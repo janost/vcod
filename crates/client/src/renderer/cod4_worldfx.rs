@@ -13,6 +13,7 @@
 use super::{
     DEPTH_FORMAT, Material, StageVariant, msaa_samples, scene_pipeline, stage_variant_state,
 };
+use crate::renderer::gpu_util;
 use std::collections::HashMap;
 
 /// What a stage batch draws through this pass.
@@ -148,25 +149,8 @@ fn distort_pipeline(
             entry_point: Some("vs_world_distort"),
             compilation_options: Default::default(),
             buffers: &[
-                Some(wgpu::VertexBufferLayout {
-                    array_stride: 44,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![
-                        0 => Float32x3, // pos
-                        1 => Float32x2, // uv
-                        2 => Float32x2, // lm_uv
-                        3 => Float32x3, // normal
-                        4 => Unorm8x4,  // color
-                    ],
-                }),
-                Some(wgpu::VertexBufferLayout {
-                    array_stride: 24,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![
-                        5 => Float32x3, // tangent
-                        6 => Float32x3, // binormal
-                    ],
-                }),
+                Some(gpu_util::world_vertex_layout(&gpu_util::WORLD_VERTEX_ATTRS)),
+                Some(gpu_util::tangent_layout()),
             ],
         },
         fragment: Some(wgpu::FragmentState {

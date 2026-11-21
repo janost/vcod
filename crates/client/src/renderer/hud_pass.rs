@@ -2,6 +2,7 @@
 //! resolution as retail registers 2D images.
 
 use super::*;
+use crate::renderer::gpu_util;
 
 /// Debug-HUD glyph budget per frame; lines past it are cut.
 pub(super) const MAX_HUD_GLYPHS: usize = 1024;
@@ -177,24 +178,7 @@ pub(super) fn create_hud_text_pass(
 
     let bg_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("hud text layout"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-        ],
+        entries: &[gpu_util::texture_2d(0), gpu_util::filtering_sampler(1)],
     });
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("hud text"),
@@ -422,28 +406,9 @@ pub(super) fn create_hud_pass(device: &wgpu::Device, format: wgpu::TextureFormat
     let texture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("hud texture layout"),
         entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
+            gpu_util::texture_2d(0),
+            gpu_util::filtering_sampler(1),
+            gpu_util::filtering_sampler(2),
         ],
     });
 

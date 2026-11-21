@@ -12,6 +12,8 @@
 //! binds the same three at 5, 6 and 7, clear of the dlight pass's group 3
 //! in shader.wgsl.
 
+use crate::renderer::gpu_util;
+
 pub struct SceneCopy {
     /// Group 2 of `FxPass::distort_pipeline`.
     pub layout: wgpu::BindGroupLayout,
@@ -39,41 +41,21 @@ impl SceneCopy {
         width: u32,
         height: u32,
     ) -> SceneCopy {
-        let tex = |binding, filterable| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable },
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
+        let tex = |binding, filterable| {
+            gpu_util::texture(
+                binding,
+                wgpu::TextureSampleType::Float { filterable },
+                wgpu::TextureViewDimension::D2,
+                false,
+            )
         };
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("scene copy layout"),
-            entries: &[
-                tex(1, false),
-                tex(2, true),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
+            entries: &[tex(1, false), tex(2, true), gpu_util::filtering_sampler(3)],
         });
         let world_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("scene copy world layout"),
-            entries: &[
-                tex(5, false),
-                tex(6, true),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 7,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
+            entries: &[tex(5, false), tex(6, true), gpu_util::filtering_sampler(7)],
         });
         let blit_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("scene copy blit layout"),
@@ -88,34 +70,17 @@ impl SceneCopy {
             bind_group_layouts: &[Some(&blit_layout)],
             immediate_size: 0,
         });
-        let blit = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("scene copy blit"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_blit"),
-                compilation_options: Default::default(),
-                targets: &[Some(format.into())],
-            }),
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let blit = gpu_util::Fullscreen::new(
+            Some("scene copy blit"),
+            Some(&pipeline_layout),
+            &shader,
+            "vs_main",
+            "fs_blit",
+            format.into(),
+        )
+        .build(device);
         // `R_InitCodeImages`' sampler for it: linear, clamped
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("scene copy sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
+        let sampler = gpu_util::linear_clamp_sampler(device, Some("scene copy sampler"));
         let (copy, bg, world_bg) = targets(
             device,
             [&layout, &world_layout],
@@ -202,22 +167,12 @@ impl SceneCopy {
             self.blit_bg = Some((scene.clone(), bg));
         }
         let (_, bg) = self.blit_bg.as_ref().expect("built above");
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("scene copy blit"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &self.copy,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
+        let mut pass = gpu_util::color_pass(
+            encoder,
+            Some("scene copy blit"),
+            &self.copy,
+            wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+        );
         pass.set_pipeline(&self.blit);
         pass.set_bind_group(0, bg, &[]);
         pass.draw(0..3, 0..1);

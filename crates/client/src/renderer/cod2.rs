@@ -8,6 +8,7 @@
 //! instead of its stage; every other material, CoD1's included, keeps the
 //! stage path, so no CoD1 pipeline or key changes.
 
+use crate::renderer::gpu_util;
 use std::collections::HashMap;
 use vcod_common::asset_source::AssetSource;
 use wgpu::util::DeviceExt;
@@ -140,7 +141,7 @@ const M_SPECULAR: u32 = 1;
 const M_DETAIL: u32 = 2;
 const M_ALPHA: u32 = 4;
 /// The material's fogged technique leaves the fog off (`Material::nofog`).
-const M_NOFOG: u32 = 8;
+pub(super) const M_NOFOG: u32 = 8;
 /// A CoD4 lit world set: CoD4's lightmap, normal and specular
 /// (`PhongLit::cod4`).
 const M_COD4: u32 = 16;
@@ -710,45 +711,27 @@ impl LitBase {
             label: Some("cod2 material layout"),
             entries: &[
                 // the vertex stage reads a CoD4 flag's switch
-                uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
-                texture_entry(1),
-                texture_entry(2),
-                texture_entry(3),
-                texture_entry(4),
+                gpu_util::uniform(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
+                gpu_util::texture_2d(1),
+                gpu_util::texture_2d(2),
+                gpu_util::texture_2d(3),
+                gpu_util::texture_2d(4),
             ],
         });
         let lightmap_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("cod2 lightmap layout"),
             entries: &[
-                uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
-                texture_entry(1),
-                texture_entry(2),
-                texture_entry(3),
-                texture_entry(4),
-                texture_entry(5),
-                texture_entry(6),
+                gpu_util::uniform(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
+                gpu_util::texture_2d(1),
+                gpu_util::texture_2d(2),
+                gpu_util::texture_2d(3),
+                gpu_util::texture_2d(4),
+                gpu_util::texture_2d(5),
+                gpu_util::texture_2d(6),
                 // a CoD4 surface's reflection probe
-                wgpu::BindGroupLayoutEntry {
-                    binding: 7,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::Cube,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
+                gpu_util::texture_float(7, wgpu::TextureViewDimension::Cube),
                 // a CoD4 static model's lighting volume
-                wgpu::BindGroupLayoutEntry {
-                    binding: 8,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D3,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
+                gpu_util::texture_float(8, wgpu::TextureViewDimension::D3),
             ],
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -803,39 +786,10 @@ impl LitBase {
     }
 }
 
-pub(super) fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    }
-}
-
 pub(super) fn tex_entry(binding: u32, view: &wgpu::TextureView) -> wgpu::BindGroupEntry<'_> {
     wgpu::BindGroupEntry {
         binding,
         resource: wgpu::BindingResource::TextureView(view),
-    }
-}
-
-pub(super) fn uniform_entry(
-    binding: u32,
-    visibility: wgpu::ShaderStages,
-) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility,
-        ty: wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Uniform,
-            has_dynamic_offset: false,
-            min_binding_size: None,
-        },
-        count: None,
     }
 }
 
@@ -2064,25 +2018,8 @@ fn lit_pipeline(
             entry_point: Some("vs_main"),
             compilation_options: Default::default(),
             buffers: &[
-                Some(wgpu::VertexBufferLayout {
-                    array_stride: 44,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![
-                        0 => Float32x3, // pos
-                        1 => Float32x2, // uv
-                        2 => Float32x2, // lm_uv
-                        3 => Float32x3, // normal
-                        4 => Unorm8x4,  // color
-                    ],
-                }),
-                Some(wgpu::VertexBufferLayout {
-                    array_stride: 24,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![
-                        5 => Float32x3, // tangent
-                        6 => Float32x3, // binormal
-                    ],
-                }),
+                Some(gpu_util::world_vertex_layout(&gpu_util::WORLD_VERTEX_ATTRS)),
+                Some(gpu_util::tangent_layout()),
             ],
         },
         fragment: fs_entry.map(|(entry, _)| wgpu::FragmentState {
@@ -2248,16 +2185,7 @@ pub(super) fn build_sky_cube(
     });
     let tex_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("cod2 sky cube layout"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                view_dimension: wgpu::TextureViewDimension::Cube,
-                multisampled: false,
-            },
-            count: None,
-        }],
+        entries: &[gpu_util::texture_float(0, wgpu::TextureViewDimension::Cube)],
     });
     let cube_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("cod2 sky cube"),
@@ -2275,7 +2203,7 @@ pub(super) fn build_sky_cube(
     });
     let eye_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("cod2 sky eye layout"),
-        entries: &[uniform_entry(0, wgpu::ShaderStages::VERTEX)],
+        entries: &[gpu_util::uniform(0, wgpu::ShaderStages::VERTEX)],
     });
     let eye_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("cod2 sky eye"),
@@ -2528,20 +2456,15 @@ pub(super) mod tests {
         // the renderer's camera layout: the Camera block, the fx lights,
         // vc_shadows' receiver (the stage path reads them) and the samplers
         let mut entries = vec![
-            uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
-            uniform_entry(1, wgpu::ShaderStages::VERTEX_FRAGMENT),
+            gpu_util::uniform(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
+            gpu_util::uniform(1, wgpu::ShaderStages::VERTEX_FRAGMENT),
         ];
         entries.extend(crate::shadows::receive_layout_entries());
         for binding in 9..=16 {
-            entries.push(wgpu::BindGroupLayoutEntry {
-                binding,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            });
+            entries.push(gpu_util::filtering_sampler(binding));
         }
         // the dynamic shadow (renderer::cod2_cookie)
-        entries.push(texture_entry(super::super::DYNAMIC_SHADOW_BINDING));
+        entries.push(gpu_util::texture_2d(super::super::DYNAMIC_SHADOW_BINDING));
         // CoD4's sun shadow map (cod4_sunshadow)
         entries.extend(crate::cod4_sunshadow::layout_entries());
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -2683,20 +2606,11 @@ pub(super) mod tests {
         assert_eq!(view.texture().depth_or_array_layers(), 6);
         let tex = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::Cube,
-                    multisampled: false,
-                },
-                count: None,
-            }],
+            entries: &[gpu_util::texture_float(0, wgpu::TextureViewDimension::Cube)],
         });
         let eye = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
-            entries: &[uniform_entry(0, wgpu::ShaderStages::VERTEX)],
+            entries: &[gpu_util::uniform(0, wgpu::ShaderStages::VERTEX)],
         });
         make_sky_pipeline(&device, super::super::SCENE_FORMAT, &camera, &tex, &eye);
         let err = pollster::block_on(scope.pop());
@@ -2747,11 +2661,7 @@ pub(super) mod tests {
             contents: bytes,
             usage: wgpu::BufferUsages::UNIFORM,
         });
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
+        let sampler = gpu_util::linear_clamp_sampler(device, None);
         let lights = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             size: 256,
@@ -4545,20 +4455,11 @@ pub(super) mod tests {
         let camera = camera_layout(&device);
         let tex = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::Cube,
-                    multisampled: false,
-                },
-                count: None,
-            }],
+            entries: &[gpu_util::texture_float(0, wgpu::TextureViewDimension::Cube)],
         });
         let eye = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
-            entries: &[uniform_entry(0, wgpu::ShaderStages::VERTEX)],
+            entries: &[gpu_util::uniform(0, wgpu::ShaderStages::VERTEX)],
         });
         let pipeline = make_sky_pipeline(&device, super::super::SCENE_FORMAT, &camera, &tex, &eye);
         let cube_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {

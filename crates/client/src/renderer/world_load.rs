@@ -1584,8 +1584,8 @@ impl Renderer {
         self.model_images.clear();
     }
 
-    /// Drops the map and every model uploaded for it, so no `ModelHandle`
-    /// from the old map can index a new upload.
+    /// Drops the map and every model uploaded for it; the old map's
+    /// `ModelHandle`s go stale and draw nothing.
     pub fn unload_world(&mut self) {
         self.world = None;
         // The recorded runs hold the old map's buffers and bind groups.
@@ -1595,6 +1595,7 @@ impl Renderer {
         self.coronas.clear();
         self.sky = None;
         self.dynamic.handles.clear();
+        self.dynamic.epoch = self.dynamic.epoch.wrapping_add(1);
         self.dynamic.models.clear();
         self.dynamic.placed.clear();
         self.dynamic.instances.clear();

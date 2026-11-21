@@ -2,6 +2,7 @@
 //! sprite.
 
 use super::*;
+use crate::renderer::gpu_util;
 
 /// One cloud-dome draw: a stage of the active sky block over the whole dome
 /// mesh, through the shared stage pipelines and params slots.
@@ -104,16 +105,7 @@ pub(super) fn build_sky_box(
 
     let tex_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("sky side layout"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
-        }],
+        entries: &[gpu_util::texture_2d(0)],
     });
     let mut side_bgs = Vec::with_capacity(6);
     for suffix in sky::AXIS_SUFFIX {
@@ -145,16 +137,7 @@ pub(super) fn build_sky_box(
     });
     let eye_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("sky eye layout"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        }],
+        entries: &[gpu_util::uniform(0, wgpu::ShaderStages::VERTEX)],
     });
     let eye_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("sky eye bind group"),
@@ -258,16 +241,7 @@ pub(super) fn build_sun_sprite(
     let view = upload_bundle_view(device, queue, fs, bundle_views, sprite);
     let tex_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("sun sprite layout"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
-        }],
+        entries: &[gpu_util::texture_2d(0)],
     });
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("sun sprite bind group"),

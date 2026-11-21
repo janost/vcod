@@ -8,6 +8,7 @@
 //! rest draw their constant or wave colour
 //! (docs/research/cod11-light-grid-and-leaf-lights.md, section 13).
 
+use crate::renderer::gpu_util;
 use std::collections::HashMap;
 use std::rc::Rc;
 use vcod_common::asset_source::{AssetSource, RawFile};
@@ -87,7 +88,6 @@ pub fn load(fs: &dyn AssetSource, lib: &MaterialLib, skin: &str, warns: &mut War
             .map_or_else(default_material, |sh| Material::from_shader(&sh));
     }
     match skin_script(skin).and_then(|n| lib.get(&n)) {
-        Some(sh) if fs.game() == vcod_common::game::Game::Cod4 && !sh.stages.is_empty() => cod4(sh),
         Some(sh) if !sh.stages.is_empty() => sh.clone(),
         _ => implicit(skin),
     }
@@ -331,6 +331,24 @@ const _: () = assert!(STAGE_PARAMS_SIZE <= ENT_STAGE_STRIDE);
 /// entity's draw culls back faces (`Material::entity_cull`).
 pub(crate) type EntPipelineKey = (Option<(BlendFactor, BlendFactor)>, bool, DepthFunc, bool);
 
+/// Stage `i` of `sh`'s pipeline key, as [`EntityMaterials::skin`] builds
+/// its pipeline and [`EntityMaterials::skin_pipeline_keys`] prewarms it.
+pub(crate) fn stage_key(sh: &Material, i: usize) -> EntPipelineKey {
+    let st = &sh.stages[i];
+    let depth_write = sh.classify_stage(i).is_some_and(|c| c.depth_write);
+    (
+        st.blend.clone(),
+        depth_write,
+        st.depth_func,
+        entity_cull(sh),
+    )
+}
+
+/// Keys that differ only in the cull bit, which only the world pass reads.
+fn cull_twins(a: &EntPipelineKey, b: &EntPipelineKey) -> bool {
+    a.0 == b.0 && a.1 == b.1 && a.2 == b.2 && a.3 != b.3
+}
+
 /// Every pipeline key a stock CoD2 xmodel's stages draw with (the census
 /// `cod2_model_pipelines_cover_every_stock_model` holds): built with the
 /// level's first models, so a later level's new model (sd's
@@ -424,6 +442,9 @@ pub(crate) struct EntityMaterials {
     image_index: HashMap<String, usize>,
     /// By skin name; shared by every model that names the skin.
     by_skin: HashMap<String, Rc<EntSkin>>,
+    /// Materials [`Self::skin_pipeline_keys`] read and [`Self::skin`] has
+    /// not taken yet.
+    loaded: HashMap<String, Material>,
     /// Stages whose params move with time; rewritten each frame.
     pub(crate) animated: Vec<(Material, usize, u32)>,
     next_slot: u32,
@@ -453,29 +474,16 @@ impl EntityMaterials {
         textures: TextureSettings,
         white_view: &wgpu::TextureView,
     ) -> Self {
-        let map_entry = |binding| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
-        };
+        let map_entry = gpu_util::texture_2d;
         let params_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("entity stage params layout"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: true,
-                        min_binding_size: wgpu::BufferSize::new(STAGE_PARAMS_SIZE),
-                    },
-                    count: None,
-                },
+                gpu_util::uniform_sized(
+                    0,
+                    wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    true,
+                    STAGE_PARAMS_SIZE,
+                ),
                 // cod2_model.wgsl's normal, specular, detail maps and
                 // `$specularity`
                 map_entry(1),
@@ -483,38 +491,11 @@ impl EntityMaterials {
                 map_entry(3),
                 map_entry(4),
                 // cod2_model.wgsl's CoD4 reflection probes
-                wgpu::BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::CubeArray,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
+                gpu_util::texture_float(5, wgpu::TextureViewDimension::CubeArray),
                 // cod2_model.wgsl's CoD4 entity model lighting volume
-                wgpu::BindGroupLayoutEntry {
-                    binding: 6,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D3,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
+                gpu_util::texture_float(6, wgpu::TextureViewDimension::D3),
                 // cod2_model.wgsl's `$lightgridweights0` and `1`
-                wgpu::BindGroupLayoutEntry {
-                    binding: 7,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::CubeArray,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
+                gpu_util::texture_float(7, wgpu::TextureViewDimension::CubeArray),
             ],
         });
         let params_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -625,6 +606,7 @@ impl EntityMaterials {
             views: Vec::new(),
             image_index: HashMap::new(),
             by_skin: HashMap::new(),
+            loaded: HashMap::new(),
             animated: Vec::new(),
             next_slot: 0,
             warns: WarnSet::new(),
@@ -649,6 +631,7 @@ impl EntityMaterials {
             );
         }
         self.by_skin.clear();
+        self.loaded.clear();
         self.animated.clear();
         self.images.truncate(1);
         self.views.truncate(1);
@@ -677,9 +660,21 @@ impl EntityMaterials {
         if let Some(i) = self.pipelines.iter().position(|(k, _)| *k == key) {
             return i;
         }
-        let pair = [EntPass::World, EntPass::View].map(|p| self.build_pipeline(device, p, &key));
-        self.pipelines.push((key, pair));
+        let world = self.build_pipeline(device, EntPass::World, &key);
+        let view = self
+            .twin_view(&key)
+            .unwrap_or_else(|| self.build_pipeline(device, EntPass::View, &key));
+        self.pipelines.push((key, [world, view]));
         self.pipelines.len() - 1
+    }
+
+    /// The view pipeline of `key`'s twin under the other cull bit, built
+    /// already: a view model draws unculled, so the two are one pipeline.
+    fn twin_view(&self, key: &EntPipelineKey) -> Option<wgpu::RenderPipeline> {
+        self.pipelines
+            .iter()
+            .find(|(k, _)| cull_twins(k, key))
+            .map(|(_, [_, view])| view.clone())
     }
 
     /// Builds the pipeline pairs of `keys` not built yet, each pass on
@@ -695,15 +690,26 @@ impl EntityMaterials {
         if fresh.is_empty() {
             return;
         }
-        let passes = [EntPass::World, EntPass::View];
+        // A key whose cull twin is built, or comes earlier, takes its view pipeline.
+        let mut jobs = Vec::with_capacity(fresh.len() * 2);
+        for (i, key) in fresh.iter().enumerate() {
+            jobs.push((i, EntPass::World));
+            let twin = |k: &EntPipelineKey| cull_twins(k, key);
+            if !self.pipelines.iter().any(|(k, _)| twin(k)) && !fresh[..i].iter().any(twin) {
+                jobs.push((i, EntPass::View));
+            }
+        }
         let (shaders, format) = (&self.passes, self.format);
-        let mut built = crate::renderer::par_build(fresh.len() * passes.len(), |i| {
-            let (pass, key) = (passes[i % passes.len()], &fresh[i / passes.len()]);
-            ent_pipeline(device, shaders, format, pass, key, true)
-        })
-        .into_iter();
-        for key in fresh {
-            let (Some(world), Some(view)) = (built.next(), built.next()) else {
+        let built = crate::renderer::par_build(jobs.len(), |j| {
+            let (i, pass) = jobs[j];
+            ent_pipeline(device, shaders, format, pass, &fresh[i], true)
+        });
+        let mut pairs: Vec<[Option<wgpu::RenderPipeline>; 2]> = vec![[None, None]; fresh.len()];
+        for (&(i, pass), pipeline) in jobs.iter().zip(built) {
+            pairs[i][pass as usize] = Some(pipeline);
+        }
+        for (key, [world, view]) in fresh.into_iter().zip(pairs) {
+            let (Some(world), Some(view)) = (world, view.or_else(|| self.twin_view(&key))) else {
                 unreachable!("par_build returns one pipeline a job");
             };
             self.pipelines.push((key, [world, view]));
@@ -712,7 +718,8 @@ impl EntityMaterials {
 
     /// The pipeline keys [`Self::skin`] would build for `skins` not
     /// built yet, read off their materials as it reads them, for
-    /// [`Self::prewarm`] to build at once.
+    /// [`Self::prewarm`] to build at once. The materials wait in
+    /// `loaded` for [`Self::skin`].
     pub(crate) fn skin_pipeline_keys(
         &mut self,
         fs: &Pk3Fs,
@@ -726,19 +733,11 @@ impl EntityMaterials {
             .filter(|s| !self.by_skin.contains_key(s.as_str()))
         {
             let sh = load(fs, lib, skin, &mut self.warns);
-            let Some(slots) = stage_slots(slot, sh.stages.len(), MAX_ENT_STAGES) else {
-                continue;
-            };
-            slot = slots.end;
-            for (i, st) in sh.stages.iter().enumerate() {
-                let depth_write = sh.classify_stage(i).is_some_and(|c| c.depth_write);
-                keys.push((
-                    st.blend.clone(),
-                    depth_write,
-                    st.depth_func,
-                    entity_cull(&sh),
-                ));
+            if let Some(slots) = stage_slots(slot, sh.stages.len(), MAX_ENT_STAGES) {
+                slot = slots.end;
+                keys.extend((0..sh.stages.len()).map(|i| stage_key(&sh, i)));
             }
+            self.loaded.insert(skin.clone(), sh);
         }
         keys
     }
@@ -939,7 +938,10 @@ impl EntityMaterials {
             self.write_params(queue, &implicit(""), 0, 0);
             self.next_slot = 1;
         }
-        let sh = load(fs, lib, skin, &mut self.warns);
+        let sh = match self.loaded.remove(skin) {
+            Some(sh) => sh,
+            None => load(fs, lib, skin, &mut self.warns),
+        };
         let mut lit = is_lit(&sh);
         let mut sort = sh.sort;
         let mut stages = Vec::with_capacity(sh.stages.len());
@@ -976,16 +978,9 @@ impl EntityMaterials {
             let slot = self.next_slot;
             self.next_slot += 1;
             self.write_params(queue, &sh, i, slot);
-            let depth_write = sh.classify_stage(i).is_some_and(|c| c.depth_write);
-            let pipeline = self.pipeline(
-                device,
-                (
-                    st.blend.clone(),
-                    depth_write,
-                    st.depth_func,
-                    entity_cull(&sh),
-                ),
-            );
+            let key = stage_key(&sh, i);
+            let depth_write = key.1;
+            let pipeline = self.pipeline(device, key);
             let params = match sh.probe {
                 Some(_) if st.rgb_gen == RgbGen::LightingDiffuse => {
                     self.probe_params(device, queue, (fs, decoded), &sh)
@@ -1724,14 +1719,8 @@ mod tests {
         let mut w = WarnSet::new();
         for skin in &skins {
             let sh = load(&fs, &lib, skin, &mut w);
-            for (i, st) in sh.stages.iter().enumerate() {
-                let depth_write = sh.classify_stage(i).is_some_and(|c| c.depth_write);
-                let key = (
-                    st.blend.clone(),
-                    depth_write,
-                    st.depth_func,
-                    entity_cull(&sh),
-                );
+            for i in 0..sh.stages.len() {
+                let key = stage_key(&sh, i);
                 let at = COD2_MODEL_PIPELINES.iter().position(|k| *k == key);
                 assert!(at.is_some(), "{skin} stage {i}: {key:?}");
                 used[at.unwrap()] = true;

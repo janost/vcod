@@ -324,6 +324,7 @@ fn stored(light: Vec3, model: [u8; 4]) -> [u8; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::renderer::gpu_util;
 
     fn sample() -> GridSample {
         let mut s = GridSample {
@@ -522,27 +523,8 @@ fn fs(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
             source: wgpu::ShaderSource::Wgsl(wgsl.into()),
         });
         let format = wgpu::TextureFormat::Rgba8Unorm;
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: None,
-            layout: None,
-            vertex: wgpu::VertexState {
-                module: &module,
-                entry_point: Some("vs"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: Some("fs"),
-                compilation_options: Default::default(),
-                targets: &[Some(format.into())],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipeline = gpu_util::Fullscreen::new(None, None, &module, "vs", "fs", format.into())
+            .build(&device);
         use wgpu::util::DeviceExt;
         let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
@@ -580,22 +562,12 @@ fn fs(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
         let view = target.create_view(&Default::default());
         let mut enc = device.create_command_encoder(&Default::default());
         {
-            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: None,
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+            let mut pass = gpu_util::color_pass(
+                &mut enc,
+                None,
+                &view,
+                wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+            );
             pass.set_pipeline(&pipeline);
             pass.set_bind_group(0, &bg, &[]);
             pass.draw(0..3, 0..1);
@@ -1239,37 +1211,14 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
             source: wgpu::ShaderSource::Wgsl(wgsl.into()),
         });
         let format = wgpu::TextureFormat::Rgba8Unorm;
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: None,
-            layout: None,
-            vertex: wgpu::VertexState {
-                module: &module,
-                entry_point: Some("vs"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: Some("fs"),
-                compilation_options: Default::default(),
-                targets: &[Some(format.into())],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipeline =
+            gpu_util::Fullscreen::new(None, None, &module, "vs", "fs", format.into()).build(device);
         let set_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
             contents: bytemuck::cast_slice(sets),
             usage: wgpu::BufferUsages::STORAGE,
         });
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
+        let sampler = gpu_util::linear_clamp_sampler(device, None);
         let mut entries = vec![wgpu::BindGroupEntry {
             binding: 0,
             resource: set_buf.as_entire_binding(),
@@ -1406,22 +1355,12 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
         let view = target.create_view(&Default::default());
         let mut enc = device.create_command_encoder(&Default::default());
         {
-            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: None,
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+            let mut pass = gpu_util::color_pass(
+                &mut enc,
+                None,
+                &view,
+                wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+            );
             pass.set_pipeline(&pipeline);
             pass.set_bind_group(0, &g0, &[]);
             pass.set_bind_group(3, &g3, &[]);

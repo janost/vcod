@@ -2308,3 +2308,12 @@ fn ssao_splits_after_the_last_opaque_or_decal_draw() {
     let only = merge_by_sort(&blends, &[], &[], &[]);
     assert_eq!(ssao_split(&only, &blends, &[], &[], &[]), 0);
 }
+
+#[test]
+fn a_model_handle_from_an_unloaded_map_indexes_nothing() {
+    let h = ModelHandle::first_map(2);
+    assert_eq!(h.live(0, 5), Some(2));
+    // the next map's table, after one unload_world, already has 5 handles
+    assert_eq!(h.live(1, 5), None);
+    assert_eq!(h.live(0, 2), None);
+}

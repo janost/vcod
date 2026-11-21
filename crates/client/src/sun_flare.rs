@@ -6,8 +6,7 @@
 //! occlusion query instead of a depth read and uses the newest finished
 //! result, a frame or two old; the fades absorb the lag.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
+use crate::renderer::gpu_util;
 
 use bytemuck::Zeroable;
 use vcod_common::sun::{SunFade, SunFile};
@@ -288,11 +287,10 @@ struct Vert {
 /// Six vertices per quad: the depth probe, the wash, the flare.
 const QUADS: usize = 3;
 
-/// One mappable copy of the query result; `state` is 0 idle, 1 in flight,
-/// 2 mapped.
+/// One mappable copy of the query result and the probe's full sample
+/// count it is read against.
 struct Readback {
-    buf: wgpu::Buffer,
-    state: Arc<AtomicU8>,
+    back: gpu_util::Readback,
     samples: u64,
 }
 
@@ -334,18 +332,9 @@ impl SunFlareGpu {
         let tex_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("sun flare layout"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                sampler_entry(1),
-                sampler_entry(2),
+                gpu_util::texture_2d(0),
+                gpu_util::filtering_sampler(1),
+                gpu_util::filtering_sampler(2),
             ],
         });
         let image_view = image.clone();
@@ -457,13 +446,7 @@ impl SunFlareGpu {
         });
         let readbacks = (0..3)
             .map(|_| Readback {
-                buf: device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("sun probe readback"),
-                    size: 8,
-                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }),
-                state: Arc::new(AtomicU8::new(0)),
+                back: gpu_util::Readback::new(device, "sun probe readback", 8),
                 samples: 1,
             })
             .collect();
@@ -502,15 +485,12 @@ impl SunFlareGpu {
     ) {
         let _ = device.poll(wgpu::PollType::Poll);
         for rb in &mut self.readbacks {
-            if rb.state.load(Ordering::Acquire) != 2 {
-                continue;
-            }
-            if let Ok(view) = rb.buf.slice(..).get_mapped_range() {
-                let passed = u64::from_le_bytes(view[..8].try_into().expect("8 bytes"));
+            let passed = rb
+                .back
+                .take(|view| view.map(|v| u64::from_le_bytes(v[..8].try_into().expect("8 bytes"))));
+            if let Some(Some(passed)) = passed {
                 self.measured = (passed as f32 / rb.samples as f32).min(1.0);
             }
-            rb.buf.unmap();
-            rb.state.store(0, Ordering::Release);
         }
         // the flare direction is a point at infinity (w 0, 0x4d8ca0)
         let clip = frame.view_proj * self.flare_dir.extend(0.0);
@@ -532,10 +512,7 @@ impl SunFlareGpu {
                 sun,
             },
         );
-        let slot = self
-            .readbacks
-            .iter()
-            .position(|rb| rb.state.load(Ordering::Acquire) == 0);
+        let slot = self.readbacks.iter().position(|rb| rb.back.is_free());
         self.issued = None;
         let mut quads = [[Vert::zeroed(); 6]; QUADS];
         if let (Some((rect, n)), Some(slot)) = (out.query, slot) {
@@ -615,7 +592,7 @@ impl SunFlareGpu {
         let rb = &mut self.readbacks[slot];
         rb.samples = samples;
         encoder.resolve_query_set(&self.queries, 0..1, &self.resolve, 0);
-        encoder.copy_buffer_to_buffer(&self.resolve, 0, &rb.buf, 0, 8);
+        encoder.copy_buffer_to_buffer(&self.resolve, 0, &rb.back.buf, 0, 8);
     }
 
     /// After the submit: maps this frame's copy.
@@ -623,21 +600,7 @@ impl SunFlareGpu {
         let Some((slot, _)) = self.issued.take() else {
             return;
         };
-        let rb = &self.readbacks[slot];
-        rb.state.store(1, Ordering::Release);
-        let state = rb.state.clone();
-        rb.buf.slice(..).map_async(wgpu::MapMode::Read, move |r| {
-            state.store(if r.is_ok() { 2 } else { 0 }, Ordering::Release);
-        });
-    }
-}
-
-fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-        count: None,
+        self.readbacks[slot].back.map();
     }
 }
 

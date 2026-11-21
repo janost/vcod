@@ -5,6 +5,7 @@
 //! [`DofPass`] draws with.
 
 use crate::cod4_viewmodel::ViewPs;
+use crate::renderer::gpu_util;
 
 /// `PM_DEAD`; at or past it the sight's targets ease in as with the gun up.
 const PM_DEAD: u32 = 7;
@@ -286,48 +287,16 @@ const PING: usize = 3;
 impl DofPass {
     /// `format` is the world target's (`Renderer::world_format`).
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat, w: u32, h: u32) -> DofPass {
-        let tex = |binding| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
-        };
+        let tex = gpu_util::texture_2d;
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("cod4 dof layout"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
+                gpu_util::uniform(0, wgpu::ShaderStages::FRAGMENT),
                 tex(1),
                 tex(2),
                 tex(3),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Depth,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: crate::renderer::msaa_samples() > 1,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
+                gpu_util::depth_2d(4, crate::renderer::msaa_samples() > 1),
+                gpu_util::filtering_sampler(5),
             ],
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -342,27 +311,15 @@ impl DofPass {
             immediate_size: 0,
         });
         let pipeline = |entry: &str, target: wgpu::TextureFormat| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(entry),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    compilation_options: Default::default(),
-                    buffers: &[],
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some(entry),
-                    compilation_options: Default::default(),
-                    targets: &[Some(target.into())],
-                }),
-                primitive: Default::default(),
-                depth_stencil: None,
-                multisample: Default::default(),
-                multiview_mask: None,
-                cache: None,
-            })
+            gpu_util::Fullscreen::new(
+                Some(entry),
+                Some(&pipeline_layout),
+                &shader,
+                "vs_main",
+                entry,
+                target.into(),
+            )
+            .build(device)
         };
         let pipelines = [
             pipeline("fs_downsample", QUARTER_FORMAT),
@@ -378,12 +335,7 @@ impl DofPass {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("cod4 dof sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
+        let sampler = gpu_util::linear_clamp_sampler(device, Some("cod4 dof sampler"));
         DofPass {
             layout,
             pipelines,
@@ -471,22 +423,12 @@ impl DofPass {
         }
         let (_, groups) = self.groups.as_ref().expect("built above");
         for ((pipe, _, dst), bg) in steps.into_iter().zip(groups) {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("cod4 dof"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: dst,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+            let mut pass = gpu_util::color_pass(
+                encoder,
+                Some("cod4 dof"),
+                dst,
+                wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+            );
             pass.set_pipeline(&self.pipelines[pipe]);
             pass.set_bind_group(0, bg, &[]);
             pass.draw(0..3, 0..1);

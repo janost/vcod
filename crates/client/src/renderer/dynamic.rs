@@ -3,6 +3,7 @@
 //! pass.
 
 use super::*;
+use crate::renderer::gpu_util;
 
 /// The viewmodel shares the world's fov but has its own near plane, retail's
 /// `r_znear_depthhack` default (docs/research/xmodel-v14-format.md, "The
@@ -264,10 +265,27 @@ pub(crate) const DYNAMIC_INSTANCE_STRIDE: u64 = 80;
 /// Unskinned instances point at a shared identity block of this many matrices.
 pub const MAX_INSTANCE_BONES: usize = 128;
 
-/// Index into the renderer's dynamic model table. `pub(crate)` so other
-/// modules' tests can build a dummy handle without a GPU.
+/// Index into the renderer's dynamic model table, valid until the next
+/// [`Renderer::unload_world`]: a handle from an older map draws nothing.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct ModelHandle(pub(crate) usize);
+pub struct ModelHandle {
+    pub(crate) index: usize,
+    /// The table's [`DynamicPass::epoch`] when the handle was made.
+    epoch: u32,
+}
+
+impl ModelHandle {
+    /// A handle of the first map's table, for tests without a GPU.
+    #[cfg(test)]
+    pub(crate) fn first_map(index: usize) -> Self {
+        ModelHandle { index, epoch: 0 }
+    }
+
+    /// Its index into a table of `len` handles at `epoch`, if it is one of them.
+    pub(super) fn live(self, epoch: u32, len: usize) -> Option<usize> {
+        (self.epoch == epoch && self.index < len).then_some(self.index)
+    }
+}
 
 /// `bones: None` draws the baked bind pose; `Some` is truncated at [`MAX_INSTANCE_BONES`].
 pub struct DynamicModelInstance {
@@ -397,8 +415,12 @@ pub(super) struct DynamicPass {
     /// for every instance at the cap.
     pub(super) bone_buf: wgpu::Buffer,
     pub(super) bone_bg: wgpu::BindGroup,
-    /// Indexed by [`ModelHandle`]: each model's LOD table; never shrinks.
+    /// Indexed by [`ModelHandle`]: each model's LOD table; grows until
+    /// [`Renderer::unload_world`] clears it.
     pub(super) handles: Vec<DynHandle>,
+    /// Bumped by each [`Renderer::unload_world`], so the old map's handles
+    /// no longer index `handles`.
+    pub(super) epoch: u32,
     /// One per uploaded LOD and per hidden-part view of one; never shrinks.
     pub(super) models: Vec<DynModel>,
     /// LODs whose buffers and skins went to the GPU.
@@ -714,7 +736,10 @@ impl Renderer {
             bone_boxes: bone_boxes(model),
             view_boxes: bone_boxes_of(model.lods.iter().flat_map(|l| &l.surfaces)),
         });
-        Some(ModelHandle(self.dynamic.handles.len() - 1))
+        Some(ModelHandle {
+            index: self.dynamic.handles.len() - 1,
+            epoch: self.dynamic.epoch,
+        })
     }
 
     /// `h`, uploaded from `model`, drawn without the LOD 0 surfaces whose
@@ -729,7 +754,7 @@ impl Renderer {
         keep: &[bool],
     ) -> Option<ModelHandle> {
         let d = &mut self.dynamic;
-        let full = d.handles.get(h.0)?;
+        let full = &d.handles[h.live(d.epoch, d.handles.len())?];
         let lod0 = &d.models[(*full.lods.first()?)?];
         let shown = kept_surfaces(&lod0.vm.surfaces, keep);
         if shown.is_empty() {
@@ -767,7 +792,10 @@ impl Renderer {
             bone_boxes,
             view_boxes,
         });
-        Some(ModelHandle(d.handles.len() - 1))
+        Some(ModelHandle {
+            index: d.handles.len() - 1,
+            epoch: d.epoch,
+        })
     }
 
     pub(super) fn upload_dyn_lod(
@@ -835,10 +863,12 @@ impl Renderer {
                 });
                 break;
             }
-            let ModelHandle(idx) = inst.model;
-            if idx >= self.dynamic.handles.len() {
+            let Some(idx) = inst
+                .model
+                .live(self.dynamic.epoch, self.dynamic.handles.len())
+            else {
                 continue;
-            }
+            };
             if inst.bones.is_some() {
                 if skinned == MAX_SKINNED_INSTANCES {
                     SKINNED_WARNED.call_once(|| {
@@ -858,7 +888,7 @@ impl Renderer {
             .into_iter()
             .zip(raw)
             .map(|((src, inst), raw)| Placed {
-                handle: inst.model.0,
+                handle: inst.model.index,
                 src,
                 raw,
                 lod_origin: inst.transform.w_axis.truncate(),
@@ -1010,16 +1040,12 @@ pub(super) fn create_vm_pass(device: &wgpu::Device, tex: &TexSamplers) -> VmPass
     let uniform_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("viewmodel uniform layout"),
         entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(VM_UNIFORM_SIZE),
-                },
-                count: None,
-            },
+            gpu_util::uniform_sized(
+                0,
+                wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                false,
+                VM_UNIFORM_SIZE,
+            ),
             s0,
             s1,
             s2,
@@ -1032,29 +1058,16 @@ pub(super) fn create_vm_pass(device: &wgpu::Device, tex: &TexSamplers) -> VmPass
     });
     let skin_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("viewmodel skin layout"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
-        }],
+        entries: &[gpu_util::texture_2d(0)],
     });
     let bone_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("viewmodel bone layout"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: wgpu::BufferSize::new(VM_BONE_BUF_SIZE),
-            },
-            count: None,
-        }],
+        entries: &[gpu_util::uniform_sized(
+            0,
+            wgpu::ShaderStages::VERTEX,
+            false,
+            VM_BONE_BUF_SIZE,
+        )],
     });
     let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("viewmodel uniform"),
@@ -1216,16 +1229,7 @@ pub(super) fn create_dynamic_pass(
     });
 
     // Worst case: every skinned instance at the bone cap, plus the identity block.
-    let storage = |binding, visibility| wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility,
-        ty: wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Storage { read_only: true },
-            has_dynamic_offset: false,
-            min_binding_size: None,
-        },
-        count: None,
-    };
+    let storage = gpu_util::storage_ro;
     // Binding 1 holds the frame's light sets; a CoD2 probe-lit surface
     // reads its set in the fragment stage.
     let bone_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -1283,6 +1287,7 @@ pub(super) fn create_dynamic_pass(
         bone_buf,
         bone_bg,
         handles: Vec::new(),
+        epoch: 0,
         models: Vec::new(),
         uploads: 0,
         placed: Vec::new(),
