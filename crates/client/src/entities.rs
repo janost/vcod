@@ -8,7 +8,7 @@ use crate::turret::{self, ET_TURRET, GunAnim, MsvcRand, TurretEye};
 use glam::{Mat4, Quat, Vec3};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
-use vcod_common::animclock::{ChannelClock, Seen, Times};
+use vcod_common::animclock::{ChannelClock, Flavour, Seen, Times};
 use vcod_common::animtree::PlayerAnims;
 use vcod_common::asset_source::AssetSource;
 use vcod_common::collision::MASK_PLAYERSOLID;
@@ -915,7 +915,7 @@ struct EntityAnim {
     /// 1.5's and UO's controls as eased so far (cgame uo 0x30005730).
     controls: Option<Controllers>,
     /// 1.5's and UO's stance window (`ci+0x4a4` 1.5b, `ci+0x4c0` UO):
-    /// `animclock::ChannelClock::update_windowed`.
+    /// `animclock::update_body`.
     stance_window_ms: i32,
     seat: SeatLeaves,
     /// The render time of the last frame the entity was in the snapshot;
@@ -1000,11 +1000,12 @@ fn update_channels(
     seen: &Seen,
     at: Times,
 ) {
-    let window = (rules != MoveRules::V1_1).then_some(window);
-    legs.cgame_spread();
-    torso.cgame_spread();
+    let flavour = match rules {
+        MoveRules::V1_1 => Flavour::V1_1,
+        _ => Flavour::Cgame15,
+    };
     let wires = (legs_wire, torso_wire);
-    vcod_common::animclock::update_body((legs, torso), anims, wires, seen, at, window);
+    vcod_common::animclock::update_body((legs, torso), anims, wires, seen, at, flavour, window);
 }
 
 /// What a body's channel updates read off its entity: the client number,

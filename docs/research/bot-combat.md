@@ -2015,10 +2015,12 @@ VERIFIED (measured, ours): every refactor commit printed these, every
 
 ## 20. CoD4 bots' cmd angles rounded as 1.7 rounds them (2026-11-21)
 
-1.7 makes a cmd angle as `(int)` of the stored float `deg * 182.04445f +
-0.5f`, masked to 16 bits: the client's `iw3mp.exe` 0x463aa9..0x463acf, and
-the server's cmd base `(viewangles - delta_angles)` the same way,
-`cod4_lnxded` 0x8130adc..0x8130b29. VERIFIED (the instructions). The mantle
+1.7's server makes its cmd base `(viewangles - delta_angles)` as `(int)`
+of the stored float `deg * 182.04445f + 0.5f`, masked to 16 bits,
+`cod4_lnxded` 0x8130adc..0x8130b29 (`fstp DWORD`, `cvttss2si`). The
+client's `iw3mp.exe` 0x463aa9..0x463acf adds the half the same way but
+truncates the double, never stored as a float (cod4-client-view.md 14.1).
+VERIFIED (the instructions). The mantle
 walk already did (`bots::cod4::cmd_short`). The brain's cmd
 (`bots::cmd_angles` over `BotView::delta_deg`) and the gunner's and frag
 throw-back's (`bots/cod4/gun.rs`) truncated each angle and subtracted a
@@ -2055,7 +2057,9 @@ build stalls the same way on seed 11 (35 ticks): allies slot 0 at (1402,
 181, 184). Seeds 7 to 12 on the before build stall nowhere else. VERIFIED
 (measured, ours). So the stall is an old one, a mantle onto a ledge a
 teammate holds, which the new angles reach on seed 1 by the matches'
-chaos. INFERRED from the two traces. The one other reader of the
+chaos. INFERRED from the two traces. A CoD4 bot under a mantle's
+landing with another body standing still on it now plans round the
+edge (bot-objectives.md 12.20); seed 1's 140 stalled ticks go to 0. The one other reader of the
 integer delta, the flee's yaw in `bots.rs` (`angles[1] + delta_angles[1]`),
 adds the rounded delta back onto the rounded angle, within a short of
 the aim. VERIFIED (the code).

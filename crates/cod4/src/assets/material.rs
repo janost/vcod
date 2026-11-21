@@ -390,8 +390,10 @@ pub struct ImageLoadDef {
     pub dimensions: [u16; 3],
     pub format: u32,
     pub resource_size: u32,
-    /// The pixels, under [`crate::walk::WalkOptions::keep_bulk`].
-    pub data: Option<Vec<u8>>,
+    /// The pixels, under [`crate::walk::WalkOptions::keep_bulk`]: shared
+    /// by every image an offset token names this def from, and the walk's
+    /// own record of it.
+    pub data: Option<std::sync::Arc<[u8]>>,
 }
 
 pub fn image<R: BufRead>(w: &mut W<R>, p: Pointer, slot: u32) -> Result<Option<Id<Image>>> {
@@ -415,7 +417,7 @@ pub fn image<R: BufRead>(w: &mut W<R>, p: Pointer, slot: u32) -> Result<Option<I
                 let at = w.here()?;
                 let h = w.load(0x10)?;
                 let size = h.u32(12);
-                let data = w.bulk(1, size as usize)?;
+                let data = w.bulk(1, size as usize)?.map(Into::into);
                 let d = ImageLoadDef {
                     level_count: h.u8(0),
                     flags: h.u8(1),

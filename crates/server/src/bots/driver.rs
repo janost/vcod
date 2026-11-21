@@ -329,6 +329,9 @@ pub(crate) trait BotWorld {
     /// ([`crate::nav::Follower::mantle_rests`]), even where CoD1's walks
     /// proved the graph.
     const MANTLE_RESTS: bool = false;
+    /// A bot gives up a mantle edge up whose landing another body stands
+    /// still on ([`crate::nav::Follower::mantle_held`]).
+    const MANTLE_YIELDS: bool = false;
     /// A bot that walked out its plan to an objective's point and comes no
     /// nearer it gives the point up for a while ([`Bot::arrived_goal`]).
     const GIVES_UP_GOALS: bool = false;
@@ -2229,6 +2232,17 @@ fn route_core<W: BotWorld>(
         follower.stuck();
     }
     let ps = input.ps;
+    let on_ground = ps.as_ref().is_some_and(|ps| ps.on_ground);
+    if W::MANTLE_YIELDS {
+        let others: Vec<(Vec3, Vec3)> = standing
+            .iter()
+            .filter(|c| c.0 != slot)
+            .map(|c| (c.1, c.2))
+            .collect();
+        if follower.mantle_held(g, view.origin.into(), on_ground, &others) {
+            follower.stuck();
+        }
+    }
     // The pace the bot runs at: a light weapon's is cut to the graph's on
     // the ground (`Bot::think`).
     follower.move_scale = view.move_scale.min(1.0);

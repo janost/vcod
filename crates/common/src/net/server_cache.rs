@@ -2,10 +2,10 @@
 //! the favourites between runs (`LAN_LoadCachedServers`,
 //! `LAN_SaveServersToCache`; docs/research/cod11-front-end.md 8,
 //! "Favourites", and "The other games' caches"). Two file shapes: 1.1's,
-//! and the one 1.5, UO and CoD2 share with their own entry sizes. vcod
-//! reads and writes only the favourites and leaves every other byte as it
-//! found it; a file that is not a cache of the install's own layout it
-//! neither reads nor writes.
+//! and the one 1.5, UO, CoD2 and 1.7 share with their own entry sizes and
+//! version words. vcod writes only the favourites and leaves every other
+//! byte as it found it; a file that is not a cache of the install's own
+//! layout it neither reads nor writes.
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 
@@ -20,6 +20,9 @@ pub enum Layout {
     Uo,
     /// CoD2 1.3 (CoD2MP_s.exe 0x4b56e0, 0x4b5750): `servercache.dat`.
     Cod2,
+    /// CoD4 1.7 (iw3mp.exe 0x4764d0, 0x476540): `servercache.dat`,
+    /// version 3 (cod4-front-end.md).
+    Cod4,
 }
 
 /// The list caps: 1.1's Internet list (`MAX_GLOBAL_SERVERS`), the later
@@ -51,6 +54,15 @@ impl Layout {
             Layout::Cod11 => 0xb8,
             Layout::Cod15 | Layout::Cod2 => 0x94,
             Layout::Uo => 0x98,
+            Layout::Cod4 => 0x9c,
+        }
+    }
+
+    /// The later layouts' first header int, which their loaders compare.
+    fn version(self) -> i32 {
+        match self {
+            Layout::Cod4 => 3,
+            _ => 1,
         }
     }
 
@@ -80,7 +92,14 @@ impl Layout {
     }
 
     /// 1.1: Internet count, favourite count, overflow count, size; the
-    /// others: version 1, Internet count, favourite count, size.
+    /// others: version, Internet count, favourite count, size.
+    fn internet_count_at(self) -> usize {
+        match self {
+            Layout::Cod11 => 0,
+            _ => 4,
+        }
+    }
+
     fn favorite_count_at(self) -> usize {
         match self {
             Layout::Cod11 => 4,
@@ -102,6 +121,16 @@ impl Layout {
             Layout::Cod11 => 0x14,
             Layout::Cod15 | Layout::Cod2 => 0x2a,
             Layout::Uo => 0x2e,
+            Layout::Cod4 => 0x31,
+        }
+    }
+
+    /// The big-endian port in the entry's `netadr_t`: after CoD1's IPX
+    /// bytes, right after the IPv4 address on 1.7.
+    fn port_at(self) -> usize {
+        match self {
+            Layout::Cod4 => 8,
+            _ => 18,
         }
     }
 
@@ -109,6 +138,7 @@ impl Layout {
     fn visible(self) -> usize {
         match self {
             Layout::Cod11 => 0xac,
+            Layout::Cod4 => 0x1b,
             _ => 0x17,
         }
     }
@@ -127,7 +157,7 @@ impl Layout {
         match self {
             Layout::Cod11 => d == self.blocks() as i32,
             _ => {
-                a == 1
+                a == self.version()
                     && (b as u32) < MAX_GLOBAL as u32
                     && (c as u32) < MAX_FAVORITES as u32
                     && d == self.blocks() as i32
@@ -146,7 +176,7 @@ impl Layout {
     fn fresh(self) -> Vec<u8> {
         let mut f = vec![0; self.file_len()];
         if self != Layout::Cod11 {
-            f[0..4].copy_from_slice(&1i32.to_le_bytes());
+            f[0..4].copy_from_slice(&self.version().to_le_bytes());
         }
         f[12..16].copy_from_slice(&(self.blocks() as i32).to_le_bytes());
         f
@@ -178,7 +208,8 @@ const PASSWORD_11: usize = 0xb4;
 
 impl Entry {
     /// What `LAN_AddServer` fills in: the 20-byte `netadr_t` (type, IP,
-    /// big-endian port at 18), the name cut to 31 bytes, the visible flag.
+    /// big-endian port at [`Layout::port_at`]), the name cut to 31 bytes,
+    /// the visible flag.
     pub fn new(layout: Layout, addr: SocketAddrV4, name: &str) -> Entry {
         let mut e = Entry {
             layout,
@@ -186,7 +217,8 @@ impl Entry {
         };
         e.bytes[0..4].copy_from_slice(&NA_IP.to_le_bytes());
         e.bytes[4..8].copy_from_slice(&addr.ip().octets());
-        e.bytes[18..20].copy_from_slice(&addr.port().to_be_bytes());
+        let port = layout.port_at();
+        e.bytes[port..port + 2].copy_from_slice(&addr.port().to_be_bytes());
         e.set_str(layout.hostname(), name);
         match layout {
             Layout::Cod11 => e.set_i32(layout.visible(), 1),
@@ -199,8 +231,8 @@ impl Entry {
         if self.i32(0) != NA_IP {
             return None;
         }
-        let b = &self.bytes;
-        let port = u16::from_be_bytes([b[18], b[19]]);
+        let (b, port) = (&self.bytes, self.layout.port_at());
+        let port = u16::from_be_bytes([b[port], b[port + 1]]);
         Some(SocketAddrV4::new(
             Ipv4Addr::new(b[4], b[5], b[6], b[7]),
             port,
@@ -209,6 +241,17 @@ impl Entry {
 
     pub fn hostname(&self) -> String {
         self.str(self.layout.hostname())
+    }
+
+    /// The `serverInfo_t` as the file holds it, [`Layout::entry`] bytes.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// A record of `layout` made elsewhere (1.7's typed row).
+    pub fn from_bytes(layout: Layout, bytes: Vec<u8>) -> Entry {
+        assert_eq!(bytes.len(), layout.entry(), "{layout:?} entry");
+        Entry { layout, bytes }
     }
 
     /// What an `infoResponse` writes over a 1.1 cached server
@@ -264,18 +307,44 @@ pub fn read_favorites(layout: Layout, file: &[u8]) -> Option<Vec<Entry>> {
     if !layout.valid(file) {
         return None;
     }
-    let at = layout.favorite_count_at();
+    let (at, base) = (layout.favorite_count_at(), layout.favorites_at());
+    Some(entries(layout, file, at, base, MAX_FAVORITES))
+}
+
+/// The Internet list in a cache file, as [`read_favorites`] reads the
+/// favourites; a 1.1-shaped file under a later game's name gives none.
+pub fn read_internet(layout: Layout, file: &[u8]) -> Option<Vec<Entry>> {
+    if layout.migrates(file) {
+        return Some(Vec::new());
+    }
+    if !layout.valid(file) {
+        return None;
+    }
+    let cap = match layout {
+        Layout::Cod11 => MAX_GLOBAL_11,
+        _ => MAX_GLOBAL,
+    };
+    Some(entries(
+        layout,
+        file,
+        layout.internet_count_at(),
+        HEADER,
+        cap,
+    ))
+}
+
+/// The records of the block at `base` whose count int sits at `count_at`,
+/// at most `cap`.
+fn entries(layout: Layout, file: &[u8], count_at: usize, base: usize, cap: usize) -> Vec<Entry> {
+    let at = count_at;
     let n = i32::from_le_bytes(file[at..at + 4].try_into().unwrap()).max(0) as usize;
     let size = layout.entry();
-    let base = layout.favorites_at();
-    Some(
-        (0..n.min(MAX_FAVORITES))
-            .map(|i| Entry {
-                layout,
-                bytes: file[base + i * size..base + (i + 1) * size].to_vec(),
-            })
-            .collect(),
-    )
+    (0..n.min(cap))
+        .map(|i| Entry {
+            layout,
+            bytes: file[base + i * size..base + (i + 1) * size].to_vec(),
+        })
+        .collect()
 }
 
 /// `old` with its favourites replaced by `favorites`, at most
@@ -309,7 +378,13 @@ pub fn write_favorites(layout: Layout, old: Option<&[u8]>, favorites: &[Entry]) 
 mod tests {
     use super::*;
 
-    const ALL: [Layout; 4] = [Layout::Cod11, Layout::Cod15, Layout::Uo, Layout::Cod2];
+    const ALL: [Layout; 5] = [
+        Layout::Cod11,
+        Layout::Cod15,
+        Layout::Uo,
+        Layout::Cod2,
+        Layout::Cod4,
+    ];
 
     #[test]
     fn file_sizes_match_retail() {
@@ -329,6 +404,9 @@ mod tests {
         assert_eq!(MAX_FAVORITES * Layout::Cod15.entry(), 0x4a00);
         assert_eq!(MAX_GLOBAL * Layout::Uo.entry(), 0x2e6300);
         assert_eq!(MAX_FAVORITES * Layout::Uo.entry(), 0x4c00);
+        // 1.7's blocks' size word (cod4-front-end.md).
+        assert_eq!(Layout::Cod4.blocks(), 0x2fe980);
+        assert_eq!(Layout::Cod4.file_len(), 3_139_984);
     }
 
     /// Every layout writes favourites it reads back, keeping the Internet
@@ -351,13 +429,15 @@ mod tests {
             assert_eq!(&file[..count_at], &old[..count_at]);
             let favs = read_favorites(layout, &file).unwrap();
             assert_eq!(favs.len(), 1);
+            assert_eq!(read_internet(layout, &file).map(|i| i.len()), Some(7));
             assert_eq!(favs[0].addr(), Some(a));
             assert_eq!(favs[0].hostname(), "My server");
             // The address sits as a netadr_t: type 4, IP bytes, port
             // big-endian; the name at the layout's hostname.
             let at = layout.favorites_at();
             assert_eq!(&file[at..at + 8], &[4, 0, 0, 0, 10, 0, 0, 5]);
-            assert_eq!(&file[at + 18..at + 20], &28961u16.to_be_bytes());
+            let port = layout.port_at();
+            assert_eq!(&file[at + port..at + port + 2], &28961u16.to_be_bytes());
             assert_eq!(&file[at + layout.hostname()..][..9], b"My server");
             // Removing it leaves the rest as it was.
             let none = write_favorites(layout, Some(&file), &[]).unwrap();
@@ -365,16 +445,17 @@ mod tests {
         }
     }
 
-    /// The later games' header: version 1, then the counts, then the size;
-    /// a 128th favourite would make the file one they drop, so it stays
-    /// out.
+    /// The later games' header: version 1 (1.7's 3), then the counts, then
+    /// the size; a 128th favourite would make the file one they drop, so it
+    /// stays out.
     #[test]
     fn the_later_layouts_keep_a_file_their_loader_takes() {
         let a: SocketAddrV4 = "10.0.0.5:1".parse().unwrap();
-        for layout in [Layout::Cod15, Layout::Uo, Layout::Cod2] {
+        for layout in [Layout::Cod15, Layout::Uo, Layout::Cod2, Layout::Cod4] {
             let favs = vec![Entry::new(layout, a, "x"); 0x80];
             let file = write_favorites(layout, None, &favs).unwrap();
-            assert_eq!(&file[0..4], &1i32.to_le_bytes());
+            let version = if layout == Layout::Cod4 { 3 } else { 1 };
+            assert_eq!(&file[0..4], &i32::to_le_bytes(version));
             assert_eq!(&file[8..12], &0x7fi32.to_le_bytes());
             assert_eq!(read_favorites(layout, &file).unwrap().len(), 0x7f);
             let mut bad = file.clone();
@@ -401,7 +482,9 @@ mod tests {
                 // 1.5's and CoD2's files are one shape; 1.1's migrates
                 // into theirs.
                 let same = other == layout || other.file_len() == layout.file_len();
-                if same || (other == Layout::Cod11 && layout != Layout::Uo) {
+                if same
+                    || (other == Layout::Cod11 && matches!(layout, Layout::Cod15 | Layout::Cod2))
+                {
                     continue;
                 }
                 let f = write_favorites(other, None, &[]).unwrap();

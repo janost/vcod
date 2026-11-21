@@ -1448,8 +1448,8 @@ the same instructions, the period from syscall 0xb7 + 200 (0xb6 the clip
 test) or 1000, 0.36f at 0x3007c06c, `_ftol` at 0x3006be3c. vcod:
 `animclock::spread_phase_15` (the server's) and `spread_phase_15_cgame` (the
 cgames', which the client's drawn bodies take through
-`ChannelClock::cgame_spread`), used by the windowed setter
-(`ChannelClock::update_windowed`), with `AnimMotion::length_ms`. The two
+`animclock::Flavour::Cgame15`), used by the windowed setter
+(`animclock::update_body` under every `Flavour` but `V1_1`), with `AnimMotion::length_ms`. The two
 forms part by an ulp of the sum once it passes 1 (client 3 at 12345 ms:
 `0x3ed9999c` against `0x3ed9999b`).
 
@@ -1821,7 +1821,7 @@ node then fades over the torso's blend. vcod: `ChannelClock::knob_nodes` and
 `touched` give the nodes and clips beside the path
 `Ramp::cleared_next_step`, which reads the old weight at the set's time and 0
 after it, and the death channel's own old clips the same. CoD2's and CoD4's
-bodies (`vcod_cod2::player`, `ChannelClock::cod2_tree`) keep the clear at
+bodies (`vcod_cod2::player`, `animclock::Flavour::cod2_tree`) keep the clear at
 once and no shared node: their gates match retail that way
 (`cod2_combat_ab`'s hit-turret kill moves off retail's with CoD1's rule) and
 `cod2_lnxded`'s clear was not read.

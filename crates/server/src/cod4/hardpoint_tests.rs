@@ -68,14 +68,11 @@ fn run_classes(
             && let Some(ps) = level.pm_state(1)
         {
             // The shooter holds still: its own view, no keys.
-            let short = |a: f32| ((a * 65536.0 / 360.0).round() as i32 & 0xffff) as u16;
             let c = UserCmd {
                 server_time: svs + 10,
                 weapon: 27,
                 offhand: 40,
-                angles: std::array::from_fn(|k| {
-                    short(ps.view_angles[k]).wrapping_sub(short(ps.delta_angles[k]))
-                }),
+                angles: vcod_cod4::net::conn::cmd_angles(ps.view_angles, ps.delta_angles),
                 ..Default::default()
             };
             probes[1].replay.clear();
@@ -375,7 +372,6 @@ fn a_helicopter_shot_down_crashes() {
             let Some(ps) = level.pm_state(0) else {
                 return;
             };
-            let short = |a: f32| ((a * 65536.0 / 360.0).round() as i32 & 0xffff) as u16;
             let attack = (svs / 50) % 2 == 0;
             if attack {
                 fired += 1;
@@ -385,9 +381,7 @@ fn a_helicopter_shot_down_crashes() {
                 weapon: ps.weapon as u8,
                 offhand: ps.off_hand_index as u8,
                 buttons: u32::from(attack),
-                angles: std::array::from_fn(|k| {
-                    short(ps.view_angles[k]).wrapping_sub(short(ps.delta_angles[k]))
-                }),
+                angles: vcod_cod4::net::conn::cmd_angles(ps.view_angles, ps.delta_angles),
                 ..Default::default()
             };
             probes[0].replay.clear();
@@ -565,15 +559,12 @@ fn rpg_at_heli(cvars: &[(&str, &str)], off: f32) -> Option<RpgFlight> {
                 ps.weapon, ps.weapon_state, ps.origin
             );
         }
-        let short = |a: f32| ((a * 65536.0 / 360.0).round() as i32 & 0xffff) as u16;
         let c = UserCmd {
             server_time: svs + 10,
             weapon: rpg,
             offhand: ps.off_hand_index as u8,
             buttons: u32::from((fire_at..fire_at + 100).contains(&svs)),
-            angles: std::array::from_fn(|k| {
-                short(ps.view_angles[k]).wrapping_sub(short(ps.delta_angles[k]))
-            }),
+            angles: vcod_cod4::net::conn::cmd_angles(ps.view_angles, ps.delta_angles),
             ..Default::default()
         };
         probes[0].replay.clear();
