@@ -32,6 +32,8 @@
 #   SERVER_ARGS extra vcod-server arguments, word split (e.g. `--set
 #              sv_cheats=1`, so `--exec-in-game "setviewpos x y z yaw
 #              pitch"` holds the view on one spot)
+#   LVP_ICD    lavapipe's ICD json: sets VK_DRIVER_FILES and
+#              WGPU_BACKEND=vulkan (or pass those two through)
 #   VK_DRIVER_FILES / WGPU_BACKEND pass through: a Vulkan adapter with BC
 #   textures (lavapipe will do; its GPU ms are CPU rasterization, on
 #   LP_NUM_THREADS threads, default 4 here).
@@ -60,6 +62,8 @@
 # Writes server.log, client.log, kwin.log (nested only) and profile.txt
 # under <outdir>. Kills only the processes it started.
 set -u
+# LVP_ICD, as gate.sh and cod1_soak.sh take it: lavapipe's ICD json.
+[[ -n ${LVP_ICD:-} ]] && export VK_DRIVER_FILES=$LVP_ICD WGPU_BACKEND=${WGPU_BACKEND:-vulkan}
 SESSION=${SESSION:-0}
 . "$(dirname "$0")/lib.sh"
 if [[ $SESSION != 1 && ${PERF_INNER:-} != 1 ]]; then

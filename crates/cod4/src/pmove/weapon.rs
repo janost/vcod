@@ -408,7 +408,7 @@ impl WeaponDef {
             destabilization_rate_time: f(2064),
             destabilization_curvature_max: f(2068),
             destabilize_distance: i(2072),
-            aim: super::aim::AimKeys::from_raw(raw),
+            aim: super::aim::AimKeys::from_raw(raw[..0x878].try_into().unwrap()),
         })
     }
 }
@@ -457,14 +457,10 @@ impl WeaponDefs for Vec<WeaponDef> {
     }
 }
 
-/// `player_burstFireCooldown` (0.2), `player_adsExitDelay` (0, see
-/// [`ads_lerp`]),
-/// `player_breath_fire_delay` (0), `bg_aimSpreadMoveSpeedThreshold` (11),
-/// `player_scopeExitOnDamage` (0) and `player_sustainAmmo` (0): 1.7's
-/// registered defaults (`tools/re/cod4_dvars.py` on `cod4_lnxded`,
-/// VERIFIED).
-const BURST_FIRE_COOLDOWN: f32 = 0.2;
-const AIM_SPREAD_MOVE_SPEED_THRESHOLD: f32 = 11.0;
+// `player_adsExitDelay` (see `ads_lerp`), `player_breath_fire_delay`,
+// `player_scopeExitOnDamage` and `player_sustainAmmo` run at 1.7's
+// registered 0 (`tools/re/cod4_dvars.py`, VERIFIED); the dvars pmove
+// reads are [`super::Rules`]'s.
 
 fn bit(bits: &[u32; 4], i: u32) -> bool {
     i < 128 && bits[(i / 32) as usize] >> (i % 32) & 1 != 0
@@ -628,7 +624,7 @@ fn spread_growth(pm: &Pmove, d: &WeaponDef, ft: f64, grounded: bool) -> f64 {
     if d.hip_spread_move_add != 0.0 && moving {
         let v = pm.ps.velocity;
         let flat_sq = (f64::from(v.y) * f64::from(v.y) + f64::from(v.x) * f64::from(v.x)) as f32;
-        let floor = f64::from(AIM_SPREAD_MOVE_SPEED_THRESHOLD);
+        let floor = f64::from(pm.rules.aim_spread_move_speed_threshold);
         if f64::from(flat_sq) > floor * floor {
             grow += f64::from(d.hip_spread_move_add) * f64::from(flat_sq.sqrt())
                 / f64::from(pm.ps.speed);
@@ -839,10 +835,6 @@ fn pin_prone(ps: &mut super::PlayerState) {
     }
 }
 
-/// `perk_weapReloadMultiplier` (0.5) and `perk_weapRateMultiplier` (0.75),
-/// 1.7's defaults (`tools/re/cod4_dvars.py`, VERIFIED).
-const PERK_RELOAD_MULTIPLIER: f32 = 0.5;
-const PERK_RATE_MULTIPLIER: f32 = 0.75;
 /// Sleight of Hand and Double Tap, the `perks` bits 0x4 and 0x8 the clock
 /// reads (cod4-combat.md 2.1).
 const PERK_FAST_RELOAD: u32 = 0x4;
@@ -856,17 +848,20 @@ fn perk_msec(msec: i32, multiplier: f32) -> i32 {
 
 /// The milliseconds this cmd takes off both weapon clocks: a reload's run
 /// faster under Sleight of Hand, a shot's and a rechamber's under Double
-/// Tap (cod4-combat.md 2.1; the `doubletap` rows).
-fn clock_step(ps: &super::PlayerState, msec: i32) -> i32 {
+/// Tap (cod4-combat.md 2.1; the `doubletap` rows). A multiplier of 0 steps
+/// by the larger clock (0x806394f).
+pub(super) fn clock_step(ps: &super::PlayerState, rules: &super::Rules, msec: i32) -> i32 {
     let (perk, multiplier) = match ps.weapon_state {
-        s if is_reloading(s) => (PERK_FAST_RELOAD, PERK_RELOAD_MULTIPLIER),
-        state::FIRE | state::RECHAMBER => (PERK_FAST_FIRE, PERK_RATE_MULTIPLIER),
+        s if is_reloading(s) => (PERK_FAST_RELOAD, rules.perk_weap_reload_multiplier),
+        state::FIRE | state::RECHAMBER => (PERK_FAST_FIRE, rules.perk_weap_rate_multiplier),
         _ => return msec,
     };
-    if ps.perks & perk != 0 {
-        perk_msec(msec, multiplier)
-    } else {
+    if ps.perks & perk == 0 {
         msec
+    } else if multiplier == 0.0 {
+        ps.weapon_time.max(ps.weapon_delay)
+    } else {
+        perk_msec(msec, multiplier)
     }
 }
 
@@ -891,7 +886,7 @@ fn run_clocks(pm: &mut Pmove, pml: &Pml) -> bool {
     if ps.weapon_restrict_kick_time > 0 {
         ps.weapon_restrict_kick_time = (ps.weapon_restrict_kick_time - pml.msec).max(0);
     }
-    let step = clock_step(ps, pml.msec);
+    let step = clock_step(ps, &pm.rules, pml.msec);
     if run_down(&mut pm.ps.weapon_time, step) && !weapon_time_out(pm) {
         return false;
     }
@@ -900,8 +895,8 @@ fn run_clocks(pm: &mut Pmove, pml: &Pml) -> bool {
 
 /// `player_burstFireCooldown` in ms: the gun stays ready but shut after a
 /// burst (cod4-combat.md 2, the `shooter` rows' 0xc8).
-fn burst_cooldown_ms() -> i32 {
-    (f64::from(BURST_FIRE_COOLDOWN) * 1000.0).round_ties_even() as i32
+fn burst_cooldown_ms(rules: &super::Rules) -> i32 {
+    (f64::from(rules.burst_fire_cooldown) * 1000.0).round_ties_even() as i32
 }
 
 /// `weaponTime` just ran out. A finished burst starts its cooldown and
@@ -919,7 +914,7 @@ fn weapon_time_out(pm: &mut Pmove) -> bool {
         && d.fires_bursts()
         && !mid_burst(ps, Some(d))
     {
-        ps.weapon_time = burst_cooldown_ms();
+        ps.weapon_time = burst_cooldown_ms(&pm.rules);
         back_to_ready(ps);
         return false;
     }
@@ -1369,16 +1364,20 @@ fn arm_add_delay(ps: &mut super::PlayerState, d: &WeaponDef) {
     }
 }
 
-/// `PM_Weapon_ReloadDelayedAction` (unverified on 1.7): a reload's delay
-/// ran out. An
-/// unchambered bolt ejects its brass (`EV_EJECT_BRASS`) and, while the
-/// segment still runs, waits again for the rest of the add moment past
-/// `rechamberBoltTime` (when that is at least a millisecond); otherwise
-/// the rounds go in now.
-fn reload_delay_out(ps: &mut super::PlayerState, d: &WeaponDef) {
+/// `PM_Weapon_ReloadDelayedAction` (`cod4_lnxded` 0x80624a6, the name by
+/// its shape): a reload's delay ran out. An unchambered bolt ejects its
+/// brass (`EV_EJECT_BRASS`, 0x806257b); in a start without
+/// `reloadStartAddTime` that is all (0x806258b..0x8062714), as CoD2's
+/// copy does. Else, while the segment still runs, it waits again for the
+/// rest of the add moment past `rechamberBoltTime` (when that is at least
+/// a millisecond, 0x80625e8..0x8062602); otherwise the rounds go in now.
+pub(super) fn reload_delay_out(ps: &mut super::PlayerState, d: &WeaponDef) {
     if unchambered(ps, d) {
         set_bit(&mut ps.weaponrechamber, ps.weapon, false);
         ps.add_event(ev::EJECT_BRASS, 0);
+        if in_reload_start(ps.weapon_state) && d.reload_start_add_time == 0 {
+            return;
+        }
         if let Some(moment) = add_moment(ps, d).filter(|_| ps.weapon_time != 0) {
             let bolt = if d.rechamber_bolt_time >= moment {
                 1

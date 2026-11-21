@@ -11,7 +11,7 @@
 //!         [--download auto|FILE,FILE...] [--dl-dir DIR] [--cmd "SECS TEXT"]...
 //!
 //! Without `--team` it stays a spectator in the team menu
-//! (docs/research/cod4-netfields.md, "The snapshot capture"). With it, it
+//! (docs/research/cod4-netfields.md 6). With it, it
 //! answers the team menu (`mr`) a second after the first snapshot and the
 //! class menu 1.5 s later, and from its spawn plays `--script`: `walk`
 //! walks, strafes, jumps, crouches, goes prone, fires the rifle in taps,
@@ -70,7 +70,7 @@
 //! The stats packets carry a fresh profile's block (`net::stats`). The first
 //! reliable command after the gamestate is `cp`, the pure checksums of the
 //! iwds in `--iwds` that the server lists, or the bare key without it; both
-//! pass a pure server's check (cod4-handshake.md, "The pure check").
+//! pass a pure server's check (cod4-handshake.md 8).
 //! `--no-cp` leaves it out. `--answers "SECS team|class RESPONSE|..."`
 //! answers the team or class menu at each time past the first snapshot in
 //! place of `--team`'s two; answers at one time go in one packet.

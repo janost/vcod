@@ -6,6 +6,7 @@
 //! triangles are required: docs/research/bsp-ibsp59-format.md, "Terrain has
 //! no brushes".
 
+use crate::clipmap::ClipTrace;
 use crate::leafwalk::LeafWalk;
 use crate::patch::{Arith, PatchCollide};
 use crate::terrain::Terrain;
@@ -89,7 +90,7 @@ pub enum Prim {
 pub trait WorldClip: Send + Sync {
     /// A sweep of the box `mins..maxs` from `start` to `end` under `mask`;
     /// `start == end` is a position test.
-    fn trace(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: u32) -> WorldHit;
+    fn trace(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: u32) -> ClipTrace;
     /// The contents of the world's brushes at `p`.
     fn point_contents(&self, p: Vec3) -> u32;
     /// The game's bullet mask: what [`CollisionWorld::shot_trace`] traces
@@ -100,17 +101,6 @@ pub trait WorldClip: Send + Sync {
     fn ladder_boxes(&self) -> Vec<(Vec3, Vec3)> {
         Vec::new()
     }
-}
-
-/// What a [`WorldClip`] trace met.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct WorldHit {
-    pub fraction: f32,
-    pub normal: Vec3,
-    pub surface_flags: u32,
-    pub contents: u32,
-    pub startsolid: bool,
-    pub allsolid: bool,
 }
 
 #[derive(Clone, Copy, Debug)]

@@ -6,7 +6,7 @@ The byte layout of a CoD 1 animation clip. Facts are VERIFIED unless a line carr
 - This doc covers the flag-0 layout. The flagged variants (loop, delta, both) and the frame-index widening are decoded in `player-model-anim-system.md`, "xanim v14 header flags".
 - Little-endian; `cstr` is NUL-terminated.
 
-## Layout (flags == 0)
+## 1. Layout (flags == 0)
 
 ```
 u16 version                 // 14
@@ -35,7 +35,7 @@ note_count x { cstr name; u16 frame }
 - A simple bone keys one i16, the quaternion's Z. Read as Z, the `viewmodel_kar98mp_idle` finger keys equal the hands' `xmodelparts` bind locals (0.0 degrees apart); read as X they land 6 to 114 degrees off. In the 48-bone kar98mp clips the simple bones are the forearms, every finger and `kar98_bolt`, all single-axis rotators.
 - The parser refuses a flag value above 3; none occurs in the corpus.
 
-## Flag extensions, in brief
+## 2. Flag extensions, in brief
 
 Decoded in `player-model-anim-system.md`.
 
@@ -47,19 +47,19 @@ Decoded in `player-model-anim-system.md`.
 
 Whatever the flags, the sparse frame-index list is u8 while the highest index fits a byte and u16 above that (`frame_count > 256` in the parser, loop key counted).
 
-## Timing
+## 3. Timing
 
 Duration is `(frame_count - 1) / framerate`, which reproduces the weapon-file timings: `viewmodel_kar98mp_fire` has 11 frames, 0.333 s, against `fireTime 0.33`; `ADS_up` 10 frames, 0.3 s, against `adsTransInTime`. A looping clip wraps over `frame_count - 1`; a one-shot clamps to its last frame and holds.
 
 kar98mp clips (frames / tracks): idle 1/48, fire 11/48, lastshot 11/48, rechamber 32/48, reload 78/48, ADS_up 10/1, ADS_down 17/1, pullout 10/48, putaway 11/48. The two ADS clips animate only `tag_torso`, which moves the grafted gun with the hands (`xmodel-v14-format.md`).
 
-## The sight layer
+## 4. The sight layer
 
 A viewmodel's hip position is not its bind pose. Every `adsUpAnim` opens and every `adsDownAnim` closes on `tag_torso`'s hip placement, and `adsUpAnim` closes on the sight placement. For `kar98k_mp`, `tag_torso` translates by (5.98, -3.10, -3.39) at `viewmodel_kar98_ADS_up` frame 0 and `viewmodel_kar98_ADS_down` frame 12, and by (3.66, -0.26, -0.51) at `ADS_up` frame 10 (VERIFIED, both clips). VERIFIED (every `weapons/mp/*` file's named clips): no idle, fire, reload or raise clip of a rifle, pistol or submachine gun keys `tag_torso`; the stock grenades key it in every clip and ship no ADS clips; `panzerfaust_mp` keys it in `altDropAnim` only. A rig that draws only the main clip leaves `tag_torso` at its zeroed bind: the gun sits 6 units behind the hip and 3 up and left, the receiver in the camera's face.
 
 In `cgame_mp_x86.dll` (1.1) the viewmodel anim tree has 21 nodes (0x30034cf0, trap 0x84 on the `"VIEWMODEL"` tree). VERIFIED (the immediates): the function at 0x30034240 sets a goal weight (trap 0x8c) of 1 on node 0x13 and 0 on node 0x14, or the reverse, then sets node 0x13's time (trap 0x91) to the value at 0x30207214 and node 0x14's to 1 minus it. INFERRED: 0x30207214 is the interpolated playerstate float at +0xc4, the one the fov function at 0x30032e20 blends `adsZoomFov` with, so `fWeaponPosFrac`. INFERRED (branch conditions): its one caller at 0x3003448a passes 0x13 when `pm_flags` bit 0x20 is set and 0x14 otherwise, and a weaponstate-5 case forces 0x14 while `weaponTime` exceeds a weapon-def field. INFERRED: nodes 0x13 and 0x14 are the up and down sight clips, one always at full weight with its time slaved to the fraction, which puts the hip at `adsDownAnim`'s last frame. vcod: `ViewWeapon::pose` (`crates/client/src/viewmodel.rs`) blends that layer with the main clip each frame ("United Offensive's rigs" below), and picks the up clip off the fraction's trend, not the flag.
 
-### The hip pose against retail
+### 4.1 The hip pose against retail
 
 A "receiver in the camera's face" pose means the sight layer above is missing; no per-weapon offset is involved. Every stock weapon file at rest (sight layer down, idle frame 0) holds `tag_weapon` 2.5 to 13.8 units ahead of `tag_view`, 2.4 to 7.8 right and 2.8 to 11.0 below (the kar98k at (4.33, -2.88, -3.84), the rifles at the short end, pistols, grenades and the panzerfaust at the long one); with the main clip alone the BAR's sits 1.7 behind the eye (VERIFIED, every `weapons/mp/*` rig through `crates/client/src/viewmodel.rs`; `every_stock_weapon_rests_ahead_right_and_below` pins it). The stand offsets play no part at rest. VERIFIED (cvar table, and the field table at 0x30075828): the cgame's `cg_gunX/Y/Z` (entries 0x30074cb4, 0x30074cc4, 0x30074cd4, all default `"0"`) and the weapon files' `standMove*`/`standRot*` fields only add motion. INFERRED (0x300362c0's branch on `standMoveMinSpeed`): the stand terms scale with speed. `cod11-combat.md` 17.4 reads the function out, `duckedOfs`/`proneOfs` included.
 
@@ -67,11 +67,11 @@ VERIFIED on screen: retail `CoDMP.exe` 1.1 under Wine and vcod `--walk`, both at
 
 Some idle clips park a part out of sight by translation: `viewmodel_mosinnagantscoped_idle` keys `k98 clip` at (120, -468, -1822) (VERIFIED, frame 0). A bounds check over a posed viewmodel mesh has to allow for it.
 
-### United Offensive's rigs
+### 4.2 United Offensive's rigs
 
 United Offensive's newer view rigs, the `w_*_view` gun models on `viewmodel_hands_new` (`gewehr43_mp`'s `w_ge_rfl_gewehr43_view`, `svt40_mp`'s `w_rs_rfl_svt40_view`), key `tag_torso` in every clip (idle, fire, ADS fire, reload) at one hip placement: (4.39, -2.92, -3.06) for the gewehr43 and (5.22, -3.41, -2.84) for the svt40 (VERIFIED, every named clip in `weapons/mp/gewehr43_mp` and `svt40_mp`, `pakuo07.pk3`). Their `adsUpAnim` does not close on a sight placement: `w_ge_rfl_gewehr43_view_ADSup` ends at (1.78, 3.27, 2.11) and `w_rs_rfl_svt40_view_ADSup` at (0.22, 4.40, 1.72), left of and above the eye, the gewehr43's barrel pitched 6 degrees up against idle's 9 down (VERIFIED, the clips). The mean of idle's and `adsUpAnim`'s last frame puts `tag_torso` at (3.08, 0.17, -0.47) for the gewehr43 and (2.72, 0.50, -0.56) for the svt40, on the view axis like the kar98k's (4.83, -0.26, -0.49), barrel level (vcod measurement). INFERRED (from that geometry; `uo_cgame_mp_x86.dll` not read): the cgame blends the sight node with the main clip's node at equal weight per bone, not one overriding the other. The stock 1.1 rigs cannot tell the two rules apart, since no main clip keys `tag_torso`. `ViewWeapon::pose` blends the two as sibling nodes (`PoseBuffer::blend_nodes`), with idle as the main clip while sighted; `uo_rigs_centre_the_sight_in_the_blend_with_idle` pins the muzzle within a unit of the axis sideways and 2.5 vertically.
 
-## Sampling and the translation-key gotcha
+## 5. Sampling and the translation-key gotcha
 
 `Track::sample` lerps positions and slerps rotations between the bracketing keys, clamps outside the keyed range, and returns nothing for a channel with no keys. A rotation key replaces the local rotation outright.
 
@@ -79,7 +79,7 @@ A track with no rotation keys poses its bone at identity, not at whatever an ear
 
 Translation keys are offsets from the bind local position, not absolute locals. VERIFIED (the shipped player clips): they key `bip01 pelvis` with small values (-2.2 idle, -22.3 crouched, -31.0 prone) against a bind local z of 37.23. Read as absolutes the stance sinks about 39 units into the ground; read as offsets `bip01 l/r toe0` lands within about 1 unit of z = 0 across `pb_stand_alert`, `pb_combatrun_forward_loop`, `pb_crouch_alert`, `pb_crouch_run_forward` and `pb_prone_aim`. Every other translation-keyed player bone (spine, clavicles, toe0, fingers) reads the same way, as fractions of the bone's bind length. Viewmodel rigs hide this: every shipped `viewmodel_*` model has its bind local positions at exactly zero (the viewhands quirk in the xmodel doc), so offset and absolute are the same number there. `PoseBuffer::apply` does `local_pos = bind_pos + key`.
 
-### Rotation keys as the engine rebuilds them
+### 5.1 Rotation keys as the engine rebuilds them
 
 VERIFIED, `cod_lnxded` (1.1d):
 

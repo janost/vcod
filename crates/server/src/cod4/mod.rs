@@ -38,7 +38,6 @@ use vcod_cod4::net::stats::{STAT_PACKETS, Stats};
 use vcod_cod4::net::wire::{Cod4Wire, EOF, Frame4, PROTOCOL_17};
 use vcod_common::net::codec::MsgWriter;
 use vcod_common::net::netchan::{NetchanParams, ServerNetchan};
-use vcod_common::net::protocol::WireGame;
 use vcod_common::text::latin1_bytes;
 
 use crate::engine::{conn, link};
@@ -102,6 +101,9 @@ pub struct Cod4Client {
     /// The exponent of the next unacked back-off draw (slot +0x804f8,
     /// 0..=8); see [`Cod4Server::transmit`].
     stall_exp: u32,
+    /// `SV_ClientCommand`'s flood count (slot +0x21458): game commands
+    /// still let through inside the 800 ms window ([`flood_check`]).
+    flood_count: i32,
 }
 
 /// The pure lists: `sv_iwds`/`sv_iwdNames` in search order and the keyed
@@ -911,7 +913,7 @@ impl Cod4Server {
     /// A netchan packet: its slot by address and qport, the netchan, then
     /// `SV_ExecuteClientMessage`.
     fn client_packet(&mut self, from: SocketAddr, pkt: &[u8]) {
-        let conn::Incoming::Message(slot, m) = conn::incoming(&self.core, from, pkt) else {
+        let conn::Incoming::Message(slot, m) = conn::incoming(&mut self.core, from, pkt) else {
             return;
         };
         let svs = self.core.sv_time_ms;
@@ -929,7 +931,12 @@ impl Cod4Server {
                 ),
             );
             let plain = self.game.huff.decompress(&m.ops);
+            let max = c.link.netchan.max_commands();
             match clmsg::read_ops(plain, key, &UserCmd::default()) {
+                Ok(ops) if commands(&ops) > max => {
+                    log::debug!("cod4: client {slot}: more than {max} commands in a message");
+                    return;
+                }
                 Ok(ops) if matches!(ops.last(), Some(ClOp::Eof)) => ops,
                 Ok(_) => {
                     log::debug!("cod4: client {slot}: message short of clc_EOF");
@@ -974,7 +981,11 @@ impl Cod4Server {
             // the gamestate again once the client has acknowledged past the
             // last one (VERIFIED live).
             let plain = self.game.huff.decompress(&m.ops);
-            for op in clmsg::read_commands(plain) {
+            let ops = clmsg::read_commands(plain);
+            if commands(&ops) > c.link.netchan.max_commands() {
+                return;
+            }
+            for op in ops {
                 if let ClOp::Command { sequence, text } = op
                     && !self.client_command(slot, sequence, &text, true)
                 {
@@ -1015,8 +1026,11 @@ impl Cod4Server {
             conn::CommandSeq::Lost => return false,
             conn::CommandSeq::Next => {}
         }
+        let floodprotect = self.int("sv_floodprotect");
+        let svs = self.core.sv_time_ms;
         let c = self.core.clients[slot].as_mut().unwrap();
         log::debug!("cod4: client {slot} command {seq} {text:?}");
+        let game_ok = flood_check(c, floodprotect, svs, &text) && !from_old;
         let args = crate::game::say::tokenize(&text);
         match args.first().map(String::as_str) {
             Some(c) if from_old && c != "disconnect" && c != "userinfo" => {}
@@ -1057,7 +1071,8 @@ impl Cod4Server {
                     level.userinfo_changed(slot, &name);
                 }
             }
-            Some(_) => self.game_command(slot, &args, &text),
+            Some(_) if game_ok => self.game_command(slot, &args, &text),
+            Some(_) => log::debug!("client text ignored for {slot}: {text}"),
             None => {}
         }
         self.core.clients[slot]
@@ -1510,7 +1525,7 @@ impl Cod4Server {
             ps.sent_angles();
             // Every entity but the one the playerstate views from: retail
             // culls none by position (cod4-pmove.md 15).
-            let viewer = ps.get("clientNum").unwrap_or(slot as u32);
+            let viewer = ps.word(vcod_cod4::ps_word!("clientNum"));
             let to = Frame4 {
                 server_time: Msec::from_raw(svs),
                 map_center,
@@ -1590,6 +1605,7 @@ impl Cod4Server {
                 guid,
                 download: download::Download::default(),
                 stall_exp: 0,
+                flood_count: 0,
             },
         ));
     }
@@ -1660,6 +1676,13 @@ fn ignorable(text: &str) -> bool {
         text.as_bytes().first(),
         Some(b'J' | b'G' | b'H' | b'I' | b'c' | b'e' | b'f' | b'g' | b'h' | b'i' | b' ')
     )
+}
+
+/// The `clc_clientCommand`s among a message's ops.
+fn commands(ops: &[ClOp]) -> usize {
+    ops.iter()
+        .filter(|op| matches!(op, ClOp::Command { .. }))
+        .count()
 }
 
 /// The engine's copy of a userinfo's `name`: its first 15 characters
@@ -1861,6 +1884,31 @@ fn info_sorted(pairs: impl Iterator<Item = (String, String)>) -> String {
         info.set(k, v);
     }
     info.to_string()
+}
+
+/// `SV_ClientCommand`'s flood rule (`cod4_lnxded` 0x8170c97..0x8170f97,
+/// cod4-handshake.md 16): whether `text` may reach the game. Under
+/// `sv_floodprotect` n, an active client's command other than one opening
+/// `team `, `score` or `mr ` (case for case) is refused when no count is
+/// left and it comes inside 800 ms of the last counted one; each counted
+/// one, refused or not, sets the count to n - 1 past the window or takes
+/// one off it inside, and opens a new window. The engine's own commands
+/// run either way.
+fn flood_check(c: &mut Client, floodprotect: i32, svs: i32, text: &str) -> bool {
+    let exempt = [&b"team "[..], b"score", b"mr "]
+        .iter()
+        .any(|p| text.as_bytes().starts_with(p));
+    if floodprotect == 0 || c.state != State::Active || exempt {
+        return true;
+    }
+    let ok = c.extra.flood_count != 0 || svs >= c.link.next_reliable_ms;
+    c.extra.flood_count = if svs >= c.link.next_reliable_ms {
+        floodprotect.saturating_sub(1)
+    } else {
+        (c.extra.flood_count - 1).max(0)
+    };
+    c.link.next_reliable_ms = svs.wrapping_add(800);
+    ok
 }
 
 #[cfg(test)]

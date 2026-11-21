@@ -992,7 +992,7 @@ pub fn snap_angles(a: Vec3) -> Vec3 {
 }
 
 /// 1.7's `SV_LinkEntity` snap (`cod4_lnxded` 0x817e426..0x817e5ba,
-/// cod4-gsc.md 3.2, "The link's snap"): as [`snap_angles`], but `n =
+/// cod4-gsc.md 3.2.6): as [`snap_angles`], but `n =
 /// floor(a + 0.5)` (`frndint` rounding down, then `fistp`) against the
 /// float 0x358637be (0x8212470), so a negative angle snaps too.
 pub fn snap_angles4(a: Vec3) -> Vec3 {
@@ -1308,12 +1308,17 @@ pub fn damageable_statics(host: &GameHost) -> Vec<EntId> {
     let mut ids: Vec<EntId> = host
         .movers
         .rows
-        .iter()
-        .filter(|(id, m)| m.use_static && host.area.last_link(id.0).is_some())
-        .map(|(id, _)| *id)
+        .keys()
+        .copied()
+        .filter(|&id| is_damageable_static(host, id))
         .collect();
     ids.sort_by_key(|id| id.0);
     ids
+}
+
+/// Whether `id` is one of [`damageable_statics`].
+pub fn is_damageable_static(host: &GameHost, id: EntId) -> bool {
+    host.movers.rows.get(&id).is_some_and(|m| m.use_static) && host.area.last_link(id.0).is_some()
 }
 
 /// `G_Damage`'s arm for an `eType` 5 entity (game.mp `0x49e93`): with a

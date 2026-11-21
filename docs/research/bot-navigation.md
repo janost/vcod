@@ -1191,6 +1191,15 @@ the build read only off model 0 (section 2, "Ladders"); since
 
 ## 3. Following
 
+**Current numbers.** The latest `ship_stalls` run per map (`dm`, 6 bots,
+4000 ticks, shoot off, release, 1.1, `VCOD_BOT_THREADS=1`); a round that
+re-measures updates its row. VERIFIED (measured, vcod-server).
+
+| Map | Seeds | Master | Stalled / falls / deaths | Given up | Section |
+|---|---|---|---|---|---|
+| `mp_ship` | 1-1535 odd | c65001bfe | 178 / 2 / 1 | 2 142 | 3.12 |
+| `mp_depot` | 1-767 odd | c65001bfe | 0 / 3 / 0 | 384 | 3.12 |
+
 The tick runs in four passes over the bots in slot order
 (`bots::driver::step`, one driver over a game's `BotWorld`): every bot's
 server commands first; then every bot's view (enemy refresh, view,
@@ -1518,7 +1527,7 @@ cause, and a 32-seed total by tens. Each round below traced its stalls
 tick by tick (`TRACE=`), fixed the cause, and re-measured on the same
 settings (`mp_ship` `dm`, 6 bots, shoot off, 4000 ticks, release, unless
 noted). Every row VERIFIED (measured). The current numbers are the
-2026-10-21 recheck at the end of this section.
+table at the top of section 3.
 
 - 2026-10-09, the hull beam: a flood edge merged onto the beam's slope
   edge at -47.875 under the top node (2172.9, 418.2, -31.875) led bots

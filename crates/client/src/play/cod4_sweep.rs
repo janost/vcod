@@ -1504,7 +1504,7 @@ impl Pilot for crate::cod4_client::Cod4Client {
             .client()
             .snapshots
             .last()
-            .and_then(|f| f.ps.get("pm_type"))
+            .map(|f| f.ps.word(vcod_cod4::ps_word!("pm_type")))
             .unwrap_or(0)
     }
 
@@ -2045,7 +2045,7 @@ fn first_marks(root: &Path, addr: SocketAddr) -> Option<MarksSeen> {
             .client()
             .snapshots
             .last()
-            .and_then(|x| x.ps.get("pm_flags"))
+            .map(|x| x.ps.word(vcod_cod4::ps_word!("pm_flags")))
             .is_none_or(|f| f & 0x800 != 0);
         if c.session.spawn().is_some() && !frozen {
             // Down at the ground ahead, in bursts.
@@ -2294,7 +2294,7 @@ fn shoot_car(root: &Path, addr: SocketAddr) -> Option<CarSeen> {
             .client()
             .snapshots
             .last()
-            .and_then(|x| x.ps.get("pm_flags"))
+            .map(|x| x.ps.word(vcod_cod4::ps_word!("pm_flags")))
             .is_none_or(|f| f & 0x800 != 0);
         if c.session.spawn().is_some() && !frozen {
             match target {

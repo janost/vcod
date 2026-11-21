@@ -436,6 +436,11 @@ impl Server {
             );
             return;
         }
+        if self.per_ip_full(from, true) {
+            log::info!("{from}: getchallenge refused, its address holds too many slots");
+            self.send_oob(from, crate::engine::link::PER_IP_REFUSAL);
+            return;
+        }
         // Slots on the unscaled clock (1.5b 0x83ccd88), the draw's xor on
         // the game's (0x83ccd84); one clock on 1.1d (0x83b67a4).
         let (svs, game) = (self.svs_time_ms(), self.core.sv_time_ms);
@@ -531,24 +536,27 @@ impl Server {
         }
         // A zombie of this peer is a reconnect into its own slot; the game
         // saw it leave at the drop, so there is nothing to tear down.
-        let Some(slot) = reconnect.or_else(|| {
-            self.game
-                .zombies
-                .iter()
-                .position(|c| c.as_ref().is_some_and(same_peer))
-                .or_else(|| {
-                    // A new client: a matching `sv_privatePassword` (an
-                    // empty one matches an absent `password`) searches from
-                    // slot 0, anyone else from `sv_privateClients` (0x8085a03).
-                    let private_pw = self.live_cvar("sv_privatePassword", "");
-                    let start =
-                        if info_value_for_key(&userinfo, "password").unwrap_or("") == private_pw {
-                            0
-                        } else {
-                            self.private_clients().max(0) as usize
-                        };
-                    self.free_slot_from(start)
-                })
+        let zombie = self
+            .game
+            .zombies
+            .iter()
+            .position(|c| c.as_ref().is_some_and(same_peer));
+        if reconnect.is_none() && zombie.is_none() && self.per_ip_full(from, false) {
+            log::info!("{from}: connect refused, its address holds too many slots");
+            self.send_oob(from, crate::engine::link::PER_IP_REFUSAL);
+            return;
+        }
+        let Some(slot) = reconnect.or(zombie).or_else(|| {
+            // A new client: a matching `sv_privatePassword` (an empty one
+            // matches an absent `password`) searches from slot 0, anyone
+            // else from `sv_privateClients` (0x8085a03).
+            let private_pw = self.live_cvar("sv_privatePassword", "");
+            let start = if info_value_for_key(&userinfo, "password").unwrap_or("") == private_pw {
+                0
+            } else {
+                self.private_clients().max(0) as usize
+            };
+            self.free_slot_from(start)
         }) else {
             log::debug!("Rejected a connection.");
             self.send_oob(from, "error\nEXE_SERVERISFULL");
@@ -601,6 +609,20 @@ impl Server {
         if count == 1 || count == self.core.clients.len() {
             self.core.masters.force();
         }
+    }
+
+    /// Whether `from`'s address holds its share of slots
+    /// (`engine::link::per_ip_full`); bots and zombies hold none.
+    fn per_ip_full(&self, from: SocketAddr, exact: bool) -> bool {
+        use crate::engine::link;
+        let cap = self.live_cvar(link::PER_IP_CVAR, link::PER_IP_DEFAULT);
+        let held = self.core.clients.iter().flatten().filter(|c| !c.is_bot);
+        link::per_ip_full(
+            crate::game::builtins::cvar::atoi(&cap),
+            from,
+            exact,
+            held.map(|c| c.link.addr),
+        )
     }
 
     /// The first slot at `start` or above neither a client nor a zombie
@@ -1221,6 +1243,57 @@ mod tests {
         assert_eq!(sv.client_count(), 1);
     }
 
+    /// One public address gets `vc_maxClientsPerIP` slots, from any ports
+    /// and qports: past them its connect and its next `getchallenge` are
+    /// refused, a held socket still gets a challenge, and another address
+    /// still gets in.
+    #[test]
+    fn one_public_address_takes_at_most_four_slots() {
+        let now = Instant::now();
+        let mut sv = Server::new(
+            ServerConfig {
+                max_clients: 8,
+                ..cfg()
+            },
+            now,
+        );
+        let version = PROTOCOL_V1.transport.version;
+        let wan = |port: u16| SocketAddr::from(([203, 0, 113, 5], port));
+        let refused = (
+            "error".to_string(),
+            "\u{15}Too many clients from your address".to_string(),
+        );
+        // Each challenge on its own clock: a tie replaces the first slot.
+        let challenges: Vec<i32> = (0..5)
+            .map(|i| {
+                sv.core.sv_time_ms += 50;
+                challenge_for(&mut sv, wan(i), now)
+            })
+            .collect();
+        for (i, &c) in challenges.iter().enumerate() {
+            sv.handle_packet(
+                wan(i as u16),
+                &connect_pkt(c, QPORT + i as u16, version),
+                now,
+            );
+            let want = if i < 4 { "connectResponse" } else { "error" };
+            assert_eq!(reply_text(&mut sv).0, want, "connect {i}");
+        }
+        assert_eq!(sv.client_count(), 4);
+        sv.handle_packet(wan(9), &oob("getchallenge"), now);
+        assert_eq!(reply_text(&mut sv), refused);
+        challenge_for(&mut sv, wan(0), now);
+        let other = SocketAddr::from(([203, 0, 113, 6], 28960));
+        let c = challenge_for(&mut sv, other, now);
+        sv.handle_packet(other, &connect_pkt(c, QPORT, version), now);
+        assert_eq!(reply_text(&mut sv).0, "connectResponse");
+        // 0 turns the cap off.
+        sv.set_cvar("vc_maxClientsPerIP", "0");
+        let c = challenge_for(&mut sv, wan(9), now);
+        sv.handle_packet(wan(9), &connect_pkt(c, QPORT + 9, version), now);
+        assert_eq!(reply_text(&mut sv).0, "connectResponse");
+    }
+
     fn connect_with(
         sv: &mut Server,
         from: SocketAddr,
@@ -1479,9 +1552,9 @@ mod tests {
         };
         let before = snapshot(&sv);
 
-        // Header checks: an ack we never sent.
+        // Header checks: a messageAcknowledge of a message we never sent.
         forged.outgoing_sequence = 0x7fff_fffe;
-        let pkt = forged.build_out(0, 0, 1, &eof, &huff).unwrap();
+        let pkt = forged.build_out(0, 1, 0, &eof, &huff).unwrap();
         sv.handle_packet(spoofer, &pkt, later);
         assert_eq!(snapshot(&sv), before, "a bad ack committed state");
 

@@ -8,7 +8,7 @@ use glam::Vec3;
 use vcod_cod4::net::clmsg::UserCmd;
 use vcod_gsc::{EntId, Host};
 
-use super::level::{Cod4Level, PsExt, ps};
+use super::level::{Cod4Level, ps};
 use crate::cod4::{Cod4Config, Cod4Game, Cod4Server};
 use crate::engine::GameModule;
 

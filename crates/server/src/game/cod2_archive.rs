@@ -141,25 +141,51 @@ impl Cod2Archive {
     /// for the client or fails, with no live fallback; only an age of 0
     /// or less falls back to the live client. VERIFIED.
     pub fn client_info(&self, on: bool, client: usize, age_ms: &mut i32, now: i32) -> ClientInfo {
+        self.find(on, client, age_ms).map_or_else(
+            |miss| miss,
+            |(ps, time)| {
+                let mut w = ps.to_wire();
+                shift_ps(&mut w, now - time, now);
+                ClientInfo::Archived(Box::new(w), ps.team)
+            },
+        )
+    }
+
+    /// [`Self::client_info`]'s origin alone, read off the record in
+    /// place: the shift moves no origin word.
+    pub fn client_origin(
+        &self,
+        on: bool,
+        client: usize,
+        age_ms: &mut i32,
+    ) -> Result<glam::Vec3, ClientInfo> {
+        self.find(on, client, age_ms)
+            .map(|(ps, _)| words_origin(&ps.f))
+    }
+
+    /// The lookup both answers share: the record and its frame's time, or
+    /// what answers in its place.
+    fn find(
+        &self,
+        on: bool,
+        client: usize,
+        age_ms: &mut i32,
+    ) -> Result<(&ArchivedPs, i32), ClientInfo> {
         if on
             && *age_ms > 0
             && let Some(i) = self.lookup(age_ms)
         {
             let f = self.ring.frame(i).expect("a found frame is kept");
             return match f.clients.get(client).and_then(Option::as_ref) {
-                Some(ps) => {
-                    let mut w = ps.to_wire();
-                    shift_ps(&mut w, now - f.time, now);
-                    ClientInfo::Archived(Box::new(w), ps.team)
-                }
-                None => ClientInfo::None,
+                Some(ps) => Ok((ps, f.time)),
+                None => Err(ClientInfo::None),
             };
         }
-        if *age_ms > 0 {
+        Err(if *age_ms > 0 {
             ClientInfo::None
         } else {
             ClientInfo::Live
-        }
+        })
     }
 }
 
@@ -168,7 +194,11 @@ const ORIGIN: [usize; 3] = vcod_cod2::field!(PLAYER_STATE_FIELDS, 3 "origin");
 
 /// The origin in an archived playerstate.
 pub fn ps_origin(ps: &PlayerState2) -> glam::Vec3 {
-    glam::Vec3::from_array(ORIGIN.map(|i| f32::from_bits(ps.f[i])))
+    words_origin(&ps.f)
+}
+
+fn words_origin(f: &[u32; PS_FIELDS]) -> glam::Vec3 {
+    glam::Vec3::from_array(ORIGIN.map(|i| f32::from_bits(f[i])))
 }
 
 /// `SV_GetClientPositionAtTime` (lnxded 0x8099dac): where a client stood
@@ -388,11 +418,21 @@ mod tests {
         let live = glam::Vec3::new(-1.0, 0.0, 0.0);
         let at = |on: bool, time: i32| {
             position_at_time(1000, time, 1000 / SV_FPS, |age| {
-                match a.client_info(on, 1, age, 1000) {
+                let (mut copy, mut place) = (*age, *age);
+                let full = match a.client_info(on, 1, &mut copy, 1000) {
                     ClientInfo::Archived(ps, _) => Some(ps_origin(&ps)),
                     ClientInfo::Live => Some(live),
                     ClientInfo::None => None,
-                }
+                };
+                // The in-place read answers what the shifted copy does.
+                let origin = match a.client_origin(on, 1, &mut place) {
+                    Ok(o) => Some(o),
+                    Err(ClientInfo::Live) => Some(live),
+                    Err(_) => None,
+                };
+                assert_eq!((origin, place), (full, copy));
+                *age = place;
+                origin
             })
             .map(|r| r.at().expect("placed"))
         };

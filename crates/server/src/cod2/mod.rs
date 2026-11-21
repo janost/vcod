@@ -63,7 +63,6 @@ use vcod_common::net::codec::{MsgReader, MsgWriter};
 use vcod_common::net::com_hash_key_bytes;
 use vcod_common::net::msg::EntityState;
 use vcod_common::net::netchan::{ClientMessage, NetchanParams, ServerNetchan};
-use vcod_common::net::protocol::WireGame;
 use vcod_common::pk3::Pk3Fs;
 
 use crate::engine::{Lan, conn, link};
@@ -781,7 +780,7 @@ impl Cod2Server {
     }
 
     fn client_packet(&mut self, from: SocketAddr, pkt: &[u8], now: Instant) {
-        let (slot, m) = match conn::incoming(&self.core, from, pkt) {
+        let (slot, m) = match conn::incoming(&mut self.core, from, pkt) {
             conn::Incoming::Message(slot, m) => (slot, m),
             // `SV_PacketEvent` (0x80960e2): a sender no slot holds is told
             // to go away (17.3).
@@ -862,7 +861,8 @@ impl Cod2Server {
     }
 
     /// Whether a message of the running level reads to its end: its
-    /// commands, then `clc_EOF`, or a move whose cmds all read. Retail
+    /// commands (at most `ServerNetchan::max_commands`), then `clc_EOF`, or a
+    /// move whose cmds all read. Retail
     /// runs each op as it reads it; vcod reads the whole block before the
     /// netchan takes the message, as CoD1's server does, so a forged or
     /// garbled one runs nothing. A move's cmds read the same off any base
@@ -870,6 +870,10 @@ impl Cod2Server {
     /// may move the playerstate, need not run first.
     fn reads_to_end(&self, slot: usize, m: &ClientMessage, ops: &[u8]) -> bool {
         let mut r = MsgReader::from_plain(ops.to_vec());
+        let max = self.core.clients[slot]
+            .as_ref()
+            .map_or(0, |c| c.link.netchan.max_commands());
+        let mut commands = 0;
         loop {
             let op = r.read_bits(CLC_BITS);
             if r.is_overflowed() {
@@ -879,6 +883,10 @@ impl Cod2Server {
                 x if x == Clc::ClientCommand as i32 => {
                     r.read_long();
                     r.read_string_bytes();
+                    commands += 1;
+                    if commands > max {
+                        return false;
+                    }
                 }
                 x if x == Clc::Eof as i32 => return true,
                 x if x == Clc::Move as i32 || x == Clc::MoveNoDelta as i32 => {
@@ -1337,10 +1345,12 @@ impl Cod2Server {
 
     /// `SV_CheckTimeouts` (0x809657e): a zombie silent `sv_zombietime` is
     /// freed; anyone else silent `sv_timeout` is dropped on the sixth such
-    /// frame and freed at once, with no zombie turn (17.3).
+    /// frame and freed at once, with no zombie turn (17.3). A slot no
+    /// netchan message came for yet is held to `slot::NO_NETCHAN_TIMEOUT_S`
+    /// (vcod's).
     fn check_timeouts(&mut self) {
         let svs = self.core.sv_time_ms;
-        let drop_before = svs - self.int("sv_timeout") * 1000;
+        let timeout_s = self.int("sv_timeout");
         let free_before = svs - self.int("sv_zombietime") * 1000;
         for slot in 0..self.core.clients.len() {
             let Some(c) = self.core.clients[slot].as_mut() else {
@@ -1350,6 +1360,7 @@ impl Cod2Server {
                 continue;
             }
             c.link.last_packet_ms = c.link.last_packet_ms.min(svs);
+            let drop_before = svs.wrapping_sub(crate::engine::slot::timeout_ms(&c.link, timeout_s));
             if c.state == State::Zombie && c.link.last_packet_ms < free_before {
                 log::debug!("cod2: client {slot} from CS_ZOMBIE to CS_FREE");
                 self.core.clients[slot] = None;

@@ -44,6 +44,11 @@ CoD1 (1.1d, 1.5b, UO):
 - `gdb_radius_damage.py`: a gdb script for the 1.1d server that logs each
   `G_RadiusDamage` candidate, its link box and `CanDamage`'s result, and
   every `G_Damage` (cod11-movers.md 26.9).
+- `gdb_bullet.py`: a gdb script for the 1.1d server that logs every
+  `Bullet_Fire_Extended` leg's trace and glass test and every `G_Damage`.
+- `gdb_teams.py`: a gdb script for the 1.1d, 1.5b and UO servers, read
+  only, that logs the team pick of `Use_Item` and `RespawnItem`
+  (cod11-items.md 14.8).
 - `annotate_func.py`: one function of a PIC ELF with its relocations
   resolved. Run it first: a plain `objdump` of `game.mp.i386.so` hides every
   call and cvar behind PIC relocations.
@@ -65,6 +70,13 @@ CoD2 1.3:
   applies the result to a Ghidra program before `ExportDecomp.java`.
 - `dump_cod2_gsc.py` (builtin, method, field and spawn tables),
   `dump_cod2_weapon_fields.py` (weapon file fields and enum tables).
+- gdb scripts for `cod2_lnxded`, each writing the file its header names:
+  `cod2_trace_gdb.py` (each locational `DObjTraceline` on a player, in the
+  `crates/cod2/tests/fixtures/trace/` format; `cod2_trace_trim.py` trims a
+  dump to a fixture), `cod2_skel_gdb.py` (each player DObj's pose and
+  skeleton, the `skel/` fixtures' format), `cod2_anim_gdb.py` (the anim
+  tree at the end frame), and `cod2_gdb_all.py` (the three in one
+  session). `GDB_PY` in `tools/run_probe_cod2.sh` runs one.
 - `cod2_rand_trace.c`: an `LD_PRELOAD` shim logging each `srand()` and
   `rand()` with its call site and `level.time` (`RAND_TRACE=1` in
   `tools/run_probe_cod2.sh`).
@@ -81,7 +93,8 @@ CoD4 1.7:
   `cod4_dvars.py` (dvar registrations), `cod4_weapon_fields.py`
   (`weaponDefFields`).
 - Off `iw3mp.exe`: `cod4_menu_commands.py`, `cod4_vision_fields.py`,
-  `cod4_default_stats.py`.
+  `cod4_default_stats.py`, `cod4_cac_items.py` (the create-a-class item
+  table the stat writes check).
 - `d3d9dis.py`: a small D3D9 shader bytecode disassembler for a technique's
   pixel shader.
 

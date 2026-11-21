@@ -9,6 +9,7 @@ mod doc_placement;
 mod env_vars_documented;
 mod evidence_labels;
 mod gunskel_ab;
+mod ignored_tests_named;
 mod notice_ports;
 mod shader_corpus;
 mod skel11_ab;

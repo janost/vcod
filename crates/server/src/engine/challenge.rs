@@ -7,6 +7,7 @@
 //! (0x80889d0), UO 1.51b's at 0x84f7060 (0x80897d4), CoD2 1.3's at
 //! 0x84230dc (0x808d18e). Times are the caller's server clock in ms.
 
+use std::hash::{BuildHasher, RandomState};
 use std::net::SocketAddr;
 
 /// `MAX_CHALLENGES`: the loop bound 0x400 in all four.
@@ -34,12 +35,19 @@ struct Slot {
 
 pub struct Challenges {
     slots: Vec<Slot>,
+    /// vcod's mask over each drawn challenge: SipHash of the address and
+    /// the draw under a per-process key from the OS, so a challenge says
+    /// nothing of the `rand()` stream it came off and one sent to a spoofed
+    /// address cannot be guessed. Retail sends the draw itself. `None`
+    /// sends the draw (the A/B gates that compare it with retail's).
+    key: Option<RandomState>,
 }
 
 impl Default for Challenges {
     fn default() -> Self {
         Challenges {
             slots: vec![Slot::default(); MAX_CHALLENGES],
+            key: Some(RandomState::new()),
         }
     }
 }
@@ -48,9 +56,9 @@ impl Challenges {
     /// `SV_GetChallenge` on its answer-at-once path: the first slot not
     /// connected whose address is `from`, else the slot with the lowest
     /// time (the first of a tie; an unwritten slot's is 0) overwritten
-    /// with `draw()`. Either way `pingTime` is `now`. Returns the
-    /// challenge to send. `draw` runs only for a new slot, so the caller's
-    /// `rand()` draws are retail's.
+    /// with `draw()` under [`Self::key`]'s mask. Either way `pingTime` is
+    /// `now`. Returns the challenge to send. `draw` runs only for a new
+    /// slot, so the caller's `rand()` draws are retail's.
     pub fn issue(&mut self, from: SocketAddr, now: i32, draw: impl FnOnce() -> i32) -> i32 {
         let mut oldest = 0;
         let mut oldest_time = i32::MAX;
@@ -66,9 +74,11 @@ impl Challenges {
             }
         }
         let i = found.unwrap_or_else(|| {
+            let drawn = draw();
+            let mask = self.key.as_ref().map_or(0, |k| k.hash_one((from, drawn)));
             self.slots[oldest] = Slot {
                 addr: Some(from),
-                challenge: draw(),
+                challenge: drawn ^ mask as i32,
                 time: now,
                 ..Slot::default()
             };
@@ -137,6 +147,12 @@ impl Challenges {
         }
     }
 
+    /// Sends each draw unmasked, as retail does.
+    #[cfg(test)]
+    pub fn unmasked(&mut self) {
+        self.key = None;
+    }
+
     /// `SV_Shutdown`'s zeroed table.
     pub fn clear(&mut self) {
         self.slots.fill(Slot::default());
@@ -159,9 +175,28 @@ mod tests {
         SocketAddr::from(([203, 0, 113, ip], port))
     }
 
+    /// A table that sends its draws as retail does.
+    fn table() -> Challenges {
+        let mut t = Challenges::default();
+        t.unmasked();
+        t
+    }
+
+    /// Two servers drawing the same `rand()` values send different
+    /// challenges, and each takes back the one it sent.
+    #[test]
+    fn a_challenge_is_masked_per_process() {
+        let (mut a, mut b) = (Challenges::default(), Challenges::default());
+        let ca = a.issue(addr(1, 5), 0, || 7);
+        let cb = b.issue(addr(1, 5), 0, || 7);
+        assert!(ca != cb && ca != 7, "{ca} {cb}");
+        assert!(a.connect(addr(1, 5), 7, 10).is_none());
+        assert!(a.connect(addr(1, 5), ca, 10).is_some());
+    }
+
     #[test]
     fn an_asking_address_keeps_its_slot_and_nothing_expires() {
-        let mut t = Challenges::default();
+        let mut t = table();
         let a = t.issue(addr(1, 5), 1000, || 7);
         // An hour on, the slot is still there and still the same.
         assert_eq!(t.issue(addr(1, 5), 3_601_000, || unreachable!()), a);
@@ -170,7 +205,7 @@ mod tests {
 
     #[test]
     fn the_whole_address_matches_port_included() {
-        let mut t = Challenges::default();
+        let mut t = table();
         t.issue(addr(1, 5), 0, || 7);
         assert_eq!(t.connect(addr(1, 6), 7, 10), None);
         assert_eq!(t.connect(addr(2, 5), 7, 10), None);
@@ -180,7 +215,7 @@ mod tests {
 
     #[test]
     fn a_full_table_overwrites_the_oldest_written_slot() {
-        let mut t = Challenges::default();
+        let mut t = table();
         for i in 0..MAX_CHALLENGES {
             t.issue(addr(1, i as u16), 100 + i as i32, || i as i32);
         }
@@ -197,7 +232,7 @@ mod tests {
 
     #[test]
     fn a_connected_slot_is_passed_over_until_the_drop() {
-        let mut t = Challenges::default();
+        let mut t = table();
         t.issue(addr(1, 5), 10, || 7);
         assert_eq!(t.connect(addr(1, 5), 7, 50), Some((0, 40)));
         // Its ping stays for a retry until the connect takes a client.
@@ -212,7 +247,7 @@ mod tests {
 
     #[test]
     fn the_guid_lives_in_the_slot_cut_to_32_chars() {
-        let mut t = Challenges::default();
+        let mut t = table();
         t.issue(addr(1, 5), 0, || 7);
         t.keep_guid(addr(1, 5), &"ab".repeat(500));
         let (i, _) = t.connect(addr(1, 5), 7, 10).unwrap();
@@ -229,7 +264,7 @@ mod tests {
 
     #[test]
     fn a_ban_refusal_forgets_the_open_slot() {
-        let mut t = Challenges::default();
+        let mut t = table();
         t.issue(addr(1, 5), 0, || 7);
         t.forget(addr(1, 5));
         assert_eq!(t.connect(addr(1, 5), 7, 10), None);

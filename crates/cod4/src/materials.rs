@@ -13,9 +13,9 @@ use crate::state::{AlphaTest, Cull as GfxCull, DepthTest, Factor, GfxState};
 use crate::techset::{Blend, Family};
 use vcod_common::material::{
     AlphaFunc, AlphaGen, BlendFactor, Bundle, Clamp, Cod4Light, Cod4Lit, CookieRole, Cull,
-    DepthFunc, Falloff, FalloffKind, ImageRef, Material, MaterialLib, ModelLight, PhongLit,
-    PolygonOffset, RgbGen, SORT_DECAL, SORT_OPAQUE, SkyParms, Stage, SurfaceBits, TcGen, Technique,
-    TexEnv, TexSemantic, TextureBinding,
+    DepthFunc, Falloff, FalloffKind, ImageRef, Material, MaterialLib, PhongLit, PolygonOffset,
+    RgbGen, SORT_DECAL, SORT_OPAQUE, SkyParms, Stage, SurfaceBits, TcGen, Technique, TexEnv,
+    TexSemantic, TextureBinding,
 };
 
 /// `images/<name>.iwi`: where an image without zone pixels lives.
@@ -100,9 +100,6 @@ pub fn compile(m: &MapMaterial) -> Material {
     let family = class.map_or(Family::Other, |c| c.family);
     let st = m.draw_state;
     let mut out = Material {
-        name: m.name.clone(),
-        technique: Technique::None,
-        sort: SORT_OPAQUE,
         surface: SurfaceBits {
             sky: family == Family::Sky,
             // A world distortion set (`wc/office_brickglass`) refracts
@@ -116,15 +113,6 @@ pub fn compile(m: &MapMaterial) -> Material {
             nolightmap: false,
             nodlight: false,
         },
-        cull: Cull::Back,
-        depth_bias: None,
-        nofog: false,
-        nopicmip: false,
-        nomipmaps: false,
-        sky: None,
-        sunfile: None,
-        deforms: Vec::new(),
-        sprite: None,
         textures: m
             .textures
             .iter()
@@ -135,35 +123,17 @@ pub fn compile(m: &MapMaterial) -> Material {
                 })
             })
             .collect(),
-        stages: Vec::new(),
-        dlight: None,
-        sort_images: None,
-        dropped_stages: 0,
-        model_axes: None,
-        phong: None,
-        vertex_multiply: false,
-        falloff: None,
-        premultiplied: false,
-        eye_offset: None,
-        reflex: None,
-        model_light: ModelLight::None,
-        probe: None,
-        smodel: None,
-        feather: None,
-        feather_view_depth: false,
         // `floatz_build_atest` kills by the colour map's alpha as the lit
         // state's test does
         floatz: m
             .order
             .draws_floatz()
             .then(|| m.draw_state.is_some_and(|d| d.alpha_test.is_some())),
-        entity_cull: false,
-        distortion: None,
         cookie: CookieRole {
             sun_caster: m.caster_state.is_some(),
             ..CookieRole::default()
         },
-        water: None,
+        ..Material::base(m.name.clone())
     };
     let Some(st) = st.filter(|_| !out.surface.nodraw) else {
         return out;

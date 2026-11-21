@@ -124,21 +124,72 @@ confirmed on 1.7.
   `com_playerProfile` when it was the active one) or opens
   `profile_delete_fail_popmenu`; the row after it is picked, or none.
   `UI_LoadPlayerProfile` runs `Com_ChangePlayerProfile` on
-  `ui_playerProfileSelected`: for another profile whose directory exists
-  it writes the name to `players/profiles/active.txt`, disconnects,
-  resets every dvar and runs `Com_SetPlayerProfile`, which sets
-  `com_playerProfile`, runs the profile's `config_mp.cfg` and sets `name`
-  to the profile's name when `name` is empty (registered `""`). INFERRED.
+  `ui_playerProfileSelected` (INFERRED). `Com_ChangePlayerProfile`
+  (`iw3mp.exe` 0x4fad00, its local client in `esi`, the name in `edi`)
+  returns at once when the name equals `com_playerProfile` (the dvar at
+  0x1435d1c) under the case-blind compare 0x571a90 (0x4fad06..0x4fad20)
+  or when the check 0x4fabb0 on its copy fails (0x4fad40..0x4fad4a; that it tests the directory is INFERRED).
+  Else it writes the name to `profiles/active.txt` (0x6e0d84, through
+  0x55c4e0 at 0x4fad69), runs `disconnect` (0x6d04d4, 0x4fad76), calls
+  0x56d430, which walks every registered dvar setting one of its stored
+  values (0x56d45e..0x56d4ad; that it is the reset is INFERRED), then
+  `Com_SetPlayerProfile` (0x4fac60, at 0x4fad89), and runs `snd_restart`
+  (0x6e0d98) when 0x56d370 says so (0x4fada3..0x4fadb3). VERIFIED (the
+  instructions and the strings). `Com_SetPlayerProfile` sets
+  `com_playerProfile` to the name (0x56ca90 on the dvar, 0x4fac69..0x4fac72),
+  builds the profile's `config_mp.cfg` path (0x6e0aa0 through 0x4faf90,
+  which prints `Tried to use a player profile before it was set.` on an
+  empty `com_playerProfile`), and hands it to 0x4ff130, which queues
+  `exec default_mp.cfg`, `exec language.cfg` and `exec <path>` (0x6e1cec,
+  0x6e1d04, 0x6e1d18) and calls 0x4f9280 (0x4ff16b), then
+  `exec safemode_mp.cfg` when 0x4fd660 is set. Then, when the dvar `name` (0x6c5ca0, found
+  through 0x56b5d0) is missing or empty, it calls 0x56d030 with `name` and
+  the profile's name (0x4facd5..0x4facdb). VERIFIED (the instructions and
+  the strings); that 0x56d030 sets a dvar by name, 0x55c4e0 writes a file
+  and 0x4f9280 runs the command buffer is INFERRED. So a switch
+  does exec the new profile's config, after `default_mp.cfg` and
+  `language.cfg`.
+- The dvar walk 0x56d430 takes the dvar lock (0xcba73fc), then for each of
+  the 0xcba73f8 dvars (stride 0x4c from 0xcbab808) whose word at +0x8 is
+  not 0 calls 0x56b1b0 on it with its 16 bytes at +0x2c and a 1
+  (0x56d470..0x56d4ab). 0x56b1b0 is the dvar set: it prints `      dvar
+  set %s %s` (0x6f3de4) under a debug word, and for a source of 1 or 2
+  refuses a dvar whose word at +0x8 has 0x40 (`%s is read only.`,
+  0x56b335..0x56b347) or 0x10 (0x56b356..0x56b364), refuses one with 0x80
+  while the cheat dvar at 0xcba7404 is off (0x56b373..0x56b392), and for
+  0x20 compares against +0x1c and stores there instead (0x56b3a1..0x56b40a,
+  the `will be changed upon restarting` path). VERIFIED (the instructions
+  and the strings). That +0x8 is the flags (read-only, write-protected,
+  cheat, latched), +0x2c the reset value and +0x1c the latched one is
+  INFERRED (the refusals' strings). So the reset is a console set of each
+  flagged dvar to its default: a read-only, write-protected or cheat dvar
+  keeps its value, a latched one latches it. 0x56d370 walks the same table
+  comparing each dvar's +0xc with its +0x1c (0x56af70 on the type at
+  +0xa, 0x56d3b0..0x56d3fe) and returns 1 on the first that differs
+  (0x56d411..0x56d41e): the `snd_restart` test is a latched value left
+  pending. VERIFIED (the instructions). Between `Com_SetPlayerProfile` and
+  that test 0x579900 runs on `com_playerProfile` (`%s/%s` and `mpdata`,
+  0x6c81dc, 0x6f5c64: the profile's stats) and then 0x4fe930. VERIFIED
+  (the calls at 0x4fad99, 0x4fad9e); what 0x4fe930 does is unread.
 - vcod runs those scripts as written (`play::cod4_menus::front`): the
   list is `players/profiles/`' directories (`front::profile_list`, feeder
   24, `player_profile`'s list; VERIFIED, the walk's `feeder`), a pick
   sets `ui_playerProfileSelected`, create and delete make and remove the
   directory, and a load hands the client `front::Request::LoadProfile`.
-  The client (`cod4_front::change_profile`) writes `active.txt`, runs the
-  profile's `vcod_mp.cfg`, else its `config_mp.cfg`, gives `name` the
-  profile's name when it has no config or an empty `name`, and writes
-  `vcod_mp.cfg` there at once. It resets no dvar first: what the config
-  does not set keeps its value. With no profile on disk the main menu
+  The client (`cod4_front::change_profile`) takes 1.7's order: it writes
+  `active.txt`, puts every cvar with a flag (archived, userinfo, cheat,
+  latched) back to its default through the console's set
+  (`Shell::reset_cvars`), runs `default_mp.cfg` and `language.cfg` off
+  the iwds, then the profile's `vcod_mp.cfg`, else its `config_mp.cfg`,
+  gives `name` the profile's name when it has no config or an empty
+  `name`, writes `vcod_mp.cfg` there at once, reloads the stats and runs
+  `snd_restart` when a latched cvar is left pending
+  (`cod4_profile_change_resets_then_runs_the_default_configs`). A file
+  that is not UTF-8 (1.7's config with a Latin-1 name) reads as Latin-1,
+  one char a byte. vcod's flags are fewer than 1.7's, so a 1.7 dvar
+  flagged only in ways vcod does not record is reset there and kept
+  here, and a value set on the command line keeps it (vcod's). The front
+  end has no connection to drop. With no profile on disk the main menu
   asks for one as 1.7's does; vcod has no stand-in profile. A deleted
   profile that held the config sends the config back to
   `main/vcod_mp.cfg` until another loads. Create, delete and load
@@ -199,7 +250,7 @@ confirmed on 1.7.
   main menu comes up and when a profile loads or is deleted
   (`Cod4Front::reload_stats`), a fresh profile's block without one, and
   writes a `statset` back to it two seconds on or as a join starts. A
-  game's `N`s reach the same file (cod4-netfields.md, "The stats file").
+  game's `N`s reach the same file (cod4-netfields.md 10.2).
   Gate: `cod4_front_create_a_class_unlocks_off_the_profiles_stats`.
 
 `main_text`'s `onOpen` runs `selectStringTableEntryInDvar
@@ -317,7 +368,7 @@ writes `vcod_mpdata` at the next frame, in the front end and in a game.
 `customclass1`..`5` are vcod's archived cvars (the config keeps the
 names); a profile loaded with no stats file takes the `CLASS_SLOT<n>`
 names once. The server reads the class off the stats the join sent
-(cod4-gsc.md, "The stats, the loadout, the perks"). Gates:
+(cod4-gsc.md 7.3). Gates:
 `cac::tests` (each command and refusal),
 `cod4_front_create_a_class_picks_reach_the_profile` (the editor's
 picks, the new marks, the file, the page drawn again) and

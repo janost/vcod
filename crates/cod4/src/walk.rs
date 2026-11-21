@@ -111,6 +111,27 @@ pub fn u16s(b: &[u8]) -> Vec<u16> {
         .collect()
 }
 
+/// The little-endian `u16` at `o` in a raw blob; panics past its end, as
+/// every reader here does.
+pub fn u16_at(b: &[u8], o: usize) -> u16 {
+    u16::from_le_bytes([b[o], b[o + 1]])
+}
+pub fn i16_at(b: &[u8], o: usize) -> i16 {
+    u16_at(b, o) as i16
+}
+pub fn u32_at(b: &[u8], o: usize) -> u32 {
+    u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]])
+}
+pub fn i32_at(b: &[u8], o: usize) -> i32 {
+    u32_at(b, o) as i32
+}
+pub fn f32_at(b: &[u8], o: usize) -> f32 {
+    f32::from_bits(u32_at(b, o))
+}
+pub fn vec3_at(b: &[u8], o: usize) -> [f32; 3] {
+    [f32_at(b, o), f32_at(b, o + 4), f32_at(b, o + 8)]
+}
+
 /// A struct as loaded: its bytes and where they landed.
 pub struct S {
     pub at: u32,
@@ -125,22 +146,22 @@ impl S {
         self.b[o] as i8
     }
     pub fn u16(&self, o: usize) -> u16 {
-        u16::from_le_bytes(self.b[o..o + 2].try_into().unwrap())
+        u16_at(&self.b, o)
     }
     pub fn i16(&self, o: usize) -> i16 {
-        self.u16(o) as i16
+        i16_at(&self.b, o)
     }
     pub fn u32(&self, o: usize) -> u32 {
-        u32::from_le_bytes(self.b[o..o + 4].try_into().unwrap())
+        u32_at(&self.b, o)
     }
     pub fn i32(&self, o: usize) -> i32 {
-        self.u32(o) as i32
+        i32_at(&self.b, o)
     }
     pub fn f32(&self, o: usize) -> f32 {
-        f32::from_bits(self.u32(o))
+        f32_at(&self.b, o)
     }
     pub fn vec3(&self, o: usize) -> [f32; 3] {
-        [self.f32(o), self.f32(o + 4), self.f32(o + 8)]
+        vec3_at(&self.b, o)
     }
     pub fn ptr(&self, o: usize) -> Pointer {
         Pointer::from_token(self.u32(o))

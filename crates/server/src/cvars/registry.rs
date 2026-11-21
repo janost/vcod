@@ -320,9 +320,15 @@ pub const MIRRORED_V22: &[(&str, &str)] = &[
 /// systeminfo).
 pub const SYSTEMINFO_V22: &[&str] = &["sv_allowDownload", "sv_night", "sv_obituary"];
 
-/// vcod's own rows, on every protocol: the bot management cvars
-/// (`crate::botmgmt::cvar`, docs/usage.md "Bots"). Retail registers none.
+/// vcod's own rows, on every protocol and game: the bot management cvars
+/// (`crate::botmgmt::cvar`, docs/usage.md "Bots") and the per-address slot
+/// cap (`crate::engine::link::PER_IP_CVAR`). Retail registers none.
 pub const VCOD_ONLY: &[(&str, &str, &str)] = &[
+    (
+        crate::engine::link::PER_IP_CVAR,
+        "",
+        crate::engine::link::PER_IP_DEFAULT,
+    ),
     ("vc_bot_autobalance", "", "1"),
     ("vc_bot_minplayers", "", "0"),
     ("vc_bot_names", "", "1"),

@@ -116,12 +116,16 @@ impl Cod1Wire {
     }
 }
 
+impl Cod1Wire {
+    /// `svc_gamestate` to its `svc_EOF`. The caller writes the
+    /// `reliableAcknowledge` and the pending server commands ahead of it.
+    pub fn write_gamestate(&self, w: &mut MsgWriter, gs: &crate::net::gamestate::Gamestate) {
+        crate::net::gamestate::write(w, self, gs);
+    }
+}
+
 impl WireGame for Cod1Wire {
-    type UserCmd = crate::net::msg::UserCmd;
-    type EntityState = crate::net::msg::EntityState;
-    type PlayerState = crate::net::msg::PlayerState;
     type Frame = crate::net::snapshot::Snapshot;
-    type Gamestate = crate::net::gamestate::Gamestate;
     type Baselines = std::collections::HashMap<u32, crate::net::msg::EntityState>;
 
     fn transport(&self) -> &Transport {
@@ -134,10 +138,6 @@ impl WireGame for Cod1Wire {
 
     fn oob_packet(&self, text: &str) -> Vec<u8> {
         crate::net::connectionless::build_oob(text)
-    }
-
-    fn write_gamestate(&self, w: &mut MsgWriter, gs: &Self::Gamestate) {
-        crate::net::gamestate::write(w, self, gs);
     }
 
     /// A CoD1 frame carries its own header: `head` is what its message

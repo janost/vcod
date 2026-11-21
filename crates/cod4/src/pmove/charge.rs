@@ -5,7 +5,7 @@
 
 use glam::Vec3;
 
-use super::{PlayerState, Pml, Pmove, pm_type, pmf};
+use super::{PlayerState, Pml, Pmove, ef, pm_type, pmf};
 
 /// `PM_MeleeChargeStart` (`cod4_lnxded` 0x80561e6): the swing's cmd sets
 /// the charge off when it asks for one, else clears it.
@@ -23,7 +23,7 @@ pub(crate) fn start(pm: &mut Pmove) {
 
 /// The usercmd's short yaw as `MSG_ReadDeltaUsercmdKey` leaves it.
 fn short2angle(s: u16) -> f32 {
-    (f64::from(s) * (360.0 / 65536.0)) as f32
+    (f64::from(s) * super::fpu::DEG_PER_SHORT) as f32
 }
 
 /// `PM_MeleeChargeClear` (inlined at 0x805bf6c and 0x805c32f).
@@ -43,7 +43,7 @@ pub(crate) fn update(pm: &mut Pmove, pml: &Pml) {
     let ps = &mut *pm.ps;
     let live = ps.pm_flags & pmf::MELEE_CHARGE != 0
         && ps.pm_type == pm_type::NORMAL
-        && ps.e_flags & 0x300 == 0
+        && ps.e_flags & ef::TURRET == 0
         && ps.pm_flags & (pmf::MANTLE | pmf::LADDER) == 0;
     let left = live.then(|| {
         let total = match ps.melee_charge_time {

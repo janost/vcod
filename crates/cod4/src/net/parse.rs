@@ -9,7 +9,7 @@ use super::delta::{
     PlayerState, PsWire, Wire,
 };
 use super::huffman::Huffman;
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use std::collections::BTreeMap;
 use vcod_common::net::Msec;
 use vcod_common::net::codec::{MsgReader, MsgWriter};
@@ -40,6 +40,23 @@ const PACKET_BACKUP: usize = 32;
 /// Server commands [`Client::server_commands`] keeps below the newest: twice
 /// the 128-command reliable ring.
 const KEPT_SERVER_COMMANDS: i32 = 256;
+
+/// What a parse fails with when `CL_ParseServerMessage` would mark the
+/// message overflowed (`iw3mp.exe` 0x474874..0x474881): a read past its
+/// end, an unknown op, a delta base the ring does not hold.
+/// `CL_PacketEvent` then rolls the message's acknowledges back
+/// (cod4-handshake.md 10, "An illegible message rolls back"). Context on
+/// the error, so `err.downcast_ref::<Illegible>()` finds it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Illegible;
+
+impl std::fmt::Display for Illegible {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("illegible message")
+    }
+}
+
+impl std::error::Error for Illegible {}
 
 /// `MSG_ReadString`: the bytes up to the NUL, as they are, no `%` or 0x92
 /// mapping (INFERRED, no 1.7 address recorded).
@@ -123,7 +140,8 @@ pub struct Snapshot {
     /// The netchan sequence of the message that carried it.
     pub message_num: i32,
     pub server_time: Msec,
-    /// 0 for a snapshot from nothing, else the message it deltas from.
+    /// The delta byte: how many messages back its base went out, 0 for
+    /// none. A byte that reaches message 0 or before has no base either.
     pub delta_num: i32,
     /// Index into [`Client::snapshots`] of the snapshot it deltas from.
     pub base: Option<usize>,
@@ -221,19 +239,42 @@ impl Client {
 
     /// Walks one message's block (the bytes past the plain
     /// `reliableAcknowledge`, unscrambled) as `CL_ParseServerMessage` does.
+    /// A message retail marks overflowed fails with [`Illegible`] in its
+    /// chain: one read past its end, an unknown op, or a delta base the
+    /// ring does not hold.
     pub fn parse(&mut self, sequence: u32, block: &[u8]) -> Result<Parsed> {
         let plain = self.huff.decompress(block);
         let mut r = MsgReader::from_plain(plain);
         let mut ops = Vec::new();
+        match self.parse_ops(&mut r, sequence, &mut ops) {
+            Err(e) if r.is_overflowed() && e.downcast_ref::<Illegible>().is_none() => {
+                return Err(e.context(Illegible));
+            }
+            done => done?,
+        }
+        let eof_at = r.readcount();
+        let bits: usize = r.plain()[..eof_at]
+            .iter()
+            .map(|&c| self.huff.code_len(c))
+            .sum();
+        Ok(Parsed {
+            ops,
+            eof_at,
+            exact: bits.div_ceil(8) == block.len(),
+        })
+    }
+
+    /// [`Self::parse`]'s op loop, to `svc_EOF`.
+    fn parse_ops(&mut self, r: &mut MsgReader, sequence: u32, ops: &mut Vec<Op>) -> Result<()> {
         loop {
             let op = r.read_byte();
             ensure!(!r.is_overflowed(), "message ran out before svc_EOF");
             match op {
-                SVC_EOF => break,
+                SVC_EOF => return Ok(()),
                 SVC_NOP => ops.push(Op::Nop),
                 SVC_SERVERCOMMAND => {
                     let seq = r.read_long();
-                    let text = read_raw_string(&mut r);
+                    let text = read_raw_string(r);
                     if seq > self.server_command_sequence {
                         self.server_command_sequence = seq;
                     }
@@ -256,14 +297,14 @@ impl Client {
                     });
                 }
                 SVC_GAMESTATE => {
-                    let gs = parse_gamestate(&mut r)?;
+                    let gs = parse_gamestate(r)?;
                     self.server_command_sequence = gs.server_command_sequence;
                     self.gamestate = Some(gs);
                     self.ring = [None; PACKET_BACKUP];
                     ops.push(Op::Gamestate);
                 }
                 SVC_SNAPSHOT => {
-                    let snap = self.parse_snapshot(&mut r, sequence as i32)?;
+                    let snap = self.parse_snapshot(r, sequence as i32)?;
                     let i = self.snapshots.len();
                     self.ring[snap.message_num as usize % PACKET_BACKUP] =
                         Some((snap.message_num, i));
@@ -271,21 +312,11 @@ impl Client {
                     ops.push(Op::Snapshot(i));
                 }
                 super::download::SVC_DOWNLOAD => {
-                    ops.push(Op::Download(super::download::DownloadMsg::read(&mut r)));
+                    ops.push(Op::Download(super::download::DownloadMsg::read(r)));
                 }
-                o => bail!("op {o} at byte {}", r.readcount() - 1),
+                o => return Err(anyhow!("op {o} at byte {}", r.readcount() - 1).context(Illegible)),
             }
         }
-        let eof_at = r.readcount();
-        let bits: usize = r.plain()[..eof_at]
-            .iter()
-            .map(|&c| self.huff.code_len(c))
-            .sum();
-        Ok(Parsed {
-            ops,
-            eof_at,
-            exact: bits.div_ceil(8) == block.len(),
-        })
     }
 
     fn parse_snapshot(&self, r: &mut MsgReader, message_num: i32) -> Result<Snapshot> {
@@ -296,15 +327,25 @@ impl Client {
         let server_time = Msec::from_raw(r.read_long());
         let delta = r.read_byte() as i32;
         let snap_flags = r.read_byte();
-        let base = if delta == 0 {
+        // Retail's wrapping `int` (iw3mp.exe 0x47378a): a demo's sequence
+        // is any word. A zero byte reads as -1, and a base of 0 or less
+        // takes the no-base arm (`jg` at 0x4737d1).
+        let num = if delta == 0 {
+            -1
+        } else {
+            message_num.wrapping_sub(delta)
+        };
+        let base = if num <= 0 {
             None
         } else {
-            // Retail's wrapping `int` (iw3mp.exe 0x47378a): a demo's
-            // sequence is any word.
-            let num = message_num.wrapping_sub(delta);
             match self.ring[num.rem_euclid(PACKET_BACKUP as i32) as usize] {
                 Some((n, i)) if n == num => Some(i),
-                _ => bail!("snapshot {message_num} deltas from {num}, which I don't hold"),
+                _ => {
+                    return Err(anyhow!(
+                        "snapshot {message_num} deltas from {num}, which I don't hold"
+                    )
+                    .context(Illegible));
+                }
             }
         };
         let old = base.map(|i| &self.snapshots[i]);

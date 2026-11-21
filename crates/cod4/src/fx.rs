@@ -4,6 +4,7 @@
 
 use crate::assets::Assets;
 use crate::assets::fx::{Fx, FxElem, FxVisual};
+use crate::walk::{f32_at, i32_at};
 
 /// `FxElemDef.elemType` (cod4-effects.md 2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -165,14 +166,6 @@ pub struct ElemDef {
     pub emit_dist_variance: Range,
     pub sort_order: u8,
     pub lighting_frac: u8,
-}
-
-fn f32_at(b: &[u8], o: usize) -> f32 {
-    f32::from_le_bytes(b[o..o + 4].try_into().unwrap())
-}
-
-fn i32_at(b: &[u8], o: usize) -> i32 {
-    i32::from_le_bytes(b[o..o + 4].try_into().unwrap())
 }
 
 fn range(b: &[u8], o: usize) -> Range {

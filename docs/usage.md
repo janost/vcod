@@ -14,6 +14,7 @@ install layout, a quick start per game and recipes. Bots:
 - [Controls](#controls), [console](#console), [window](#window-and-fullscreen), [menus](#main-menu-and-browser)
 - Per game: [CoD 1.1 and 1.5](#cod-11-and-15), [United Offensive](#united-offensive), [CoD2](#cod2), [CoD4](#cod4)
 - [Debug and developer modes](#debug-and-developer-modes)
+- [Environment variables](#environment-variables)
 
 ## Install and game
 
@@ -27,7 +28,8 @@ Both binaries share these flags.
 | `--vanilla` | CoD1 and UO: only the patch's stock paks (`pak0`..`pak8` on 1.1, `pak0`..`pakf` on 1.5, UO's `pakuo*` and `uomappack00`, and their `localized_*` paks). Every other pk3 in `main/` and `uo/` is ignored. |
 
 `COD_DIR` is the only install variable the binaries read, for every game.
-`COD2_DIR` and `COD4_DIR` point tests and tools at those installs.
+`COD2_DIR` and `COD4_DIR` point tests and tools at those installs. The
+other variables are in [Environment variables](#environment-variables).
 
 With `--vanilla` the client downloads nothing: a server on a non-stock
 map fails the load with a popup naming its paks, and one that only adds
@@ -53,6 +55,7 @@ load a third-party map and refuses `--set fs_game`.
 | `--class <response>` | CoD4: answer the class menu, e.g. `assault_mp,0`. |
 | `--fs-game mods/<name>` | CoD4: load a map under a mod. A joined server's `fs_game` wins. |
 | `--debug-overlay` | Start with the F3 overlay up. |
+| `--pos "x y z yaw [pitch]"` | Fly mode: start there instead of at the first spawn, in the F3 camera line's order and degrees. |
 | `--rtx-on` | Turn on every beyond-retail extra for this run, unsaved: `vc_bicubic`, `vc_bloom`, `vc_shadows`, `vc_ssao`, `vc_sunShafts`, `vc_softParticles`, `vc_hdr`, `vc_grade`, `vc_vignette`, `vc_grain`. No rays are traced. |
 | `--no-audio` | Run silent. |
 | `--volume <0..1>` | Master volume (`mss_volume`, default 0.8, kept in the config). |
@@ -156,6 +159,7 @@ Common ones:
 | `fs_homepath` | Where the log goes. Default the `--game-dir`. CoD2 serves downloads from here first, then the game dir. Like `fs_game` and `fs_basepath`, set on the command line only: rcon and scripts cannot move it. |
 | `sv_allowDownload` | On by default: serve the server's non-stock paks to a client that lacks them. CoD2 serves any `.iwd` a client names under `fs_homepath` or the game dir, nothing else and nothing outside them. `sv_wwwDownload 1` with `sv_wwwBaseURL` redirects instead. |
 | `sv_pure` | 1 by default, as on retail: clients must pass the pure `cp` check. 0 turns it off. |
+| `vc_maxClientsPerIP` | vcod's own, all games: the most slots one public address may hold, connected or connecting. Default 4; 0 turns it off. Loopback, private (10/8, 172.16/12, 192.168/16) and link-local addresses are never capped. |
 
 ### Log
 
@@ -319,7 +323,8 @@ commands.
 
 | Command | Does |
 |---|---|
-| `connect <host[:port]>` (port 28960 when left out), `disconnect`, `reconnect`, `quit` | What they say |
+| `connect <host[:port]>` | Join a server; the port is 28960 when left out |
+| `disconnect`, `reconnect`, `quit` | What they say |
 | `say`, `say_team` | Chat |
 | `cmd <text>` | Send a raw client command |
 | `rcon <command>` | CoD1, UO: run a server command with `rconPassword`, on the connected server, else on `rconAddress` (`ip[:port]`, port 28960 by default). The reply prints in the console |
@@ -331,8 +336,11 @@ commands.
 | `ui_load` | Reload the menus off the list `ui_menuFiles` names |
 | `record [name]`, `stoprecord` | Record a demo to `demos/` in the game directory (the mod's first) |
 | `demo <name>` | Play one back (`.dm_1`, `.dm_2` or `.dm_3`, found without the extension). `cl_freezeDemo 1` pauses it; `nextdemo` holds a command to run at its end |
-| `screenshot [silent\|name]`, `screenshotJPEG [silent\|name]` | Write the next frame to `screenshots/` in the game folder: `shotNNNN.tga` or `.jpg`, or `<name>.tga`/`.jpg`. `silent` prints no `Wrote` line. `levelshot` writes `levelshots/<map>.tga` (128 x 128), `savegame <name>` writes `<name>.jpg` (512 x 512) |
-| `timedemo` | CoD1, UO: `set timedemo 1` before `demo` times it. CoD2, CoD4: `timedemo <name>` is a command, as retail's: it plays `<name>.dm_1` 50 ms a frame and prints the frame count and fps. CoD2 also writes `demos/timedemo_<map>_mode_<r_mode>.csv`, a `<frame>,<ms>` line a frame |
+| `screenshot [silent\|name]`, `screenshotJPEG [silent\|name]` | Write the next frame to `screenshots/` in the game folder: `shotNNNN.tga` or `.jpg`, or `<name>.tga`/`.jpg`. `silent` prints no `Wrote` line |
+| `levelshot` | Write `levelshots/<map>.tga` (128 x 128) |
+| `savegame <name>` | Write `<name>.jpg` (512 x 512) |
+| `set timedemo 1` | CoD1, UO: the next `demo` is timed |
+| `timedemo <name>` | CoD2, CoD4, as retail's: play `<name>.dm_1` 50 ms a frame and print the frame count and fps. CoD2 also writes `demos/timedemo_<map>_mode_<r_mode>.csv`, a `<frame>,<ms>` line a frame |
 
 Anything else goes to the server while connected (`callvote`, `kill`,
 `follownext`). Bindable commands and key names are retail's (`+attack`,
@@ -455,10 +463,10 @@ Client:
   turns it off both ways. On Windows put `libspeex-1.dll` (or `libspeex.dll`,
   `speex.dll`) beside `vcod.exe`; only that directory and System32 are
   searched. On macOS vcod looks in `/opt/homebrew/lib`, `/usr/local/lib` and
-  `/usr/lib`. The library loads the first time voice is sent or heard. The scoreboard marks talkers and muted players,
-  the talker list shows at the top left, and Esc's Mute Players
-  menu mutes a player for the session. `VCOD_VOICE_INPUT=tone` sends a
-  440 Hz tone instead of the microphone.
+  `/usr/lib`. The library loads the first time voice is sent or heard.
+  The scoreboard marks talkers and muted players, the talker list shows
+  at the top left, and Esc's Mute Players menu mutes a player for the
+  session. `VCOD_VOICE_INPUT=tone` sends a test tone (below).
 - `vcod <map>` flies a map.
 - Other modes (`--walk`, `--list`) exit with an error.
 
@@ -494,7 +502,9 @@ Client:
   - Mods runs a `mods/<dir>` mod. Options and Controls set the options
     and binds vcod has.
   - Select Profile creates, deletes and loads a profile in
-    `players/profiles/`. The active profile's `vcod_mp.cfg` is the
+    `players/profiles/`. A load resets the cvars to their defaults and
+    runs `default_mp.cfg` before the profile's config, as 1.7 does. The
+    active profile's `vcod_mp.cfg` is the
     config, its `vcod_mpdata` the stats a join sends and the main menu
     reads (rank, unlocks, the Create a Class picks), stored plain and
     written back as they change. Retail's `mpdata` is left alone. The
@@ -549,8 +559,8 @@ Server (`vcod-server <map> --game cod4`, or a CoD4 install):
   `--probe-say` asks.
   `--probe-secs` sets how long it stays (default 65). On CoD2
   `--probe-team` / `--probe-weapon` make it join and play a scripted
-  loop; `VCOD_COD2_RECORD=<dir>/<name>` records the run as
-  `<name>.dm_1`. On CoD4 `--team` and `--class` make it join.
+  loop; `VCOD_COD2_RECORD` records the run (below). On CoD4 `--team` and
+  `--class` make it join.
 - `vcod --game cod2 --probe-demo <file.dm_1> [--probe-timedemo]` plays a
   CoD2 demo headless and prints what it parsed and drew.
 - `cargo run -p vcod-common --example demo_dump -- <file.dm_N>` prints a
@@ -558,17 +568,29 @@ Server (`vcod-server <map> --game cod4`, or a CoD4 install):
   from a server alongside every message it sent.
 - `vcod --game cod4 --capture <file>` replays a `cod4_probe` capture
   (`crates/cod4/tests/fixtures/net/play-1.7-*.txt`) on its own clock.
-- F3 (`--debug-overlay`) shows frame, draw, vis, net and audio counters;
-  F4 cycles culling on, locked (the visible set frozen) and off.
-- `VCOD_NETSIM="ping=100,jitter=20,loss=2"` gives the client a bad link.
-- `VCOD_FRAME_PROFILE=<path>` writes each frame's CPU and GPU time by
-  stage.
+- F3 (`--debug-overlay`) shows frame, draw, vis, audio, clock, net and
+  prediction counters; F4 cycles culling on, locked (the visible set
+  frozen) and off.
 - Server: `--trace` logs every snapshot per client and a per-second tick
   summary; `--test-entities <n>` adds up to 32 invisible moving entities
   (numbers 32 to 63, so `--max-clients` 32 or fewer) to exercise the
-  entity encoding; `VCOD_TICK_TRACE=<path>` writes the
-  tick's step log; `VCOD_TICK_PROFILE_MS=<ms>` logs every tick slower
-  than that. `VCOD_BOT_THREADS=<n>` sets the threads the bots think on
-  (default the cores up to 4; `1` thinks on the tick's own thread).
-- `RUST_LOG` sets the log level (default `info`); `WGPU_BACKEND` narrows
-  the graphics backend.
+  entity encoding.
+
+## Environment variables
+
+| Variable | Read by | Does |
+|---|---|---|
+| `COD_DIR` | both | The install, for every game (`--game-dir` wins). |
+| `VCOD_CDKEY` | `vcod` | The CD key ([CD keys](#cd-keys)). |
+| `VCOD_VOICE_INPUT=tone` | `vcod` | CoD2 and CoD4 voice: a 440 Hz tone in place of the microphone. |
+| `VCOD_NETSIM="ping=100,jitter=20,loss=2"` | `vcod` | A simulated bad link. |
+| `VCOD_FRAME_PROFILE=<path>` | `vcod` | Each frame's CPU and GPU time by stage. |
+| `VCOD_COD2_RECORD=<dir>/<name>` | `vcod --net-probe` on CoD2 | Records the probe's run as `<name>.dm_1`. |
+| `VCOD_TICK_TRACE=<path>` | `vcod-server` | The tick's step log. |
+| `VCOD_TICK_PROFILE_MS=<ms>` | `vcod-server` | Logs every tick slower than that. |
+| `VCOD_BOT_THREADS=<n>` | `vcod-server` | The threads the bots think on: the cores up to 4 by default, `1` on the tick's own thread. |
+| `RUST_LOG` | both | The log level, default `info`. |
+| `WGPU_BACKEND` | `vcod` | Narrows the graphics backend (`vulkan`, `gl`, `dx12`, `metal`). |
+
+The developer variables (profiling switches, test knobs) are in
+[docs/dev/running.md](dev/running.md#every-env-var).

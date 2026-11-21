@@ -41,6 +41,7 @@ mod edge_probe;
 mod entities;
 mod entity_light;
 mod entity_material;
+mod fatal;
 mod flame_probe;
 mod frame_clock;
 mod frame_digest;
@@ -175,6 +176,11 @@ struct Args {
     /// Spawn as a soldier and walk (first person) instead of flying
     #[arg(long)]
     walk: bool,
+    /// Fly mode (`vcod <map>`): start at "x y z yaw [pitch]", the order and
+    /// degrees the F3 overlay's camera line prints, instead of the first spawn
+    #[arg(long, value_name = "X Y Z YAW [PITCH]", allow_hyphen_values = true,
+          value_parser = FlyCamera::parse_view)]
+    pos: Option<FlyCamera>,
     /// Start with the debug overlay visible (F3 toggles it at runtime)
     #[arg(long)]
     debug_overlay: bool,
@@ -1447,6 +1453,10 @@ fn hud_lines(
 }
 
 fn main() -> Result<()> {
+    run().inspect_err(|e| fatal::record(TITLE, &format!("Error: {e:?}")))
+}
+
+fn run() -> Result<()> {
     let started = Instant::now();
     console::log::init();
     frame_digest::init();
@@ -1457,6 +1467,7 @@ fn main() -> Result<()> {
     std::panic::set_hook(Box::new(move |info| {
         eprintln!("{TITLE} panicked");
         default_panic(info);
+        fatal::record(TITLE, &info.to_string());
     }));
     quit::install();
     use vcod_common::game::Game;
@@ -2002,9 +2013,12 @@ fn main() -> Result<()> {
                 Some(c) => Some(c.spawn),
                 None => bsp::find_spawn(&bsp.entities),
             };
-            let cam = match spawn {
-                Some((origin, yaw)) => FlyCamera::new(Vec3::from(origin) + Vec3::Z * 60.0, yaw),
-                None => {
+            let cam = match (args.pos.clone(), spawn) {
+                (Some(cam), _) => cam,
+                (None, Some((origin, yaw))) => {
+                    FlyCamera::new(Vec3::from(origin) + Vec3::Z * 60.0, yaw)
+                }
+                (None, None) => {
                     let (min, max) = mesh::map_bounds(&bsp);
                     let center = (Vec3::from(min) + Vec3::from(max)) * 0.5;
                     log::warn!("no player spawn found, starting at the center of the map");
@@ -2493,12 +2507,12 @@ fn read_config(path: &std::path::Path) -> Option<String> {
     }
 }
 
-/// A config's bytes as text; bytes that are not UTF-8 become U+FFFD.
+/// A config's bytes as text ([`vcod_common::text::utf8_or_latin1`]).
 fn config_from_bytes(path: &std::path::Path, bytes: Vec<u8>) -> String {
-    String::from_utf8(bytes).unwrap_or_else(|e| {
-        log::warn!("{}: not UTF-8, read lossily", path.display());
-        String::from_utf8_lossy(e.as_bytes()).into_owned()
-    })
+    if std::str::from_utf8(&bytes).is_err() {
+        log::debug!("{}: not UTF-8, read as Latin-1", path.display());
+    }
+    vcod_common::text::utf8_or_latin1(bytes)
 }
 
 /// A CoD2 profile's config into `shell`: run when the file is there,
@@ -4399,7 +4413,7 @@ impl App {
         }
         console::log::print(&format!("execing {file}"));
         self.exec_depth += 1;
-        let effects = self.shell.execute(&String::from_utf8_lossy(&text));
+        let effects = self.shell.execute(&vcod_common::text::utf8_or_latin1(text));
         self.apply(event_loop, effects);
         self.exec_depth -= 1;
     }
@@ -6037,10 +6051,11 @@ mod tests {
     }
 
     /// A config holding a byte that is not UTF-8 (a retail config's
-    /// Latin-1 `ö`) still runs, at startup and as a CoD2 profile's, and
-    /// the profile's file is not overwritten.
+    /// Latin-1 `ö`) runs as Latin-1, at startup and as a CoD2 profile's,
+    /// the profile's file not overwritten, and the `ö` survives vcod's
+    /// write and read back. A UTF-8 file reads as UTF-8.
     #[test]
-    fn a_config_that_is_not_utf8_still_runs_and_is_kept() {
+    fn a_config_that_is_not_utf8_reads_as_latin1_and_is_kept() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(CONFIG_FILE);
         // Not vcod's header, so the stamp is current and nothing upgrades.
@@ -6050,16 +6065,26 @@ mod tests {
         let text = read_config(&path).expect("the config reads");
         let mut shell = console::shell::Shell::new();
         shell.exec_config(&text, &mut |_| None);
-        assert_eq!(shell.bind("F1"), Some("say sch\u{fffd}n"));
+        assert_eq!(shell.bind("F1"), Some("say sch\u{f6}n"));
 
         let mut shell = console::shell::Shell::new();
         load_profile_config(&mut shell, &Pk3Fs::empty(), &path);
-        assert_eq!(shell.bind("F1"), Some("say sch\u{fffd}n"));
+        assert_eq!(shell.bind("F1"), Some("say sch\u{f6}n"));
         assert_eq!(
             std::fs::read(&path).unwrap(),
             bytes,
             "the profile's config was rewritten"
         );
+
+        std::fs::write(&path, shell.config_text()).unwrap();
+        let mut again = console::shell::Shell::new();
+        again.exec_config(&read_config(&path).unwrap(), &mut |_| None);
+        assert_eq!(again.bind("F1"), Some("say sch\u{f6}n"));
+
+        std::fs::write(&path, "bind F1 \"say sch\u{f6}n\"\n").unwrap();
+        let mut utf8 = console::shell::Shell::new();
+        utf8.exec_config(&read_config(&path).unwrap(), &mut |_| None);
+        assert_eq!(utf8.bind("F1"), Some("say sch\u{f6}n"));
     }
 
     /// The gamestate's search path restart and `vid_restart` rebuild the

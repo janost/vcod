@@ -54,6 +54,12 @@ pub fn latin1(b: &[u8]) -> String {
     b.iter().map(|&c| char::from(c)).collect()
 }
 
+/// A text file's bytes: UTF-8 when they are, else [`latin1`], so a file
+/// in the engine's byte strings (a retail config's `ö`) loses nothing.
+pub fn utf8_or_latin1(bytes: Vec<u8>) -> String {
+    String::from_utf8(bytes).unwrap_or_else(|e| latin1(e.as_bytes()))
+}
+
 /// [`latin1`]'s inverse: one byte per char, a char above U+00FF as `.`, as
 /// `write_big_string` sends one. Its low byte could be a NUL or a `\`.
 pub fn latin1_bytes(s: &str) -> Vec<u8> {

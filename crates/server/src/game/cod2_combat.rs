@@ -627,15 +627,15 @@ impl Cod2Level {
     /// playerstate's origin while it carries `pm_flags` 0x800000
     /// (`GetFollowPlayerState`).
     pub(super) fn rewound_origin(&self, slot: usize, time: i32) -> Option<Rewind> {
-        use super::cod2_archive::{ClientInfo, position_at_time, ps_origin};
+        use super::cod2_archive::{ClientInfo, position_at_time};
         let (on, now) = (self.rt.archive_on(), self.level_time());
         position_at_time(now, time, crate::cod2::FRAME_MS, |age| {
-            match self.archive.client_info(on, slot, age, now) {
-                ClientInfo::Archived(ps, _) => Some(ps_origin(&ps)),
-                ClientInfo::Live => self.players.get(slot)?.as_ref().and_then(|p| {
+            match self.archive.client_origin(on, slot, age) {
+                Ok(o) => Some(o),
+                Err(ClientInfo::Live) => self.players.get(slot)?.as_ref().and_then(|p| {
                     (p.ps.pm_flags & super::cod2::PMF_PLAYING != 0).then_some(p.ps.origin)
                 }),
-                ClientInfo::None => None,
+                Err(_) => None,
             }
         })
     }

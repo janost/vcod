@@ -644,7 +644,7 @@ impl Renderer {
 
     /// Builds every mark shader in `shaders` now (its images, stages and
     /// pipelines): a surface's first impact mark then binds only its
-    /// lightmap (cod4-map-sweep.md, "The soak").
+    /// lightmap (cod4-map-sweep.md 5).
     pub fn prewarm_marks<'a>(&mut self, fs: &Pk3Fs, shaders: impl IntoIterator<Item = &'a str>) {
         let ctx = MarkCtx {
             device: &self.device,

@@ -49,7 +49,7 @@ impl Cod4Hud {
         g.scoreboard = self.scoreboard_fade(snap, now).is_some();
         g.killcam = in_killcam(snap);
         g.dead = u("pm_type") >= PM_DEAD;
-        g.intermission = snap.ps.get("pm_type") == Some(h::PM_INTERMISSION);
+        g.intermission = snap.ps.word(vcod_cod4::ps_word!("pm_type")) == h::PM_INTERMISSION;
         g.following = u("otherFlags") & 2 != 0;
         g.selecting_location = u("locationSelectionInfo") != 0;
         g.night_vision = crate::cod4_look::night_vision(u("weapFlags"));
@@ -76,7 +76,7 @@ impl Cod4Hud {
             .client()
             .snapshots
             .last()
-            .is_some_and(|x| x.ps.get("pm_type") == Some(h::PM_INTERMISSION));
+            .is_some_and(|x| x.ps.word(vcod_cod4::ps_word!("pm_type")) == h::PM_INTERMISSION);
         HudEnv {
             hud: self,
             s,

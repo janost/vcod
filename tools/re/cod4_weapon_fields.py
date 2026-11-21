@@ -1,5 +1,5 @@
 # Dumps cod4_lnxded 1.7's weaponDefFields ({name*, offset, type}) and the
-# weapon field type name tables. usage: dump_wfields.py <cod4_lnxded>
+# weapon field type name tables. usage: cod4_weapon_fields.py <cod4_lnxded>
 import struct, sys
 d = open(sys.argv[1], 'rb').read()
 BASE = 0x8048000  # vaddr - file offset for .rodata/.data (non-PIC exe)

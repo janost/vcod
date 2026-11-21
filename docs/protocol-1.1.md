@@ -69,6 +69,10 @@ A per-byte Huffman decode and a whole-block decompress give the same bytes only 
 
 **Client to server.** A 9-byte plain header, then `scramble(Huff_Compress(ops))` from byte 0 of the compressed output. **Divergence from RTCW, #5.** The header is `serverId` as one byte (`MSG_ReadByte`), `messageAcknowledge` (long) and `reliableAcknowledge` (long). RTCW uses a 4-byte serverId and compresses the header with the ops. The server reads the 9 plain bytes (`SV_PacketEvent`, entry `0x808c9ca`, the read at `0x808c9d1`), then decodes and decompresses from byte 9. `SV_PacketEvent` drops the message when `messageAcknowledge < 0` or `reliableSequence - reliableAcknowledge > 63`, RTCW's lost-reliable-commands check sized to the 64-slot ring. The server keeps `sv_serverid` as a byte too (map_restart below), so this round-trips.
 
+`CoDMP.exe`'s own server reads the header the same way (0x45abb1..0x45aca3, after `Netchan_Process` 0x448d40 at 0x45abda): `serverId` into `client+0x5a8f8` (0x45ac00), `messageAcknowledge` into `+0x10618` and a negative one dropped (0x45ac23..0x45ac29), `reliableAcknowledge` into `+0x10610` (0x45ac57), and when `reliableSequence` (`+0x1060c`) less it is 0x40 or more (`cmp 0x40`, `jl`, signed) `reliableSequence` stored over it and the message dropped (0x45ac5f..0x45ac65), no print. A zombie's message stops after that (0x45ac80..0x45ac89), so a zombie takes the clamp too. VERIFIED (the instructions). An acknowledge past `reliableSequence` passes the signed test. vcod-server takes the clamp and lets one past the sequence through (`Link::reliable_ack_behind`), in 64-bit math, so an acknowledge near `i32::MIN` is clamped where retail's test wraps it into the window.
+
+The client's `CL_ParseServerMessage` (`CoDMP.exe`, the decompress at 0x416686) tests the cursor against the decompressed size before each op and calls `Com_Error` with code 1 and `CL_ParseServerMessage: read past end of server message` (0x565aa8) past it (0x41669a..0x4166a5); an unknown op is `CL_ParseServerMessage: Illegible server message %d` (0x565a50) the same way (0x416748..0x416750). VERIFIED (the instructions and the strings); that 0x435ad0 is `Com_Error` and code 1 `ERR_DROP` is INFERRED (the live drop under svc_gamestate below). There is no `ignoring illegible message` in `CoDMP.exe`, so 1.1 has no rollback: such a message drops the connection. vcod's client stops reading the message instead and keeps the connection.
+
 ## Netchan framing
 
 Standard Q3 netchan. The sequence number is the first 4 bytes, little-endian. `FRAGMENT_BIT = 1<<31` on it marks a fragment. `FRAGMENT_SIZE = 1300`.
@@ -882,6 +886,8 @@ INFERRED from those steps: a spectator flies where it looks, half a key flies at
 
 A spectator who was a player reads `groundEntityNum` 0 too. `ClientSpawn` (0x4268c) zeroes the whole `gclient_t` (`__bzero` of 0x22c4 bytes at 0x42804) and copies back only the persistent halves, so the last ground trace does not survive. INFERRED from that call. Live 2026-10-12, `mp_carentan` dm: a probe that joined allies stood at 1022 (`ENTITYNUM_WORLD`) for 12 s, then answered the team menu with `spectator` (`--probe-say '12:mr {sid} 0 spectator'`) and read 0 on every snapshot after. VERIFIED (capture). vcod read the same in the same run: `ClientSim::to_wire` writes `groundEntityNum` for a player only. VERIFIED (capture).
 
+## Client commands
+
 ### Client commands are flood-protected
 
 `SV_ClientCommand` (`cod_lnxded` 0x8086e08) gates every client command on `sv_floodProtect` before the game sees it. VERIFIED, out of the function:
@@ -898,6 +904,8 @@ INFERRED, from that control flow:
 - A bare `score` is *not* exempt: its NUL fails the compare against the space.
 
 VERIFIED, `crates/server/tests/fixtures/netchan/mp_carentan-sd-roundrestart-target.txt` and two later pairs: the probe sends `score` every 2 s and `kill` every 45 s. Retail killed it on the first and third `kill` and ignored the second and fourth, each of which landed 300 to 700 ms after a `score`. After each accepted `kill` the next `score` went unanswered (the 4 s gaps between `b` lines at `ms=21571` and `ms=111970`), the window the `kill` had opened. vcod's `client_command` applies the same rule (`FLOOD_WINDOW_MS`), and `crates/server/tests/flood_protect.rs` measures it.
+
+## The playerstate and prediction
 
 ### View angles: `delta_angles` always, `viewangles` the sum below `pm_type` 5
 
@@ -965,6 +973,8 @@ The general rule, which two vcod bugs came out of: **a field that only holds a v
 VERIFIED live 2026-08-28 against the retail 1.1 client, both directions. With `commandTime` clamped up to `serverTime - sv_fps_interval`, it sat 11-24 ms past the newest simulated cmd on 100% of 801 traced frames, and retail drew smooth movement with a view that juddered at snapshot rate: position was predicted while the view angles were reset from the stale snapshot 20 times a second. Reporting the true last-simulated time made `commandTime - last_simulated` exactly 0 on all 446 frames of the confirming trace, and the judder went away.
 
 The lead (`serverTime - commandTime`) is a consequence, not a target: it is however far behind the client's own clock runs. The committed captures (vcod's probe against retail) show 0-34 ms (mean 16); a retail client against vcod's server shows 63-74 ms, because a retail client runs its `serverTime` estimate behind on purpose so it always has frames to interpolate. Clamping the lead to hide that difference caused the bug. `crates/common/examples/snapshot_timing.rs` prints the capture side; `vcod-server --trace` prints the live side.
+
+## Clocks and rates
 
 ### The client's clock
 
@@ -1088,6 +1098,9 @@ Everything else holds: the Huffman table, the svc/clc opcodes, netchan fragmenta
 Anti-abuse checks, two timing differences, a LAN test and a default; the wire format is unchanged (`crates/server/src/server/`, `crates/server/src/main.rs`).
 
 - Connectionless queries (`getinfo`, `getstatus`, `getchallenge`) are rate limited as ioquake3 does it, on all three games (`crates/server/src/engine/ratelimit.rs`): a per-source-address bucket (a burst of 10, one back per second, 1024 addresses tracked), then for `getinfo` and `getstatus` a global bucket (a burst of 10, one back per 100 ms). `getchallenge` skips the global bucket, so a spoofed status flood cannot hold joins off; a spoofed challenge flood still turns the 1024-slot challenge table over at its own rate, as on retail. Excess requests are dropped silently. Retail answers every one, which makes `getstatus` a reflection amplifier.
+- One public address holds at most `vc_maxClientsPerIP` slots (default 4, 0 off; loopback, RFC 1918 and link-local exempt), on all three games: past it a `getchallenge` from a new socket and a `connect` into a new slot are refused (`docs/research/cod11-server-handshake.md`, "The challenge table"). Retail has no cap.
+- A challenge is retail's `rand()` draw xored with a keyed hash of the address under a per-process secret, so it cannot be predicted; the draws themselves stay retail's.
+- A client netchan packet past `MAX_PACKETLEN` (1400) or with more than twice the reliable ring's commands (128 on CoD1, 256 on CoD2 and CoD4) is dropped unread, and the reader drops any datagram past 32768 bytes. No client sends either: retail fragments past `FRAGMENT_SIZE`, and its ring holds at most 64 unacknowledged commands (128 on CoD2 and CoD4).
 - A netchan message is parsed in full (header checks, `serverId`, every command and every usercmd) before anything about the client is updated. Retail commits the sequence number, the address and the timeout stamp first, so one spoofed packet with a client's IP and qport and a huge sequence number stalls that client until it times out.
 - A `connect` that matches a live client's address and qport may replace it only when it carries that client's challenge, or when the slot has been silent for `sv_reconnectlimit` (3 s). Retail hands the slot over on the address match alone.
 - A packet that arrives between ticks is handled on arrival, and its replies (a `connectResponse`, a gamestate, an rcon print) go out at once, as retail's event loop does. One that arrives while a tick runs is handled once the tick ends, or at the next tick's start if the tick overran its slot, on the moment retail's 5 ms socket poll would have handled it: rcon's 500 ms window reads its arrival (or the end of an earlier packet's handling that ran past it), and a move message's ack takes the time of the newest frame that had gone out when it arrived (`docs/research/cod11-server-handshake.md`, "rcon" and "Pings"). Its replies leave as soon as it is handled, before the next tick (`handle_queued` in `crates/server/src/main.rs`), as `NET_SendPacket` writes the socket inside retail's handler.

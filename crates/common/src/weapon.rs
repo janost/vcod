@@ -980,11 +980,12 @@ impl WeaponDef {
             start_ammo: parse_num(map, "startAmmo", 0),
             bolt_action: parse_bool(map, "boltAction", false),
             rechamber_drops_ads: !parse_bool(map, "rechamberWhileAds", false),
-            world_model: map
-                .get("worldModel")
-                .map(|v| v.strip_prefix("xmodel/").unwrap_or(v).to_string()),
-            world_flash_effect: map.get("worldFlashEffect").map(|v| v.trim().to_string()),
-            view_flash_effect: map.get("viewFlashEffect").map(|v| v.trim().to_string()),
+            world_model: opt_str(map, "worldModel").map(|v| {
+                v.strip_prefix("xmodel/")
+                    .map_or_else(|| v.clone(), str::to_string)
+            }),
+            world_flash_effect: opt_str(map, "worldFlashEffect"),
+            view_flash_effect: opt_str(map, "viewFlashEffect"),
             shell_eject_effect: opt_str(map, "shellEjectEffect"),
             last_shot_eject_effect: opt_str(map, "lastShotEjectEffect"),
             kill_icon: opt_str(map, "killIcon"),
@@ -2035,6 +2036,15 @@ mod tests {
             d.world_flash_effect.as_deref(),
             Some("fx/muzzleflashes/standardflashworld.efx")
         );
+    }
+
+    #[test]
+    fn blank_model_and_flash_keys_read_none() {
+        let map = xmodel::parse_weapon(r"\worldModel\ \worldFlashEffect\\viewFlashEffect\ ");
+        let d = WeaponDef::from_map(&map);
+        assert_eq!(d.world_model, None);
+        assert_eq!(d.world_flash_effect, None);
+        assert_eq!(d.view_flash_effect, None);
     }
 
     #[test]

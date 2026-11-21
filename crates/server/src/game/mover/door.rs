@@ -1038,14 +1038,17 @@ pub fn damageable(host: &GameHost) -> Vec<EntId> {
     let mut ids: Vec<EntId> = host
         .movers
         .rows
-        .iter()
-        .filter(|(id, m)| {
-            m.door.as_ref().is_some_and(|d| d.takedamage) && host.area.last_link(id.0).is_some()
-        })
-        .map(|(id, _)| *id)
+        .keys()
+        .copied()
+        .filter(|&id| is_damageable(host, id))
         .collect();
     ids.sort_by_key(|id| id.0);
     ids
+}
+
+/// Whether `id` is one of [`damageable`].
+pub fn is_damageable(host: &GameHost, id: EntId) -> bool {
+    door(host, id).is_some_and(|d| d.takedamage) && host.area.last_link(id.0).is_some()
 }
 
 /// `G_Damage`'s `eType` 5 arm (0x49e93..0x49ee1) on a door with

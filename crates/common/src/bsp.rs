@@ -81,6 +81,10 @@ fn lump<'a>(data: &'a [u8], dir: &[(u32, u32)], i: usize) -> Result<&'a [u8]> {
     Ok(&data[off..off + len])
 }
 
+fn le_u16(b: &[u8], off: usize) -> u16 {
+    u16::from_le_bytes([b[off], b[off + 1]])
+}
+
 fn le_u32(b: &[u8], off: usize) -> u32 {
     u32::from_le_bytes(b[off..off + 4].try_into().unwrap())
 }
@@ -133,188 +137,83 @@ pub fn parse(data: &[u8]) -> Result<MapWorld> {
         })
         .collect();
 
-    let mats = lump(data, &dir, LUMP_MATERIALS)?;
-    ensure!(
-        mats.len() % 72 == 0,
-        "materials lump size {} not divisible by 72",
-        mats.len()
-    );
-    let materials: Vec<Material> = mats
-        .as_chunks::<72>()
-        .0
-        .iter()
-        .map(|c| {
-            let name_end = c[..64].iter().position(|&b| b == 0).unwrap_or(64);
-            Material {
-                // some materials use '\' (mp_carride's curtains)
-                name: String::from_utf8_lossy(&c[..name_end]).replace('\\', "/"),
-                surface_flags: u32::from_le_bytes(c[64..68].try_into().unwrap()),
-                content_flags: u32::from_le_bytes(c[68..72].try_into().unwrap()),
-            }
-        })
-        .collect();
-
-    let lm = lump(data, &dir, LUMP_LIGHTMAPS)?;
+    let materials = records(lump(data, &dir, LUMP_MATERIALS)?, 72, "materials", |c| {
+        let name_end = c[..64].iter().position(|&b| b == 0).unwrap_or(64);
+        Material {
+            // some materials use '\' (mp_carride's curtains)
+            name: String::from_utf8_lossy(&c[..name_end]).replace('\\', "/"),
+            surface_flags: le_u32(c, 64),
+            content_flags: le_u32(c, 68),
+        }
+    })?;
     const PAGE: usize = LIGHTMAP_SIZE * LIGHTMAP_SIZE * 3;
-    ensure!(
-        lm.len() % PAGE == 0,
-        "lightmap lump size {} not divisible by {PAGE}",
-        lm.len()
-    );
-    let lightmaps = lm
-        .as_chunks::<PAGE>()
-        .0
-        .iter()
-        .map(|c| c.to_vec())
-        .collect();
-
-    let soup_raw = lump(data, &dir, LUMP_SOUPS)?;
-    ensure!(
-        soup_raw.len() % 16 == 0,
-        "triangle soup lump size {} not divisible by 16",
-        soup_raw.len()
-    );
-    let soups: Vec<TriangleSoup> = soup_raw
-        .as_chunks::<16>()
-        .0
-        .iter()
-        .map(|c| TriangleSoup {
-            material: u16::from_le_bytes(c[0..2].try_into().unwrap()),
-            lightmap: u16::from_le_bytes(c[2..4].try_into().unwrap()),
-            first_vertex: u32::from_le_bytes(c[4..8].try_into().unwrap()),
-            vertex_count: u16::from_le_bytes(c[8..10].try_into().unwrap()),
-            index_count: u16::from_le_bytes(c[10..12].try_into().unwrap()),
-            first_index: u32::from_le_bytes(c[12..16].try_into().unwrap()),
-        })
-        .collect();
-
-    let pl = lump(data, &dir, LUMP_PLANES)?;
-    ensure!(
-        pl.len() % 16 == 0,
-        "plane lump size {} not divisible by 16",
-        pl.len()
-    );
-    let planes: Vec<Plane> = pl
-        .as_chunks::<16>()
-        .0
-        .iter()
-        .map(|c| Plane {
-            normal: [
-                f32::from_le_bytes(c[0..4].try_into().unwrap()),
-                f32::from_le_bytes(c[4..8].try_into().unwrap()),
-                f32::from_le_bytes(c[8..12].try_into().unwrap()),
-            ],
-            dist: f32::from_le_bytes(c[12..16].try_into().unwrap()),
-        })
-        .collect();
-
-    let bs = lump(data, &dir, LUMP_BRUSHSIDES)?;
-    ensure!(
-        bs.len() % 8 == 0,
-        "brushside lump size {} not divisible by 8",
-        bs.len()
-    );
-    let brush_sides: Vec<BrushSide> = bs
-        .as_chunks::<8>()
-        .0
-        .iter()
-        .map(|c| BrushSide {
-            plane_or_dist: u32::from_le_bytes(c[0..4].try_into().unwrap()),
-            material: u32::from_le_bytes(c[4..8].try_into().unwrap()),
-        })
-        .collect();
-
-    let br = lump(data, &dir, LUMP_BRUSHES)?;
-    ensure!(
-        br.len() % 4 == 0,
-        "brush lump size {} not divisible by 4",
-        br.len()
-    );
+    let lightmaps = records(
+        lump(data, &dir, LUMP_LIGHTMAPS)?,
+        PAGE,
+        "lightmap",
+        <[u8]>::to_vec,
+    )?;
+    let soups = records(lump(data, &dir, LUMP_SOUPS)?, 16, "triangle soup", |c| {
+        TriangleSoup {
+            material: le_u16(c, 0),
+            lightmap: le_u16(c, 2),
+            first_vertex: le_u32(c, 4),
+            vertex_count: le_u16(c, 8),
+            index_count: le_u16(c, 10),
+            first_index: le_u32(c, 12),
+        }
+    })?;
+    let planes = records(lump(data, &dir, LUMP_PLANES)?, 16, "plane", |c| Plane {
+        normal: le_vec3(c, 0),
+        dist: le_f32(c, 12),
+    })?;
+    let brush_sides = records(lump(data, &dir, LUMP_BRUSHSIDES)?, 8, "brushside", |c| {
+        BrushSide {
+            plane_or_dist: le_u32(c, 0),
+            material: le_u32(c, 4),
+        }
+    })?;
+    let raw_brushes = records(lump(data, &dir, LUMP_BRUSHES)?, 4, "brush", |c| {
+        (le_u16(c, 0), le_u16(c, 2))
+    })?;
     let mut first_side = 0u32;
-    let mut brushes: Vec<Brush> = Vec::with_capacity(br.len() / 4);
-    for c in br.as_chunks::<4>().0 {
-        let b = Brush {
+    let mut brushes: Vec<Brush> = Vec::with_capacity(raw_brushes.len());
+    for (num_sides, material) in raw_brushes {
+        brushes.push(Brush {
             first_side,
-            num_sides: u16::from_le_bytes(c[0..2].try_into().unwrap()),
-            material: u16::from_le_bytes(c[2..4].try_into().unwrap()),
-        };
+            num_sides,
+            material,
+        });
         first_side = first_side
-            .checked_add(b.num_sides as u32)
+            .checked_add(u32::from(num_sides))
             .ok_or_else(|| anyhow!("brush side total overflows u32"))?;
-        brushes.push(b);
     }
     ensure!(
         first_side as usize == brush_sides.len(),
         "brush side counts ({first_side}) do not cover the brushside lump ({})",
         brush_sides.len()
     );
-
-    let mo = lump(data, &dir, LUMP_MODELS)?;
-    ensure!(
-        mo.len() % 48 == 0,
-        "model lump size {} not divisible by 48",
-        mo.len()
-    );
-    let models: Vec<Model> = mo
-        .as_chunks::<48>()
-        .0
-        .iter()
-        .map(|c| {
-            let f = |o: usize| f32::from_le_bytes(c[o..o + 4].try_into().unwrap());
-            let u = |o: usize| u32::from_le_bytes(c[o..o + 4].try_into().unwrap());
-            Model {
-                mins: [f(0), f(4), f(8)],
-                maxs: [f(12), f(16), f(20)],
-                first_soup: u(24),
-                num_soups: u(28),
-                partitions: (u(32), u(36)),
-                first_brush: u(40),
-                num_brushes: u(44),
-            }
-        })
-        .collect();
-
-    let vert_raw = lump(data, &dir, LUMP_DRAWVERTS)?;
-    ensure!(
-        vert_raw.len() % 44 == 0,
-        "drawvert lump size {} not divisible by 44",
-        vert_raw.len()
-    );
-    let verts: Vec<DrawVert> = vert_raw
-        .as_chunks::<44>()
-        .0
-        .iter()
-        .map(|c| DrawVert {
-            pos: [
-                f32::from_le_bytes(c[0..4].try_into().unwrap()),
-                f32::from_le_bytes(c[4..8].try_into().unwrap()),
-                f32::from_le_bytes(c[8..12].try_into().unwrap()),
-            ],
-            uv: [
-                f32::from_le_bytes(c[12..16].try_into().unwrap()),
-                f32::from_le_bytes(c[16..20].try_into().unwrap()),
-            ],
-            lm_uv: [
-                f32::from_le_bytes(c[20..24].try_into().unwrap()),
-                f32::from_le_bytes(c[24..28].try_into().unwrap()),
-            ],
-            normal: [
-                f32::from_le_bytes(c[28..32].try_into().unwrap()),
-                f32::from_le_bytes(c[32..36].try_into().unwrap()),
-                f32::from_le_bytes(c[36..40].try_into().unwrap()),
-            ],
+    let models = records(lump(data, &dir, LUMP_MODELS)?, 48, "model", |c| Model {
+        mins: le_vec3(c, 0),
+        maxs: le_vec3(c, 12),
+        first_soup: le_u32(c, 24),
+        num_soups: le_u32(c, 28),
+        partitions: (le_u32(c, 32), le_u32(c, 36)),
+        first_brush: le_u32(c, 40),
+        num_brushes: le_u32(c, 44),
+    })?;
+    let verts = records(lump(data, &dir, LUMP_DRAWVERTS)?, 44, "drawvert", |c| {
+        DrawVert {
+            pos: le_vec3(c, 0),
+            uv: [le_f32(c, 12), le_f32(c, 16)],
+            lm_uv: [le_f32(c, 20), le_f32(c, 24)],
+            normal: le_vec3(c, 28),
             color: [c[40], c[41], c[42], c[43]],
-        })
-        .collect();
-
-    let idx_raw = lump(data, &dir, LUMP_DRAWINDICES)?;
-    ensure!(idx_raw.len() % 2 == 0, "index lump has odd size");
-    let indices: Vec<u16> = idx_raw
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|c| u16::from_le_bytes(*c))
-        .collect();
+        }
+    })?;
+    let indices = records(lump(data, &dir, LUMP_DRAWINDICES)?, 2, "index", |c| {
+        le_u16(c, 0)
+    })?;
 
     for (i, s) in soups.iter().enumerate() {
         ensure!(
@@ -451,17 +350,21 @@ pub fn parse(data: &[u8]) -> Result<MapWorld> {
         mins: [le_i32(b, 12), le_i32(b, 16), le_i32(b, 20)],
         maxs: [le_i32(b, 24), le_i32(b, 28), le_i32(b, 32)],
     })?;
-    let leafs = records(lump(data, &dir, LUMP_LEAFS)?, 36, "leafs", |b| Leaf {
-        cluster: le_i32(b, 0),
-        area: le_i32(b, 4),
-        cell: le_i32(b, 24),
-    })?;
-    let leaf_lights = lump(data, &dir, LUMP_LEAFS)?
-        .as_chunks::<36>()
-        .0
-        .iter()
-        .map(|b| (le_u32(b, 28), le_u32(b, 32)))
-        .collect();
+    let (leafs, (leaf_lights, leaf_lists)): (Vec<Leaf>, (Vec<_>, Vec<LeafLists>)) =
+        records(lump(data, &dir, LUMP_LEAFS)?, 36, "leafs", |b| {
+            let leaf = Leaf {
+                cluster: le_i32(b, 0),
+                area: le_i32(b, 4),
+                cell: le_i32(b, 24),
+            };
+            let lists = LeafLists {
+                brushes: (le_u32(b, 16), le_u32(b, 20)),
+                partitions: (le_u32(b, 8), le_u32(b, 12)),
+            };
+            (leaf, ((le_u32(b, 28), le_u32(b, 32)), lists))
+        })?
+        .into_iter()
+        .unzip();
     let pvs = parse_pvs(lump(data, &dir, LUMP_PVS)?)?;
     // Lighting lumps parse leniently: a bad one costs prop lighting, not
     // the map.
@@ -544,15 +447,6 @@ pub fn parse(data: &[u8]) -> Result<MapWorld> {
         }
     }
 
-    let leaf_lists: Vec<LeafLists> = lump(data, &dir, LUMP_LEAFS)?
-        .as_chunks::<36>()
-        .0
-        .iter()
-        .map(|b| LeafLists {
-            brushes: (le_u32(b, 16), le_u32(b, 20)),
-            partitions: (le_u32(b, 8), le_u32(b, 12)),
-        })
-        .collect();
     let leaf_brushes = records(
         lump(data, &dir, LUMP_LEAF_BRUSHES)?,
         4,

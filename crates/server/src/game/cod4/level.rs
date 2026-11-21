@@ -66,20 +66,8 @@ const NO_SPECTATE_FREELOOK: u8 = 1 << crate::follow::FREELOOK;
 /// A playerstate word by its literal field name, resolved at compile time:
 /// a name `PLAYER_STATE` lacks fails the build.
 macro_rules! ps {
-    ($name:literal) => {
-        const { vcod_cod4::net::delta::word_named(&vcod_cod4::net::fields::PLAYER_STATE, $name) }
-    };
-    ($n:literal $name:literal) => {
-        const {
-            let mut words = [0usize; $n];
-            let mut k = 0;
-            while k < $n {
-                words[k] =
-                    vcod_cod4::net::delta::word_at(&vcod_cod4::net::fields::PLAYER_STATE, $name, k);
-                k += 1;
-            }
-            words
-        }
+    ($($t:tt)*) => {
+        vcod_cod4::ps_word!($($t)*)
     };
 }
 pub(super) use ps;
@@ -561,7 +549,7 @@ impl Cod4Level {
     /// cmd with a move key or the 0x401 buttons puts it `g_inactivity`
     /// seconds ahead. Past the deadline the client goes; ten seconds
     /// before, it is warned once. Network clients only: `pers.localClient`
-    /// exempts bots and loopback (cod4-server-gaps.md, "g_inactivity").
+    /// exempts bots and loopback (cod4-server-gaps.md 5).
     pub fn inactivity_timer(&mut self, slot: usize, cmd: &UserCmd) -> Inactivity {
         let state = self.rt.client_session(slot).map(|s| s.state);
         if !matches!(state, Some(SessionState::Playing | SessionState::Dead)) {

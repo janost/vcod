@@ -291,7 +291,7 @@ fn capture_demo(name: &str) -> (Vec<u8>, Vec<u8>, Vec<Vec<u8>>) {
         let full = parsed
             .ops
             .iter()
-            .any(|o| matches!(o, Op::Snapshot(i) if c.snapshots[*i].delta_num == 0));
+            .any(|o| matches!(o, Op::Snapshot(i) if c.snapshots[*i].base.is_none()));
         if full {
             waiting = false;
             r.waiting = false;
@@ -405,6 +405,39 @@ fn cod4_retail_framed_demo_plays_and_vcod_writes_it_alike() {
     );
     assert!(!a.is_empty(), "no event in the capture");
     assert_eq!(a, b);
+}
+
+/// `CL_ReadDemoMessage` reads a message acknowledging more than 128
+/// behind `reliableSequence` (0 on playback) and never parses it
+/// (`iw3mp.exe` 0x46907c): -129 is skipped, -128 parsed.
+#[test]
+fn a_demo_message_acknowledging_behind_the_ring_is_skipped() {
+    use std::collections::BTreeMap;
+    use vcod_cod4::net::parse::{Gamestate, MAX_CONFIGSTRINGS};
+    let huff = vcod_cod4::net::huffman::Huffman::new();
+    let table = vec![String::new(); MAX_CONFIGSTRINGS as usize];
+    let gs = Gamestate::from_table(0, &table, &BTreeMap::new(), 0, 0);
+    let mut demo = RetailDemo::default();
+    demo.message(
+        1,
+        &vcod_cod4::net::demo::gamestate_message(&huff, 0, 0, &gs),
+    );
+    // An op no server sends: a parsed message fails.
+    let bad = huff.compress(&[0xee]);
+    for (seq, ack) in [(2, -129i32), (3, -128)] {
+        let mut m = ack.to_le_bytes().to_vec();
+        m.extend(&bad);
+        demo.message(seq, &m);
+    }
+    demo.stop();
+    let mut d = Cod4Session::play_demo(demo.0, false).unwrap();
+    let mut now = 0.0;
+    while !d.demo_over() && now < 10_000.0 {
+        d.step(now).unwrap();
+        now += 16.0;
+    }
+    assert!(d.demo_over());
+    assert_eq!(d.demo_counts(), Some((3, 1)), "records read, parse errors");
 }
 
 /// A demo sheds its old snapshots as a live session does and plays the

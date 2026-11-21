@@ -737,9 +737,9 @@ more) are gone; new are the bone and tag names (`tag_flash`, `tag_weapon`,
 `j_head`, `back_low`, ...), the `snd_*prio_*` names, `freelook`,
 `call_vote` and `vote` (VERIFIED, both lists).
 
-## 5. What vcod needs, by size
+## 5. The CoD2 dialect in vcod, by size
 
-All five are done. `ScriptRuntime::load_cod2` passes `Dialect::Cod2` and
+`ScriptRuntime::load_cod2` passes `Dialect::Cod2` and
 the CoD2 builtin table to the `Loader` (5.1).
 
 1. `#include` (3.1): directive, per-file import set, non-transitive,

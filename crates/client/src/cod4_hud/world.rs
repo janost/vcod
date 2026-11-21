@@ -305,7 +305,7 @@ impl Cod4Hud {
         let (Some(Some(l)), Some(snap)) = (&self.loaded, s.client().snapshots.last()) else {
             return out;
         };
-        let own = snap.ps.get("clientNum").unwrap_or(u32::MAX);
+        let own = snap.ps.word(vcod_cod4::ps_word!("clientNum"));
         let pointer = image_of(l, POINTER);
         let mut elems: Vec<HudElem> = h::hud_elems(&snap.ps)
             .into_iter()

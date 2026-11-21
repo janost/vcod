@@ -7,7 +7,7 @@
 
 use glam::Vec3;
 pub(crate) use vcod_common::x87::{
-    angle_delta_floor as angle_delta, angle_normalize180_floor as angle_normalize180,
+    INV_360, angle_delta_floor as angle_delta, angle_normalize180_floor as angle_normalize180,
     angle_normalize360_floor as angle_normalize360, dot, length_stored as length,
     lerp_stored as lerp, ma_stored as ma, normalize2_kept as normalize2, scale as scale_kept,
     scale_stored as scale, sqrt_stored as sqrt, vec3_normalize_kept as normalize,
@@ -27,6 +27,36 @@ pub(crate) fn ma_kept(a: Vec3, s: f64, b: Vec3) -> Vec3 {
         (d(a.y) + s * d(b.y)) as f32,
         (d(a.z) + s * d(b.z)) as f32,
     )
+}
+
+/// 360 / 65536: a usercmd short's degrees, as the double 1.7 multiplies
+/// by.
+pub(crate) const DEG_PER_SHORT: f64 = 0.0054931640625;
+
+/// `(s - floor(s + 0.5)) * 360` of the turns `s`, all on the stack: the
+/// `AngleNormalize180` 1.7 inlines (0x8055562, 0x8057dd2).
+pub(crate) fn angle_normalize180_kept(deg: f64) -> f64 {
+    let s = deg * INV_360;
+    (s - (s + 0.5).floor()) * 360.0
+}
+
+/// `AngleDelta` (0x8190590), out of line: `a - b` in turns, kept, less
+/// `floor` of it plus a half, times 360, returned on the stack. The stored
+/// form inlined elsewhere is [`angle_delta`].
+pub(crate) fn angle_delta_kept(a: f32, b: f32) -> f64 {
+    let s = (d(a) - d(b)) * INV_360;
+    let fl = (s + 0.5).floor() as f32;
+    (s - d(fl)) * 360.0
+}
+
+/// `AngleNormalize360` (0x8190540), out of line: the turns kept, their
+/// fraction off `floor` times 360, less 360 once more at a whole turn,
+/// returned on the stack. The stored form is [`angle_normalize360`].
+pub(crate) fn angle_normalize360_kept(a: f32) -> f64 {
+    let s = d(a) * INV_360;
+    let fl = s.floor() as f32;
+    let r = (s - d(fl)) * 360.0;
+    if r - 360.0 < 0.0 { r } else { r - 360.0 }
 }
 
 /// `Vec2Normalize` on a vector's x and y, z kept.

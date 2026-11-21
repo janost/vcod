@@ -55,23 +55,14 @@ MP script uses.
   capture reads hint 2 with string index 6 beside the Panzer IV and 5
   beside the Willys (VERIFIED, capture). The cgame has no vehicle icon:
   hint 2 is `hintActivate` in the table at 0x3044b6f8 (VERIFIED).
-- **The use press.** `Cmd_Activate_f` (0x4dffb) runs on the use press edge.
-  Seated, it calls the vehicle's use (the exit); otherwise
-  `G_IsVehicleUsable` (0x8b673) on the hint entity, then the use
-  (INFERRED, control flow). `G_IsVehicleUsable` wants a free seat, speed ≤
-  100 units/s, health, contents 0x200000, `grenadeTimeLeft` 0 and every
-  occupant on the player's team (VERIFIED decompile).
-- **Entering** (0x8998d, VERIFIED decompile). The player must be on the
-  ground or falling slower than 80, and 250 ms past his last seat change.
-  The seat is the first free one from 1 (seat 2 needs `hasGunner`, seat n
-  ≥ 3 needs `numPassengers > n - 3`). The mount sets `eFlags` 0x300000,
-  `viewlocked_entNum`, `vehPos`, `vehType`, clears `pm_flags` 0x20 and
-  sends `v cl_run 1` and `v cl_stance 0`. It calls `SetClientViewAngle`
-  (0x44301) with the seat bone's angles (`tag_player` seat 1,
-  `tag_secondary_gun` seat 2, `tag_body` else) at roll 0, which rewrites
-  `delta_angles`. `ps.weapon` is untouched: the infantry weapon stays. The
-  capture's entries keep the view and move `delta_angles` (VERIFIED,
-  capture).
+- **The use press and entering.** `Cmd_Activate_f` (0x4dffb),
+  `G_IsVehicleUsable` (0x8b673) and `VEH_LinkPlayer` (0x8998d): the server's
+  rules, in order, are 11.1. The seat is the first free one from 1 (seat
+  2 needs `hasGunner`, seat n ≥ 3 needs `numPassengers > n - 3`), and the
+  mount clears `pm_flags` 0x20 (VERIFIED decompile). `ps.weapon` is
+  untouched on entry: the
+  infantry weapon stays. The capture's entries keep the view and move
+  `delta_angles` (VERIFIED, capture).
 - **pm_type.** `G_RunClient` (0x41dfc) puts a linked client in `pm_type` 1
   (VERIFIED decompile); every seated snapshot of the captures reads 1
   (VERIFIED, capture).

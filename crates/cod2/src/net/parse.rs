@@ -49,7 +49,8 @@ pub struct Snapshot2 {
     /// The netchan sequence that carried it.
     pub message_num: i32,
     pub server_time: Msec,
-    /// The frame it deltas from, -1 for none.
+    /// The frame it deltas from; 0 or less (-1 for a zero delta byte) is
+    /// none.
     pub delta_num: i32,
     pub snap_flags: u8,
     /// False when the delta frame was not the one the server meant.
@@ -265,11 +266,11 @@ impl Parser {
         Ok(())
     }
 
-    /// `CL_ParseSnapshot` (Mac 0x1d5cb2). A delta whose frame left the ring
-    /// is an error here; retail parses it against the stale slot and drops
-    /// the result, which vcod does when the slot holds a different frame.
-    /// Retail's 0x780-entity age check has no analogue: frames hold their
-    /// own entity lists.
+    /// `CL_ParseSnapshot` (Mac 0x1d5cb2). A delta whose slot is invalid or
+    /// holds another frame is read against that slot and marked invalid;
+    /// an empty slot reads as the zeroed one the gamestate left
+    /// (cod2-protocol.md 3.3). Retail's 0x780-entity age check has no
+    /// analogue: frames hold their own entity lists.
     fn parse_snapshot(
         &mut self,
         r: &mut MsgReader,
@@ -286,13 +287,19 @@ impl Parser {
         } else {
             message_num.wrapping_sub(back)
         };
-        let (from, valid) = if delta_num < 0 {
+        // A base of 0 or less takes the no-base arm (`jg` at 0x41377c).
+        let (from, valid) = if delta_num <= 0 {
             (None, true)
         } else {
-            let slot = self.frames[delta_num as usize % PACKET_BACKUP]
-                .as_ref()
-                .with_context(|| format!("delta from empty frame {delta_num}"))?;
-            (Some(slot), slot.message_num == delta_num && slot.valid)
+            match self.frames[delta_num as usize % PACKET_BACKUP].as_ref() {
+                Some(slot) => (Some(slot), slot.message_num == delta_num && slot.valid),
+                // `Delta from invalid frame` (CoD2MP_s.exe 0x4137d4): the
+                // zeroed slot, no playerstate, entity or client in it.
+                None => {
+                    log::debug!("delta from invalid frame {delta_num}");
+                    (None, false)
+                }
+            }
         };
         let (ps_lc, ps) = read_delta_playerstate(r, from.map(|f| &f.ps))?;
         let gs = self

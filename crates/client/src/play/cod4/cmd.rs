@@ -66,7 +66,7 @@ impl Cod4Session {
         self.client()
             .snapshots
             .last()
-            .and_then(|s| s.ps.get("locationSelectionInfo"))
+            .map(|s| s.ps.word(vcod_cod4::ps_word!("locationSelectionInfo")))
             .unwrap_or(0)
     }
 
@@ -406,7 +406,7 @@ pub(super) fn out_of_ammo_pick(
 fn ps_u_last(c: &Client) -> u32 {
     c.snapshots
         .last()
-        .and_then(|s| s.ps.get("locationSelectionInfo"))
+        .map(|s| s.ps.word(vcod_cod4::ps_word!("locationSelectionInfo")))
         .unwrap_or(0)
 }
 
@@ -544,7 +544,7 @@ fn own_cmd(
     let delta = |i: usize| angle2short(ps_f32(ps, &format!("delta_angles[{i}]")));
     let [forwardmove, rightmove] = input.moves(talking);
     let (weapon, offhand) = input.weapons();
-    let pm_type = ps.get("pm_type").unwrap_or(0) as i32;
+    let pm_type = ps.word(vcod_cod4::ps_word!("pm_type")) as i32;
     UserCmd {
         server_time,
         buttons: input.buttons(pm_type, talking),

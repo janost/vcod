@@ -235,7 +235,7 @@ An unknown name logs `unknown UI script %s` (`0x4002e7bc`, pushed at
 - The rate picker is an `ITEM_TYPE_MULTI` on `rate`, `cvarFloatList` 2500,
   3000, 4000, 5000, 25000. VERIFIED.
 
-### Server list columns
+### 4.1 Server list columns
 
 The feeder's text function switches on the column through the jump table at
 `0x4000cb58` (`jmp [esi*4+0x4000cb58]` at `0x4000c8ad`, six entries). Before
@@ -381,7 +381,7 @@ nine-column list in 1.1's six, shifted a column right (issue #3).
   hidden, so retail's browser has no Add to Favorites button, is INFERRED
   from the RTCW lineage.
 
-### The game type filter
+### 6.1 The game type filter
 
 - `UI_LoadGameTypes` (`0x4000cf80`) builds two lists: the join list (count
   `0x401e33ec`, 8-byte entries from `0x401e33f0`: script name, display
@@ -460,7 +460,7 @@ nine-column list in 1.1's six, shifted a column right (issue #3).
   `cl_languagewarningsaserrors` (`0x40036e58`) makes it an error. VERIFIED
   (branches `0x4000ec30`..`0x4000ed0f`, the table rows).
 
-### The refresh date
+### 6.2 The refresh date
 
 - `UI_StartServerRefresh` (`0x4000ea90`) reads `trap_RealTime`
   (`0x40019770`) and stores `ui_lastServerRefresh_<source>` (`0x4002f000`)
@@ -485,7 +485,7 @@ nine-column list in 1.1's six, shifted a column right (issue #3).
   by game browser settings)` (`0x4002e090`). Neither is drawn. VERIFIED
   (the strings and pushes).
 
-### The map preview
+### 6.3 The map preview
 
 - `UI_FeederSelection` for `FEEDER_SERVERS` (`0x4000ccee`) reads the
   selected server's info, registers `levelshots/<mapname>` (`0x4002f9cc`,
@@ -540,7 +540,7 @@ nine-column list in 1.1's six, shifted a column right (issue #3).
   `getinfo` and lists it on that answer, as retail does. It waits while
   nobody answered, as `UI_DoServerRefresh` does.
 
-### Pings
+### 7.1 Pings
 
 - 16 ping slots at `0x15ca660`, `0x41c` bytes each (address, its port at
   `+0x12` marking the slot used, start `+0x14`, time `+0x18`, info
@@ -655,7 +655,7 @@ nine-column list in 1.1's six, shifted a column right (issue #3).
   into the entry, as `CL_SetServerInfo` updates every list holding the
   address (INFERRED from Q3).
 
-### The other games' caches
+### 8.1 The other games' caches
 
 - 1.5 (`CoDMP.exe` load `0x4190d0`, parse `0x419000`, save `0x419140`),
   UO (`CoDUOMP.exe` `0x41a5b0`, `0x41a4e0`, `0x41a620`) and CoD2 1.3
@@ -837,7 +837,7 @@ nine-column list in 1.1's six, shifted a column right (issue #3).
 
 ## 13. Esc in a game
 
-### The client's key handler
+### 13.1 The client's key handler
 
 `CL_KeyEvent` (`0x40dc30`) handles an Esc (`0x1b`) press at `0x40ddca`,
 ahead of the binds. VERIFIED (disassembly `0x40ddca`..`0x40deb2`):
@@ -887,7 +887,7 @@ front end keeps its own.
 non-zero (VERIFIED). That call is syscall `0x65` (`0x40019830`), which
 returns `cls.state == 6` (`0x418c1b` in `CoDMP.exe`). VERIFIED.
 
-### `UI_SetActiveMenu` (`ui_mp_x86.dll` `0x4000d810`)
+### 13.2 `UI_SetActiveMenu` (`ui_mp_x86.dll` `0x4000d810`)
 
 `vmMain` (`0x400076a0`) sends command 7 here (jump table `0x400077a8`,
 entry 7 is `0x4000770f`), which switches through the table at `0x4000dbcc`
@@ -943,7 +943,7 @@ while the load's `1` stands. vcod has no listen server and keeps no
 or unknown `g_scriptMainMenu` opens nothing: `0x400134b0` looks the name up
 (`0x40010560`) and returns when missing. VERIFIED.
 
-### The script menu's cursor
+### 13.3 The script menu's cursor
 
 - Cases 10 and 11 run only when no menu has the focus or the focused one
   came from case 10 or 11 (`0x401bf42c` is 10 after either). Case 11 writes
@@ -1002,7 +1002,7 @@ or unknown `g_scriptMainMenu` opens nothing: `0x400134b0` looks the name up
   say (they scale only the view, `0x40b130`). With the console down in a
   window it does not move at all.
 
-### The menus it reaches
+### 13.4 The menus it reaches
 
 - `ui_mp/ingame.txt` (`pak0.pk3`) lists `ui_mp/ingame.menu` and five more
   `ingame_*` files, none in any 1.1 pak, then `ui_mp/wm_quickmessage.menu`,
@@ -1034,7 +1034,7 @@ or unknown `g_scriptMainMenu` opens nothing: `0x400134b0` looks the name up
   replayed that frame, so over a game the music ends the frame it starts.
   INFERRED (not heard).
 
-### Where the script menus come from
+### 13.5 Where the script menus come from
 
 - At start the cgame loads every script menu the server precached:
   `0x3002c060` walks configstrings `0x49c..0x4bb` (1180..1211) and passes
@@ -1070,7 +1070,7 @@ or unknown `g_scriptMainMenu` opens nothing: `0x400134b0` looks the name up
   (`tdm.gsc:257`, `if(response == "open" || response == "close")
   continue;`). VERIFIED (the files).
 
-### When a `t` opens its menu
+### 13.6 When a `t` opens its menu
 
 - `UI_SetActiveMenu` records the id it ran in `0x401bf42c` for every case
   but 10 and 11, which write 10 (`0x4000dadb`). `vmMain` 8 (`0x4000d800`)
@@ -1105,7 +1105,7 @@ or unknown `g_scriptMainMenu` opens nothing: `0x400134b0` looks the name up
   when `vmMain` 8 answers 10, either way. VERIFIED (asm). So `u` closes a
   script popup as Esc would, and nothing else.
 
-### Esc and the fullscreen menus
+### 13.7 Esc and the fullscreen menus
 
 `_UI_KeyEvent` (`0x4000d6f0`) takes an Esc ahead of `Menu_HandleKey`
 (`0x4000d72d`): when `0x40016ab0` finds no menu on the stack with its
@@ -1118,7 +1118,7 @@ one never runs its `onEsc`; every menu closes through its `onClose`.
 `onEsc`. VERIFIED (the files). Which of `ebx`/`edi` is the key and which the
 down flag is INFERRED (the `0x1b` compare).
 
-### `cl_bypassMouseInput` and the keys
+### 13.8 `cl_bypassMouseInput` and the keys
 
 `CL_KeyEvent` (`0x40dc30`) passes a press to the binds instead of the UI
 while `cl_bypassMouseInput` is not 0 (`0x40dfd2` on): `MOUSE1`..`MOUSE3`
@@ -1131,7 +1131,7 @@ while `cl_bypassMouseInput` is not 0 (`0x40dfd2` on): `MOUSE1`..`MOUSE3`
 the quick message menus only their digit keys go to the menu; every other
 key, mouse buttons included, reaches the binds. INFERRED (the combination).
 
-### vcod
+### 13.9 vcod
 
 - Script menus load into the front end's `Ui` once the map is up
   (`Ui::load_script_menus` after the lists' menus; the cgame's start),
@@ -1228,7 +1228,7 @@ key, mouse buttons included, reaches the binds. INFERRED (the combination).
 
 ## 14. The options screens
 
-### Files and layout
+### 14.1 Files and layout
 
 - `menus.txt` loads `ui_mp/options.menu` (not `ui/options.menu`, which
   differs only in 130-wide button rects), eleven `ui/options_*.menu`,
@@ -1254,7 +1254,7 @@ key, mouse buttons included, reaches the binds. INFERRED (the combination).
   menu whose item it lands on. vcod routes clicks and moves as section 20,
   "Which menu takes the mouse", reads them.
 
-### Item types
+### 14.2 Item types
 
 `ui/menudef.h` numbers them: editfield 4, ownerdraw 8, slider 10, yes/no
 11, multi 12, bind 13. VERIFIED. The stock options files use 49 binds, 24
@@ -1310,7 +1310,7 @@ multis, 16 yes/nos, 6 sliders and one edit field. VERIFIED (counted).
   and inserts. Q3 starts an edit at position 0 in overstrike mode; not
   checked against CoD.
 
-### Scripts and cvars
+### 14.3 Scripts and cvars
 
 - `uiScript` names the options files call (strings in `ui_mp_x86.dll`):
   `loadControls` (`0x4002eb70`), `update` (`0x4002e844`), `getLanguage`
@@ -1355,7 +1355,7 @@ multis, 16 yes/nos, 6 sliders and one edit field. VERIFIED (counted).
   | `cl_languagesavailable` | "0" (set to the language count later) | |
   | cgame `cg_drawCrosshair`, `cg_drawStatus`, `cg_marks`, `cg_brass`, `cg_blood` | "1" | 1 (rows `0x30074aa0`, `0x30074a40`, `0x30074c80`, `0x30074c70`, `0x30075430`) |
 
-### How retail applies the Graphics, Performance and Sound pages
+### 14.4 How retail applies the Graphics, Performance and Sound pages
 
 All CoDMP.exe 1.1 unless named. Which page writes which cvar is VERIFIED
 from `ui/options_graphics.menu`, `ui/options_performance.menu`,
@@ -1624,7 +1624,7 @@ file).
   and `mss_khz`. Its top row (2000 MHz, 256 MB, 256 MB) is `r_picmip` 0,
   `r_picmip2` 0, `r_swapInterval` 1, bilinear, `mss_khz` 44.
 
-### What vcod backs
+### 14.5 What vcod backs
 
 - Live: every bind, `sensitivity`, invert mouse (`m_pitch`), `name` (on
   closing Multiplayer Options), `rate`, `mss_volume` (master volume, read
@@ -1717,7 +1717,7 @@ file).
   `vid_restart` and picks the menu files' language directory (section 1),
   but a stock install ships only the English localized paks.
 
-### Driver Info
+### 14.6 Driver Info
 
 - `options_driverinfo` (`ui/options_driverinfo.menu`) is a popup whose
   Driver Info button on `options_menu` shows only under `developer 1`
@@ -1813,7 +1813,7 @@ HUD side (`cod11-hud-protocol.md` section 9, "Mod items"), and a survey of
 listed 49 servers, all answered `getstatus`, and vcod joined 13 as a
 spectator for 10-25 s each.
 
-### What the survey found
+### 16.1 What the survey found
 
 - 36 of 49 serverinfos carry `codextended` (CoDExtended v20/v21), 6 carry
   `iw1x`, the rest neither. `mod` reads 1 on three. Eleven carry
@@ -1847,7 +1847,7 @@ spectator for 10-25 s each.
 - One server answered `connect` with two OOB `print`s (an advertising URL)
   and sent `connectResponse` 4 s after the challenge. VERIFIED (live).
 
-### The systeminfo sets client cvars
+### 16.2 The systeminfo sets client cvars
 
 - `CL_SystemInfoChanged` (`0x415eb0`) reads `sv_serverid`, then returns
   while a demo plays (`clc.demoplaying`, `0x15ef004`). VERIFIED (the
@@ -1899,7 +1899,7 @@ spectator for 10-25 s each.
 - No stock menu sets `cl_allowDownload`; `configure_mp.cfg` and
   `safemode_mp.cfg` in `pak0.pk3` set it "0". VERIFIED.
 
-### vcod
+### 16.3 vcod
 
 - Every systeminfo key is forced into the client's cvars at the gamestate
   and at each `d 1`, except during a demo (`Shell::apply_systeminfo`).
@@ -1929,7 +1929,7 @@ spectator for 10-25 s each.
 Sources: `ui_mp/mods.menu` and `ui_mp/main.menu` in `pak0.pk3`,
 `ui_mp_x86.dll` 1.1 (base `0x40000000`), `CoDMP.exe` 1.1.
 
-### The menu
+### 17.1 The menu
 
 - `mods.menu` defines `mods_menu`: `onOpen { hide grpfinish; hide accept;
   uiScript loadMods }`, `onEsc { close mods_menu; open main }`, a list box
@@ -1949,7 +1949,7 @@ Sources: `ui_mp/mods.menu` and `ui_mp/main.menu` in `pak0.pk3`,
   keeps at most 64 `name\0description\0` pairs. The feeder shows the
   description when non-empty, else the directory. VERIFIED (asm).
 
-### The engine
+### 17.2 The engine
 
 - `FS_GetModList` (`0x43b030`, reached through `$modlist` at `0x5644d8`)
   lists the subdirectories of `fs_basepath` and `fs_cdpath`, deduplicated,
@@ -2001,7 +2001,7 @@ Sources: `ui_mp/mods.menu` and `ui_mp/main.menu` in `pak0.pk3`,
   its own `maps/mp/<map>.bsp` replaces the stock geometry and collision.
   INFERRED (the two together).
 
-### A mod switch during a download
+### 17.3 A mod switch during a download
 
 - `CL_Vid_Restart_f` holds no download test. With no listen server it
   stops the sound, shuts the cgame, UI and renderer down, sends `vdr`
@@ -2025,7 +2025,7 @@ Sources: `ui_mp/mods.menu` and `ui_mp/main.menu` in `pak0.pk3`,
   the search path and the front end, and starts no cgame half before the
   game is live ("vcod" below), as retail.
 
-### The cgame restart
+### 17.4 The cgame restart
 
 - `CL_Vid_Restart_f` (`0x40fbe0`), while a cgame runs (`0x1617348`), calls
   its export `0x11` to save state into the hunk before the restart and,
@@ -2072,7 +2072,7 @@ Sources: `ui_mp/mods.menu` and `ui_mp/main.menu` in `pak0.pk3`,
   `maps/mp/%s.bsp` and `CL_InitCGame: %5.2f seconds`. VERIFIED (calls,
   strings).
 
-### A map change reloads the cgame
+### 17.5 A map change reloads the cgame
 
 - Every gamestate goes through the same reload. VERIFIED (calls):
   `CL_ParseGamestate` (`0x416050`) ends in `CL_InitDownloads` (`0x410240`),
@@ -2100,7 +2100,7 @@ Sources: `ui_mp/mods.menu` and `ui_mp/main.menu` in `pak0.pk3`,
   walk there). A `map_restart` sends no gamestate (cod11-map-cycle.md
   section 4) and reloads nothing.
 
-### A disconnect frees the cgame
+### 17.6 A disconnect frees the cgame
 
 - `0x4358a0`, the error handler's arm for codes 1, 2, 3 and 5 (a
   `disconnect`, a drop, a server `error`), calls `CL_Disconnect(1)`
@@ -2122,7 +2122,7 @@ Sources: `ui_mp/mods.menu` and `ui_mp/main.menu` in `pak0.pk3`,
   (calls). That each call is 1.1's counterpart in the same place is
   INFERRED.
 
-### `snd_restart` with no game up
+### 17.7 `snd_restart` with no game up
 
 - `snd_restart`'s body (`0x40fe0c`) saves the streams (`0x4510f0`), shuts
   the sound system down and starts it (`0x450130`, `0x44fe60`), runs
@@ -2150,7 +2150,7 @@ Sources: `ui_mp/mods.menu` and `ui_mp/main.menu` in `pak0.pk3`,
   (`AudioSystem::on_gamestate("menu")`) before opening the main menu, so it
   ends the same way, a frame earlier.
 
-### Alt+Enter's release
+### 17.8 Alt+Enter's release
 
 - The window procedure sends `WM_SYSKEYUP` (0x105) through the byte table
   at `0x467050` (index 0) and the jump table at `0x467040` (entry 0) to
@@ -2163,7 +2163,7 @@ Sources: `ui_mp/mods.menu` and `ui_mp/main.menu` in `pak0.pk3`,
   reaches the menu on retail too, and vcod's `Ui::key_up`
   (`Menu_HandleKey`'s focus pass at the cursor) matches.
 
-### vcod
+### 17.9 vcod
 
 - `mods_menu` opens from the stock button, lists
   `vcod_common::pk3::mod_list` (the install's directories other than `main`
@@ -2212,7 +2212,7 @@ Sources: `ui_mp/mods.menu` and `ui_mp/main.menu` in `pak0.pk3`,
 
 ## 18. Start New Server (`ui_mp/createserver.menu`)
 
-### The menus
+### 18.1 The menus
 
 - `createserver.menu` holds three menuDefs: `createserver` (full screen,
   the backdrop), `createserver_op` (server settings, Back, the Game Type
@@ -2251,7 +2251,7 @@ Sources: `ui_mp/mods.menu` and `ui_mp/main.menu` in `pak0.pk3`,
   165` and stack 15 apart from 173. INFERRED from RTCW's `ItemParse_origin`
   and the stock layout it produces.
 
-### The game type and map lists
+### 18.2 The game type and map lists
 
 - The game type list is `UI_LoadGameTypes`' second list (section 6, "The
   game type filter"): the same scripts without `All`. vcod reads both off
@@ -2293,7 +2293,7 @@ Sources: `ui_mp/mods.menu` and `ui_mp/main.menu` in `pak0.pk3`,
   `sv_minPing`, `sv_maxPing` "0" (5), `sv_pure` "1" (0xc). VERIFIED
   (decompile, strings at `0x55dda8`, `0x5667b0`, `0x56871c`, `0x5685e4`).
 
-### `uiScript StartServer` (`0x4000a62b`)
+### 18.3 `uiScript StartServer` (`0x4000a62b`)
 
 - Sets `cg_thirdPerson` (`0x4002f380`) to "0", `dedicated` (`0x4002ecb8`)
   to `ui_dedicated`'s integer (`0x401eed0c`) clamped to 0..2
@@ -2304,7 +2304,7 @@ Sources: `ui_mp/mods.menu` and `ui_mp/main.menu` in `pak0.pk3`,
   console. The Start button's script closes `createserver`, `joinserver`
   and `multi_menu` first. VERIFIED (the file).
 
-### vcod
+### 18.4 vcod
 
 - Retail first. `dedicated` is registered latched (flags 0x20) by
   `Com_Init` (`0x4375c0`). `Com_Frame` (`0x437f40`) applies a latched
@@ -2374,7 +2374,7 @@ Sources: `ui_mp/mods.menu` and `ui_mp/main.menu` in `pak0.pk3`,
 
 Sources: `ui_mp_x86.dll` 1.1. Function names are RTCW's, matched by shape.
 
-### The scroll bar
+### 19.1 The scroll bar
 
 - `Item_ListBox_Paint` (`0x400159b0`) draws a vertical list's bar on every
   list box, with no flag to turn it off: the up arrow at `x + w - 17`, `y +
@@ -2413,7 +2413,7 @@ Sources: `ui_mp_x86.dll` 1.1. Function names are RTCW's, matched by shape.
   the key. The list box handler takes neither, so the wheel never scrolls a
   list. VERIFIED (decompile).
 
-### The capture: held arrows and the thumb drag
+### 19.2 The capture: held arrows and the thumb drag
 
 - `Item_HandleKey` (`0x40013040`): with no capture item (`0x401bf3e8`), a
   press of `K_MOUSE1`..`K_MOUSE3` (200..202) runs `Item_StartCapture`
@@ -2465,7 +2465,7 @@ Sources: `ui_mp_x86.dll` 1.1. Function names are RTCW's, matched by shape.
   flags frozen on the thumb that call returns at the `0x2000` test. VERIFIED
   (asm). This is RTCW's mapping with the same constants.
 
-### The wheel
+### 19.3 The wheel
 
 - `Menu_HandleKey` (`0x400136b0`) runs `Menu_HandleMouseMove`
   (`0x40016b20`) at the cursor first, then the focused item's key handler,
@@ -2531,7 +2531,7 @@ Sources: `ui_mp_x86.dll` 1.1. Function names are RTCW's, matched by shape.
   next item is the `password` column header, whose `mouseEnter` plays
   `mouse_over`.
 
-### Right click
+### 19.4 Right click
 
 - `Menu_HandleKey` takes `K_MOUSE2` (201) wherever it takes `K_MOUSE1`
   (200): the item under the cursor gets its key handler, then its action
@@ -2541,7 +2541,7 @@ Sources: `ui_mp_x86.dll` 1.1. Function names are RTCW's, matched by shape.
   and `0xbf`. A yes/no item (`0x400122b0`) toggles and a multi item
   (`0x40012550`) steps forward on either. VERIFIED (decompile).
 
-### vcod
+### 19.5 vcod
 
 - The server list (`FEEDER_SERVERS`), map list (`FEEDER_ALLMAPS`) and Mods
   list (`FEEDER_MODS`) draw the bar and scroll on its arrows, its page
@@ -2578,7 +2578,7 @@ Sources: `ui_mp_x86.dll` 1.1 (base `0x40000000`). The display context the
 module calls through sits at `0x401c3ce0`; `_UI_Init` (`0x4000d310`) fills
 it. VERIFIED (asm).
 
-### Keywords
+### 20.1 Keywords
 
 - Item keyword table (VERIFIED, asm):
 
@@ -2617,7 +2617,7 @@ it. VERIFIED (asm).
   three `execKey`s; vcod draws those menus in the HUD
   (`cod11-quick-chat.md`). VERIFIED (the pak files).
 
-### Taking the focus
+### 20.2 Taking the focus
 
 - `Item_SetFocus` (`0x40011410`, section 19), once it accepts an item,
   calls `Menu_ClearFocus` (`0x4000fe70`) first, which clears the focus bit
@@ -2658,7 +2658,7 @@ it. VERIFIED (asm).
   (`0x401bf3e8`), a bind waiting for its key (`0x401bf3f0`) or an edit
   (`0x401bf3f4`) is set. VERIFIED (decompile).
 
-### Which menu takes the mouse
+### 20.3 Which menu takes the mouse
 
 - `Display_MouseMove` (`0x40018b40`), called with no menu from the mouse
   event (`0x4000d790`), takes the focused menu (`0x40016970`: the topmost
@@ -2685,7 +2685,7 @@ it. VERIFIED (asm).
   `main`'s rect is the whole screen, so no click reaches the page under
   it. INFERRED (the combination).
 
-### The focused menu
+### 20.4 The focused menu
 
 - Menu flag `0x2` is the focus. `Menus_Activate` (`0x40013400`) clears it
   on every stack menu, pushes the menu (`0x400104f0` takes it out first,
@@ -2717,7 +2717,7 @@ it. VERIFIED (asm).
   `outOfBoundsClick` (`0x4002d2a4`) with `0x40018620`, which ORs `0x20000`
   into the menu's flags (`+0x48`) and takes no argument. VERIFIED (asm).
 
-### Edit fields
+### 20.5 Edit fields
 
 - `Menu_HandleKey` (`0x400136b0`) hands an edit's press to
   `Item_TextField_HandleKey` (`0x40012690`) for the edit item
@@ -2747,7 +2747,7 @@ it. VERIFIED (asm).
   dropped (`maxChars <= len` returns 1 before the insert). VERIFIED
   (decompile).
 
-### Menu keys
+### 20.6 Menu keys
 
 - `Item_HandleKey` (`0x40013040`) starts a capture for `K_MOUSE1..3` and
   hands the key to the item's type handler only for list boxes (6), owner
@@ -2816,7 +2816,7 @@ it. VERIFIED (asm).
   uiScript JoinServer }`, so Enter over it does nothing on retail.
   VERIFIED (decompile, `joinserver.menu`).
 
-### Text rects and the focus colour
+### 20.7 Text rects and the focus colour
 
 - `Item_Text_Paint` (`0x400144d0`, item types 0 and 1) takes the item's
   text, or its cvar's value when it has no text, localizes an `@` key
@@ -2927,7 +2927,7 @@ it. VERIFIED (asm).
   key number order, so a `+` alias's `-` half runs; the cgame's turn is
   not modelled.
 
-### vcod
+### 20.8 vcod
 
 - `crates/common/src/ui_menu.rs` parses `onFocus`, `leaveFocus`,
   `focusSound`, `maxCharsGotoNext`, `execKey`, `execKeyInt` and

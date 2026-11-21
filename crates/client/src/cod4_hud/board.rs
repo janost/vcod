@@ -97,7 +97,7 @@ impl Cod4Hud {
     /// then a 100 ms fade (`CG_FadeColor(time, scoreFadeTime, 100, 100)`);
     /// `None` once gone.
     pub(crate) fn scoreboard_fade(&self, snap: &Snapshot, now: i32) -> Option<f32> {
-        if self.show_scores || snap.ps.get("pm_type") == Some(h::PM_INTERMISSION) {
+        if self.show_scores || snap.ps.word(vcod_cod4::ps_word!("pm_type")) == h::PM_INTERMISSION {
             return Some(1.0);
         }
         let t = now - self.score_fade_at?;

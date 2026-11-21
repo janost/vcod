@@ -1,4 +1,4 @@
-# Retail server handshake and empty-map configstrings (CoD 1.1)
+# Retail server handshake, configstrings and housekeeping (CoD 1.1)
 
 What the retail 1.1d Linux dedicated server sends before any player exists:
 the three connectionless replies, the gamestate framing and the whole
@@ -13,7 +13,8 @@ names its own runs and binaries and each claim carries its own label.
 
 Contents: setup; connectionless replies; the gamestate message; configstrings
 at gamestate; what a minimal server has to set; retail client check;
-housekeeping (heartbeat, rcon, zombies, frame message order, drops,
+housekeeping (heartbeat, rcon, zombies, frame message order, receive
+order, drops,
 reconnects, console commands, the stdin console, pings, rate, bans, shutdown, OOB `disconnect`,
 challenge key, `fs_restrict`, private slots, ping limits, challenge table,
 pacing, bare messages, fragmented gamestate, `snaps`, `g_password`); pak
@@ -626,6 +627,13 @@ A silent client:
   `a_silent_client_s_last_snapshot_is_250_ms_past_its_timeout`
   (`crates/server/tests/connect.rs`). Trap: a wall-clock check ahead of the
   clock advance drops on the first stale frame.
+- vcod: a slot no netchan message has been taken from yet is held to 15 s
+  when `sv_timeout` is longer (`engine::slot::NO_NETCHAN_TIMEOUT_S`, shared
+  with CoD2, `a_slot_that_never_sent_a_netchan_message_times_out_early`).
+  vcod's (SEC-066): retail holds it the whole `sv_timeout`, so a host that
+  sends `getchallenge` and `connect` from many ports keeps the slots four
+  minutes. That a retail client sends its first netchan message well
+  inside 15 s of `connectResponse` is INFERRED (Q3's connect flow).
 
 A zombie never active:
 
@@ -687,6 +695,37 @@ INFERRED (control flow of the three `SV_SendClientMessages` below).
   2026-10-24). `a_frames_messages_go_out_in_slot_order` pins both. Trap:
   separate in-world, unentered and zombie passes sent slot 1's snapshot first
   in 294/300 frames.
+
+### Receive order (`SV_PacketEvent`, 1.1d 0x808c870)
+
+Two probes on one server answer the same snapshot within microseconds,
+so neither their stamps nor their send clocks (`w=`) say whose packet
+the server ran first. The server says, under `+set showpackets 1`:
+
+- VERIFIED, the three servers: each client packet goes `recvfrom` (1.1d
+  0x80c723f, 1.5b 0x80d4c4b, UO 0x80c9f4b) to `SV_PacketEvent` (1.1d
+  0x808c870), which calls `Netchan_Process` (1.1d 0x80804f0 at 0x808c9ba,
+  1.5b 0x8083890 at 0x8093c0c, UO 0x8084378 at 0x8094b6d) and then
+  `SV_ExecuteClientMessage` (1.1d 0x80872ec at 0x808ca57, 1.5b 0x808cdd0
+  at 0x8093ce6, UO 0x808dba1 at 0x8094c47), whose `SV_UserMove` (1.1d
+  0x8086fa4, 1.5b 0x808cade, UO 0x808d8af, the `cmdCount` strings) runs
+  each cmd stamped past the client's last one. `Netchan_Process` prints
+  `%s recv %4i : s=%i` (1.1d 0x8080691, 1.5b 0x80839b7, UO 0x808449f)
+  under `showpackets`, ahead of its `Out of order packet` test (1.1d
+  0x80806e7), so the console has one line per packet in the order the
+  server ran them. INFERRED, off the call order: a `recv` line's cmds ran
+  before the next line's.
+- VERIFIED, the three `-turn` captures (2026-11-13): every cmd of both
+  probes was read (6420, 6300 and 6360 cmds), each client's in the order
+  it sent them, and no `Out of order` or `Dropped` line printed. Within a
+  tie either client's packet came first, about half the time each.
+  Ordering the two clients by `w=` disagrees with the server on 3, 1 and
+  2 pairs, all sent 1 to 3 microseconds apart. 1.5b's
+  `mp_carentan-dm-turret-victim-15-recv.txt` read all 1020 of its
+  gunner's cmds in send order (cod11-turrets.md 13.3).
+
+How to read the order off a run (`q=`, `s=`, `tools/recv_order.sh`):
+`docs/dev/retail.md`, "Receive order".
 
 ### When the game hears a drop (`SV_DropClient`, `ClientDisconnect`)
 
@@ -944,6 +983,10 @@ The registry:
   the default (`is:"8" default:"20"`). Registering a `set`-created cvar takes
   over its default (`scr_allow_fg42` `is:"0" default:"1"` after
   `default_mp.cfg`'s `set` and `makeCvarServerInfo(..., "1")`). VERIFIED.
+- vcod-only rows sit on top (`registry::VCOD_ONLY`, on every protocol and
+  in the CoD2 and CoD4 tables): the `vc_bot_*` cvars and
+  `vc_maxClientsPerIP` ("The challenge table"). Retail registers none of
+  them.
 - That homepath mounted 1.5's localized paks, whose `default_mp.cfg` also sets
   `scr_killcam`, `scr_freelook`, `scr_teambalance`, `scr_spectateenemy` and
   four `scr_hq*` limits: 8 more than vcod on a 1.1 install. VERIFIED.
@@ -2012,6 +2055,20 @@ writes).
   rand() ^ sv_time_ms` (the game clock, 1.5's 0x83ccd84), CoD2's on
   `svs.time`. Address and port must match, so a connect from another port is
   refused, as on retail.
+- vcod's own, on all four: what goes out is the draw xored with a SipHash of
+  the address and the draw under a per-process key from the OS
+  (`Challenges::issue`), so a challenge tells nothing of the `rand()` stream
+  and one issued to a spoofed address cannot be guessed. The draws and their
+  count are retail's, so the game's stream stays in step (cod2-combat.md
+  9.6, cod4-combat.md 10.9); only the number sent differs.
+- vcod's own, on all four: `vc_maxClientsPerIP` (default 4, 0 off) caps the
+  slots one address holds, connected or on its way in. Past it a
+  `getchallenge` from a socket that holds no slot and a `connect` into a new
+  slot get `error\n\x15Too many clients from your address`, before the
+  challenge or the client slot is taken. Loopback, RFC 1918 and link-local
+  addresses are exempt; bots and zombies hold none
+  (`engine::link::per_ip_full`). Retail has no cap; off the LAN its
+  authorize server stands in front of the challenge, which vcod skips.
 
 ### Message pacing (`SV_SendClientMessages` 0x809045c)
 

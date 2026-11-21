@@ -352,7 +352,7 @@ fn stat_player(host: &GameHost, id: vcod_gsc::EntId, name: &str) -> Result<Clien
 /// `N <index> <value>` (`%c %i %i` at 0x8217f78 with 0x4e), which its
 /// profile takes. The `impure scripts loaded.` refusal ahead of the dvar's
 /// is never met: its flag needs a loose script read with `useFastFile` 0
-/// (cod4-gsc.md, "The stats, the loadout, the perks").
+/// (cod4-gsc.md 7.3).
 fn set_stat(
     host: &mut GameHost,
     _: &mut Cx,

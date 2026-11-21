@@ -46,7 +46,8 @@ impl Client {
 
     /// A sequenced packet from the server. `None` while fragments are joined,
     /// for a stale packet, or for one whose acknowledge is more than 128
-    /// behind our commands (`CL_PacketEvent`, cod2-demos.md 2).
+    /// behind our commands, which takes every command as acknowledged
+    /// (`CL_PacketEvent`, cod2-protocol.md 2.2, cod2-demos.md 2).
     pub fn receive(&mut self, packet: &[u8]) -> anyhow::Result<Option<Parsed>> {
         if packet.len() < 4 {
             return Ok(None);
@@ -55,7 +56,9 @@ impl Client {
             return Ok(None);
         };
         let ack = i32::from_le_bytes(body.get(..4).context("short message")?.try_into()?);
+        // Every command taken as acknowledged (CoD2MP_s.exe 0x40f3f5).
         if self.ack_too_old(ack) {
+            self.reliable_acknowledge = self.reliable_sequence;
             return Ok(None);
         }
         let cmd = &self.reliable_commands[ack as usize % MAX_RELIABLE_COMMANDS];
@@ -108,9 +111,9 @@ impl Client {
             self.set_systeminfo(&si);
         }
         // `CL_ParseSnapshot` (Mac 0x1d5cb2) ends the wait on a frame
-        // that deltas from nothing.
+        // that deltas from nothing: a base of 0 or less.
         if let Some(n) = parsed.snapshot
-            && self.parser.frame(n).is_some_and(|f| f.delta_num < 0)
+            && self.parser.frame(n).is_some_and(|f| f.delta_num <= 0)
             && let Some(rec) = self.recording.as_mut()
         {
             rec.waiting = false;
@@ -281,7 +284,7 @@ mod tests {
                 let _ = cl.receive(&p);
             }
             if ack < 0 {
-                assert_eq!(cl.reliable_acknowledge, 0, "{ack:#x}");
+                assert_eq!(cl.reliable_acknowledge, cl.reliable_sequence, "{ack:#x}");
             }
             let packet = cl.build_packet(&[]).unwrap();
             assert!(packet.len() < 64, "{ack:#x}: {} bytes", packet.len());

@@ -334,7 +334,7 @@ fn turn_on_grid(
 fn health_frac(snap: &Snapshot) -> f32 {
     let ps = &snap.ps;
     let (hp, max) = (ps.stats[0], ps.stats[2]);
-    if hp == 0 || max == 0 || ps.get("pm_type") == Some(PM_DEAD) {
+    if hp == 0 || max == 0 || ps.word(vcod_cod4::ps_word!("pm_type")) == PM_DEAD {
         return 0.0;
     }
     (hp as f32 / max as f32).clamp(0.0, 1.0)

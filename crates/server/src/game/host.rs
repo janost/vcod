@@ -258,7 +258,7 @@ pub struct Cod2HostState {
 /// search path (`Carry::weapon_files`): a restart registers the same list,
 /// so it takes them instead of reading and parsing each file twice again,
 /// and touches the file, so its iwd is referenced as a read's would be
-/// (cod4-server-frame.md 9, "The restart's load").
+/// (cod4-server-frame.md 9.7.2).
 #[derive(Clone, Default)]
 pub struct WeaponFiles {
     fs: std::rc::Weak<vcod_common::pk3::Pk3Fs>,
@@ -668,7 +668,7 @@ impl EntArrays {
 /// The routes and builtins `profile`'s tables give each atom's folded
 /// name, worked out on first use: the table lookups hash the name's text,
 /// which was a seventh of the spawn wave's script time
-/// (cod4-server-frame.md 9, "The spawn wave"). Keyed on the interner
+/// (cod4-server-frame.md 9.7). Keyed on the interner
 /// ([`Cx::interner_id`]) and the profile; either changing empties it.
 #[derive(Default)]
 struct AtomMemo {
@@ -1946,8 +1946,8 @@ impl GameHost {
         self.turrets.contains_key(&id)
             || self.vehicles.live.contains_key(&id)
             || self.script_takedamage.contains(&id)
-            || crate::game::mover::damageable_statics(self).contains(&id)
-            || crate::game::mover::door::damageable(self).contains(&id)
+            || crate::game::mover::is_damageable_static(self, id)
+            || crate::game::mover::door::is_damageable(self, id)
             || self.is_damage_trigger(id)
     }
 

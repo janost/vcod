@@ -19,7 +19,7 @@ use std::cell::RefCell;
 
 use glam::Vec3;
 
-use crate::collision::{WorldClip, WorldHit};
+use crate::collision::WorldClip;
 
 /// `surfaceparm` content bits, from the material compiler's table (Mac
 /// `.data` 0x348820; `cod2-d3dbsp-format.md`, "Contents and surface flags").
@@ -58,6 +58,10 @@ pub const SURF_MANTLE_ON: u32 = 0x200_0000;
 pub const SURF_MANTLE_OVER: u32 = 0x400_0000;
 /// The sound material's bits.
 pub const SURF_MATERIAL_MASK: u32 = 0x1f0_0000;
+
+/// The material a ladder's rung footstep and jump carry without one of
+/// their own (1.7's immediate 0x15, pmladder.rs and cod4 `Jump_AddSurfaceEvent`).
+pub const LADDER_SURFACE: u32 = 0x15;
 
 /// The sound material a surface's flags carry (bits 20-24).
 pub const fn surface_material(flags: u32) -> u32 {
@@ -479,16 +483,8 @@ impl ClipMap {
 }
 
 impl WorldClip for ClipMap {
-    fn trace(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: u32) -> WorldHit {
-        let t = ClipMap::trace(self, start, end, mins, maxs, mask);
-        WorldHit {
-            fraction: t.fraction,
-            normal: t.normal,
-            surface_flags: t.surface_flags,
-            contents: t.contents,
-            startsolid: t.startsolid,
-            allsolid: t.allsolid,
-        }
+    fn trace(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: u32) -> ClipTrace {
+        ClipMap::trace(self, start, end, mins, maxs, mask)
     }
 
     fn point_contents(&self, p: Vec3) -> u32 {

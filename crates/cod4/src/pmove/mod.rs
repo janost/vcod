@@ -44,6 +44,7 @@ pub use stance::lerp_duration as view_height_lerp_duration;
 pub use vcod_common::pmove::Stance;
 pub(crate) use vcod_common::pmshared::leave_ladder;
 use vcod_common::pmshared::{PmState, TouchList};
+use weapon::state;
 
 /// `groundEntityNum` off the ground, and the world's number.
 pub const ENTITYNUM_NONE: i32 = 1023;
@@ -243,6 +244,15 @@ pub struct Rules {
     /// `player_meleeChargeFriction` (1200): the lunge's friction, which
     /// also sets its speed and length (cod4-pmove.md 17).
     pub melee_charge_friction: f32,
+    /// `player_burstFireCooldown` (seconds): a burst's wait.
+    pub burst_fire_cooldown: f32,
+    /// `bg_aimSpreadMoveSpeedThreshold`: the flat speed past which a move
+    /// grows the hip spread.
+    pub aim_spread_move_speed_threshold: f32,
+    /// `perk_weapReloadMultiplier` and `perk_weapRateMultiplier`: Sleight
+    /// of Hand's and Double Tap's clock divisors (cod4-combat.md 2.1).
+    pub perk_weap_reload_multiplier: f32,
+    pub perk_weap_rate_multiplier: f32,
 }
 
 impl Default for Rules {
@@ -291,6 +301,10 @@ impl Default for Rules {
             mantle_anims: mantle::installed(),
             shock_slows: 0,
             melee_charge_friction: 1200.0,
+            burst_fire_cooldown: 0.2,
+            aim_spread_move_speed_threshold: 11.0,
+            perk_weap_reload_multiplier: 0.5,
+            perk_weap_rate_multiplier: 0.75,
         }
     }
 }
@@ -689,6 +703,22 @@ pub trait PmWorld {
     /// A capsule (or point) sweep from `start` to `end` under `mask`,
     /// passing entity `pass`.
     fn trace(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, pass: u32, mask: u32) -> Tr;
+}
+
+/// A pmove trace as a world clip's result: `material` unknown.
+impl From<Tr> for ClipTrace {
+    fn from(t: Tr) -> ClipTrace {
+        ClipTrace {
+            fraction: t.fraction,
+            normal: t.normal,
+            surface_flags: t.surface_flags,
+            contents: t.contents,
+            material: None,
+            allsolid: t.allsolid,
+            startsolid: t.startsolid,
+            walkable: t.walkable,
+        }
+    }
 }
 
 /// A world trace's contact named as `SV_Trace` names it.
@@ -1131,7 +1161,7 @@ fn update_prone_still(pm: &mut Pmove) {
         ps.pm_flags &= !pmf::SIGHT;
         false
     } else {
-        let idle = ps.weapon_state <= 4 || ps.weapon_state == 7;
+        let idle = ps.weapon_state <= state::LOWER_QUICK || ps.weapon_state == state::RELOAD;
         ps.pm_flags & pmf::SIGHT != 0 || !idle
     };
     if !keep {
@@ -1147,7 +1177,7 @@ fn firing(pm: &Pmove) -> bool {
     pm.cmd.buttons & button::ATTACK != 0
         && ps.pm_type != pm_type::INTERMISSION
         && ps.pm_flags & pmf::RESPAWNED == 0
-        && matches!(ps.weapon_state, 0 | 5)
+        && matches!(ps.weapon_state, state::READY | state::FIRE)
         && pm.defs.is_none_or(|d| weapon::ammo_available(ps, d) != 0)
 }
 
@@ -1300,7 +1330,7 @@ fn can_stand(pm: &Pmove) -> bool {
 
 /// The reloading weapon states, which keep the sighted walk off.
 fn reloading(state: i32) -> bool {
-    matches!(state, 7..=11)
+    (weapon::state::RELOAD..=weapon::state::RELOAD_CLOSE).contains(&state)
 }
 
 /// `PM_UpdatePlayerWalkingFlag`: the sighted walk follows the held sight
@@ -1425,7 +1455,7 @@ fn sprint_posture(pm: &Pmove, keys: u32) -> bool {
 
 /// The melee and offhand weapon states (12..=20).
 fn busy_hands(state: i32) -> bool {
-    (12..=20).contains(&state)
+    (weapon::state::MELEE_SWING..=weapon::state::OFFHAND_RAISE).contains(&state)
 }
 
 /// `PM_UpdateSprint` (0x80570ae). Only a normal player (linked or not)
@@ -1457,7 +1487,7 @@ fn keep_sprint(pm: &mut Pmove) {
     let broken = ps.pm_flags & SPRINT_ENDERS != 0
         || !sprint_posture(pm, SPRINT_BREAKERS)
         || busy_hands(ps.weapon_state)
-        || matches!(ps.weapon_state, 25 | 26);
+        || matches!(ps.weapon_state, state::NVG_ON | state::NVG_OFF);
     let pressed = pm.cmd.buttons & button::SPRINT != 0 && pm.oldcmd.buttons & button::SPRINT == 0;
     if broken {
         end_sprint(pm);

@@ -1084,7 +1084,7 @@ fn spread_draws(cap: &Capture, spread: f32) -> Vec<(f64, f64)> {
 /// (`cargo test -p vcod-server --lib -- --ignored recover_spread_seed
 /// --nocapture`); its finds are the seeds the replay pins.
 #[test]
-#[ignore]
+#[ignore = "seed search by hand: COMBAT_SEED_FROM and COMBAT_SEED_TO"]
 fn recover_spread_seed() {
     let read = |n: &str| std::fs::read_to_string(format!("{FIXTURES}/{n}.txt")).unwrap();
     let secs = |k: &str| -> u64 { std::env::var(k).expect(k).parse().unwrap() };
@@ -1152,7 +1152,7 @@ fn recover_spread_seed() {
 /// (`cargo test -p vcod-server --lib -- --ignored recover_rocket_seed --nocapture`,
 /// `COD2_DIR` set, `COMBAT_SEED_CAPTURE` naming the capture).
 #[test]
-#[ignore]
+#[ignore = "seed search by hand: COD2_DIR, COMBAT_SEED_FROM, COMBAT_SEED_TO and COMBAT_SEED_CAPTURE"]
 fn recover_rocket_seed() {
     use vcod_common::x87::normalize_stored;
     let Some(fs) = vcod_common::testing::cod2_fs() else {

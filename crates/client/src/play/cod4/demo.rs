@@ -46,7 +46,9 @@ pub(super) struct DemoPlay {
 
 impl DemoPlay {
     /// `CL_ReadDemoMessage` (0x4690c0): one record; false once there is
-    /// none. A message that fails to parse is counted and skipped.
+    /// none. A message that fails to parse is counted and skipped, and so
+    /// is one acknowledging more than 128 behind `reliableSequence`, which
+    /// stays 0 on playback (0x469076..0x469099, cod4-demos.md 2).
     pub(super) fn read(&mut self) -> bool {
         use vcod_cod4::net::demo::{DemoEnd, Record};
         if self.ended {
@@ -61,6 +63,10 @@ impl DemoPlay {
             Ok(Record::Message(seq, msg)) => {
                 self.messages += 1;
                 if msg.len() < 4 {
+                    return true;
+                }
+                let ack = i32::from_le_bytes([msg[0], msg[1], msg[2], msg[3]]);
+                if ack < -0x80 {
                     return true;
                 }
                 match self.client.parse(seq, &msg[4..]) {

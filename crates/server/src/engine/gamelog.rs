@@ -1,6 +1,6 @@
 //! `games_mp.log`: `G_LogPrintf` and the file `G_InitGame` opens, the
 //! same on CoD1 1.1, 1.5, UO, CoD2 1.3 and CoD4 1.7 (CoD4 1.7 0x80b43c4,
-//! docs/research/cod4-server-gaps.md, "games_mp.log"; CoD1 and CoD2 in
+//! docs/research/cod4-server-gaps.md 4; CoD1 and CoD2 in
 //! cod11-map-cycle.md 9). Each line is the level clock as `%3i:%i%i `
 //! (minutes, then the seconds' two digits) and the text as raised; the
 //! level clock is the server's (`G_InitGame` starts `level.time` at

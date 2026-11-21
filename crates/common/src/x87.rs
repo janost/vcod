@@ -237,8 +237,9 @@ pub fn angle_subtract(a: f32, b: f32) -> f32 {
     d
 }
 
-/// 1 / 360 as the double constant CoD4 1.7's angle helpers multiply by.
-const INV_360: f64 = 0.002777777845039964;
+/// 1 / 360 as CoD4 1.7's angle helpers multiply by: the float at
+/// `cod4_lnxded` rodata 0x8209630 (0x3b360b61), widened.
+pub const INV_360: f64 = 0.002777777845039964;
 
 /// CoD4 1.7's `AngleNormalize360`: the turns' fraction off `floor`, 360
 /// taken away once more when the product rounds to a whole turn.

@@ -277,7 +277,7 @@ const STICK_TO_ALL: i32 = 1;
 pub(crate) type BoneMove = (Quat, Vec3);
 
 /// The helicopter's DObj skeleton as 1.7 builds it (`vcod_cod4::skel`,
-/// cod4-gsc.md 3.2, "The skeleton"): the model's base locals, then the
+/// cod4-gsc.md 3.2.5): the model's base locals, then the
 /// controller's three tags (handler 23's, `cod4_lnxded` 0x80bab1e, on every
 /// pose: `tag_body` at (bodyPitch, 0, bodyRoll), `tag_turret` at (0, gunYaw,
 /// 0), `tag_barrel` at (gunPitch, 0, 0)), each a local whose slot takes the
@@ -385,7 +385,7 @@ pub(crate) fn heli_tag(c4: &Cod4HostState, h: &Heli4, tag: &str) -> Option<(Vec3
     Some((heli_world_pos(h, m.trans), h.quat() * q))
 }
 
-/// What `VEH_UpdateAim` aims from and in (cod4-gsc.md 3.2, "The turret"):
+/// What `VEH_UpdateAim` aims from and in (cod4-gsc.md 3.2.4):
 /// `tag_barrel`'s place ([`heli_world_pos`]) and the angles of bone 0's
 /// matrix (`G_DObjGetWorldTagMatrix` 0x80cbe9a: the bone's weighted
 /// matrix, [`vcod_cod4::skel::AnimMat::axis`], times the body's axis, then
@@ -776,7 +776,7 @@ impl Heli4 {
     /// it, so it runs from rest, where it keeps the place, levels pitch and
     /// roll to +0 (the tilt's spring at rest, plus the hover jitter's +0)
     /// and normalises the yaw on the stack (0x808c719..0x808c798;
-    /// cod4-gsc.md 3.2, "The no-goal think").
+    /// cod4-gsc.md 3.2.3).
     fn hold(&mut self) {
         self.angles = Vec3::new(0.0, super::missile::normalize180(self.link_angles.y), 0.0);
     }
@@ -788,7 +788,7 @@ impl Heli4 {
     /// Returns the notifies: `turret_rotate_stopped` two thinks after the
     /// gun last turned far, then `turret_on_target` once both angles were
     /// within a degree of it, else `turret_not_on_target`; the caller adds
-    /// the sight notify after it (cod4-gsc.md 3.2, "The turret").
+    /// the sight notify after it (cod4-gsc.md 3.2.4).
     pub fn aim(&mut self, barrel: Vec3, frame: Vec3, target: Vec3) -> Vec<&'static str> {
         let dir = normalize4(target, barrel);
         let toward = axis4(super::item::vectoangles(dir));
