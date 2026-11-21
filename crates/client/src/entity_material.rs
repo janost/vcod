@@ -313,6 +313,14 @@ pub(crate) struct EntSkin {
     pub(crate) sun_cut: Option<StageImage>,
 }
 
+impl EntSkin {
+    /// Whether a draw reads the surface's skin image: a `$texturename`
+    /// stage or the fallback. The other stages bind their images by path.
+    pub(crate) fn reads_skin_image(&self) -> bool {
+        self.stages.iter().any(|st| st.image == StageImage::Skin)
+    }
+}
+
 /// One `StageParams` slot per entity material stage, a multiple of the
 /// widest uniform offset alignment so no device limit is needed.
 pub(crate) const ENT_STAGE_STRIDE: u64 = 512;
