@@ -6,6 +6,7 @@
 
 use crate::assets::Assets;
 use crate::assets::model::{XAnim, XModel};
+use crate::walk::{f32_at, i16_at};
 use crate::xanimcalc::{Parts, Rot, Trans};
 use anyhow::{Context, Result, bail, ensure};
 use glam::{Quat, Vec3};
@@ -19,14 +20,6 @@ pub fn script_string(a: &Assets, i: u16) -> &str {
         .get(usize::from(i))
         .and_then(|s| s.as_deref())
         .unwrap_or("")
-}
-
-fn i16_at(b: &[u8], o: usize) -> i16 {
-    i16::from_le_bytes([b[o], b[o + 1]])
-}
-
-fn f32_at(b: &[u8], o: usize) -> f32 {
-    f32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]])
 }
 
 /// An `XModelQuat`'s four shorts over 32767 (`DObjCalcBaseAnim`).

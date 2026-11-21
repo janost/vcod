@@ -174,12 +174,16 @@ impl Cod2Wire {
     }
 }
 
+impl Cod2Wire {
+    /// `svc_gamestate` to its `svc_EOF`. The caller writes the
+    /// `reliableAcknowledge` and the pending server commands ahead of it.
+    pub fn write_gamestate(&self, w: &mut MsgWriter, gs: &super::Gamestate2) {
+        super::write::write_gamestate(w, gs);
+    }
+}
+
 impl WireGame for Cod2Wire {
-    type UserCmd = super::UserCmd2;
-    type EntityState = super::EntityState2;
-    type PlayerState = super::PlayerState2;
     type Frame = super::write::Frame2;
-    type Gamestate = super::Gamestate2;
     type Baselines = std::collections::BTreeMap<u32, super::EntityState2>;
 
     fn transport(&self) -> &Transport {
@@ -193,10 +197,6 @@ impl WireGame for Cod2Wire {
     /// Latin-1, a byte a char.
     fn oob_packet(&self, text: &str) -> Vec<u8> {
         super::oob::packet(text)
-    }
-
-    fn write_gamestate(&self, w: &mut MsgWriter, gs: &Self::Gamestate) {
-        super::write::write_gamestate(w, gs);
     }
 
     /// CoD2's `snapFlags` is a byte; no `sv_padPackets` nops.

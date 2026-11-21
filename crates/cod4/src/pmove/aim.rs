@@ -76,7 +76,7 @@ pub struct AimKeys {
 
 impl AimKeys {
     /// Off a zone weapon's 0x878-byte struct.
-    pub fn from_raw(raw: &[u8]) -> AimKeys {
+    pub fn from_raw(raw: &[u8; 0x878]) -> AimKeys {
         let i = |o: usize| i32::from_le_bytes(raw[o..o + 4].try_into().unwrap());
         let f = |o: usize| f32::from_le_bytes(raw[o..o + 4].try_into().unwrap());
         let v = |o: usize| [f(o), f(o + 4), f(o + 8)];
@@ -254,8 +254,8 @@ pub fn bob_cycle(ps: &PlayerState) -> f32 {
 /// flag.
 fn amplitude(ps: &PlayerState) -> [f32; 2] {
     match ps.view_height_target {
-        11 => BOB_PRONE,
-        40 => BOB_DUCKED,
+        super::VIEW_PRONE => BOB_PRONE,
+        super::VIEW_CROUCH => BOB_DUCKED,
         _ if ps.pm_flags & pmf::SPRINTING != 0 => BOB_SPRINTING,
         _ => BOB_STANDING,
     }
@@ -502,7 +502,7 @@ impl AimState {
         if frac != 0.0 {
             target = target.map(|t| t * (1.0 - frac));
         }
-        let rate = if ps.view_height_current == 11.0 {
+        let rate = if ps.view_height_current == super::VIEW_PRONE as f32 {
             k.pos_prone_rot_rate
         } else {
             k.pos_rot_rate
@@ -706,22 +706,11 @@ fn matrix_multiply(a: [Vec3; 3], b: [Vec3; 3]) -> [Vec3; 3] {
     std::array::from_fn(|i| Vec3::new(el(i, 0), el(i, 1), el(i, 2)))
 }
 
-/// `AxisToAngles`' pitch and yaw: `vectoangles` of the forward.
+/// `AxisToAngles`' pitch and yaw (0x81951fe): `vectoangles` (0x8191a72)
+/// of the forward, the same arithmetic as `vectopitch` and `vectoyaw`
+/// (cod4-combat.md 6.1).
 fn axis_to_angles(m: [Vec3; 3]) -> [f32; 2] {
-    let v = m[0];
-    if v.y == 0.0 && v.x == 0.0 {
-        return [if v.z > 0.0 { 270.0 } else { 90.0 }, 0.0];
-    }
-    let mut yaw = (d(v.y).atan2(d(v.x)).to_degrees()) as f32;
-    if yaw < 0.0 {
-        yaw += 360.0;
-    }
-    let flat = (d(v.y) * d(v.y) + d(v.x) * d(v.x)).sqrt();
-    let mut pitch = (-d(v.z).atan2(flat).to_degrees()) as f32;
-    if pitch < 0.0 {
-        pitch += 360.0;
-    }
-    [pitch, yaw]
+    [super::fpu::vectopitch(m[0]), super::fpu::vectoyaw(m[0])]
 }
 
 #[cfg(test)]

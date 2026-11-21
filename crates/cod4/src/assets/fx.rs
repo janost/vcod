@@ -165,7 +165,7 @@ fn elem<R: BufRead>(w: &mut W<R>, s: S) -> Result<FxElem> {
         };
         if w.inline_only(t.ptr(16), 4)? {
             let b = w.bulk_kept(4, 0x14 * t.i32(12).max(0) as usize)?;
-            let f = |c: &[u8], o: usize| f32::from_le_bytes(c[o..o + 4].try_into().unwrap());
+            let f = crate::walk::f32_at;
             def.verts = b
                 .as_chunks::<0x14>()
                 .0

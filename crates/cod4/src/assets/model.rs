@@ -164,11 +164,7 @@ pub fn xmodel<R: BufRead>(w: &mut W<R>, p: Pointer, slot: u32) -> Result<Option<
                         .as_chunks::<0x30>()
                         .0
                         .iter()
-                        .map(|t| {
-                            std::array::from_fn(|k| {
-                                f32::from_le_bytes(t[4 * k..][..4].try_into().unwrap())
-                            })
-                        })
+                        .map(|t| std::array::from_fn(|k| crate::walk::f32_at(t, 4 * k)))
                         .collect();
                 }
                 coll.push(XModelCollSurf {
@@ -347,7 +343,7 @@ pub(crate) fn brush_wrapper<R: BufRead>(w: &mut W<R>) -> Result<PhysBrush> {
     let planes = w
         .shared(b.ptr(76), 4, 0x14 * sides, "brush planes", false)?
         .map(|p| {
-            let f = |o: usize| f32::from_le_bytes(p[o..o + 4].try_into().unwrap());
+            let f = |o: usize| crate::walk::f32_at(&p, o);
             (0..sides)
                 .map(|i| {
                     [

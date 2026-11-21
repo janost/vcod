@@ -557,17 +557,16 @@ impl vcod_common::collision::WorldClip for Bush {
         mins: Vec3,
         maxs: Vec3,
         mask: u32,
-    ) -> vcod_common::collision::WorldHit {
+    ) -> vcod_common::clipmap::ClipTrace {
         let inside = mask & crate::collision::CONTENTS_FOLIAGE != 0
             && (start + mins).cmplt(self.hi).all()
             && (start + maxs).cmpgt(self.lo).all();
-        vcod_common::collision::WorldHit {
+        vcod_common::clipmap::ClipTrace {
             fraction: if inside { 0.0 } else { 1.0 },
-            normal: Vec3::ZERO,
-            surface_flags: 0,
             contents: if inside { 2 } else { 0 },
             startsolid: inside,
             allsolid: inside,
+            ..vcod_common::clipmap::ClipTrace::clear()
         }
     }
 

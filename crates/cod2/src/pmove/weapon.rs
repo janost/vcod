@@ -22,8 +22,10 @@
 //! [`WeaponCmd::anim`] the script.
 
 use crate::net::UserCmd2;
+use crate::pmove::aim::diff_track;
 use crate::pmove::anim::{self, AnimInput, AnimTable, Event};
-use crate::pmove::{PlayerState, button, pm_type, pmf};
+use crate::pmove::fpu::angle_subtract;
+use crate::pmove::{PlayerState, button, ef, pm_type, pmf};
 use crate::weapon::WeaponDef;
 
 /// `weaponstate` (ps+0xd8), as `PM_Weapon` numbers them.
@@ -795,18 +797,6 @@ fn breath_weapon(ps: &PlayerState, ws: &WeaponState, defs: &dyn Weapons) -> bool
             .is_some_and(|w| w.ads_overlay_reticle != 0 && w.weap_class != 9)
 }
 
-/// `DiffTrack` (0x80a3cea): `cur` toward `goal` by `rate * (goal - cur) *
-/// dt`, landing on `goal` once within 0.001 or the step would pass it.
-fn diff_track(goal: f32, cur: f32, rate: f32, dt: f32) -> f32 {
-    let diff = goal - cur;
-    let step = (f64::from(rate) * f64::from(diff) * f64::from(dt)) as f32;
-    if diff.abs() > f32::from_bits(0x3a83_126f) && diff.abs() >= step.abs() {
-        cur + step
-    } else {
-        goal
-    }
-}
-
 /// The breath hold (0x80ed084, after the sight lerp in `PM_Weapon`): the
 /// hold key down the sight of a scoped weapon holds the breath while the
 /// timer is 0, the timer counts the hold up and back down, a hold past
@@ -889,9 +879,9 @@ pub fn adjust_aim_spread(
             let mut rate = w.hip_spread_decay_rate;
             if airborne {
                 rate *= 0.5;
-            } else if ps.e_flags & 0x8 != 0 {
+            } else if ps.e_flags & ef::PRONE != 0 {
                 rate *= w.hip_spread_prone_decay;
-            } else if ps.e_flags & 0x4 != 0 {
+            } else if ps.e_flags & ef::CROUCH != 0 {
                 rate *= w.hip_spread_ducked_decay;
             }
             let dec = rate * frametime;
@@ -926,18 +916,6 @@ pub fn adjust_aim_spread(
         _ => (0.0, 1.0),
     };
     ps.aim_spread_scale = (ps.aim_spread_scale + 255.0 * (inc - dec)).clamp(0.0, 255.0);
-}
-
-/// `AngleSubtract`: `a - b` folded into (-180, 180].
-fn angle_subtract(a: f32, b: f32) -> f32 {
-    let mut d = vcod_common::fguard::turns(a - b);
-    while d > 180.0 {
-        d -= 360.0;
-    }
-    while d < -180.0 {
-        d += 360.0;
-    }
-    d
 }
 
 /// `BG_GetSpreadForWeapon` (0x80ec8cc): the hip spread's min and max at the
@@ -1192,7 +1170,7 @@ pub fn pm_weapon(ps: &mut PlayerState, ws: &mut WeaponState, c: &WeaponCmd, defs
     // `PmoveSingle`'s default arm (`pm_type` 0 and 6) takes the mounted
     // reset in place of `PM_Weapon`, so a gunner killed on the gun keeps
     // his weapon until his release (cod2-turrets.md 14.1).
-    if ps.e_flags & 0x300 != 0 && matches!(ps.pm_type, pm_type::NORMAL | pm_type::DEAD) {
+    if ps.e_flags & ef::TURRET != 0 && matches!(ps.pm_type, pm_type::NORMAL | pm_type::DEAD) {
         mounted_reset(ps, ws);
         return;
     }
@@ -1203,7 +1181,7 @@ pub fn pm_weapon(ps: &mut PlayerState, ws: &mut WeaponState, c: &WeaponCmd, defs
         ws.weapon = 0;
         return;
     }
-    if ps.e_flags & 0x300 != 0 {
+    if ps.e_flags & ef::TURRET != 0 {
         mounted_reset(ps, ws);
         return;
     }
@@ -1328,7 +1306,7 @@ pub fn pm_weapon(ps: &mut PlayerState, ws: &mut WeaponState, c: &WeaponCmd, defs
             if ws.weapon != 0 {
                 begin_change(ps, ws, 0, c, defs);
             }
-        } else if ws.weapon != want && (ps.pm_flags & 0x8000 == 0 || ws.weapon == 0) {
+        } else if ws.weapon != want && (ps.pm_flags & pmf::FROZEN == 0 || ws.weapon == 0) {
             let valid = want == 0 || (ws.holds(want) && usize::from(want) <= defs.count());
             if valid {
                 begin_change(ps, ws, want, c, defs);
@@ -1900,7 +1878,7 @@ fn fire(
     if ws.weapon_delay != 0 {
         return;
     }
-    if ps.e_flags & 0x300 == 0 {
+    if ps.e_flags & ef::TURRET == 0 {
         ws.clip[w.clip_index] -= 1;
     }
     if w.is_grenade() {

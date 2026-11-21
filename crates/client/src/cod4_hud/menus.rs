@@ -293,7 +293,7 @@ impl Cod4Hud {
                     u("weapon")
                 } as usize;
                 let def = l.weapon_hud.get(self.weapons.get(held.checked_sub(1)?)?)?;
-                let scoped = snap.ps.get_f32("fWeaponPosFrac") == Some(1.0);
+                let scoped = snap.ps.word_f32(vcod_cod4::ps_word!("fWeaponPosFrac")) == 1.0;
                 let pm_type = u("pm_type") as i32;
                 let holding = s.input.buttons(pm_type, s.talking) & BUTTON_HOLD_BREATH != 0;
                 if def.def.overlay_reticle == 0

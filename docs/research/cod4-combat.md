@@ -138,8 +138,13 @@ the shot's start (`PM_Weapon_StartFiring`, inlined at 0x80640af).
   Either rounds half up: `fadd` 0.5 (0x8209628 = 0x3f000000), `frndint`
   under round-down, truncating `fistp` (0x80645c8..0x80645ed,
   0x80636f0..0x806372b). VERIFIED (the disassembly). A multiplier of 0
-  steps by the larger timer (0x806394f). INFERRED (the branch). vcod:
-  `pmove::weapon::run_clocks`, `clock_step`, `perk_msec`.
+  steps by the larger of `weaponTime` and `weaponDelay`
+  (0x806394f..0x8063963; the reload dvar's test at 0x80636dd..0x80636ea,
+  the rate dvar's at 0x8063938..0x8063949, a NaN taking the quotient).
+  VERIFIED (the instructions). vcod: `pmove::weapon::run_clocks`,
+  `clock_step`, `perk_msec`, the multipliers, `player_burstFireCooldown`
+  and `bg_aimSpreadMoveSpeedThreshold` off `Rules` (the client's off the
+  server's dvar mirror when it carries them).
 - A timer stepped to 0 or below is set to 0 (`weaponTime` 0x8064592,
   `weaponDelay` 0x80645b5): the overshoot is dropped, never carried.
   INFERRED (the branches into both stores).
@@ -158,6 +163,29 @@ the shot's start (`PM_Weapon_StartFiring`, inlined at 0x80640af).
   armed: 306 rows each (913 and 911 cmds), every word exact, free and
   resynced. `cod4_fire_rate_ab` replays their cmds free and fires
   retail's rounds in each burst. VERIFIED (the gates).
+
+### 2.2 The reload's delayed action
+
+`cod4_lnxded` 0x80624a6 (`PM_Weapon_ReloadDelayedAction` by its shape,
+INFERRED) runs when a reload's `weaponDelay` runs out.
+
+- A bolt-action weapon (`WeaponDef` +0x4e8) with its `weaponrechamber`
+  bit set (ps+0x57c) clears the bit and adds `EV_EJECT_BRASS` (0x1d) at
+  0x8062572..0x8062586. In a reload start (state 9 or 10) whose
+  `reloadStartAddTime` (+0x39c) is 0 it returns there (0x806258b,
+  0x806270c..0x8062714): no rounds. VERIFIED (the instructions). CoD2's
+  copy does the same.
+- Else, with `weaponTime` running, the add moment (a start's
+  `min(reloadStartAddTime, reloadStartTime)`, a segment's
+  `reloadTime` or, from an empty bullet clip, `reloadEmptyTime`, capped
+  by `reloadAddTime`) less `rechamberBoltTime` (+0x374, 1 when the moment
+  is no longer) goes into `weaponDelay` when positive
+  (0x80625e8..0x8062602). VERIFIED (the instructions).
+- Otherwise the rounds go in: a start's `reloadStartAdd` (+0x538),
+  nothing when 0, or a segment's `reloadAmmoAdd`, capped by the clip's
+  room and the reserve, with `EV_RELOAD_ADDAMMO` (0x14) when any move
+  (0x80624e4..0x806255d, 0x806260a..0x806265d). VERIFIED (the
+  instructions). vcod: `pmove::weapon::reload_delay_out`.
 
 ## 3. The shot
 

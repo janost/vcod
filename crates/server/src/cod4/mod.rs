@@ -38,7 +38,6 @@ use vcod_cod4::net::stats::{STAT_PACKETS, Stats};
 use vcod_cod4::net::wire::{Cod4Wire, EOF, Frame4, PROTOCOL_17};
 use vcod_common::net::codec::MsgWriter;
 use vcod_common::net::netchan::{NetchanParams, ServerNetchan};
-use vcod_common::net::protocol::WireGame;
 use vcod_common::text::latin1_bytes;
 
 use crate::engine::{conn, link};
@@ -1519,7 +1518,7 @@ impl Cod4Server {
             ps.sent_angles();
             // Every entity but the one the playerstate views from: retail
             // culls none by position (cod4-pmove.md 15).
-            let viewer = ps.get("clientNum").unwrap_or(slot as u32);
+            let viewer = ps.word(vcod_cod4::ps_word!("clientNum"));
             let to = Frame4 {
                 server_time: Msec::from_raw(svs),
                 map_center,

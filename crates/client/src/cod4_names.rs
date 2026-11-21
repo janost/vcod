@@ -184,7 +184,7 @@ impl OverheadNames {
     pub fn frame(&mut self, f: &Frame, dv: &Dvars) -> Vec<Name> {
         let snap = f.snap;
         let team = |n: u32| snap.clients.iter().find(|c| c.0[0] == n).map(client_team);
-        let own = snap.ps.get("clientNum").unwrap_or(0);
+        let own = snap.ps.word(vcod_cod4::ps_word!("clientNum"));
         let players = || snap.entities.iter().filter(|e| e.etype() == ET_PLAYER);
         let name = |n: u32, client: u32, alpha: f32, crosshair: bool| Name {
             client,
@@ -221,7 +221,7 @@ impl OverheadNames {
         if !dv.friendly || mine == 0 {
             return out;
         }
-        let following = snap.ps.get("otherFlags").unwrap_or(0) & 6 != 0;
+        let following = snap.ps.word(vcod_cod4::ps_word!("otherFlags")) & 6 != 0;
         for e in players() {
             if following && e.number() == own && !f.third_person {
                 continue;
@@ -307,7 +307,7 @@ pub(crate) fn session_frame(
         return Vec::new();
     }
     let (parms, start, duration) = crate::play::cod4_shock::of_session(s);
-    let pass = snap.ps.get("clientNum").unwrap_or(0);
+    let pass = snap.ps.word(vcod_cod4::ps_word!("clientNum"));
     let trace = s.world().map(|w| {
         move |a: Vec3, b: Vec3| {
             use vcod_cod4::pmove::PmWorld;

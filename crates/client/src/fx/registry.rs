@@ -339,7 +339,6 @@ pub fn level_effects(
             ]
             .into_iter()
             .flatten()
-            .filter(|p| !p.is_empty())
             .cloned(),
         );
     }
@@ -520,7 +519,6 @@ fn vehicle_flash(ev: &GameEvent, ctx: &ResolveCtx) -> Option<Resolved> {
     let weapon = fire_weapon(ev);
     let path = weapon_def(ctx, weapon)
         .and_then(|d| d.world_flash_effect.clone())
-        .filter(|p| !p.is_empty())
         .or_else(|| ctx.weapon_flash.get(&weapon).cloned())?;
     Some(Resolved::OnTag {
         path,

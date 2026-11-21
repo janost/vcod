@@ -529,7 +529,8 @@ pub(crate) fn jump_check(pm: &mut Pmove, pml: &mut Pml) -> bool {
     super::anim::event(pm, takeoff, false, true);
     // `Jump_AddSurfaceEvent`: the surface rides the parm, a ladder's 0x15.
     if pm.ps.pm_flags & pmf::LADDER != 0 {
-        pm.ps.add_event(ev::JUMP, 0x15);
+        pm.ps
+            .add_event(ev::JUMP, vcod_common::clipmap::LADDER_SURFACE);
         super::ladder::push_off(pm, pml);
     } else {
         let surf = super::ground::surface_type(&pml.ground_trace);

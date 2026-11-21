@@ -211,6 +211,8 @@ pub struct Conn {
     recv_buf: Vec<u8>,
     /// The newest the server executed (each server message's first long).
     commands_acked: i32,
+    /// [`Self::command`] found the ring full: the connection is dropped.
+    overflowed: bool,
     last_cmd: UserCmd,
     /// The checksum feed of the gamestate the last `cp` answered.
     cp_feed: Option<i32>,
@@ -269,6 +271,7 @@ impl Conn {
             commands_base: 0,
             recv_buf: Vec::new(),
             commands_acked: 0,
+            overflowed: false,
             last_cmd: UserCmd::default(),
             cp_feed: None,
             applied: 0,
@@ -349,9 +352,18 @@ impl Conn {
         self.server
     }
 
-    /// Queues a reliable command; returns its sequence.
+    /// Queues a reliable command; returns its sequence. Past
+    /// [`KEPT_COMMANDS`] unacknowledged, `CL_AddReliableCommand` drops the
+    /// connection with `EXE_ERR_CLIENT_CMD_OVERFLOW` (cod4-handshake.md 4):
+    /// nothing queues and the next [`Self::send`] or [`Self::poll`] fails.
     pub fn command(&mut self, text: impl Into<Vec<u8>>) -> usize {
-        self.commands.push(text.into());
+        if i64::from(self.reliable_sequence()) - i64::from(self.commands_acked)
+            > KEPT_COMMANDS as i64
+        {
+            self.overflowed = true;
+        } else {
+            self.commands.push(text.into());
+        }
         self.reliable_sequence() as usize
     }
 
@@ -396,6 +408,13 @@ impl Conn {
         self.ack
     }
 
+    fn check_overflow(&self) -> Result<()> {
+        if self.overflowed {
+            bail!("EXE_ERR_CLIENT_CMD_OVERFLOW");
+        }
+        Ok(())
+    }
+
     /// The newest usercmd sent (its `server_time` the floor for the next).
     pub fn last_cmd(&self) -> &UserCmd {
         &self.last_cmd
@@ -406,6 +425,7 @@ impl Conn {
     /// before (no move op without cmds). Before the gamestate it is the
     /// bare header the client sends while it waits.
     pub fn send(&mut self, cmds: &[UserCmd]) -> Result<()> {
+        self.check_overflow()?;
         let mut pkt = self.seq.to_le_bytes().to_vec();
         self.seq += 1;
         pkt.extend_from_slice(&self.qport.to_le_bytes());
@@ -487,6 +507,7 @@ impl Conn {
     /// [`Conn::poll`] reading at most `max` datagrams, so a flood cannot
     /// hold the frame.
     fn poll_at_most(&mut self, until: Instant, max: usize) -> Result<Vec<Received>> {
+        self.check_overflow()?;
         let mut out = Vec::new();
         let mut read = 0;
         while read < max
@@ -945,6 +966,7 @@ mod tests {
             commands_base: 0,
             recv_buf: Vec::new(),
             commands_acked: 0,
+            overflowed: false,
             last_cmd: UserCmd::default(),
             cp_feed: None,
             applied: 0,
@@ -1086,6 +1108,22 @@ mod tests {
         assert_eq!(c.command_text(100_000), b"c100000");
         assert_eq!(c.command_text(99_997 - KEPT_COMMANDS as i32 + 1), b"c99870");
         assert_eq!(c.command_text(1), b"");
+    }
+
+    /// More than the ring unacknowledged refuses the next command and
+    /// drops the connection, as `CL_AddReliableCommand` does.
+    #[test]
+    fn unacknowledged_commands_past_the_ring_overflow() {
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut c = joined(server.local_addr().unwrap());
+        for i in 1..=KEPT_COMMANDS + 1 {
+            assert_eq!(c.command("x"), i);
+        }
+        c.send(&[]).unwrap();
+        assert_eq!(c.command("x"), KEPT_COMMANDS + 1);
+        let e = c.send(&[]).unwrap_err();
+        assert_eq!(e.to_string(), "EXE_ERR_CLIENT_CMD_OVERFLOW");
+        assert!(c.poll(Instant::now()).is_err());
     }
 
     /// The challenge replies of a CoD4x server and of retail 1.7

@@ -25,9 +25,6 @@ use super::{PlayerState, VIEW_CROUCH, VIEW_PRONE, ef, pmf};
 const BOB_AMPLITUDE: [f32; 3] = [0.007, 0.0075, 0.03];
 pub const BOB_MAX: f32 = 8.0;
 
-/// `weaponstate` 5, reloading: no movement tilt.
-const WEAPON_RELOADING: i32 = 5;
-
 /// The weapon file's keys the block reads, by `WeaponDef` offset.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AimKeys {
@@ -234,7 +231,7 @@ fn lean_fraction(f: f32) -> f64 {
 
 /// `DiffTrack` (0x80a3cea): `cur` toward `target` by `rate * dt` of the
 /// gap, the target outright inside 0.001 or past it.
-fn diff_track(target: f32, cur: f32, rate: f32, dt: f32) -> f32 {
+pub(super) fn diff_track(target: f32, cur: f32, rate: f32, dt: f32) -> f32 {
     let gap = target - cur;
     let step = (d(rate) * d(gap) * d(dt)) as f32;
     if d(gap.abs()) > d(0.001f32) {
@@ -400,7 +397,7 @@ impl AimState {
         let st = stance(ps);
         let min = k.rot_min[st];
         let mut target = [0.0f32; 3];
-        if xyspeed > min && inp.ws.state != WEAPON_RELOADING {
+        if xyspeed > min && inp.ws.state != super::weapon::state::RELOADING {
             let f = ((d(xyspeed) - d(min)) / (d(ps.speed as f32) - d(min))) as f32;
             let f = if 0.0 - f >= 0.0 { 0.0 } else { f };
             let f = if f - 1.0 >= 0.0 { 1.0 } else { f };

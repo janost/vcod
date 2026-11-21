@@ -104,8 +104,6 @@ const MIN_NORMAL_LEN: f32 = f32::from_bits(0x38d1_b717);
 const RAD_TO_DEG: f64 = f64::from_bits(0x404c_a5dc_1a63_c1f8);
 /// rodata 0x820a288 (double): `VectorAngleMultiply`'s degrees to radians.
 const DEG_TO_RAD: f64 = f64::from_bits(0x3f91_df46_a252_9d39);
-/// rodata 0x8209640: ms to seconds.
-const MSEC_TO_SEC: f32 = f32::from_bits(0x3a83_126f);
 
 /// One clip's root translation track as the zone stores it.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -599,7 +597,7 @@ pub(crate) fn mantle_move(pm: &mut Pmove, pml: &Pml) {
     let kept: [f64; 3] = std::array::from_fn(|i| d(d1[i]) - d(d0[i]));
     let step = Vec3::from_array(kept.map(|k| k as f32));
     ps.origin = Vec3::from_array(std::array::from_fn(|i| (kept[i] + d(ps.origin[i])) as f32));
-    let per_sec = 1.0 / (d(MSEC_TO_SEC) * f64::from(now.wrapping_sub(old)));
+    let per_sec = 1.0 / (d(super::MSEC_TO_SEC) * f64::from(now.wrapping_sub(old)));
     ps.velocity = Vec3::from_array(std::array::from_fn(|i| (d(step[i]) * per_sec) as f32));
     if now == total {
         ps.pm_flags &= !pmf::MANTLE;
@@ -628,7 +626,7 @@ pub(crate) fn cap_view(pm: &mut Pmove) {
     }
     let cap = d(pm.rules.mantle_view_yawcap);
     let ps = &mut *pm.ps;
-    let mut delta = angle_delta(ps.mantle.yaw, ps.view_angles[1]);
+    let mut delta = fpu::angle_delta_kept(ps.mantle.yaw, ps.view_angles[1]);
     if !(delta < -cap || cap < delta) {
         return;
     }
@@ -645,28 +643,7 @@ pub(crate) fn cap_view(pm: &mut Pmove) {
     }
     let edge = if delta <= 0.0 { cap } else { -cap };
     ps.delta_angles[1] = (delta + d(ps.delta_angles[1])) as f32;
-    ps.view_angles[1] = angle_normalize360((edge + d(ps.mantle.yaw)) as f32) as f32;
-}
-
-/// rodata 0x8209630: the float 1 / 360 the out-of-line angle helpers take.
-const INV_360: f32 = f32::from_bits(0x3b36_0b61);
-
-/// `AngleDelta` (0x8190590), out of line: `a - b` in turns, kept, less
-/// `floor` of it plus a half, times 360, returned on the stack.
-fn angle_delta(a: f32, b: f32) -> f64 {
-    let s = (d(a) - d(b)) * d(INV_360);
-    let fl = (s + 0.5).floor() as f32;
-    (s - d(fl)) * 360.0
-}
-
-/// `AngleNormalize360` (0x8190540), out of line: the turns kept, their
-/// fraction off `floor` times 360, less 360 once more at a whole turn,
-/// returned on the stack.
-fn angle_normalize360(a: f32) -> f64 {
-    let s = d(a) * d(INV_360);
-    let fl = s.floor() as f32;
-    let r = (s - d(fl)) * 360.0;
-    if r - 360.0 < 0.0 { r } else { r - 360.0 }
+    ps.view_angles[1] = fpu::angle_normalize360_kept((edge + d(ps.mantle.yaw)) as f32) as f32;
 }
 
 #[cfg(test)]

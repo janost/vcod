@@ -1627,7 +1627,7 @@ impl Cod4Client {
             return None;
         }
         let ps = &self.session.client().snapshots.last()?.ps;
-        ps.get("viewlocked_entNum").filter(|&n| n != 1023)
+        Some(ps.word(vcod_cod4::ps_word!("viewlocked_entNum"))).filter(|&n| n != 1023)
     }
 
     /// The gun our view is locked to, its `tag_player` this frame: `None`
@@ -1644,7 +1644,7 @@ impl Cod4Client {
         let Some(snap) = self.session.client().snapshots.last() else {
             return [0.0; 2];
         };
-        if snap.ps.get("viewlocked") != Some(2) {
+        if snap.ps.word(vcod_cod4::ps_word!("viewlocked")) != 2 {
             return [0.0; 2];
         }
         let Some(gun) = self.own_gun() else {

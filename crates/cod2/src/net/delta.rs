@@ -119,13 +119,25 @@ impl EntityState2 {
         f32::from_bits(self.f[field_index(&ENTITY_STATE_FIELDS, name)])
     }
 
+    /// Field `ix` (a [`field!`](crate::field) over the entity table) as an
+    /// int.
+    pub fn i32_at(&self, ix: usize) -> i32 {
+        self.f[ix] as i32
+    }
+
+    /// Field `ix` as a float.
+    pub fn f32_at(&self, ix: usize) -> f32 {
+        f32::from_bits(self.f[ix])
+    }
+
+    /// Fields `ix` as floats.
+    pub fn vec3_at(&self, ix: [usize; 3]) -> [f32; 3] {
+        ix.map(|i| self.f32_at(i))
+    }
+
     /// `pos.trBase`.
     pub fn origin(&self) -> [f32; 3] {
-        [
-            self.f32("pos.trBase[0]"),
-            self.f32("pos.trBase[1]"),
-            self.f32("pos.trBase[2]"),
-        ]
+        self.vec3_at(crate::field!(ENTITY_STATE_FIELDS, 3 "pos.trBase"))
     }
 }
 
@@ -202,20 +214,28 @@ impl PlayerState2 {
         f32::from_bits(self.f[field_index(&PLAYER_STATE_FIELDS, name)])
     }
 
+    /// Field `ix` (a [`field!`](crate::field) over the playerstate table)
+    /// as an int.
+    pub fn i32_at(&self, ix: usize) -> i32 {
+        self.f[ix] as i32
+    }
+
+    /// Field `ix` as a float.
+    pub fn f32_at(&self, ix: usize) -> f32 {
+        f32::from_bits(self.f[ix])
+    }
+
+    /// Fields `ix` as floats.
+    pub fn vec3_at(&self, ix: [usize; 3]) -> [f32; 3] {
+        ix.map(|i| self.f32_at(i))
+    }
+
     pub fn origin(&self) -> [f32; 3] {
-        [
-            self.f32("origin[0]"),
-            self.f32("origin[1]"),
-            self.f32("origin[2]"),
-        ]
+        self.vec3_at(crate::field!(PLAYER_STATE_FIELDS, 3 "origin"))
     }
 
     pub fn viewangles(&self) -> [f32; 3] {
-        [
-            self.f32("viewangles[0]"),
-            self.f32("viewangles[1]"),
-            self.f32("viewangles[2]"),
-        ]
+        self.vec3_at(crate::field!(PLAYER_STATE_FIELDS, 3 "viewangles"))
     }
 }
 

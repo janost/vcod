@@ -46,7 +46,8 @@ Grep the module header comments for more; each one names its research doc.
     codec, netchan, stock paks) and the `WireGame` trait each game's
     descriptor implements: its `id()` (game and version together, never the
     version alone: CoD4 1.7 and CoD1 1.5 both speak protocol 6), its
-    connectionless framing, gamestate and snapshot writers.
+    connectionless framing and snapshot writer (the gamestate writer is
+    each wire's own method).
   - `net/codec.rs`: the game-neutral bit reader and table-driven field codec.
   - `net/msec.rs`: `Msec`, the wire and level clock every game's snapshot
     and frame carries; its arithmetic wraps as retail's `int` does.

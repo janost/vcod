@@ -63,7 +63,6 @@ use vcod_common::net::codec::{MsgReader, MsgWriter};
 use vcod_common::net::com_hash_key_bytes;
 use vcod_common::net::msg::EntityState;
 use vcod_common::net::netchan::{ClientMessage, NetchanParams, ServerNetchan};
-use vcod_common::net::protocol::WireGame;
 use vcod_common::pk3::Pk3Fs;
 
 use crate::engine::{Lan, conn, link};
