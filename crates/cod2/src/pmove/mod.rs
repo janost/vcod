@@ -672,12 +672,7 @@ fn prone_move_interrupts(ps: &mut PlayerState) -> bool {
         state::READY..=state::DROPPING | state::RECHAMBERING..=state::RELOAD_END => true,
         state::FIRING | state::MELEE_RELAX..=state::OFFHAND => false,
         s => {
-            ps.pm_flags &= !(weapon::wpf::OFFHAND | pmf::PRONE_SIGHT);
-            if (state::BINOCULARS_ADS_EXIT..=state::BINOCULARS_RAISE_WEAPON).contains(&s) {
-                ps.add_event(weapon::ev::RESET_ADS, 0);
-                ps.pm_flags &= !(pmf::SIGHT | weapon::wpf::BINOCULARS);
-                ps.add_event(weapon::ev::BINOCULAR_EXIT, 0);
-            }
+            weapon::interrupt_flags(ps, s);
             ps.weapon_state = state::READY;
             ps.weapon_interrupt = true;
             true
@@ -714,7 +709,15 @@ pub(crate) fn pmove_single(pm: &mut Pmove) {
             pm.ps.add_event(weapon::ev::RESET_ADS, 0);
             pm.ps.pm_flags &= !pmf::SIGHT;
         }
-    } else if pm.ps.pm_flags & pmf::SIGHT == 0 && matches!(pm.ps.weapon_state, 0 | 1 | 2 | 5) {
+    } else if pm.ps.pm_flags & pmf::SIGHT == 0
+        && matches!(
+            pm.ps.weapon_state,
+            weapon::state::READY
+                | weapon::state::RAISING
+                | weapon::state::DROPPING
+                | weapon::state::RELOADING
+        )
+    {
         pm.ps.pm_flags &= !pmf::PRONE_SIGHT;
     }
     let stance = pm.ps.effective_stance();
@@ -727,7 +730,9 @@ pub(crate) fn pmove_single(pm: &mut Pmove) {
     } else {
         pm.ps.e_flags &= !ef::TALK;
     }
-    if pm.ps.pm_type < pm_type::DEAD && pm.cmd.buttons & 0x4001 == 0 {
+    if pm.ps.pm_type < pm_type::DEAD
+        && pm.cmd.buttons & (button::ATTACK | weapon::key::BINOCULARS) == 0
+    {
         pm.ps.pm_flags &= !pmf::RESPAWNED;
     }
 
@@ -884,7 +889,7 @@ fn sight_walk(pm: &mut Pmove) {
         && pm.cmd.buttons & button::ADS != 0
         && ps.pm_flags & pmf::PRONE == 0
         && ps.pm_flags & pmf::SIGHT != 0
-        && !(5..=9).contains(&ps.weapon_state)
+        && !(weapon::state::RELOADING..=weapon::state::RELOAD_END).contains(&ps.weapon_state)
     {
         ps.pm_flags |= pmf::SIGHT_WALK;
     }

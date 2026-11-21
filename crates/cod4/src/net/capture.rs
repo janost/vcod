@@ -7,7 +7,7 @@ use super::clmsg::{self, ClOp, ClientMessage, UserCmd};
 use super::parse::{Client, Parsed};
 use anyhow::{Context, Result, bail};
 use std::collections::BTreeMap;
-use vcod_common::net::netchan::{Netchan, NetchanParams, scramble_client_ops};
+use vcod_common::net::netchan::{Netchan, NetchanParams, read_client_message};
 
 pub struct Line {
     pub ms: u64,
@@ -102,18 +102,15 @@ impl Session {
                 let chan = self
                     .chan
                     .get_or_insert_with(|| Netchan::with_params(0, ch, NetchanParams::COD2));
-                let Some((sequence, mut msg)) = chan.frame(d)? else {
+                let commands = &self.client_commands;
+                let key = |_: &Netchan, ack| commands.get(&ack).cloned().unwrap_or_default();
+                let Some((sequence, msg)) = chan.process_keyed(d, key)? else {
                     return Ok(None);
                 };
                 if msg.len() < 4 {
                     return Ok(None);
                 }
                 let reliable_ack = i32::from_le_bytes(msg[..4].try_into().unwrap());
-                let key = self
-                    .client_commands
-                    .get(&reliable_ack)
-                    .map_or(&[][..], Vec::as_slice);
-                chan.decode(sequence, key, &mut msg);
                 let block = msg[4..].to_vec();
                 let parsed = self
                     .client
@@ -134,21 +131,21 @@ impl Session {
                 if d.len() < 15 {
                     bail!("client packet of {} bytes", d.len());
                 }
-                let msg_head = ClientMessage {
-                    sequence: u32::from_le_bytes(d[..4].try_into().unwrap()),
-                    qport: u16::from_le_bytes(d[4..6].try_into().unwrap()),
-                    server_id: d[6],
-                    message_ack: i32::from_le_bytes(d[7..11].try_into().unwrap()),
-                    reliable_ack: i32::from_le_bytes(d[11..15].try_into().unwrap()),
-                    ops: Vec::new(),
-                };
                 if d.len() == 15 {
                     return Ok(None);
                 }
-                let server_cmd = self.client.server_command(msg_head.reliable_ack).to_vec();
-                let mut block = d[15..].to_vec();
-                let seed = ch as u32 ^ msg_head.server_id as u32 ^ msg_head.message_ack as u32;
-                scramble_client_ops(seed as u8, &server_cmd, &mut block);
+                let key = |ack| self.client.server_command(ack).to_vec();
+                let m = read_client_message(d, ch, key).context("client header")?;
+                let msg_head = ClientMessage {
+                    sequence: m.sequence,
+                    qport: u16::from_le_bytes(d[4..6].try_into().unwrap()),
+                    server_id: m.server_id,
+                    message_ack: m.message_ack,
+                    reliable_ack: m.reliable_ack,
+                    ops: Vec::new(),
+                };
+                let server_cmd = self.client.server_command(m.reliable_ack).to_vec();
+                let block = m.ops;
                 let feed = self
                     .client
                     .gamestate

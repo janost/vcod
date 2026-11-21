@@ -191,33 +191,35 @@ pub fn write_delta_usercmd(w: &mut MsgWriter, mut key: u32, from: &UserCmd2, to:
 
 /// `MSG_SetDefaultUserCmd`: the base the first cmd of a message deltas from.
 pub fn default_usercmd(ps: &PlayerState2) -> UserCmd2 {
+    use super::fields::PLAYER_STATE_FIELDS as F;
     let mut c = UserCmd2 {
-        weapon: ps.i32("weapon") as u8,
-        off_hand_index: ps.i32("offHandIndex") as u8,
+        weapon: ps.i32_at(crate::field!(F, "weapon")) as u8,
+        off_hand_index: ps.i32_at(crate::field!(F, "offHandIndex")) as u8,
         ..UserCmd2::default()
     };
     let view = ps.viewangles();
+    let deltas = crate::field!(F, 3 "delta_angles");
     for (i, v) in view.iter().take(2).enumerate() {
-        let delta = ps.i32(&format!("delta_angles[{i}]")) as i16;
+        let delta = ps.i32_at(deltas[i]) as i16;
         let a = ((v * (65536.0f32 / 360.0)) as i32) as i16;
         c.angles[i] = i32::from(a.wrapping_sub(delta) as u16);
     }
-    if ps.i32("pm_flags") & PMF_CMD_STANCE == 0 {
+    if ps.i32_at(crate::field!(F, "pm_flags")) & PMF_CMD_STANCE == 0 {
         return c;
     }
-    let eflags = ps.i32("eFlags");
+    let eflags = ps.i32_at(crate::field!(F, "eFlags"));
     if eflags & EF_PRONE != 0 {
         c.buttons |= 0x100;
     } else if eflags & EF_CROUCHING != 0 {
         c.buttons |= 0x200;
     }
-    let lean = ps.f32("leanf");
+    let lean = ps.f32_at(crate::field!(F, "leanf"));
     if lean < 0.0 {
         c.buttons |= 0x40;
     } else if lean > 0.0 {
         c.buttons |= 0x80;
     }
-    if ps.f32("fWeaponPosFrac") != 0.0 {
+    if ps.f32_at(crate::field!(F, "fWeaponPosFrac")) != 0.0 {
         c.buttons |= 0x1000;
     }
     c

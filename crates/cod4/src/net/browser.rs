@@ -7,6 +7,7 @@
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 use vcod_common::net::connectionless::{info_pairs, info_value_for_key};
+use vcod_common::net::server_cache::{self, Layout};
 
 /// The protocol 1.7 speaks and asks the master for (`globalservers 0 6
 /// full empty`, iw3mp.exe 0x54ac77).
@@ -28,13 +29,8 @@ pub const RECORD: usize = 0x9c;
 pub const MAX_GLOBAL: usize = 20000;
 pub const MAX_LOCAL: usize = 0x80;
 pub const MAX_FAVORITES: usize = 0x80;
-/// `servercache.dat`'s version word and its blocks' size word.
-pub const CACHE_VERSION: i32 = 3;
 pub const CACHE_FILE: &str = "servercache.dat";
-const BLOCKS: usize = (MAX_GLOBAL + MAX_FAVORITES) * RECORD;
-const HEADER: usize = 16;
-pub const CACHE_LEN: usize = HEADER + BLOCKS;
-const FAVORITES_AT: usize = HEADER + MAX_GLOBAL * RECORD;
+pub const CACHE_LEN: usize = 16 + (MAX_GLOBAL + MAX_FAVORITES) * RECORD;
 /// `netadrtype_t`'s `NA_IP` (the type `CL_ServersResponsePacket` stores,
 /// 0x471668).
 const NA_IP: i32 = 4;
@@ -142,29 +138,10 @@ pub fn info_protocol(info: &str) -> i32 {
 
 /// `CL_ServersResponsePacket` (0x4714b0) over the bytes after the command
 /// word: from the first `\`, six address bytes (port big-endian) and a
-/// `\` per server, at most 256, ending at `\EOT` or `\EOF` or when fewer
-/// than seven bytes are left.
+/// `\` per server, at most 256, ending at `\EOT` or `\EOF` (0x4715c9) or
+/// when fewer than seven bytes are left: CoD1's walk with one more trailer.
 pub fn parse_servers_response(body: &[u8]) -> Vec<SocketAddrV4> {
-    let mut out = Vec::new();
-    let Some(mut i) = body.iter().position(|&b| b == b'\\') else {
-        return out;
-    };
-    i += 1;
-    while i + 6 < body.len() {
-        let b = &body[i..i + 6];
-        if body[i + 6] != b'\\' {
-            break;
-        }
-        out.push(SocketAddrV4::new(
-            Ipv4Addr::new(b[0], b[1], b[2], b[3]),
-            u16::from_be_bytes([b[4], b[5]]),
-        ));
-        i += 7;
-        if out.len() >= 256 || matches!(body.get(i..i + 3), Some(b"EOT" | b"EOF")) {
-            break;
-        }
-    }
-    out
+    vcod_common::net::master::servers_response(body, &[*b"EOT", *b"EOF"])
 }
 
 /// A player line of `statusResponse`: `<score> <ping> "<name>"`.
@@ -346,7 +323,8 @@ impl Record {
 /// `servercache.dat` (`LAN_LoadCachedServers` 0x4764d0,
 /// `LAN_SaveServersToCache` 0x476540): the version 3, the Internet and
 /// favourite counts, the blocks' size 0x2fe980, then 20000 and 128
-/// records. The loader refuses a file whose words or block reads differ.
+/// records. The loader refuses a file whose words or block reads differ;
+/// the file itself is `server_cache`'s [`Layout::Cod4`].
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ServerCache {
     pub global: Vec<Record>,
@@ -356,70 +334,25 @@ pub struct ServerCache {
 impl ServerCache {
     /// `None` for a file the loader refuses.
     pub fn read(bytes: &[u8]) -> Option<ServerCache> {
-        if bytes.len() != CACHE_LEN {
-            return None;
-        }
-        let word = |at: usize| i32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
-        let (globals, favorites) = (word(4) as u32 as usize, word(8) as u32 as usize);
-        if word(0) != CACHE_VERSION
-            || globals >= MAX_GLOBAL
-            || favorites >= MAX_FAVORITES
-            || word(12) as usize != BLOCKS
-        {
-            return None;
-        }
-        let rec = |at: usize| Record::read(&bytes[at..at + RECORD]);
+        let rows =
+            |v: Vec<server_cache::Entry>| v.iter().map(|e| Record::read(e.bytes())).collect();
         Some(ServerCache {
-            global: (0..globals).map(|n| rec(HEADER + n * RECORD)).collect(),
-            favorites: (0..favorites)
-                .map(|n| rec(FAVORITES_AT + n * RECORD))
-                .collect(),
+            global: rows(server_cache::read_internet(Layout::Cod4, bytes)?),
+            favorites: rows(server_cache::read_favorites(Layout::Cod4, bytes)?),
         })
     }
 
-    /// The whole file, unused records zero.
-    pub fn write(&self) -> Vec<u8> {
-        let mut out = vec![0u8; CACHE_LEN];
-        self.write_into(&mut out);
-        out
-    }
-
     /// Writes `favorites` and their count over `file`, a valid cache or
-    /// zeros of [`CACHE_LEN`], every other byte as it was: the Internet
-    /// list stays the one retail last saved.
+    /// any bytes of [`CACHE_LEN`] (an empty cache then); a valid one keeps
+    /// its header and Internet list, the one retail last saved.
     pub fn write_favorites(favorites: &[Record], file: &mut [u8]) {
-        let n = favorites.len().min(MAX_FAVORITES - 1);
-        for (at, v) in [(0, CACHE_VERSION), (8, n as i32), (12, BLOCKS as i32)] {
-            file[at..at + 4].copy_from_slice(&v.to_le_bytes());
-        }
-        for (i, r) in favorites.iter().take(n).enumerate() {
-            let at = FAVORITES_AT + i * RECORD;
-            file[at..at + RECORD].copy_from_slice(&r.write());
-        }
-    }
-
-    /// Writes the header and both lists over `file`, a valid cache or
-    /// zeros of [`CACHE_LEN`]; the records past each count keep their
-    /// bytes.
-    pub fn write_into(&self, file: &mut [u8]) {
-        let globals = self.global.len().min(MAX_GLOBAL - 1);
-        let favorites = self.favorites.len().min(MAX_FAVORITES - 1);
-        for (at, v) in [
-            (0, CACHE_VERSION),
-            (4, globals as i32),
-            (8, favorites as i32),
-            (12, BLOCKS as i32),
-        ] {
-            file[at..at + 4].copy_from_slice(&v.to_le_bytes());
-        }
-        for (n, r) in self.global.iter().take(globals).enumerate() {
-            let at = HEADER + n * RECORD;
-            file[at..at + RECORD].copy_from_slice(&r.write());
-        }
-        for (n, r) in self.favorites.iter().take(favorites).enumerate() {
-            let at = FAVORITES_AT + n * RECORD;
-            file[at..at + RECORD].copy_from_slice(&r.write());
-        }
+        let entries: Vec<_> = (favorites.iter())
+            .map(|r| server_cache::Entry::from_bytes(Layout::Cod4, r.write().to_vec()))
+            .collect();
+        let old = ServerCache::read(file).is_some().then_some(&*file);
+        let out = server_cache::write_favorites(Layout::Cod4, old, &entries)
+            .expect("a valid cache or none");
+        file.copy_from_slice(&out);
     }
 }
 
@@ -497,16 +430,22 @@ mod tests {
         fav.info = ServerInfo::parse(INFO);
         fav.ping = 12;
         fav.answered = true;
-        let cache = ServerCache {
-            global: vec![Record::new("10.0.0.1:28961".parse().unwrap())],
-            favorites: vec![fav],
-        };
-        let bytes = cache.write();
+        let mut bytes = vec![0; CACHE_LEN];
+        ServerCache::write_favorites(std::slice::from_ref(&fav), &mut bytes);
         assert_eq!(bytes.len(), 3_139_984);
+        assert_eq!(&bytes[0..4], &3i32.to_le_bytes());
         assert_eq!(&bytes[12..16], &0x2fe980i32.to_le_bytes());
         // The port in network order at +8.
-        let f = FAVORITES_AT;
+        let f = 16 + MAX_GLOBAL * RECORD;
         assert_eq!(&bytes[f + 4..f + 10], &[127, 0, 0, 1, 0x71, 0x20]);
+        // An Internet row as retail saved it.
+        let global = Record::new("10.0.0.1:28961".parse().unwrap());
+        bytes[4] = 1;
+        bytes[16..16 + RECORD].copy_from_slice(&global.write());
+        let cache = ServerCache {
+            global: vec![global],
+            favorites: vec![fav],
+        };
         assert_eq!(ServerCache::read(&bytes), Some(cache));
         let mut bad = bytes.clone();
         bad[0] = 2;

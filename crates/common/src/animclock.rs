@@ -61,6 +61,52 @@ pub struct Seen {
     pub eflags: i32,
 }
 
+/// Which engine's clock a [`ChannelClock`] imitates, as [`update_body`]
+/// names it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Flavour {
+    /// 1.1d's server and 1.1's cgame: no stance window, and a looping
+    /// clip's step keeps its wrap on the stack ([`Play::step`]).
+    #[default]
+    V1_1,
+    /// 1.5's and UO's server: the windowed setter ([`blend_ms_windowed`])
+    /// and its spread phase ([`spread_phase_15`]).
+    Server15,
+    /// 1.5's and UO's cgames: the windowed setter with the cgames' spread
+    /// ([`spread_phase_15_cgame`]).
+    Cgame15,
+    /// `cod2_lnxded` 1.3: the windowed setter, stored increments, weights
+    /// and rate ([`Ramp::cod2`], [`rate_cod2`]; cod2-player-anims.md 7),
+    /// and CoD2's tree handling ([`Flavour::cod2_tree`]).
+    Cod2,
+    /// 1.7: the windowed setter, CoD2's tree handling, and the rate over
+    /// the float `moveSpeed`.
+    Cod4,
+}
+
+impl Flavour {
+    /// The 1.5, UO, CoD2 and CoD4 setter, whose blends a crouch or prone
+    /// change stretches.
+    fn windowed(self) -> bool {
+        self != Flavour::V1_1
+    }
+
+    /// `cod2_lnxded`'s stored arithmetic: each step stores its increment,
+    /// each weight its goal time, the rate each quotient.
+    fn stored(self) -> bool {
+        self == Flavour::Cod2
+    }
+
+    /// CoD2's and CoD4's tree handling: a KnobAll clears beside the death's
+    /// path at once, and a setter starting a node the other lerp frame
+    /// holds starts its own (cod2-player-anims.md 7 and 12 hold those
+    /// weights against gdb dumps). CoD1's engine keeps a cleared node's
+    /// weight until the next step (cod11-movers.md 15), unread on CoD2.
+    fn cod2_tree(self) -> bool {
+        matches!(self, Flavour::Cod2 | Flavour::Cod4)
+    }
+}
+
 /// How many clips a channel keeps blending out at once. A change lands at
 /// most once an end frame; with blends of 250 ms at most, a sixth one is at
 /// weight 0 by the time it would be pushed out. A blend stretched to 400 ms
@@ -96,12 +142,6 @@ struct Play {
     /// A sync group's node (an MG42 gunner's turret anim), whose step
     /// stores its increment before the sum ([`Play::step`]).
     sync: bool,
-    /// 1.1d's step, which wraps a looping clip on the stack before its one
-    /// store ([`Play::step`]).
-    kept: bool,
-    /// `cod2_lnxded`'s step, which stores its increment before the sum as
-    /// a sync node's does ([`ChannelClock::store_steps`]).
-    stored: bool,
 }
 
 /// The server frame the engine steps a node time by: `level.frametime`
@@ -116,11 +156,11 @@ impl Play {
     /// The node time after every whole frame step up to `now_ms`.
     /// Stops early once a step returns its input bit for bit (rate 0, a
     /// clip held at 1): step is pure, so every later step would too.
-    fn time(&self, now_ms: i32) -> f32 {
+    fn time(&self, now_ms: i32, f: Flavour) -> f32 {
         let steps = now_ms.wrapping_sub(self.time_ms).max(0) / STEP_MS;
         let mut t = self.time_t;
         for _ in 0..steps {
-            let next = self.step(t);
+            let next = self.step(t, f);
             if next.to_bits() == t.to_bits() {
                 break;
             }
@@ -138,15 +178,15 @@ impl Play {
     /// `frequency * rate * dtime` as a float first, then the sum. 1.1d's
     /// leaf arm (`cod_lnxded` 0x80bbab0) keeps the sum and a looping clip's
     /// wrap by 1 on the stack and stores the result once.
-    fn step(&self, t: f32) -> f32 {
+    fn step(&self, t: f32, f: Flavour) -> f32 {
         let dt = f64::from(STEP_MS as f32 * 0.001);
         let inc = dt * f64::from(self.rate) * f64::from(self.frequency);
-        let inc = if self.sync || self.stored {
+        let inc = if self.sync || f.stored() {
             f64::from(inc as f32)
         } else {
             inc
         };
-        if self.kept && self.looping {
+        if f == Flavour::V1_1 && self.looping {
             let mut next = f64::from(t) + inc;
             while next < 0.0 {
                 next += 1.0;
@@ -174,9 +214,9 @@ impl Play {
 
     /// Steps the node time up to `now_ms` and keeps it there, so a long
     /// clip never walks its whole history.
-    fn settle(&mut self, now_ms: i32) {
+    fn settle(&mut self, now_ms: i32, f: Flavour) {
         let steps = now_ms.wrapping_sub(self.time_ms).max(0) / STEP_MS;
-        self.time_t = self.time(now_ms);
+        self.time_t = self.time(now_ms, f);
         self.time_ms = self.time_ms.wrapping_add(steps * STEP_MS);
     }
 }
@@ -189,6 +229,9 @@ impl Play {
 /// clip's float time").
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct LeafTime(Play);
+
+/// A seat leaf's step: neither 1.1d's kept wrap nor CoD2's stored increment.
+const LEAF: Flavour = Flavour::Cgame15;
 
 impl LeafTime {
     /// A leaf allocated at level time `start_ms`.
@@ -204,12 +247,12 @@ impl LeafTime {
 
     /// The node time after every whole frame step up to `now_ms`.
     pub fn at(&self, now_ms: i32) -> f32 {
-        self.0.time(now_ms)
+        self.0.time(now_ms, LEAF)
     }
 
     /// Steps the time up to `now_ms` and keeps it there.
     pub fn settle(&mut self, now_ms: i32) {
-        self.0.settle(now_ms);
+        self.0.settle(now_ms, LEAF);
     }
 
     /// Keeps the time where it stopped and steps it again from `now_ms`.
@@ -235,9 +278,6 @@ struct Ramp {
     /// `cod2_lnxded` 1.3's goal time in seconds, as its setter stores it
     /// ([`Ramp::cod2`]); `None` on the other engines.
     cod2: Option<f32>,
-    /// How far ahead of the node times the weight reads
-    /// ([`ChannelClock::set_weight_lead`]); 0 but on 1.7's server.
-    lead_ms: i32,
 }
 
 impl Ramp {
@@ -249,7 +289,6 @@ impl Ramp {
             ms,
             stored: false,
             cod2: None,
-            lead_ms: 0,
         }
     }
 
@@ -374,7 +413,6 @@ impl Ramp {
     }
 
     fn at(&self, now_ms: i32) -> f32 {
-        let now_ms = now_ms.wrapping_add(self.lead_ms);
         let since = now_ms.wrapping_sub(self.start_ms);
         if self.cod2.is_some() && since >= 0 && since % STEP_MS == 0 {
             return self.cod2_stepped(since / STEP_MS).0;
@@ -459,11 +497,8 @@ pub struct ChannelClock {
     weight: Ramp,
     /// Earlier clips still blending out.
     fading: [Option<(Play, Ramp)>; FADES],
-    /// Every clip's step stores its increment first ([`Self::store_steps`]).
-    stored: bool,
-    /// The 1.5 and UO setter's spread phase as the cgames round it
-    /// ([`Self::cgame_spread`]).
-    cgame: bool,
+    /// The engine the clock imitates, as the last [`update_body`] named it.
+    flavour: Flavour,
     /// 1.5's and UO's sync groups (a gunner's turret anims) a blend took
     /// to weight 0, at the node time their last weighted step left: the
     /// group's rows keep their weights, so its record lives on and a later
@@ -478,14 +513,9 @@ pub struct ChannelClock {
     rate: f32,
     /// The torso channel's: the two nodes its setter weights.
     nodes: Nodes,
-    /// How far ahead of the node times every weight reads
-    /// ([`Self::set_weight_lead`]).
+    /// How far ahead of the node times [`Self::layers`] and
+    /// [`Self::node_weights`] read every weight ([`Self::set_weight_lead`]).
     lead_ms: i32,
-    /// A CoD2 or CoD4 body (`vcod_cod2::player`): a KnobAll clear lands
-    /// at once and a setter never takes the other lerp frame's clip, as
-    /// those gates measured; the next-step clear and the shared node are
-    /// CoD1's engine reads ([`Self::cod2_tree`]).
-    cod2_tree: bool,
 }
 
 impl ChannelClock {
@@ -495,18 +525,6 @@ impl ChannelClock {
     /// cod4-player-anims.md 3), so `ms` is `level.frametime`.
     pub fn set_weight_lead(&mut self, ms: i32) {
         self.lead_ms = ms;
-        self.stamp_lead();
-    }
-
-    /// Gives every ramp the clock holds its lead.
-    fn stamp_lead(&mut self) {
-        let lead = self.lead_ms;
-        self.weight.lead_ms = lead;
-        for (_, w) in self.fading.iter_mut().flatten() {
-            w.lead_ms = lead;
-        }
-        self.nodes.torso.lead_ms = lead;
-        self.nodes.legs.lead_ms = lead;
     }
 
     /// A clock already on `anim` at full weight, started at `start_ms` and
@@ -537,43 +555,16 @@ impl ChannelClock {
         if self.current.index != index & !TOGGLE {
             return;
         }
-        self.current.settle(now_ms);
+        self.current.settle(now_ms, self.flavour);
         self.current.frequency = frequency;
         self.current.looping = looping;
         self.current.sync = true;
     }
 
-    /// Each clip's step stores `dtime * rate * frequency` as a float
-    /// before the sum, as `cod2_lnxded` 1.3 steps a node time (a
-    /// gdb-read series, cod2-player-anims.md 7); 1.5's and UO's keep it on
-    /// the stack.
-    pub fn store_steps(&mut self) {
-        self.stored = true;
-        self.current.stored = true;
-        for (p, _) in self.fading.iter_mut().flatten() {
-            p.stored = true;
-        }
-    }
-
-    /// The 1.5 and UO cgames' spread phase ([`spread_phase_15_cgame`]) for
-    /// the windowed setter, where the server's stores the sum.
-    pub fn cgame_spread(&mut self) {
-        self.cgame = true;
-    }
-
-    /// Keeps CoD2's and CoD4's tree handling: a KnobAll clears beside the
-    /// death's path at once, and a setter starting a node the other lerp
-    /// frame holds starts its own (cod2-player-anims.md 7 and 12 hold those
-    /// weights against gdb dumps). CoD1's engine keeps a cleared node's
-    /// weight until the next step (cod11-movers.md 15), unread on CoD2.
-    pub fn cod2_tree(&mut self) {
-        self.cod2_tree = true;
-    }
-
     /// The ramp a KnobAll leaves on a node beside the death's path that
     /// read `w` at `now_ms`.
     fn knob_cleared(&self, w: f32, now_ms: i32) -> Ramp {
-        match self.cod2_tree {
+        match self.flavour.cod2_tree() {
             true => Ramp::new(0.0, 0.0, now_ms, 0.0),
             false => Ramp::cleared_next_step(w, now_ms),
         }
@@ -608,9 +599,10 @@ impl ChannelClock {
     /// The torso clock's `torso` and `legs` node weights at `now_ms`; a legs
     /// clock reads the defaults.
     pub fn node_weights(&self, now_ms: i32) -> NodeWeights {
+        let lead = now_ms.wrapping_add(self.lead_ms);
         NodeWeights {
-            torso: self.nodes.torso.at(now_ms),
-            legs: self.nodes.legs.at(now_ms),
+            torso: self.nodes.torso.at(lead),
+            legs: self.nodes.legs.at(lead),
         }
     }
 
@@ -620,8 +612,8 @@ impl ChannelClock {
         let layer = |p: &Play, w: &Ramp| Layer {
             index: p.index,
             seconds: p.seconds(now_ms),
-            time: (p.frequency > 0.0).then(|| p.time(now_ms)),
-            weight: w.at(now_ms),
+            time: (p.frequency > 0.0).then(|| p.time(now_ms, self.flavour)),
+            weight: w.at(now_ms.wrapping_add(self.lead_ms)),
         };
         self.fading
             .iter()
@@ -632,20 +624,17 @@ impl ChannelClock {
             .collect()
     }
 
-    /// 0x2aba0 (and the cgame's 0x30003be0) for one channel: start the clip
-    /// when `wire` differs from the last one set, then, when the snapshot
-    /// time moved, measure the rate off how far `seen.tr_base`, the entity's
-    /// snapped origin, moved since the last measurement. `legs` picks the
-    /// legs lerp frame, whose setter blends by stance (0x2a6ff).
-    pub fn update(&mut self, anims: &PlayerAnims, legs: bool, wire: i32, seen: &Seen, at: Times) {
-        self.update_in(anims, legs, wire, seen, at, None, None);
+    /// One channel's update alone, without [`update_body`]'s clears and
+    /// hand-offs between the two lerp frames.
+    #[cfg(test)]
+    fn update(&mut self, anims: &PlayerAnims, legs: bool, wire: i32, seen: &Seen, at: Times) {
+        self.flavour = Flavour::V1_1;
+        self.update_in(anims, legs, wire, seen, at, &mut 0, None);
     }
 
-    /// [`Self::update`] under 1.5's and UO's setter, whose blends a crouch
-    /// or prone change stretches: `window` is the client's end of that
-    /// stretch (`ci+0x4a4` 1.5b, `ci+0x4c0` UO), shared by both channels,
-    /// the legs first.
-    pub fn update_windowed(
+    /// [`Self::update`] under 1.5's and UO's server setter.
+    #[cfg(test)]
+    fn update_windowed(
         &mut self,
         anims: &PlayerAnims,
         legs: bool,
@@ -654,9 +643,15 @@ impl ChannelClock {
         at: Times,
         window: &mut i32,
     ) {
-        self.update_in(anims, legs, wire, seen, at, Some(window), None);
+        self.flavour = Flavour::Server15;
+        self.update_in(anims, legs, wire, seen, at, window, None);
     }
 
+    /// 0x2aba0 (and the cgame's 0x30003be0) for one channel: start the clip
+    /// when `wire` differs from the last one set, then, when the snapshot
+    /// time moved, measure the rate off how far `seen.tr_base`, the entity's
+    /// snapped origin, moved since the last measurement. `legs` picks the
+    /// legs lerp frame, whose setter blends by stance (0x2a6ff).
     fn update_in(
         &mut self,
         anims: &PlayerAnims,
@@ -664,17 +659,14 @@ impl ChannelClock {
         wire: i32,
         seen: &Seen,
         at: Times,
-        window: Option<&mut i32>,
+        window: &mut i32,
         shared: Option<(Play, Ramp)>,
     ) -> Touches {
-        // 1.1's setter (no window) is 1.1d's, whose step keeps its wrap.
-        let kept = window.is_none();
-        self.current.kept = kept;
-        self.current.settle(at.clock_ms);
+        let f = self.flavour;
+        self.current.settle(at.clock_ms, f);
         for (p, w) in self.fading.iter_mut().flatten() {
-            p.kept = kept;
             // The step moves no time on a node its blend has taken to 0.
-            p.settle(at.clock_ms.min(w.last_weighted()));
+            p.settle(at.clock_ms.min(w.last_weighted()), f);
         }
         let index = wire & !TOGGLE;
         let touches = if wire != self.anim {
@@ -682,9 +674,6 @@ impl ChannelClock {
         } else {
             Touches::default()
         };
-        if self.stored {
-            self.store_steps();
-        }
         if index == 0 {
             return touches;
         }
@@ -696,7 +685,7 @@ impl ChannelClock {
             self.rate = 1.0;
             self.old_ms = now_ms;
             self.old_pos = tr_base;
-        } else if self.old_ms != now_ms && self.stored {
+        } else if self.old_ms != now_ms && f.stored() {
             let ms = now_ms.wrapping_sub(self.old_ms);
             self.rate = rate_cod2(&motion, self.old_pos, tr_base, ms);
             self.old_ms = now_ms;
@@ -709,7 +698,7 @@ impl ChannelClock {
                 self.old_pos.distance(tr_base)
             };
             let secs = now_ms.wrapping_sub(self.old_ms) as f32 * 0.001;
-            let speed = if anims.float_move_speed {
+            let speed = if f == Flavour::Cod4 {
                 motion.move_speed_f
             } else {
                 motion.move_speed as f32
@@ -762,10 +751,11 @@ impl ChannelClock {
         legs: bool,
         seen: &Seen,
         now_ms: i32,
-        window: Option<&mut i32>,
+        window: &mut i32,
         shared: Option<(Play, Ramp)>,
     ) -> Touches {
-        let kept = window.is_none();
+        let f = self.flavour;
+        let windowed = f.windowed();
         let motion = |i: i32| anims.motion(i).filter(|_| i != 0);
         let (old_index, new_index) = (self.anim & !TOGGLE, wire & !TOGGLE);
         let (old, new) = (motion(old_index), motion(new_index));
@@ -779,7 +769,7 @@ impl ChannelClock {
                 .copied()
                 .chain(std::iter::once((self.current, self.weight)))
                 .filter(|(p, w)| p.index != 0 && p.index != new_index && w.at(now_ms) > 0.0)
-                .filter(|_| !self.cod2_tree)
+                .filter(|_| !f.cod2_tree())
                 .map(|(p, w)| (p, Ramp::cleared_next_step(w.at(now_ms), now_ms)))
                 .collect();
             self.fading = [None; FADES];
@@ -798,8 +788,6 @@ impl ChannelClock {
                 frequency: n.frequency,
                 looping: n.looping,
                 sync: false,
-                kept,
-                stored: self.stored,
             };
             self.weight = Ramp::new(1.0, 1.0, now_ms, 0.0);
             return Touches {
@@ -809,13 +797,12 @@ impl ChannelClock {
         }
         let client_num = seen.client_num;
         // The windowed setter is 1.5's and UO's, whose spread differs.
-        let cgame = self.cgame;
         let spread = |now_ms, client_num| {
             let period = old.map_or(1000, |o| o.length_ms + 200);
-            match (window.is_some(), cgame) {
-                (false, _) => spread_phase(now_ms, client_num),
-                (true, false) => spread_phase_15(now_ms, client_num, period),
-                (true, true) => spread_phase_15_cgame(now_ms, client_num, period),
+            match f {
+                Flavour::V1_1 => spread_phase(now_ms, client_num),
+                Flavour::Cgame15 => spread_phase_15_cgame(now_ms, client_num, period),
+                _ => spread_phase_15(now_ms, client_num, period),
             }
         };
         // The phase in seconds' terms and as the old node's float time
@@ -824,7 +811,7 @@ impl ChannelClock {
             Some(n) if n.move_speed != 0 && n.looping => match old {
                 Some(o) if o.move_speed != 0 && o.looping && o.duration > 0.0 => (
                     (self.current.seconds(now_ms) / o.duration).rem_euclid(1.0),
-                    self.current.time(now_ms),
+                    self.current.time(now_ms, f),
                 ),
                 _ => {
                     let p = spread(now_ms, client_num);
@@ -833,11 +820,10 @@ impl ChannelClock {
             },
             _ => (0.0, 0.0),
         };
-        let windowed = window.is_some();
         let keeps = windowed && !RESTART_WEIGHTED.with(|c| c.get());
-        let blend = match window {
-            None => blend_ms(anims, old_index, new_index, legs),
-            Some(w) => blend_ms_windowed(anims, old_index, new_index, legs, now_ms, w),
+        let blend = match windowed {
+            false => blend_ms(anims, old_index, new_index, legs),
+            true => blend_ms_windowed(anims, old_index, new_index, legs, now_ms, window),
         } as f32;
         // `XAnimClearGoalWeight` (0x080bf53c) sends the old node to 0 over
         // the whole blend time; the clips already fading keep their own.
@@ -849,7 +835,7 @@ impl ChannelClock {
             .copied()
             .chain(std::iter::once((
                 self.current,
-                match self.stored {
+                match f.stored() {
                     true => Ramp::cod2(
                         old_weight,
                         self.weight.to,
@@ -921,11 +907,9 @@ impl ChannelClock {
                 frequency: new.map_or(0.0, |n| n.frequency),
                 looping: new.is_some_and(|n| n.looping),
                 sync: false,
-                kept,
-                stored: self.stored,
             },
         };
-        self.weight = match self.stored {
+        self.weight = match f.stored() {
             true => Ramp::cod2(from, 0.0, 1.0, now_ms, blend, 0.0),
             false => Ramp::raised(from, 1.0, now_ms, (1.0 - from) * blend).stored_on(windowed),
         };
@@ -936,8 +920,8 @@ impl ChannelClock {
                 (1.0, LEGS_UNDER_TORSO)
             };
             self.nodes = Nodes {
-                torso: goal(self.nodes.torso, torso, now_ms, blend, self.stored),
-                legs: goal(self.nodes.legs, legs, now_ms, blend, self.stored),
+                torso: goal(self.nodes.torso, torso, now_ms, blend, f.stored()),
+                legs: goal(self.nodes.legs, legs, now_ms, blend, f.stored()),
             };
         }
         Touches {
@@ -958,7 +942,7 @@ impl ChannelClock {
             }
             let last = w.last_weighted();
             let frozen = Play {
-                time_t: p.time(last),
+                time_t: p.time(last, self.flavour),
                 time_ms: last,
                 ..p
             };
@@ -1012,7 +996,7 @@ impl ChannelClock {
             // `XAnimClearGoalWeight` 0x080bf53c: to 0 over the whole time,
             // or the sooner of the two when it was already going there.
             let w = self.weight.at(now_ms);
-            if self.stored {
+            if self.flavour.stored() {
                 let left = self.weight.cod2_left(now_ms);
                 self.weight = Ramp::cod2(w, self.weight.to, 0.0, now_ms, blend, left);
             } else {
@@ -1038,7 +1022,7 @@ impl ChannelClock {
             if cut(index) {
                 self.weight = self.knob_cleared(self.weight.at(now_ms), now_ms);
             }
-            if self.cod2_tree {
+            if self.flavour.cod2_tree() {
                 for f in self.fading.iter_mut() {
                     if f.is_some_and(|(p, _)| cut(p.index)) {
                         *f = None;
@@ -1070,7 +1054,11 @@ impl ChannelClock {
     /// is the node the setter raises, from its weight there.
     fn shared(own: &Self, other: &Self, wire: i32, now_ms: i32) -> Option<(Play, Ramp)> {
         let index = wire & !TOGGLE;
-        if own.cod2_tree || wire == own.anim || index == 0 || own.holding(index, now_ms).is_some() {
+        if own.flavour.cod2_tree()
+            || wire == own.anim
+            || index == 0
+            || own.holding(index, now_ms).is_some()
+        {
             return None;
         }
         other.holding(index, now_ms)
@@ -1127,7 +1115,7 @@ impl ChannelClock {
     }
 
     fn set_rate(&mut self, now_ms: i32, rate: f32) {
-        self.current.settle(now_ms);
+        self.current.settle(now_ms, self.flavour);
         self.current.base_s = self.current.seconds(now_ms);
         self.current.base_ms = now_ms;
         self.current.rate = rate;
@@ -1190,29 +1178,27 @@ struct Touches {
 /// One body's two lerp frames as `BG_PlayerAnimation` (`game.mp.i386.so`
 /// 0x2c1f4) and the cgame's 0x30004e40 step them: each lerp frame whose
 /// node reads weight 0 cleared, then the legs and the torso updated, each
-/// setter's touch on the shared tree passed to the other lerp frame. With
-/// `window` the 1.5 and UO setter (`ChannelClock::update_windowed`).
+/// setter's touch on the shared tree passed to the other lerp frame, both
+/// under `flavour`'s engine. `window` is the client's end of the stance
+/// stretch the windowed setter keeps (`ci+0x4a4` 1.5b, `ci+0x4c0` UO,
+/// `ci+0x4ac` CoD2), shared by both channels, the legs first; 1.1 reads
+/// none.
 pub fn update_body(
     (legs, torso): (&mut ChannelClock, &mut ChannelClock),
     anims: &PlayerAnims,
     (legs_wire, torso_wire): (i32, i32),
     seen: &Seen,
     at: Times,
-    mut window: Option<&mut i32>,
+    flavour: Flavour,
+    window: &mut i32,
 ) {
     let now_ms = at.clock_ms;
+    legs.flavour = flavour;
+    torso.flavour = flavour;
     legs.clear_unweighted(now_ms);
     torso.clear_unweighted(now_ms);
     let shared = ChannelClock::shared(legs, torso, legs_wire, now_ms);
-    let t = legs.update_in(
-        anims,
-        true,
-        legs_wire,
-        seen,
-        at,
-        window.as_deref_mut(),
-        shared,
-    );
+    let t = legs.update_in(anims, true, legs_wire, seen, at, window, shared);
     if shared.is_some() {
         torso.release(legs_wire & !TOGGLE);
     }
@@ -1229,8 +1215,6 @@ pub fn update_body(
     if let Some(death) = t.knob_all {
         torso.knob_nodes(anims, death, now_ms);
     }
-    legs.stamp_lead();
-    torso.stamp_lead();
 }
 
 /// The tree nodes from `wire`'s up to the root, its own first.
@@ -1395,7 +1379,7 @@ mod tests {
     fn a_default_play_settles_at_once() {
         let mut p = Play::default();
         let start = std::time::Instant::now();
-        p.settle(i32::MAX);
+        p.settle(i32::MAX, Flavour::Server15);
         assert_eq!(p.time_t.to_bits(), 0f32.to_bits());
         assert_eq!(p.time_ms, i32::MAX / STEP_MS * STEP_MS);
         let held = Play {
@@ -1404,7 +1388,7 @@ mod tests {
             time_t: 1.0,
             ..Play::default()
         };
-        assert_eq!(held.time(i32::MAX), 1.0);
+        assert_eq!(held.time(i32::MAX, Flavour::Server15), 1.0);
         assert!(start.elapsed() < std::time::Duration::from_millis(50));
     }
 
@@ -1440,6 +1424,7 @@ mod tests {
             ..Play::default()
         };
         let d = 0.05f32 as f64 * 1.3f32 as f64 * (30.0f32 / 29.0) as f64;
+        let f = Flavour::Server15;
         let mut t = 0.0f32;
         for k in 1..40 {
             t = (t as f64 + d) as f32;
@@ -1447,13 +1432,13 @@ mod tests {
                 t -= 1.0;
             }
             // A step lands only on a whole frame.
-            assert_eq!(p.time(1000 + 50 * k + 49).to_bits(), t.to_bits(), "{k}");
+            assert_eq!(p.time(1000 + 50 * k + 49, f).to_bits(), t.to_bits(), "{k}");
         }
-        let at = p.time(2950);
-        p.settle(2960);
-        assert_eq!((p.time_ms, p.time(2999)), (2950, at));
+        let at = p.time(2950, f);
+        p.settle(2960, f);
+        assert_eq!((p.time_ms, p.time(2999, f)), (2950, at));
         p.looping = false;
-        assert_eq!(p.time(9000), 1.0);
+        assert_eq!(p.time(9000, f), 1.0);
     }
 
     #[test]
@@ -1490,17 +1475,16 @@ mod tests {
     fn a_cod2_step_stores_its_increment() {
         // `pb_stand_alert` (100 frames at 30 fps): retail's 17th step,
         // read under gdb (cod2-player-anims.md 7), against the stack sum's.
-        let play = |stored| Play {
+        let play = Play {
             rate: 1.0,
             frequency: 30.0 / 99.0,
             looping: true,
-            stored,
             ..Play::default()
         };
         let (mut a, mut b) = (0.0f32, 0.0f32);
         for _ in 0..17 {
-            a = play(true).step(a);
-            b = play(false).step(b);
+            a = play.step(a, Flavour::Cod2);
+            b = play.step(b, Flavour::Server15);
         }
         assert_eq!((a.to_bits(), b.to_bits()), (0x3e83_e0f8, 0x3e83_e0f9));
     }
@@ -1884,7 +1868,8 @@ mod tests {
                 w,
                 &seen(0.0, eflags),
                 Times::end_frame(ms),
-                None,
+                Flavour::V1_1,
+                &mut 0,
             )
         };
         // The torso keeps its fire anim: the clear lands at the next step.
@@ -1930,7 +1915,8 @@ mod tests {
                 w,
                 &seen(0.0, 0),
                 Times::end_frame(ms),
-                None,
+                Flavour::V1_1,
+                &mut 0,
             );
             (legs.layers(ms), legs.seconds(ms))
         };
@@ -1966,7 +1952,8 @@ mod tests {
                 w,
                 &seen(0.0, 0),
                 Times::end_frame(ms),
-                None,
+                Flavour::V1_1,
+                &mut 0,
             );
             (legs.layers(ms), torso.layers(ms))
         };

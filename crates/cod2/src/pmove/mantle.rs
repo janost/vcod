@@ -333,7 +333,7 @@ pub(crate) fn check(pm: &mut Pmove, pml: &Pml) {
     if ps.pm_type > pm_type::INTERMISSION
         || ps.pm_flags & pmf::MANTLE != 0
         || ps.e_flags & (ef::CROUCH | ef::PRONE) != 0
-        || (17..=22).contains(&ps.weapon_state)
+        || super::weapon::in_binoculars(ps.weapon_state)
     {
         return;
     }

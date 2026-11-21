@@ -635,25 +635,42 @@ fn idle_anim(ps: &PlayerState, ws: &mut WeaponState) {
     }
 }
 
-/// What `PmoveSingle`'s mounted arm runs where the others run `PM_Weapon`
-/// (lnxded 0x80e8934 calls 0x80f0946, which is 0x80ef946): `pm_flags` 0x10
-/// and 0x800 off, the binoculars left at once (`PM_ExitBinocularsQuick`
-/// 0x80effda) from states 17..22, the weapon ready with no time or delay
-/// and its anim restarted at 0. Every step on a gun, so `weapAnim`'s toggle
-/// flips each cmd. VERIFIED, the calls and the stores, and the gunner's
-/// capture (cod2-turrets.md 11).
-fn mounted_reset(ps: &mut PlayerState, ws: &mut WeaponState) {
+/// The weapon interrupt's playerstate half (lnxded 0x80ef946, Mac
+/// 0x7cbb2): `pm_flags` 0x10 and 0x800 off and, from `state` 17..22, the
+/// binoculars left at once (`PM_ExitBinocularsQuick` 0x80effda): the sight
+/// reset, `pm_flags` 0x20000 off and the exit event. A prone move runs it
+/// ahead of the move's events and owes `PM_Weapon` [`interrupt_weapon`]
+/// (cod2-movement.md 17.3).
+pub(crate) fn interrupt_flags(ps: &mut PlayerState, state: i32) {
     ps.pm_flags &= !(wpf::OFFHAND | pmf::PRONE_SIGHT);
-    if ws.state > 0x10 && ws.state < 0x17 {
-        ws.pos_frac = 0.0;
+    if in_binoculars(state) {
         exit_sight(ps);
         ps.pm_flags &= !wpf::BINOCULARS;
         ps.add_event(ev::BINOCULAR_EXIT, 0);
+    }
+}
+
+/// The interrupt's `WeaponState` half: out of the binoculars the sight's
+/// lerp at 0, then the weapon ready with no time or delay and its anim
+/// restarted at 0. It raises no event.
+fn interrupt_weapon(ps: &PlayerState, ws: &mut WeaponState) {
+    if in_binoculars(ws.state) {
+        ws.pos_frac = 0.0;
     }
     ws.weapon_time = 0;
     ws.weapon_delay = 0;
     ws.state = state::READY;
     start_anim(ps, ws, 0);
+}
+
+/// The interrupt (0x80ef946) whole. `PmoveSingle`'s mounted arm runs it
+/// where the others run `PM_Weapon` (lnxded 0x80e8934 calls 0x80f0946,
+/// which is 0x80ef946), every step on a gun, so `weapAnim`'s toggle flips
+/// each cmd. VERIFIED, the calls and the stores, and the gunner's capture
+/// (cod2-turrets.md 11).
+fn interrupt(ps: &mut PlayerState, ws: &mut WeaponState) {
+    interrupt_flags(ps, ws.state);
+    interrupt_weapon(ps, ws);
 }
 
 /// `PM_ExitAimDownSight` (0x80ecc72).
@@ -1159,19 +1176,13 @@ pub fn pm_weapon(ps: &mut PlayerState, ws: &mut WeaponState, c: &WeaponCmd, defs
     // The interrupt `PmoveSingle` took ahead of the move (0x80ef946):
     // its playerstate half ran there, before the move's events.
     if std::mem::take(&mut ps.weapon_interrupt) {
-        if (state::BINOCULARS_ADS_EXIT..=state::BINOCULARS_RAISE_WEAPON).contains(&ws.state) {
-            ws.pos_frac = 0.0;
-        }
-        ws.weapon_time = 0;
-        ws.weapon_delay = 0;
-        ws.state = state::READY;
-        start_anim(ps, ws, 0);
+        interrupt_weapon(ps, ws);
     }
     // `PmoveSingle`'s default arm (`pm_type` 0 and 6) takes the mounted
-    // reset in place of `PM_Weapon`, so a gunner killed on the gun keeps
+    // interrupt in place of `PM_Weapon`, so a gunner killed on the gun keeps
     // his weapon until his release (cod2-turrets.md 14.1).
     if ps.e_flags & ef::TURRET != 0 && matches!(ps.pm_type, pm_type::NORMAL | pm_type::DEAD) {
-        mounted_reset(ps, ws);
+        interrupt(ps, ws);
         return;
     }
     if ps.pm_flags & pmf::RESPAWNED != 0 {
@@ -1182,7 +1193,7 @@ pub fn pm_weapon(ps: &mut PlayerState, ws: &mut WeaponState, c: &WeaponCmd, defs
         return;
     }
     if ps.e_flags & ef::TURRET != 0 {
-        mounted_reset(ps, ws);
+        interrupt(ps, ws);
         return;
     }
     update_sight_lerp(ps, ws, c, defs);
@@ -1625,20 +1636,6 @@ pub fn binocular_weapon(defs: &dyn Weapons) -> u8 {
         .unwrap_or(0)
 }
 
-/// Out of the binoculars at once (Mac 0x7cbb2, the interrupt): the sight
-/// reset, `pm_flags` 0x20000 off with the exit event, the weapon ready.
-fn leave_binoculars(ps: &mut PlayerState, ws: &mut WeaponState) {
-    ps.pm_flags &= !(wpf::OFFHAND | pmf::PRONE_SIGHT);
-    ws.pos_frac = 0.0;
-    ps.add_event(ev::RESET_ADS, 0);
-    ps.pm_flags &= !(wpf::BINOCULARS | pmf::SIGHT);
-    ps.add_event(ev::BINOCULAR_EXIT, 0);
-    ws.weapon_time = 0;
-    ws.weapon_delay = 0;
-    ws.state = state::READY;
-    start_anim(ps, ws, 0);
-}
-
 /// `PM_Weapon`'s binocular block (Mac 0x7cbb2, before the offhand keys):
 /// from ready (not down a scoped sight, no fire, melee, reload or offhand
 /// key) or inside the binoculars. Inside, a changed weapon or offhand byte
@@ -1670,7 +1667,8 @@ pub fn binoculars(ps: &mut PlayerState, ws: &mut WeaponState, c: &WeaponCmd, def
     let changed =
         c.cmd.weapon != c.oldcmd.weapon || c.cmd.off_hand_index != c.oldcmd.off_hand_index;
     if inside && (changed || buttons & KEYS != 0) {
-        leave_binoculars(ps, ws);
+        // Out at once (Mac 0x7cbb2, the interrupt).
+        interrupt(ps, ws);
         if buttons & button::ATTACK != 0 {
             ws.weapon_time = 1;
         }
@@ -1783,7 +1781,7 @@ fn binocular_state(ps: &mut PlayerState, ws: &mut WeaponState, c: &WeaponCmd, de
         }
         // The weapon is back (case 0x16): the sight reset and a second
         // exit event, then ready.
-        state::BINOCULARS_RAISE_WEAPON => leave_binoculars(ps, ws),
+        state::BINOCULARS_RAISE_WEAPON => interrupt(ps, ws),
         _ => {}
     }
 }
@@ -1952,9 +1950,9 @@ pub fn table_of(names: &[&str], defs: &[Option<&WeaponDef>]) -> Vec<Option<Weapo
 /// the move at the held weapon's `moveSpeedScale`, then `PM_Weapon` and
 /// `ClientEvents`' zeroing of a thrown grenade's fuse (cod2-combat.md 2.6).
 /// Only a living or dead body runs the weapon. The client predicts with
-/// it; the movement A/B replays retail's captures through it.
-/// vcod-server's `client_think` (`game::cod2`) runs its own copy of this
-/// order.
+/// it and the movement A/B replays retail's captures through it, both
+/// without the anim script; vcod-server's `client_think` (`game::cod2`)
+/// runs [`armed_step_with`].
 pub fn armed_step(
     ps: &mut PlayerState,
     ws: &mut WeaponState,
@@ -1963,6 +1961,37 @@ pub fn armed_step(
     world: vcod_common::movetrace::MoveWorld,
     rules: crate::pmove::Rules,
     defs: &dyn Weapons,
+) {
+    let hooks = StepHooks::default();
+    armed_step_with(ps, ws, cmd, oldcmd, world, rules, defs, hooks);
+}
+
+/// What the server's cmd hands [`armed_step_with`] beyond the client's
+/// prediction; `Default` is the prediction's.
+#[derive(Clone, Copy, Default)]
+pub struct StepHooks<'a> {
+    /// The anim script and the game's `rand()` its clause picks draw off:
+    /// the move's conditions (`BG_AnimUpdatePlayerStateConditions`, Mac
+    /// 0x182666, before each step) and `PM_Weapon`'s torso events read
+    /// them (cod2-combat.md 9.6).
+    pub anims: Option<(&'a AnimTable, &'a dyn Fn(usize) -> usize)>,
+    /// The caller runs `ClientEvents` itself, whose throw takes the fuse
+    /// (`game::cod2_combat`); without it the step zeroes the fuse on a
+    /// `USE_OFFHAND` as `ClientEvents` leaves it.
+    pub client_events: bool,
+}
+
+/// [`armed_step`] under `hooks`.
+#[allow(clippy::too_many_arguments)]
+pub fn armed_step_with(
+    ps: &mut PlayerState,
+    ws: &mut WeaponState,
+    cmd: &UserCmd2,
+    oldcmd: &mut UserCmd2,
+    world: vcod_common::movetrace::MoveWorld,
+    rules: crate::pmove::Rules,
+    defs: &dyn Weapons,
+    hooks: StepHooks,
 ) {
     let old = *oldcmd;
     let armed = matches!(
@@ -1989,12 +2018,24 @@ pub fn armed_step(
     }
     // `PM_CmdScale_Walk` (0x80e1c58) scales by the held weapon.
     let scale = move_scale(defs, ws.weapon);
-    crate::pmove::player_step(ps, cmd, oldcmd, world, rules, scale);
+    let anim = hooks.anims.map(|(table, pick)| AnimInput {
+        pick: Some(pick),
+        ..anim_input(table, ps, ws, defs)
+    });
+    let prone = ps.view_height_target == crate::pmove::VIEW_PRONE;
+    crate::pmove::player_step_anim(ps, cmd, oldcmd, world, rules, scale, anim);
     if msec > 0 {
+        let wc = WeaponCmd {
+            prone_change: prone != (ps.view_height_target == crate::pmove::VIEW_PRONE),
+            anim: hooks.anims.map(|(table, pick)| WeaponAnims { table, pick }),
+            ..wc
+        };
         let seq = ps.event_sequence;
         pm_weapon(ps, ws, &wc, defs);
         ps.weapon_state = ws.state;
-        if (seq..ps.event_sequence).any(|i| ps.events[(i & 3) as usize] == ev::USE_OFFHAND) {
+        let thrown =
+            (seq..ps.event_sequence).any(|i| ps.events[(i & 3) as usize] == ev::USE_OFFHAND);
+        if thrown && !hooks.client_events {
             ws.grenade_time_left = 0;
         }
     }

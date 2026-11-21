@@ -185,6 +185,24 @@ fn type_scale(ps: &PlayerState, mut s: f32, rules: &super::Rules) -> f32 {
     s
 }
 
+/// Where an eye lerp between crouch and prone stands at `time`:
+/// `(from, to, fraction)` over a caller's `crouch` and `prone` shares,
+/// down to prone first; `None` with no such lerp running. `PM_CmdScale`'s
+/// and the footstep rate's blends each keep their own rodata and rounding.
+pub(crate) fn prone_lerp(
+    ps: &PlayerState,
+    time: i32,
+    crouch: f32,
+    prone: f32,
+) -> Option<(f32, f32, f32)> {
+    let down = lerp_frac(ps, 40, 11, time);
+    if down != 0.0 {
+        return Some((crouch, prone, down));
+    }
+    let up = lerp_frac(ps, 11, 40, time);
+    (up != 0.0).then_some((prone, crouch, up))
+}
+
 /// The eye's lerp fraction between two stance heights (0x80e3dae), 0 when
 /// no lerp runs that way.
 pub(crate) fn lerp_frac(ps: &PlayerState, from: i32, to: i32, time: i32) -> f32 {
@@ -227,14 +245,10 @@ fn cmd_scale_walk(pm: &Pmove, fm: i8, rm: i8) -> f32 {
         pm_type::NOCLIP => s *= SCALE_NOCLIP,
         pm_type::UFO => s *= SCALE_UFO,
         _ => {
-            let t = pm.cmd.server_time;
-            let down = lerp_frac(ps, 40, 11, t);
-            let up = lerp_frac(ps, 11, 40, t);
-            let blend = |a: f32, b: f32, f: f32| (d(a) * (1.0 - d(f)) + d(b) * d(f)) as f32;
-            if down != 0.0 {
-                s = (d(s) * d(blend(SCALE_CROUCH, SCALE_PRONE, down))) as f32;
-            } else if up != 0.0 {
-                s = (d(s) * d(blend(SCALE_PRONE, SCALE_CROUCH, up))) as f32;
+            let lerp = prone_lerp(ps, pm.cmd.server_time, SCALE_CROUCH, SCALE_PRONE);
+            if let Some((a, b, f)) = lerp {
+                let blend = (d(a) * (1.0 - d(f)) + d(b) * d(f)) as f32;
+                s = (d(s) * d(blend)) as f32;
             } else {
                 match ps.effective_stance() {
                     Stance::Prone => s *= SCALE_PRONE,

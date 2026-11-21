@@ -965,27 +965,6 @@ impl Cod2Level {
             level_time,
             msec,
         });
-        let weapon_cmd = vcod_cod2::pmove::weapon::WeaponCmd {
-            cmd,
-            oldcmd: &oldcmd,
-            msec,
-            ads_exit_delay: 0,
-            prone_change: false,
-            anim: None,
-        };
-        // Only `PmoveSingle`'s default arm runs the weapon: a living or
-        // dead player, never a spectator, a flyer or the intermission.
-        let armed = matches!(
-            p.ps.pm_type,
-            pm_type::NORMAL | pm_type::NORMAL_LINKED | pm_type::DEAD | pm_type::DEAD_LINKED
-        );
-        let msec = if armed { msec } else { 0 };
-        vcod_cod2::pmove::weapon::update_firing_flag(&mut p.ps, &p.ws, cmd, defs);
-        if msec > 0 {
-            use vcod_cod2::pmove::weapon as w;
-            w::update_sight_flag(&mut p.ps, &p.ws, cmd, &oldcmd, defs);
-            w::adjust_aim_spread(&mut p.ps, &p.ws, &weapon_cmd, defs);
-        }
         // `pm.tracemask` meets the mantle blocks' 0x10000; a block lets its
         // own climber through (cod2-movement.md 9).
         let world = vcod_common::movetrace::MoveWorld {
@@ -996,49 +975,36 @@ impl Cod2Level {
         .with_clip_boxes(&blocks);
         // The events' clause picks draw off the game's `rand()`, inside
         // `Pmove` (cod2-combat.md 9.6).
+        // A torso event's pick among a clause's commands: `BG_AnimScriptEvent`
+        // draws `rand() % n` for every clause with a command, one command or
+        // more (lnxded 0x80d96ee).
         let rand = &self.combat.rand;
         let pick = |n: usize| rand.rand() as usize % n;
-        // `BG_AnimUpdatePlayerStateConditions` reads the viewmodel weapon
-        // (Mac 0x7b226) before each step.
-        let anim = self
-            .anims
-            .as_deref()
-            .map(|table| vcod_cod2::pmove::AnimInput {
-                pick: Some(&pick),
-                ..vcod_cod2::pmove::weapon::anim_input(table, &p.ps, &p.ws, defs)
-            });
-        let prone = p.ps.view_height_target == vcod_cod2::pmove::VIEW_PRONE;
-        let move_scale = vcod_cod2::pmove::weapon::move_scale(defs, p.ws.weapon);
+        let hooks = vcod_cod2::pmove::weapon::StepHooks {
+            anims: self
+                .anims
+                .as_deref()
+                .map(|t| (t, &pick as &dyn Fn(usize) -> usize)),
+            client_events: true,
+        };
         let mantling = p.ps.pm_flags & vcod_cod2::pmove::pmf::MANTLE != 0;
-        vcod_cod2::pmove::player_step_anim(
-            &mut p.ps,
+        let (ps, ws) = (&mut p.ps, &mut p.ws);
+        let rules = self.rules;
+        vcod_cod2::pmove::weapon::armed_step_with(
+            ps,
+            ws,
             cmd,
             &mut p.oldcmd,
             world,
-            self.rules,
-            move_scale,
-            anim,
+            rules,
+            defs,
+            hooks,
         );
         let started = !mantling && p.ps.pm_flags & vcod_cod2::pmove::pmf::MANTLE != 0;
         let mantle = started
             .then_some(self.rules.mantle_anims)
             .flatten()
             .map(|a| vcod_cod2::pmove::mantle::end_and_duration(a, &p.ps));
-        if msec > 0 {
-            // A torso event's pick among a clause's commands:
-            // `BG_AnimScriptEvent` draws `rand() % n` for every clause with a
-            // command, one command or more (lnxded 0x80d96ee).
-            let weapon_cmd = vcod_cod2::pmove::weapon::WeaponCmd {
-                prone_change: prone != (p.ps.view_height_target == vcod_cod2::pmove::VIEW_PRONE),
-                anim: self
-                    .anims
-                    .as_deref()
-                    .map(|table| vcod_cod2::pmove::weapon::WeaponAnims { table, pick: &pick }),
-                ..weapon_cmd
-            };
-            vcod_cod2::pmove::weapon::pm_weapon(&mut p.ps, &mut p.ws, &weapon_cmd, defs);
-            p.ps.weapon_state = p.ws.state;
-        }
         sync_weapons_out(&mut self.rt.host, slot, &p.ws);
         let events = cmd_events(&p.ps, seq);
         let fired = events.iter().map(|&(e, _)| e);
