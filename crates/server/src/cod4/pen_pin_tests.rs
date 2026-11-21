@@ -200,6 +200,63 @@ fn a_painful_landing_takes_its_share_of_max_health() {
     assert!(health(level) <= 0, "health {}", health(level));
 }
 
+/// A fall end to end (cod4-combat.md 16): B set 200 over the open ground
+/// west of the town (floor 264.125, nothing over it for 260) falls under
+/// his own cmds, lands with `EV_LANDING_PAIN_*` (a drop between 1.7's
+/// `bg_fallDamageMinHeight` 128 and `MaxHeight` 300) and loses what
+/// [`fall_damage`] makes of its percent. Over the yard by the plate the
+/// same 200 starts the box in a playerclip brush, where the body stays
+/// put as `PM_SlideMove` leaves an all-solid one.
+///
+/// [`fall_damage`]: crate::game::cod4::combat::fall_damage
+#[test]
+fn a_drop_of_200_takes_its_share_of_max_health() {
+    let Some(mut t) = Trio::new(&[("scr_player_maxhealth", "100")]) else {
+        return;
+    };
+    t.place([(A_SPOT, -90.0), (B_SPOT, -90.0), (IN_ROOM, 90.0)]);
+    const FLOOR: f32 = 264.125;
+    let eye = 200.0 + t.level().pm_state(B).unwrap().view_height_current - 1.0;
+    t.level()
+        .set_view_pos(B, [-1400.0, 1200.0, FLOOR + eye], [0.0, -90.0, 0.0]);
+    let before = t.level().rt.client_vitals(B).health;
+    let pain =
+        vcod_cod4::pmove::ev::LANDING_PAIN_FIRST..=vcod_cod4::pmove::ev::LANDING_PAIN_FIRST + 28;
+    let mut landing = None;
+    // The probes' cmds go no further than the placing; B's go straight in.
+    for _ in 0..40 {
+        let svs = t.sv.core.sv_time_ms;
+        let level = t.level();
+        let ps = level.pm_state(B).unwrap();
+        let seq = ps.event_sequence;
+        let cmd = UserCmd {
+            server_time: svs + 10,
+            weapon: ps.weapon as u8,
+            offhand: ps.off_hand_index as u8,
+            angles: vcod_cod4::net::conn::cmd_angles([0.0, -90.0, 0.0], ps.delta_angles),
+            ..Default::default()
+        };
+        level.client_think(B, &cmd);
+        let ps = level.pm_state(B).unwrap();
+        landing = landing.or_else(|| {
+            (seq..ps.event_sequence)
+                .map(|k| (k & 3) as usize)
+                .find(|&k| pain.contains(&ps.events[k]))
+                .map(|k| (ps.event_parms[k] as i32, ps.origin.z))
+        });
+        t.run_to(svs + 50);
+    }
+    let (parm, z) = landing.expect("a painful landing");
+    assert!((z - FLOOR).abs() < 1.0, "landed at {z}");
+    assert!((30..60).contains(&parm), "percent {parm}");
+    let lost = before - t.level().rt.client_vitals(B).health;
+    assert_eq!(
+        Some(lost),
+        crate::game::cod4::combat::fall_damage(parm, 100),
+        "percent {parm}"
+    );
+}
+
 /// Rounds north along x 207 through the plate, A's body, B's body and
 /// the yard's far concrete wall, and the variants: perks, weapons,
 /// penetration off, a leg begun past the plate.
