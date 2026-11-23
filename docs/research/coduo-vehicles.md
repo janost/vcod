@@ -734,7 +734,9 @@ other model is registered on the way: wrecks and effects come from
 four-wheel on its wheel traces: the BSP's z -8 parks at -7.875 (VERIFIED,
 baselines), and `time2` becomes `trunc(1000 * suspensionTravel)`, 6 bits on
 the wire (24 for the Panzer IV, 8 for the Sherman) (VERIFIED decompile;
-capture). The vehicle table's angles are 16 bits, so the BSP's yaw 270
+capture): the files' `suspensionTravel` 7 and 5 give 7000 and 5000, whose
+low 6 bits are 24 and 8 (VERIFIED, the paks). The cgame reads it as the
+wheels' reach, `time2 / 1000` units (`coduo-diff.md` 9). The vehicle table's angles are 16 bits, so the BSP's yaw 270
 reads -90 (VERIFIED, baselines).
 
 It does nothing else of the step: it settles, places the vehicle through
