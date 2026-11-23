@@ -422,9 +422,7 @@ cod11-front-end.md 20.5.1 and 18.4.1.
   `^` colour code in one go (`0x53da72`..`0x53dabb`), End calls a
   paint-offset fixup (`0x53d550`, from `0x53da4c`), and types 16, 17 and
   18 have character tests of their own (`0x53d6e9`..`0x53d764`). VERIFIED
-  (asm). vcod keeps its own CoD2 edit (`Ui::edit_key_cod2`): typed text
-  appends at the end, the field paints its tail and a `|`, and no cursor
-  blinks. Porting CoD2's handler is open.
+  (asm). 4.2.1 has the handler; vcod runs it (`Ui::edit_key_cod2`).
 - `Menu_PaintAll` (`0x542740`, from `UI_Refresh` `0x532553`) paints the
   menus off the stack (stack at the UI context's `+0x230`, count `+0x270`)
   that carry the visible flag (`+0xe8 & 4`), in load order
@@ -432,3 +430,86 @@ cod11-front-end.md 20.5.1 and 18.4.1.
   `fullscreen` (`+0x214`, `MenuParse_fullscreen` `0x543b00`, keyword
   entry `0x5dd1cc`) up (`0x542979`..`0x5429da`), as 1.1 does. VERIFIED
   (asm). vcod paints CoD2's stack the same way (`Ui::painted`).
+
+#### 4.2.1 The edit handler
+
+`Item_TextField_HandleKey` (`CoD2MP_s.exe` `0x53d590`), read with
+`objdump` (2026-11-23). The item's type is at `+0x270`, its dvar at
+`+0x2c0`, `cursorPos` at `+0x2dc`, the edit data (`0x547080`: item
+`+0x2ec` for types 0, 4, 9, 10, 11, 14, 16, 17 and 18) holds `maxChars`
+`+0x10`, `maxCharsGotoNext` `+0x14`, `maxPaintChars` `+0x18` and
+`paintOffset` `+0x1c`. VERIFIED (asm).
+
+- The edit types (`0x53d4d0`, its byte table at `0x53d4fc`): 4, 9, 16, 17
+  and 18. VERIFIED (asm). They are `ui/menudefinition.h`'s edit, numeric,
+  valid-file, decimal and upper-case fields (`iw_07.iwd`). VERIFIED (the
+  file). vcod reads 16 as an edit field with `file_name_only` and 18 as
+  CoD1's 15 (`ui_menu::cod2::item_type`).
+- The buffer: the dvar's string into a zeroed 1024 bytes (`0x3ff` copied),
+  `len` its length; a `len` past a non-zero `maxChars` is cut there with a
+  NUL written (`0x53d5c5`..`0x53d61a`). No edit data or no dvar answers 0.
+  VERIFIED (asm).
+- The cursor step (`0x546da0`, `n` in `ecx`): backward, each step takes one
+  character, but a `^` and a digit before the cursor pass as a pair that
+  counts nothing (`0x546dad`..`0x546def`); forward, the pairs at the cursor
+  pass first, then the step stops at the NUL or after `n` characters, so a
+  forward step also passes the codes after it (`0x546df1`..`0x546e30`).
+  The pair test is `^` then a byte that is not NUL, not `^`, and in
+  `0`..`9`. VERIFIED (asm). Left (`0x9c`, `0xb9`) and Backspace's move run
+  the backward step inline (`0x53da72`..`0x53dabb`, `0x53d686`..`0x53d6e4`).
+- The fixup (`0x53d550`) after every cursor move: a `paintOffset` past the
+  cursor comes down to it; else with a non-zero `maxPaintChars` it rises to
+  the backward step of `maxPaintChars` from the cursor. VERIFIED (asm).
+- Char 8 (Backspace): with the cursor past 0, `memmove` the rest one left
+  over the character before it (`0x53d63c`..`0x53d656`); the dvar is set
+  either way and read back, the cursor takes a backward step from where it
+  stood, and the fixup runs (`0x53d659`..`0x53d6e4`, `0x53dabd`). VERIFIED
+  (asm).
+- Other characters (`0x53d6e9`..`0x53d775`): type 16 drops one
+  `I_isforfilename` (`0x44a610`: letters, digits, `_`, `-`) refuses; any
+  type drops a character under `0x20`; type 9 ends the edit (answers 0) on
+  a non-digit; type 17 ends it on a non-digit other than the decimal point
+  (`0x435610`: `,` for the languages 1, 2, 3, 4, 6, 7 and 14, else `.`),
+  stores that point as `.`, and does not count points; type 18 goes
+  through the CRT's `toupper` (`0x57b7d5`). VERIFIED (asm). That
+  `0x11972ec`'s `+8` is the language number is INFERRED; vcod takes `.`
+  only.
+- Insert (overstrike 0): `len` 255, or `len` at a non-zero `maxChars`,
+  drops it; else `memmove` from the cursor one right
+  (`0x53d786`..`0x53d7b5`). Overstrike: a cursor at a non-zero `maxChars`
+  drops it, stepping the focus on with `maxCharsGotoNext` (the edit moves
+  to an edit field there, its cursor kept; `0x53d87f`..`0x53d8c6`).
+  VERIFIED (asm).
+- The character goes at the cursor, the dvar is set and read back, the
+  cursor takes one forward step and the fixup runs (`0x53d7c0`..`0x53d81a`).
+  At a non-zero `maxChars` with `maxCharsGotoNext` the focus steps on, the
+  next item's `cursorPos` goes to 0 and the edit moves there when it is an
+  edit field (`0x53d81f`..`0x53d874`). The character then falls into the
+  key compares below, as 1.1's does (20.5.1 of cod11-front-end.md); vcod
+  does not do this. VERIFIED (asm).
+- Keys (`0x53d8d8`..`0x53da31`): Del (`0xa2`, `0xc1`) `memmove`s the rest
+  over the character under a cursor under `len` and sets the dvar, no
+  fixup (`0x53daec`); Right (`0x9d`, `0xbb`) one forward step and the fixup
+  (`0x53dada`); Home (`0xa5`, `0xb6`) zeroes the cursor and `paintOffset`;
+  End (`0xa6`, `0xbc`) puts the cursor at `len` and runs the fixup only
+  (`0x53da40`), so with `maxPaintChars` 0 the text stays painted, unlike
+  1.1; Insert (`0xa1`, `0xc0`) flips overstrike (`0x53d960`). Tab, `0x9b`,
+  `0xbd` step the focus on and `0x9a`, `0xb7` back, the edit moving to an
+  edit field (`0x53d97f`..`0x53d9f6`); Enter (`0xd`, `0xbf`) runs `accept`
+  (item `+0x2b4`, `0x53da16`) and answers 0, as Esc (`0x1b`) does. VERIFIED
+  (asm).
+- `Item_TextField_Paint` (`0x53fb80`): type 17 with a float dvar paints
+  the value formatted at two places (`0x435640`, `eax` 2), whatever the
+  edit did to the dvar's text, else the dvar's string; both from
+  `paintOffset` (`0x53fbc8`..`0x53fc1f`, `0x53fd41`..`0x53fd61`). VERIFIED
+  (asm). The renderer counts `maxChars` in glyphs: a colour code takes none
+  (`gfx_d3d_mp_x86_s.dll` `0x10032a30`, the count dropped at `0x10032c86`
+  and skipped by the code arms). VERIFIED (asm). It draws the cursor glyph
+  once, in the text's current colour and with no shadow, at the pen spot of
+  the glyph whose byte index (codes count 2) is the cursor, or after the
+  last (`0x10032c3e`..`0x10032c61`, `0x10032ca9`..`0x10032cdb`,
+  `0x10032860`). VERIFIED (asm).
+
+vcod (`Ui::edit_key_cod2`, `Ui::painted_field`) follows all of it but the
+fall-through, the comma point, and a cursor between a `^` and its digit,
+which vcod's paint still draws.
