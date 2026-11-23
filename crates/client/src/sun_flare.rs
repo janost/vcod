@@ -662,7 +662,7 @@ mod tests {
 
     fn harbor() -> FlareParams {
         // scripts/mp_harbor.sun
-        FlareParams::of(&SunFile::parse(
+        let sf = SunFile::parse(
             "r_sunsprite_shader \"0\"\nr_sunsprite_size \"16\"\n\
              r_sunflare_shader \"gfx/sun/global_flare\"\nr_sunflare_min_size \"12\"\n\
              r_sunflare_min_angle \"90\"\nr_sunflare_max_size \"600\"\n\
@@ -673,7 +673,8 @@ mod tests {
              r_sunblind_fadeout \"3\"\nr_sunglare_min_angle \"30\"\n\
              r_sunglare_max_angle \"5\"\nr_sunglare_max_lighten \".1\"\n\
              r_sunglare_fadein \".5\"\nr_sunglare_fadeout \"3\"\n",
-        ))
+        );
+        FlareParams::of(&sf.expect("mp_harbor.sun sets every cvar"))
     }
 
     fn frame(now_ms: f32, dot: f32, window: Option<[f32; 2]>, measured: f32) -> FrameIn {

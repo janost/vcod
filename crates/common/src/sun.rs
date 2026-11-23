@@ -11,9 +11,9 @@ use crate::material::{Material, MaterialLib};
 use crate::mesh::{self, MaterialKind};
 
 /// `scripts/<name>.sun`, the cvar dump a sky block's `sunfile <name>` token
-/// names (loaded by CoDMP.exe via `"scripts/%s.sun"`, 0x4e7f30). Defaults
-/// are the cvars' registration strings (the `r_sun*` block of 0x4b3300 from
-/// 0x4b41b1 on), which a key the file leaves out keeps.
+/// names (loaded by CoDMP.exe via `"scripts/%s.sun"`, 0x4e7f30). The file
+/// sets every field ([`SunFile::parse`]); `Default` holds the cvars'
+/// registration strings (the `r_sun*` block of 0x4b3300 from 0x4b41b1 on).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SunFile {
     /// `r_sunsprite_shader`; `None` draws no disc ("0" is how mp_harbor.sun
@@ -62,7 +62,7 @@ impl Default for SunFile {
         };
         SunFile {
             sprite: None,
-            sprite_size: Self::DEFAULT_SPRITE_SIZE,
+            sprite_size: 16.0,
             flare: Some("sunFlareShader".into()),
             flare_min_size: 0.0,
             flare_max_size: 2500.0,
@@ -78,12 +78,36 @@ impl Default for SunFile {
 }
 
 impl SunFile {
-    /// Engine default for `r_sunsprite_size`; every stock `.sun` that wants a
-    /// disc sets both fields explicitly, so this only covers partial files.
-    pub const DEFAULT_SPRITE_SIZE: f32 = 16.0;
+    /// The cvars a `.sun` file must set, in retail's table order (0x5713c8).
+    const KEYS: [&'static str; 20] = [
+        "r_sunsprite_shader",
+        "r_sunsprite_size",
+        "r_sunflare_shader",
+        "r_sunflare_min_size",
+        "r_sunflare_min_angle",
+        "r_sunflare_max_size",
+        "r_sunflare_max_angle",
+        "r_sunflare_max_alpha",
+        "r_sunflare_fadein",
+        "r_sunflare_fadeout",
+        "r_sunblind_min_angle",
+        "r_sunblind_max_angle",
+        "r_sunblind_max_darken",
+        "r_sunblind_fadein",
+        "r_sunblind_fadeout",
+        "r_sunglare_min_angle",
+        "r_sunglare_max_angle",
+        "r_sunglare_max_lighten",
+        "r_sunglare_fadein",
+        "r_sunglare_fadeout",
+    ];
 
-    pub fn parse(text: &str) -> SunFile {
+    /// `None` unless the file sets all twenty `r_sun*` cvars: retail's
+    /// loader (CoDMP.exe 0x438eb0) then prints the missing ones and fails,
+    /// and 0x4e7f30 skips the refill that would draw a sun.
+    pub fn parse(text: &str) -> Option<SunFile> {
         let mut sf = SunFile::default();
+        let mut seen = [false; 20];
         let shader = |v: &str| (!v.is_empty() && v != "0").then(|| v.to_string());
         for line in text.lines() {
             let Some((key, value)) = line.trim().split_once(char::is_whitespace) else {
@@ -92,6 +116,10 @@ impl SunFile {
             let value = value.trim().trim_matches('"');
             let n = value.parse::<f32>().ok();
             let key = key.trim().to_ascii_lowercase();
+            let Some(k) = Self::KEYS.iter().position(|&n| n == key) else {
+                continue;
+            };
+            seen[k] = true;
             let num = match key.as_str() {
                 "r_sunsprite_shader" => {
                     sf.sprite = shader(value);
@@ -121,11 +149,17 @@ impl SunFile {
                 "r_sunglare_fadeout" => &mut sf.glare.fade_out,
                 _ => continue,
             };
-            if let Some(n) = n {
-                *num = n;
-            }
+            // Cvar_Set keeps the string; its value reads 0 where atof finds no number
+            *num = n.unwrap_or(0.0);
         }
-        sf
+        let missing: Vec<&str> = (Self::KEYS.iter().zip(seen))
+            .filter_map(|(&k, s)| (!s).then_some(k))
+            .collect();
+        if !missing.is_empty() {
+            log::warn!("sunfile: cvars not specified: {}", missing.join(" "));
+            return None;
+        }
+        Some(sf)
     }
 }
 
@@ -205,17 +239,19 @@ pub struct MapSun {
 }
 
 /// `None` where retail draws no sun: no `sunfile` on the sky block, a
-/// `.sun` file that does not load (the world load zeroes the sun state and
-/// only a loaded file refills it), or no lump-30 sun light.
+/// `.sun` file that does not load or leaves a cvar out (the world load
+/// zeroes the sun state and only a loaded file refills it), or no lump-30
+/// sun light.
 pub fn load(fs: &dyn AssetSource, sky: &Material, bsp: &MapWorld) -> Option<MapSun> {
     let name = sky.sunfile.as_ref()?;
     let Some(bytes) = fs.read(&format!("scripts/{name}.sun")) else {
         log::debug!("sunfile: scripts/{name}.sun not found");
         return None;
     };
+    let file = SunFile::parse(&String::from_utf8_lossy(&bytes))?;
     let light_dir = sun_light(bsp)?;
     Some(MapSun {
-        file: SunFile::parse(&String::from_utf8_lossy(&bytes)),
+        file,
         light_dir,
         dir: Vec3::from(bsp::sun_direction(&bsp.entities)),
     })

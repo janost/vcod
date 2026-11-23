@@ -183,7 +183,11 @@ impl App {
                     }
                     loading::Action::FinishDownloads => net.finish_downloads(),
                     loading::Action::Ready => {
-                        r.set_image_gamma(image_gamma(&mut self.shell, self.ignore_hw_gamma));
+                        r.set_image_gamma(image_gamma(
+                            &mut self.shell,
+                            self.ignore_hw_gamma,
+                            self.fs.game(),
+                        ));
                         let t_load = Instant::now();
                         match load_map(
                             &map,

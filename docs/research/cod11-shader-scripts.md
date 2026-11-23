@@ -228,10 +228,10 @@ and CoDUOMP.exe (0x4fea30) parse stages with the same keyword strings:
   `fogParms` skip their line; `clampTime` and `light` read one token;
   `portal` sets shader flag 2 and sort 1.0 (0x4fae63); `picmip2` flag
   0x200; any other keyword warns "unknown general shader parameter" and
-  fails the shader. CoDUOMP.exe 0x5014c4 adds `nolightscale`, shader flag
-  0x2000, on the flamethrower's sprites; 1.5's parser (0x4fb510) has no
-  such keyword. Neither has `depthFunc less`: UO's two stock uses warn and
-  keep `lequal`.
+  fails the shader. CoDUOMP.exe 0x5014c4 adds `nolightscale`, shader
+  flag 0x2000, on the flamethrower's sprites (coduo-diff.md 14.1); 1.5's
+  parser (0x4fb510) has no such keyword. Neither has `depthFunc less`:
+  UO's two stock uses warn and keep `lequal`.
 
 - VERIFIED, 0x4f8a23..0x4f8a46: `perLight` (0x547e98) ORs 0x80 into the
   stage's flag word (`+0x00`; `detail` is 0x2 there) and is refused inside
@@ -982,9 +982,11 @@ coronas (8.5), `r_flares` (8.6) and `vc_sunShafts` (8.7).
 - `heightToNormal` is ignored (a debug note). (`clampy` sits on stock
   foliage and water, `clampx` on seven `shadertypes/world/*_clampx.stype`;
   both clamp their one axis, section 3.)
-- `nolightscale` (UO) is consumed; what reads its flag 0x2000 is not
-  traced. `portal` sorts but draws no portal view. The stage `detail` flag
-  and `fog on|off` are consumed inertly.
+- `nolightscale` (UO) is consumed and its flag 0x2000 dropped: it
+  only skips the overbright doubling of uncompressed images, and every
+  stock use maps DDS ones (coduo-diff.md 14.1). `portal` sorts but draws
+  no portal view. The stage `detail` flag and `fog on|off` are consumed
+  inertly.
 
 ### 8.1 Vertex deforms
 
@@ -1362,6 +1364,39 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   no shader carries 0x1000 and the remap has nothing to act on; the
   `not precached` error is not ported either.
 
+- VERIFIED, census of every `xmodel*` file in the 1.1, 1.5 and UO stock
+  paks (5536 on 1.1, 10348 on 1.5 with UO) against every shader block
+  with a `nextbundle` (133 and 325 blocks, every `.shader` file): no model
+  names one, and the two model `.stype` files with the word
+  (`metal_env`, `wood_env`) have it commented out. The census is a byte
+  search for each block's name; the same search finds `metal_env@` in 12
+  1.1 models.
+- VERIFIED: 0x4f3660..0x4f36a2 binds the white image for `$lightmap` in
+  a material with a negative lightmap index (section 3, the impacts). A
+  model's material is one, so INFERRED: a model's `nextbundle map
+  $lightmap` modulates by white and changes nothing.
+- vcod: the entity and viewmodel passes (`dynamic_model.wgsl`,
+  `viewmodel.wgsl`) draw bundle 0 alone. A second bundle naming
+  `$lightmap` changes nothing, as above; any other warns "entity stage
+  nextbundle image not drawn" and is dropped, where retail would apply
+  its texture environment. No stock model reaches that.
+
+- VERIFIED (the instructions), CoDMP.exe 0x4b4890 (it prints
+  "RE_Shutdown( %i )", 0x557828), stored as refexport slot 0 (0x4b4a6a)
+  and called through the client's copy at 0x1432860: while the renderer
+  is registered (0x16c4d40) it runs its teardown (0x4f09a0, 0x4ea310,
+  0x4b4830, 0x4b8220), then 0x4b7840, 0x4b88b0, 0x505220 and 0x4e0c00,
+  and clears 0x16c4d40 (0x4b49c9). `CL_DownloadsComplete` calls it with 0
+  on every gamestate from a remote server (cod11-front-end.md 17.5).
+  INFERRED (Q3's `RE_Shutdown(qfalse)` and `CL_StartHunkUsers` shape):
+  the shaders and images go with it, and the new map registers every
+  model skin again.
+- vcod: `EntityMaterials::clear` drops the entity materials at
+  `Renderer::unload_world`, and the viewmodel's skins resolve again at the
+  end of `load_world`, before the new map's first frame. Until then no
+  map is loaded and the viewmodel's draw is skipped (the skin count test
+  in `Renderer::upload_view_model`).
+
 ### 8.3 World shader types
 
 - VERIFIED, CoDMP.exe: the shader-type path (0x4fc0c0) builds
@@ -1465,19 +1500,35 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   The same function writes 0 to the `sunfile` name at 0x16c4e20
   (0x4dd06b); the shader parser's `sunfile` keyword fills that name
   (`strncpy` at 0x4faeeb).
-- INFERRED, 0x4dd000's branch at 0x4dd417: it calls 0x4e7f30 (0x4dd424)
-  only when that name is non-empty after the load.
-- INFERRED, 0x4e7f30's early return: a file that fails to read prints
-  "couldn't load sun file" and returns before 0x4e7be0, the routine that
-  refills the state. 0x4e7be0's only other caller, 0x4e840d, runs while
-  the cheat cvar `r_suntest` is set.
+- VERIFIED (the instructions), 0x4dd417..0x4dd424: the world load calls
+  0x4e7f30 only when that name's first byte is non-zero after the load.
+- VERIFIED (the instructions), 0x4e7f30..0x4e7f94: it reads
+  `scripts/%s.sun` (0x54c61c); a failed read prints "^3WARNING: couldn't
+  load sun file '%s'" (0x54c5f4) and returns. Otherwise it hands the text
+  to the cvar-file loader (refimport `+0x44`, CoDMP.exe 0x438eb0) with the
+  twenty names at 0x5713c8 and calls 0x4e7be0, the routine that refills
+  the state, only when that returns non-zero. 0x4e7be0's only other
+  caller, 0x4e840d, runs while the cheat cvar `r_suntest` is set.
+  `r_loadsun` (cheat-protected, 0x54c534) loads a file by name through the
+  same 0x4e7f30.
+- VERIFIED (the instructions), 0x438eb0..0x4390da: per line, the first
+  token is matched against the twenty names (0x53549f; INFERRED: a
+  case-blind compare, the MSVC `_stricmp`). A known name sets its cvar
+  from the next token on that line (0x439650) and marks it seen; an
+  unknown one prints "^3WARNING: unknown cvar '%s' in file '%s'"
+  (0x562450). At the end it returns 1 only when all twenty were seen.
+  Otherwise it prints "^1ERROR: the following cvars were not specified in
+  file '%s'" (0x562410) and each missing name, and returns 0. It never
+  resets a cvar to its default.
 - VERIFIED: `r_suntest` registers at 0x4b41b1 with default "0".
-- INFERRED, the null tests at 0x4e80c5 and 0x4e81e6: the disc returns on
-  a null shader at 0x11dbda0 and the flare on a null shader at 0x11dbde8;
-  the washes (0x4e8270) ease toward maxima of 0. So a missing `.sun` file
-  draws no disc, no flare and no wash, on the first map of a session and
-  after any other map alike. The `r_sun*` cvars keep the previous file's
-  values, but nothing reads them until a file loads again.
+- VERIFIED (the instructions), 0x4e80c0..0x4e80c7 and 0x4e81e0..0x4e81e8:
+  the disc returns on a null shader at 0x11dbda0 and the flare on a null
+  shader at 0x11dbde8. INFERRED: the washes (0x4e8270) ease toward maxima
+  of 0. So a missing `.sun` file, or one that leaves any of the twenty
+  cvars out, draws no disc, no flare and no wash, on the first map of a
+  session and after any other map alike. The `r_sun*` cvars keep the
+  previous file's values (a partial file sets the ones it names), but
+  nothing reads them until a full file loads.
 - VERIFIED, census of the 31 `.sun` files in `pak4.pk3`: every one sets
   all twenty keys, so carried-over cvar values could never show anyway.
 
@@ -1533,7 +1584,8 @@ passed samples over `n * n * MSAA_SAMPLES`; the result is read back a frame
 or more late, so the fades start from a stale fraction. The flare draws
 with the stock flare stage hard-coded and the image of the named block's
 first stage. A missing `.sun` file draws no sun at all, as retail does,
-so the seven stock MP skies above draw no disc, flare or wash.
+so the seven stock MP skies above draw no disc, flare or wash; nor does
+a file that leaves a cvar out (`SunFile::parse`).
 
 ### 8.5 Coronas
 

@@ -482,8 +482,9 @@ pub struct Renderer {
     /// Retail's `identityLight` for the current overbright bits
     /// (`gamma::identity_light`): what lit colours are scaled by.
     identity_light: f32,
-    /// The texture gamma table images load through (`gamma::bake_image`),
-    /// set before a world load while `r_ignorehwgamma` is 1.
+    /// The table uncompressed images load through (`gamma::bake_image`):
+    /// `r_intensity`, then `r_gamma` while `r_ignorehwgamma` is 1; set
+    /// before a world load.
     image_gamma: Option<[u8; 256]>,
     /// `r_picmip`, `r_picmip2`, `r_texturebits` and `r_textureMode` as of
     /// this renderer's build (`crate::texture_settings`).
