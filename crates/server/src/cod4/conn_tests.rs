@@ -366,3 +366,33 @@ fn origin_goes_out_unless_the_move_predicted_it() {
     assert!(!origin_echoed(&ps, ([100.0, -200.0, 30.0], 4999)));
     assert!(!origin_echoed(&ps, ([f32::NAN, -200.0, 30.0], 5000)));
 }
+
+/// A still client whose moves carry the newest snapshot's origin at its
+/// newest cmd's time (`Probe::echo_origin`, a 1.7 client predicting
+/// nothing) gets its playerstate without origin and reads it back off its
+/// own archive; one sending the far origin always gets it
+/// (cod4-netfields.md 13).
+#[test]
+fn a_still_client_echoing_its_origin_gets_playerstates_without_it() {
+    let (mut sv, mut p, mut now) = joined();
+    let origin = |s: &vcod_cod4::net::parse::Snapshot| {
+        vcod_cod4::ps_word!(3 "origin").map(|w| f32::from_bits(s.ps.word(w)))
+    };
+    for _ in 0..10 {
+        step(&mut sv, &mut p, &mut now);
+    }
+    let held = p.snapshots().last().unwrap();
+    assert!(held.ps.origin_sent, "left out against the far origin");
+    let at = origin(held);
+    p.echo_origin = true;
+    for _ in 0..10 {
+        step(&mut sv, &mut p, &mut now);
+    }
+    let snaps = p.snapshots();
+    let tail = &snaps[snaps.len() - 5..];
+    assert!(tail.iter().all(|s| !s.ps.origin_sent), "origin still sent");
+    assert!(
+        tail.iter().all(|s| origin(s) == at),
+        "the archive's origin is off"
+    );
+}

@@ -853,6 +853,9 @@ fn main() -> Result<()> {
                 cmds.push(c);
             }
         }
+        // The far origin keeps every playerstate's origin, velocity and view
+        // on the wire, which a capture has no other way to read
+        // (cod4-netfields.md 13).
         conn.send(&cmds, None)?;
         for got in conn.poll(Instant::now() + Duration::from_millis(50))? {
             let s = got.sequence;

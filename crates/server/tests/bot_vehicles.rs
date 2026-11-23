@@ -360,6 +360,7 @@ fn a_bot_keeps_out_of_a_burning_hull() {
     let health = sv.bot_body(slot).unwrap().health;
     let mut nearest = f32::MAX;
     let mut gone = None;
+    let mut after_blast = None;
     for tick in 0..320 {
         run(&mut sv, &mut now, 1);
         let b = sv.bot_body(slot).unwrap();
@@ -369,6 +370,7 @@ fn a_bot_keeps_out_of_a_burning_hull() {
                 nearest.min((b.origin[0] - tank.origin[0]).hypot(b.origin[1] - tank.origin[1]));
         } else if gone.is_none() {
             gone = Some(tick);
+            after_blast = Some(b.health);
         }
         if std::env::var("VEH_REPORT").is_ok() && tick % 10 == 0 {
             eprintln!(
@@ -379,15 +381,18 @@ fn a_bot_keeps_out_of_a_burning_hull() {
     }
     let b = sv.bot_body(slot).unwrap();
     eprintln!(
-        "hull at {:?} gone at {gone:?}, nearest {nearest:.0}, health {health} -> {}",
-        tank.origin, b.health
+        "hull at {:?} gone at {gone:?}, nearest {nearest:.0}, health {health} -> {after_blast:?}",
+        tank.origin
     );
     assert!(gone.is_some(), "the hull never went off a second time");
     assert!(
         nearest > BLAST,
         "the bot came {nearest:.0} from the burning hull"
     );
-    assert_eq!(b.health, health, "the bot took a blast");
+    // The blast and the delete share a frame. Later, the duplicate's 0.4 u/s
+    // that never rests may knock a bot that walks into it, as on retail
+    // (coduo-vehicles.md 17.6).
+    assert_eq!(after_blast, Some(health), "the bot took a blast");
     assert!(!b.dead);
     assert_eq!(sv.script_aborts(), Vec::<String>::new());
 }

@@ -3,7 +3,7 @@
 //! the riders read back (docs/research/coduo-vehicles.md 12 and 13).
 
 use super::info::KIND_FOUR_WHEEL;
-use super::{MAX_SEATS, physics};
+use super::{MAX_SEATS, ThinkLog, physics};
 use crate::game::host::GameHost;
 use vcod_gsc::{Cx, EntId};
 
@@ -22,7 +22,7 @@ fn heat_check(heat: f32, overheating: &mut bool) -> Option<bool> {
 }
 
 /// The kick a pushed vehicle takes decelerates at this (0x442f0000).
-const PUSH_DECEL: f32 = 175.0;
+const PUSH_DECEL: f32 = 700.0;
 /// One think's step, a retail immediate whatever the frame.
 pub const STEP_MS: i32 = 50;
 /// Overheat at 1.0, cool back under 0.5 (0xa6d14, 0xa7590).
@@ -192,6 +192,18 @@ fn think(host: &mut GameHost, cx: &mut Cx, id: EntId, inputs: &[Option<RiderInpu
             jolting: ov.phys.jolt.remaining != 0.0,
         })
         .collect();
+    let pool: Vec<physics::PoolRecord> = host
+        .vehicles
+        .live
+        .iter()
+        .filter(|(o, _)| **o != id)
+        .map(|(o, ov)| physics::PoolRecord {
+            entity: o.0,
+            origin: ov.phys.s.origin,
+            velocity: ov.phys.s.velocity,
+            still: ov.phys.still(),
+        })
+        .collect();
     let v = host.vehicles.live.get_mut(&id).unwrap();
     v.posed_wire = v.wire;
     let driver = input(v.seats[1]);
@@ -216,7 +228,6 @@ fn think(host: &mut GameHost, cx: &mut Cx, id: EntId, inputs: &[Option<RiderInpu
         bmodel,
         bounds_maxs,
         max_clients: crate::server::MAX_CLIENTS as u32,
-        neighbour_moving: false,
         tex_scroll_scale: tex_scroll,
         horns,
         alt_overheated: v.guns.overheating[0],
@@ -233,6 +244,7 @@ fn think(host: &mut GameHost, cx: &mut Cx, id: EntId, inputs: &[Option<RiderInpu
             },
             bodies: &bodies,
             vehicles: &others,
+            pool: &pool,
         };
         if !v.initialized {
             v.phys.init(&info, &vw, v.driven);
@@ -257,6 +269,12 @@ fn think(host: &mut GameHost, cx: &mut Cx, id: EntId, inputs: &[Option<RiderInpu
         }
     }
     v.initialized = true;
+    let logged = ThinkLog {
+        entity: id.0,
+        time: now,
+        state: v.phys.s,
+        jolt: v.phys.jolt,
+    };
     // `Scr_Vehicle_Init` (0x8c5ab) settles the vehicle and places it, and
     // the first `Scr_Vehicle_Think` runs 50 ms on (coduo-vehicles.md 15.2).
     if init_only {
@@ -270,6 +288,9 @@ fn think(host: &mut GameHost, cx: &mut Cx, id: EntId, inputs: &[Option<RiderInpu
             super::link(host, cx, id);
         }
         return;
+    }
+    if let Some(log) = host.vehicles.think_log.as_mut() {
+        log.push(logged);
     }
     // 0x827ab's two `G_Damage`s, inside the step: they land before the
     // readers and the sounds read the seats and the health
@@ -665,6 +686,7 @@ struct BodiesWorld<'a> {
     /// Entity number, origin, mins, maxs.
     bodies: &'a [(u32, glam::Vec3, glam::Vec3, glam::Vec3)],
     vehicles: &'a [OtherVehicle],
+    pool: &'a [physics::PoolRecord],
 }
 
 /// Another live vehicle as the step reads it.
@@ -759,6 +781,10 @@ impl physics::VehicleWorld for BodiesWorld<'_> {
         }
         self.inner.entity(num)
     }
+
+    fn pool(&self) -> &[physics::PoolRecord] {
+        self.pool
+    }
 }
 
 #[cfg(test)]
@@ -785,6 +811,7 @@ mod tests {
             },
             bodies: &bodies,
             vehicles: &[],
+            pool: &[],
         };
         use physics::VehicleWorld;
         let (lo, hi) = (Vec3::splat(-8.0), Vec3::splat(8.0));

@@ -4219,11 +4219,27 @@ mod cod4 {
                 ..self.last_cmd
             };
             self.last_cmd = cmd;
+            // A 1.7 client predicting nothing: the newest snapshot's
+            // origin at the cmd's time, filed in its archive, which a
+            // still one's playerstates go out without
+            // (cod4-netfields.md 13).
+            let (origin, origin_time) = match self.parser.snapshots.last() {
+                Some(s) => {
+                    let row = vcod_cod4::net::demo::Archive::unpredicted(
+                        &s.ps,
+                        Some(cmd.angles),
+                        cmd.server_time,
+                    );
+                    self.parser.archive.add(row);
+                    (row.origin.map(f32::to_bits), row.server_time)
+                }
+                None => ([1.0e6f32.to_bits(); 3], 0),
+            };
             ops.push(ClOp::Move {
                 delta: snap.is_some(),
                 cmds: vec![(cmd, CmdWire::full(&UserCmd::default(), &cmd))],
-                origin: [1.0e6f32.to_bits(); 3],
-                origin_time: 0,
+                origin,
+                origin_time,
             });
             ops.push(ClOp::Eof);
             let mut comp = clmsg::compress_ops(&self.parser.huff, &ops, key, &UserCmd::default());

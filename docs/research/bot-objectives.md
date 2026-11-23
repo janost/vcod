@@ -1772,7 +1772,8 @@ stops boarding and gets a seated bot out (`SeatView::off`, 10.4).
   trace from the eye to the middle (or stopping within 24 units of the
   box: the hull's own clip). On foot only from 320 to 1500 units, past
   the launchers' 256-unit splash (`BREACH_CLEAR`, `BREACH_RANGE`); in a
-  tank within the gun's 3000.
+  tank within the gun's 3000, with whether a shell fired now along
+  `GunSight` meets the hull (`ArmorView::shell_on`, 10.11).
 
 ### 10.2 Boarding
 
@@ -1865,6 +1866,8 @@ stops boarding and gets a seated bot out (`SeatView::off`, 10.4).
 - With no enemy in range, a tank's driver lays its gun on
   `BotView::armor` the same way (an enemy tank's driver is out of every
   round's reach, coduo-vehicles.md 13, so only the hull is a target).
+  The shell goes only while its line meets the hull; 10 s without one
+  and the tank drives on, the gun still on the hull (10.11).
 - On foot, a bot with a loaded launcher and `BotView::armor`, and no
   other enemy nearer than the vehicle (an enemy riding in it is the
   vehicle), draws the launcher, stops its feet, turns at its skill's
@@ -2260,6 +2263,43 @@ the stock script lines, read out of `pakuo01.pk3`.
 - 1.1 and 1.5 have no script vehicles, so no wrecks: their bots read an
   empty `wrecks`. INFERRED (the vehicle pool is filled only by a
   `script_vehicle` spawn with the vehicle files loaded, `game/spawn.rs`).
+
+### 10.11 A tank's shell over the hull it aimed at, 2026-11-23
+
+Retail has no bots; this section is measured on vcod-server only.
+
+- VERIFIED (trace, debug, UO, master 37fc04040,
+  `bots::uo_bots_fight_and_sprint_in_tdm` seed 1, mp_cassino `tdm`): the
+  tank at (1034, -1384, 58) laid its gun on the other side's tank at
+  (2290, -2433, 84), 1640 units off, and fired from 37.85 s for over 40
+  s. Every shell struck the wall at (2960, -2903, 233), 800 units past
+  the hull: the gun's line (`GunSight::dir`) climbed 4 to 6 degrees
+  while the view lay 1.2 degrees down, and the shell flew over the
+  hull. The eye's trace to the hull's middle was clear, the gun's yaw
+  was within 4 degrees: nothing tested where the shell went. Those
+  blasts are 14.14's heard spot.
+- The rule: `Server::armor_view` traces the shell a tank's gun fires
+  now along its arc, as a `bas` base's (`shell_strike`, the chords of
+  `shell_lands`), out past the hull's far side, through the world and
+  the script models and hulls but its own. `ArmorView::shell_on` is set
+  when it strikes the target's hull, or the world within 24 units of
+  its box (`hull_met`). `think_seat` fires at the hull only then. A line
+  that stays off `SHELL_WAIT_TICKS` (10 s) ends the hold: the tank drives
+  its route, the gun still on the hull, and fires once the line meets
+  it (`a_tank_gun_with_no_line_on_an_enemy_hull_holds_its_fire`,
+  `a_shell_over_the_hull_or_into_a_wall_is_not_on_it`). The cost is 8
+  missile traces, and the model clips along them, a tick for each tank
+  driver with an enemy hull in view; the models are posed once a tick
+  when any tank driver has a gun sight, as for a rocket on foot.
+- VERIFIED (trace, as above, the rule on): the tank held its fire 10 s,
+  drove on, and from 48 s its shells struck the hull at (2229, -2368,
+  95) and (2234, -2366, 95); no shell struck the wall.
+- VERIFIED (measured, release, `examples/bot_vehicles`, `ON_ONLY=1`,
+  seeds 1 to 13 odd, mp_cassino `tdm`, 3 min each, master 37fc04040
+  then the rule): seeds 3, 5, 7, 11 and 13 play the same. Seed 1 kills
+  23 → 25, gun kills 10 → 8, gun hits 8 → 9, wrecks 0 → 1; seed 9 kills
+  20 → 23, gun kills 5 → 4, gun hits 10 → 5. All seeds: kills 176 →
+  181, gun kills 43 → 40, wrecks 4 → 5, stuck drivers 0 both.
 
 ## 11. CoD2's `sd`, `ctf` and `hq`
 
@@ -4661,7 +4701,8 @@ its recall and the noises heard, debug, UO, 8afc118ad merged in):
   tank 191's driver seat at (1032, -1381, 58), laying the main gun on an
   enemy hull (`think_seat`'s `armor`) and firing every 61 ticks; each
   shell struck a wall 272 units over the floor and its blast (radius
-  1500) renewed the spot's `noise_ticks`.
+  1500) renewed the spot's `noise_ticks`. The shells flew over the hull
+  they aimed at; the gun holds such a shot now (10.11).
 - VERIFIED (trace): the plan to the spot ended at node (2929, -2880, 1)
   on the floor under the blast, `Follower::walked_out` held, and the
   body walked straight at the spot into the wall, its unstick spells

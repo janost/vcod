@@ -104,6 +104,12 @@ pub(super) struct Probe {
     stats_due: bool,
     /// The checksum feed of the gamestate a `cp` answered.
     cp_feed: Option<i32>,
+    /// Its moves carry the newest snapshot's origin at the newest cmd's
+    /// time, as a 1.7 client predicting nothing sends them, and file the
+    /// row (`Archive::unpredicted`). Off, they carry what `cod4_probe`
+    /// and so every capture sent: an origin far off at time 0, which keeps
+    /// origin and velocity on the wire (cod4-netfields.md 13).
+    pub(super) echo_origin: bool,
 }
 
 impl Probe {
@@ -141,7 +147,26 @@ impl Probe {
             pre_angles: Vec::new(),
             stats_due: false,
             cp_feed: None,
+            echo_origin: false,
         }
+    }
+
+    /// The snapshots its parser holds, a playerstate sent without origin
+    /// filled off its own archive.
+    pub(super) fn snapshots(&self) -> &[Snapshot] {
+        &self.parser.snapshots
+    }
+
+    /// The predicted origin and time a move whose newest cmd is `cmd`
+    /// carries ([`Self::echo_origin`]).
+    fn move_origin(&mut self, cmd: &UserCmd) -> ([u32; 3], i32) {
+        let snap = self.parser.snapshots.last().map(|s| &s.ps);
+        let Some(ps) = snap.filter(|_| self.echo_origin) else {
+            return ([1.0e6f32.to_bits(); 3], 0);
+        };
+        let row = vcod_cod4::net::demo::Archive::unpredicted(ps, Some(cmd.angles), cmd.server_time);
+        self.parser.archive.add(row);
+        (row.origin.map(f32::to_bits), row.server_time)
     }
 
     /// The seven stats packets again after a `requeststats` (a map
@@ -293,11 +318,13 @@ impl Probe {
                     })
                     .collect();
                 self.last_cmd = *cmds.last().unwrap();
+                let newest = self.last_cmd;
+                let (origin, origin_time) = self.move_origin(&newest);
                 ops.push(ClOp::Move {
                     delta: true,
                     cmds: wired,
-                    origin: [1.0e6f32.to_bits(); 3],
-                    origin_time: 0,
+                    origin,
+                    origin_time,
                 });
             }
         } else if svs + FRAME_MS >= self.first_snap {
@@ -343,11 +370,12 @@ impl Probe {
             };
             let wire = CmdWire::full(&UserCmd::default(), &cmd);
             self.last_cmd = cmd;
+            let (origin, origin_time) = self.move_origin(&cmd);
             ops.push(ClOp::Move {
                 delta: !self.parser.snapshots.is_empty(),
                 cmds: vec![(cmd, wire)],
-                origin: [1.0e6f32.to_bits(); 3],
-                origin_time: 0,
+                origin,
+                origin_time,
             });
         }
         ops.push(ClOp::Eof);
