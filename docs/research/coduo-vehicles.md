@@ -680,7 +680,7 @@ copies the settled pose into the record's previous pose, runs
 `rec+0x170`, which `VEH_InitPhysics` (0x7cd00) took from the unsettled
 spawn pose. So a vehicle that settled fails 0x827ab's "nothing moved" test
 on its first think and runs the collision probes once (VERIFIED decompile;
-section 15.2 for what that does to a wreck's duplicate).
+sections 15.2 and 17.6 for what that does to a wreck's duplicate).
 
 ### 10.5 Freeing
 
@@ -1356,7 +1356,8 @@ trace").
   decompile, constants at 0xa6b78..0xa6c2c):
   - unless its sway kick still runs (`rec+0x2b0` not 0) it is kicked
     (0x7d492) toward its origin from ours, scale `clamp(2 impact, 0.2,
-    0.5)`, decel 175 (0x442f0000);
+    0.5)`, decel 700 (0x442f0000 stored as the fifth argument at 0x8391f)
+    (VERIFIED (the instructions); gdb, 17.6);
   - with `k = 100 * its maxSpeed / ours` and `share = clamp(|our velocity|
     / our maxSpeed, 0.5, 1)`, a struck vehicle slower than `k * share`
     gains `k * share` along the line from us to it, capped at its
@@ -1564,14 +1565,9 @@ trace").
 
   A blend goes out with `eventParm` and `scale` the aliases and
   `angles2[1]` the crossfade, unlinked when both aliases are 0.
-- **Ported and unwired.** Two step inputs have no writer in vcod-server,
-  so three ported branches never run (read off vcod's code, not a retail
-  claim):
-  - `StepInput::neighbour_moving`, `VEH_PhysicsNotRequired`'s (0x87a13)
-    test for another pool vehicle within 1024 units that itself needs
-    physics: `think::think` passes `false`, so a parked vehicle next
-    to a moving one stops stepping where retail may keep it awake
-    (INFERRED: the neighbour walk's range and order are not read here).
+- **Ported and unwired.** One step input has no writer in vcod-server,
+  so its ported branches never run (read off vcod's code, not a retail
+  claim; the neighbour walk has had one since 17.6):
   - `HitEntity::script_model`, classname `script_model` (scr_const 0x7e)
     on an entity a trace struck: `BodiesWorld::entity` fills only bodies
     and vehicles. So the slide's `trigger` notify to a struck script_model,
@@ -3084,9 +3080,9 @@ drives under the fields (`playerstate/mp_peaks-tdm-slope-8ms-jeep-closespeed-uo.
   hit at 18500 that used to part it). After the exit the fall off the
   dismount spot runs 3 u/s slow from its first frame (z velocity -34 where
   retail has -37 at `commandTime` 33432, the same six cmds) and lands 0.6
-  higher with no slide; not read. The tank's drive matches for 283
-  snapshots; at 27200 its track clock parts by 78 (17.5).
-  `vehicle_ab` and `vehicle_drive_ab` name both tails as gaps.
+  higher with no slide; not read. The tank's drive matches through to its
+  end, the track clock's part at 27200 included (17.5). `vehicle_ab`
+  names the jeep's tail as a gap.
 
 ### 17.2 `getWheelSurface(name)`
 
@@ -3234,16 +3230,10 @@ capture's 27150 (VERIFIED, gdb, 2026-11-21).
   `VEH_PhysicsNotRequired`'s walk of the pool does (0x87c2d..0x87cc3:
   each record in use within 1024 units, 1048576 squared at 0xa6d38, that
   is not itself at rest keeps the caller stepping) (VERIFIED (the
-  instructions)). vcod passes no neighbour (12, "Ported and unwired").
-  With both, the ram, runover and closespeed replays match; but on
-  mp_peaks the wreck's duplicate then wakes the wreck and shoves it, and
-  `vehicle_blast_ab`'s wreck blast lands 10 on the shooter where retail
-  lands 11, and `bot_vehicles::a_bot_keeps_out_of_a_burning_hull` takes 1.
-  Retail does wake the wreck: it rises 0.12 on the duplicate's first
-  think and slides 0.9 before its blast (VERIFIED, gdb on a rerun of the
-  blast capture). vcod's duplicate ends that think on its BSP pose (its
-  probes strike the wreck and the hit restores the committed copy, 10.4)
-  where retail's stays on its settled one; why is not read.
+  instructions)). vcod runs both (`walkable_move`'s `dot64`, the walk in
+  `Physics::physics_not_required`), and the ram, runover and closespeed
+  replays match. The walk also wakes a wreck beside its duplicate, which
+  took more (17.6).
 - The push a hit hands another vehicle (0x827ab's `script_vehicle` arm)
   keeps the speed share on the stack into each component, `share * k *
   d[i] + v[i]` stored once (0x83a7a..0x83b9f, 0x83c3c..0x83dcb) (VERIFIED
@@ -3254,19 +3244,60 @@ capture's 27150 (VERIFIED, gdb, 2026-11-21).
 
 ### 17.6 A wreck beside its duplicate
 
-Addresses are `game.mp.uo.i386.so`'s.
+With the walk of 17.5 the mp_peaks Willys's duplicate shoved its wreck off
+retail's line: `vehicle_blast_ab`'s wreck blast landed 10 on the shooter
+where retail's lands 11. Two reruns of retail under
+`tools/re/gdb_vehicle.py` show why: the mp_peaks blast capture
+(2026-11-21) and `client-probes/probe_vehdupe` on mp_cassino
+(2026-11-23, no client; the same kill at 2050, the duplicate 160 at
+12100). Addresses are `game.mp.uo.i386.so`'s.
 
+- **The walk runs on every pass.** `Scr_Vehicle_Think`'s two passes
+  (0x8c8f5..0x8c98c) each call the drive (0x87cd3, or 0x88561 for
+  `ent+0x17e` 1) and then 0x827ab; the drive asks
+  `VEH_PhysicsNotRequired(ent, 1)` at 0x8811c, so the walk reads the
+  other records as they stand at that pass (VERIFIED (the instructions)).
+  A push writes the struck record's velocity at once (12, "Another
+  vehicle"). So a duplicate's first pass that strikes the wreck restores
+  its committed copy (the BSP pose, no velocity: 10.4), pushes the wreck,
+  and its second pass steps, because the wreck it just pushed no longer
+  rests. On mp_cassino the duplicate enters the think with the committed
+  z 4 (the BSP's) and leaves it settled at -7.875 with velocity (0, 0,
+  -40); the wreck's next think enters with (0, 0, -50) and leaves with
+  (0, 0, 0.5) and a kick whose decel is 700 (VERIFIED, gdb). vcod read
+  the walk once before the think, so the second pass stood still and the
+  duplicate kept its BSP pose (4 on mp_cassino, -87 on mp_peaks). The
+  step now reads the other records through `VehicleWorld::pool` on each
+  pass, a velocity pushed this think from `StepOutput::pushes`, and the
+  push's kick decelerates at 700 (vcod had 175).
+- **The duplicate never rests.** Each think its probes strike the wreck
+  and the restore puts back the velocity the last pass committed: retail's
+  duplicate holds (0, 0, 0.4) at -7.875 from 12200 to the end of the run
+  at 30400, long after the wreck goes at 12600 (VERIFIED, gdb). vcod's
+  holds the same. A body that walks into it takes `VEH_PlayerCollision`'s
+  knock (0x8213f, 0.4 is over its 0.01 floor): `bot_vehicles`'
+  `a_bot_keeps_out_of_a_burning_hull` reads the bot's health at the
+  hull's blast, not after.
 - **The wreck settles on its death model.** `_jeepeffects_gmi::death`
   sets a jeep's `deathmodel` at the death (`xmodel/v_us_lnd_willysjeep_d`
   for the Willys); the tanks' swap is commented out (15.2) (VERIFIED, the
   scripts in `pakuo0*.pk3`). The suspension (0x81331) reads each wheel's
   tag off the entity's DObj on every step: its wheel loop
   (0x813e0..0x8171d) calls 0x7c488, which is `G_DObjGetLocalTagMatrix(ent,
-  tag)` on the tag name table at GOT - 0x4ea0, with `Com_Error` when one is
-  missing (0x7c4ae..0x7c4f3) (VERIFIED (the instructions)). On a rerun of
-  the mp_peaks blast capture under `tools/re/gdb_vehicle.py` (2026-11-21)
-  the wreck, at rest since the kill, steps at its duplicate's first frame
-  and rises 0.12 (z -110.5165 to -110.3952) and rolls -0.846 to -0.912
-  with no velocity: the death model's wheels (VERIFIED, gdb). vcod kept
-  the spawn model's wheel tags; `setModel` on a vehicle now re-reads them
-  (`vehicle::model_changed`).
+  tag)` on the tag name table at GOT - 0x4ea0, with `Com_Error`
+  when one is missing (0x7c4ae..0x7c4f3) (VERIFIED (the instructions)).
+  On the mp_peaks rerun the wreck, at rest since the kill, steps at the
+  duplicate's first frame (the duplicate's settle left it an angular
+  velocity) and rises 0.12 (z -110.5165 to -110.3952) and rolls -0.846
+  to -0.912 with no velocity: the death model's wheels (VERIFIED, gdb).
+  vcod kept the spawn model's wheel tags, so its wreck's step changed
+  nothing and the duplicate's walk found every record at rest. `setModel`
+  on a vehicle now re-reads them (`vehicle::model_changed`).
+- With the three, vcod's mp_peaks duplicate and wreck repeat the rerun's
+  pose, velocity and kick on every think from the duplicate's settle
+  through the wreck's slide, and mp_cassino's duplicate and wreck repeat
+  the probe_vehdupe rerun's to the bit (VERIFIED, replay against both gdb
+  logs, 2026-11-23; `vehicle_wreck_ab::the_wreck_and_its_duplicate_step_as_on_uo`
+  holds mp_cassino's, fixture `mp_cassino-tank-dupe-steps-uo.txt`). The
+  wreck's blast lands 11 on the shooter, as in the fixture (VERIFIED,
+  `vehicle_blast_ab::a_rocket_strikes_a_jeep_as_on_uo`).
