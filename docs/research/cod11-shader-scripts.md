@@ -1379,6 +1379,22 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   nextbundle image not drawn" and is dropped, where retail would apply
   its texture environment. No stock model reaches that.
 
+- VERIFIED (the instructions), CoDMP.exe 0x4b4890 (it prints
+  "RE_Shutdown( %i )", 0x557828), stored as refexport slot 0 (0x4b4a6a)
+  and called through the client's copy at 0x1432860: while the renderer
+  is registered (0x16c4d40) it runs its teardown (0x4f09a0, 0x4ea310,
+  0x4b4830, 0x4b8220), then 0x4b7840, 0x4b88b0, 0x505220 and 0x4e0c00,
+  and clears 0x16c4d40 (0x4b49c9). `CL_DownloadsComplete` calls it with 0
+  on every gamestate from a remote server (cod11-front-end.md 17.5).
+  INFERRED (Q3's `RE_Shutdown(qfalse)` and `CL_StartHunkUsers` shape):
+  the shaders and images go with it, and the new map registers every
+  model skin again.
+- vcod: `EntityMaterials::clear` drops the entity materials at
+  `Renderer::unload_world`, and the viewmodel's skins resolve again at the
+  end of `load_world`, before the new map's first frame. Until then no
+  map is loaded and the viewmodel's draw is skipped (the skin count test
+  in `Renderer::upload_view_model`).
+
 ### 8.3 World shader types
 
 - VERIFIED, CoDMP.exe: the shader-type path (0x4fc0c0) builds
