@@ -1572,8 +1572,9 @@ fn top_token(
         "light" | "clamptime" => usize::from(!args.is_empty()),
         // shader flag 0x200; vcod has no picmip
         "picmip2" => 0,
-        // United Offensive's shader flag 0x2000 (CoDUOMP.exe 0x5014d4), on
-        // the flamethrower's sprites; its reader is not traced
+        // United Offensive's shader flag 0x2000 (CoDUOMP.exe 0x5014d4): an
+        // uncompressed image skips the overbright doubling; every stock use
+        // maps DDS images, which it never reaches (coduo-diff.md 14.1)
         "nolightscale" => 0,
         // shader flag 2 and sort 1 (0x4fae63); vcod draws no portal view
         "portal" => {

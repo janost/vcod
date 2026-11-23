@@ -863,6 +863,46 @@ version (`pmove::weapon::cooking`).
   `streets`, `uo_carentan`, `uo_dawnville`, `uo_depot`, `uo_harbor`,
   `uo_hurtgen`, `uo_powcamp`) (VERIFIED).
 
+### 14.1 nolightscale
+
+The shader keyword's flag and its one reader, in `CoDUOMP.exe`:
+
+- VERIFIED (the instructions), 0x5014c4..0x5014de: `nolightscale` ORs
+  0x2000 into the shader being parsed (flags at 0x388031c, `+0x4c` of the
+  shader at 0x38802d0, whose name the parser pushes).
+- VERIFIED (the instructions), 0x4f99a0..0x4f99d4: a stage's image load
+  turns the shader flags into image flags: no 0x80 (`nomipmaps`) sets 1,
+  no 0x100 (`nopicmip`) sets 2, 0x200 (`picmip2`) sets 4, and 0x2000 sets
+  0x400. VERIFIED (a search of 0x4b0000..0x540000 for `test` or `and`
+  with 0x2000, `test` of a high byte with 0x20 and byte reads at `+0x4d`):
+  nothing else tests the flag.
+- VERIFIED (the instructions), 0x506051..0x50606b: the upload passes
+  `flags & 0x400` to 0x504e80, UO's `R_LightScaleTexture`, on the same
+  mip or resample path as 1.1's (cod11-gamma.md 3). 0x504e80 returns at
+  0x504e89 unless the format is `GL_RGBA` (0x1908).
+- VERIFIED (the instructions), 0x504e80..0x5050a1: with device gamma
+  (0x489a04c) an image without 0x400 goes through the intensity table
+  (0x3887cc8, skipped when unmipped) and nothing else, as on 1.1; with
+  0x400 the result then goes through 0x388bdd0. Without device gamma the
+  last table is 0x38879c0 with 0x400 and 0x3887ac8 without.
+- VERIFIED (the instructions), 0x50a650 (`R_SetColorMappings`): for each
+  i, 0x38879c0 is the unshifted gamma curve, 0x3887ac8 that curve shifted
+  left by `overbrightBits` (0x4885898), 0x388bdd0 `i >> overbrightBits`,
+  0x3887cc8 `min(255, ftol(i * r_intensity))`. `overbrightBits` is 1 only
+  with device gamma, full screen (0x489a0b4) and `r_overBrightBits`
+  (0x50a65c..0x50a680), so without device gamma both last tables agree.
+- So `nolightscale` halves an uncompressed image's rgb in full screen
+  with device gamma, which the ramp's doubling then restores: the texels
+  reach the screen as authored. Windowed or with `r_ignorehwgamma 1` it
+  changes nothing. INFERRED (from the names).
+- VERIFIED, census of `pakuo01.pk3`'s `scripts/flamethrower.shader`, the
+  only stock script with the keyword: its 46 blocks map only `.dds`
+  images. INFERRED (1.1's image loader passes a DDS image's compressed
+  format, cod11-gamma.md 3): the flag reaches no stock texel.
+- vcod consumes the keyword and drops the flag
+  (`vcod_common::shader`). A third-party TGA or JPG under it draws twice
+  as bright as retail in full screen.
+
 ## 15. UI and menus
 
 - New script menus `quickrequests`, `quickvehicles`,

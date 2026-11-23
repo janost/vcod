@@ -228,10 +228,10 @@ and CoDUOMP.exe (0x4fea30) parse stages with the same keyword strings:
   `fogParms` skip their line; `clampTime` and `light` read one token;
   `portal` sets shader flag 2 and sort 1.0 (0x4fae63); `picmip2` flag
   0x200; any other keyword warns "unknown general shader parameter" and
-  fails the shader. CoDUOMP.exe 0x5014c4 adds `nolightscale`, shader flag
-  0x2000, on the flamethrower's sprites; 1.5's parser (0x4fb510) has no
-  such keyword. Neither has `depthFunc less`: UO's two stock uses warn and
-  keep `lequal`.
+  fails the shader. CoDUOMP.exe 0x5014c4 adds `nolightscale`, shader
+  flag 0x2000, on the flamethrower's sprites (coduo-diff.md 14.1); 1.5's
+  parser (0x4fb510) has no such keyword. Neither has `depthFunc less`:
+  UO's two stock uses warn and keep `lequal`.
 
 - VERIFIED, 0x4f8a23..0x4f8a46: `perLight` (0x547e98) ORs 0x80 into the
   stage's flag word (`+0x00`; `detail` is 0x2 there) and is refused inside
@@ -982,9 +982,11 @@ coronas (8.5), `r_flares` (8.6) and `vc_sunShafts` (8.7).
 - `heightToNormal` is ignored (a debug note). (`clampy` sits on stock
   foliage and water, `clampx` on seven `shadertypes/world/*_clampx.stype`;
   both clamp their one axis, section 3.)
-- `nolightscale` (UO) is consumed; what reads its flag 0x2000 is not
-  traced. `portal` sorts but draws no portal view. The stage `detail` flag
-  and `fog on|off` are consumed inertly.
+- `nolightscale` (UO) is consumed and its flag 0x2000 dropped: it
+  only skips the overbright doubling of uncompressed images, and every
+  stock use maps DDS ones (coduo-diff.md 14.1). `portal` sorts but draws
+  no portal view. The stage `detail` flag and `fog on|off` are consumed
+  inertly.
 
 ### 8.1 Vertex deforms
 
