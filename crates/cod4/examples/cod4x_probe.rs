@@ -11,6 +11,7 @@
 //!
 //!     cargo run -p vcod-cod4 --example cod4x_probe -- HOST:PORT OUTDIR [--secs 15]
 //!         [--protocol 21] [--stats none|skip|fresh] [--qport N] [--cmd "SECS TEXT"]...
+//!         [--name NAME] [--until-stats] [--log FILE]
 //!     cargo run -p vcod-cod4 --example cod4x_probe -- --gamestate OUTDIR/rel-<n>-1.bin
 //!     cargo run -p vcod-cod4 --example cod4x_probe -- --baseline17 CAPTURE.txt ENTITY
 //!
@@ -19,6 +20,10 @@
 //! `--stats fresh` (the default) answers the stats request with a fresh
 //! profile's block in mode 2 (`openssl` on the path), `skip` with mode 0
 //! (no stats, which the stock scripts kick), `none` not at all.
+//! `--until-stats` ends the join at the stats request, or `--secs` after the
+//! start without one, for a reach check that sends no stats. `--log` writes
+//! every datagram as `<ms> <c2s|s2c> <peer> <hex>` (`tools/lo_capture.py`'s
+//! lines). On the way out the probe sends `disconnect` in three messages.
 //! OUTDIR gets each reliable message the server sent as `rel-<n>-<cmd>.bin`
 //! (its body, past the length word) and `gamestate.txt`, the decoded
 //! gamestate.
@@ -304,10 +309,52 @@ fn parse_gamestate21(body: &[u8], out: &mut String) -> Result<(Gamestate, i32)> 
     Ok((gs, config_seq))
 }
 
-fn wait_oob(sock: &UdpSocket, buf: &mut [u8], prefix: &str, t: Duration) -> Result<Option<String>> {
+/// The socket, with every datagram it moves logged when `--log` is set.
+struct Wire {
+    sock: UdpSocket,
+    server: SocketAddr,
+    start: Instant,
+    log: Option<std::fs::File>,
+}
+
+impl Wire {
+    fn note(&mut self, dir: &str, d: &[u8]) -> Result<()> {
+        if let Some(f) = &mut self.log {
+            let hex: String = d.iter().map(|b| format!("{b:02x}")).collect();
+            let ms = self.start.elapsed().as_millis();
+            writeln!(f, "{ms} {dir} {} {hex}", self.server)?;
+        }
+        Ok(())
+    }
+
+    fn send(&mut self, d: &[u8]) -> Result<()> {
+        self.note("c2s", d)?;
+        self.sock.send_to(d, self.server)?;
+        Ok(())
+    }
+
+    fn oob(&mut self, t: &str) -> Result<()> {
+        let mut p = vec![0xff; 4];
+        p.extend_from_slice(t.as_bytes());
+        self.send(&p)
+    }
+
+    /// One datagram from the server, if one came within the read timeout.
+    fn recv(&mut self, buf: &mut [u8]) -> Result<Option<usize>> {
+        match self.sock.recv_from(buf) {
+            Ok((n, from)) if from == self.server => {
+                self.note("s2c", &buf[..n])?;
+                Ok(Some(n))
+            }
+            _ => Ok(None),
+        }
+    }
+}
+
+fn wait_oob(w: &mut Wire, buf: &mut [u8], prefix: &str, t: Duration) -> Result<Option<String>> {
     let end = Instant::now() + t;
     while Instant::now() < end {
-        if let Ok((n, _)) = sock.recv_from(buf)
+        if let Some(n) = w.recv(buf)?
             && n >= 4
             && buf[..4] == [0xff; 4]
         {
@@ -362,6 +409,8 @@ fn main() -> Result<()> {
     let protocol: i32 = opt("--protocol").map_or(Ok(21), |s| s.parse())?;
     let qport: u16 = opt("--qport").map_or(Ok(0x1234), |s| s.parse())?;
     let stats = opt("--stats").map_or("fresh", String::as_str).to_string();
+    let name = opt("--name").map_or_else(|| format!("vcodx{qport}"), String::clone);
+    let until_stats = args.iter().any(|a| a == "--until-stats");
     let mut cmds: Vec<(f32, String)> = Vec::new();
     for (i, a) in args.iter().enumerate() {
         if a == "--cmd" {
@@ -371,25 +420,32 @@ fn main() -> Result<()> {
         }
     }
 
-    let sock = UdpSocket::bind("127.0.0.1:0")?;
+    let sock = UdpSocket::bind("0.0.0.0:0")?;
     sock.set_read_timeout(Some(Duration::from_millis(10)))?;
-    let oob = |t: &str| -> Result<()> {
-        let mut p = vec![0xff; 4];
-        p.extend_from_slice(t.as_bytes());
-        sock.send_to(&p, server)?;
-        Ok(())
+    let log = opt("--log").map(std::fs::File::create).transpose()?;
+    let mut w = Wire {
+        sock,
+        server,
+        start: Instant::now(),
+        log,
     };
     let mut buf = vec![0u8; 65536];
-    oob("getchallenge 0 \"97c8407fc937bc7c1eddecf36de89e75\"")?;
-    let c = wait_oob(&sock, &mut buf, "challengeResponse", Duration::from_secs(3))?
-        .context("no challenge")?;
+    w.oob("getchallenge 0 \"97c8407fc937bc7c1eddecf36de89e75\"")?;
+    let c = wait_oob(
+        &mut w,
+        &mut buf,
+        "challengeResponse",
+        Duration::from_secs(3),
+    )?
+    .context("no challenge")?;
     let challenge: i32 = c.split_whitespace().nth(1).context("challenge")?.parse()?;
     let ui = format!(
         "\\cg_predictItems\\1\\cl_punkbuster\\0\\cl_anonymous\\0\\color\\4\\head\\default\\model\\multi\
-         \\snaps\\20\\rate\\25000\\name\\vcodx{qport}\\protocol\\{protocol}\\challenge\\{challenge}\\qport\\{qport}"
+         \\snaps\\20\\rate\\25000\\name\\{name}\\protocol\\{protocol}\\challenge\\{challenge}\\qport\\{qport}"
     );
-    oob(&format!("connect \"{ui}\""))?;
-    let c = wait_oob(&sock, &mut buf, "connectResponse", Duration::from_secs(3))?
+    println!("userinfo {ui:?}");
+    w.oob(&format!("connect \"{ui}\""))?;
+    let c = wait_oob(&mut w, &mut buf, "connectResponse", Duration::from_secs(3))?
         .context("no connectResponse")?;
     if !c.starts_with("connectResponse") {
         bail!("refused: {c:?}");
@@ -414,14 +470,25 @@ fn main() -> Result<()> {
     let (mut parsed, mut exact) = (0usize, 0usize);
     let start = Instant::now();
     let mut last_cmd = UserCmd::default();
+    let mut stats_asked = false;
+    // Messages left to send once the run is over, each carrying `disconnect`.
+    let mut leaving: Option<u8> = None;
     loop {
-        if gs_at.is_some_and(|t| t.elapsed().as_secs_f32() > secs)
-            || start.elapsed() > Duration::from_secs_f32(secs + 30.0)
-        {
+        let over = gs_at.is_some_and(|t| t.elapsed().as_secs_f32() > secs)
+            || (until_stats && (stats_asked || start.elapsed().as_secs_f32() > secs))
+            || start.elapsed() > Duration::from_secs_f32(secs + 30.0);
+        if over && leaving.is_none() {
+            reliable_seq += 1;
+            reliable.insert(reliable_seq, "disconnect".into());
+            sent.insert(reliable_seq, "disconnect".into());
+            println!("command {reliable_seq}: disconnect");
+            leaving = Some(3);
+        }
+        if leaving == Some(0) {
             break;
         }
         // Receive.
-        while let Ok((n, _)) = sock.recv_from(&mut buf) {
+        while let Some(n) = w.recv(&mut buf)? {
             let d = buf[..n].to_vec();
             if n < 4 {
                 continue;
@@ -437,6 +504,7 @@ fn main() -> Result<()> {
                     let cmd = i32::from_le_bytes(body[..4].try_into().unwrap_or([0; 4]));
                     println!("rel << message {nrel}: cmd {cmd}, {} bytes", body.len());
                     std::fs::write(outdir.join(format!("rel-{nrel}-{cmd}.bin")), &body)?;
+                    stats_asked |= cmd == 9;
                     match cmd {
                         9 if stats == "fresh" => {
                             let mut b = 9i32.to_le_bytes().to_vec();
@@ -525,13 +593,18 @@ fn main() -> Result<()> {
         }
         // Send.
         let now = Instant::now();
-        for p in rel.due(now) {
-            sock.send_to(&p, server)?;
+        if leaving.is_none() {
+            for p in rel.due(now) {
+                w.send(&p)?;
+            }
         }
         if now < next_send {
             continue;
         }
         next_send = now + Duration::from_millis(50);
+        if let Some(n) = &mut leaving {
+            *n -= 1;
+        }
         if let Some(t) = gs_at {
             let el = t.elapsed().as_secs_f32();
             for (at, text) in cmds.iter_mut() {
@@ -576,7 +649,7 @@ fn main() -> Result<()> {
                 text: t.as_bytes().to_vec(),
             })
             .collect();
-        if client.gamestate.is_some() {
+        if client.gamestate.is_some() && leaving.is_none() {
             let t = client.snapshots.last().map_or(0, |s| {
                 (s.server_time + last_snap_at.elapsed().as_millis() as i32).raw()
             });
@@ -604,8 +677,12 @@ fn main() -> Result<()> {
         pkt.extend_from_slice(&client.server_command_sequence.to_le_bytes());
         pkt.extend_from_slice(&config_ack.to_le_bytes());
         pkt.extend_from_slice(&comp);
-        sock.send_to(&pkt, server)?;
+        w.send(&pkt)?;
     }
+    println!(
+        "result: stats_requested {stats_asked} gamestate {}",
+        client.gamestate.is_some()
+    );
     println!(
         "done: {} snapshots; {parsed} server messages parsed, {exact} to their last byte",
         client.total_snapshots()
