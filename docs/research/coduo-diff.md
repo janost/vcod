@@ -567,6 +567,18 @@ has the seats, the drive step and vcod-server's vehicles.
     disassembly).
   - The seat view sits at the seat tag of `viewlocked_entNum` (0x30040810)
     (INFERRED, decompile).
+  - The intermission view takes none of it (VERIFIED (the instructions),
+    `CG_CalcViewValues` 0x30041a30). Under `ps.pm_type` 5 (0x30041a75) the
+    view is `ps.origin` and `ps.viewangles`, the roll included
+    (0x30041a84..0x30041ad5), through `AnglesToAxis` and `CG_CalcFov`, and it
+    returns at 0x30041b1c. That is before the four-wheel turn (0x30040580,
+    called at 0x30041bab), the turret view (0x30041550, at 0x30041ca4) and
+    `CG_VehicleView` (at 0x30041cd0). vcod's live view skips the seat and
+    gun eyes under `pm_type` 5 and draws the snapshots' roll. A seated
+    gunner's eye rolls with the gun's `tag_player`, so a stale seat at
+    intermission could turn the view over (INFERRED). That is the one
+    candidate found for an upside-down intermission frame once seen on
+    mp_peaks; it was never reproduced.
 - **The vehicle's head icon** (0x30021771..0x3002183c, VERIFIED (the
   instructions)). It runs only past the model's two early outs (`eFlags`
   0x80, no DObj). It returns when `otherEntityNum` (`+0x74`) is 1023 or
