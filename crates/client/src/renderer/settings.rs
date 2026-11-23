@@ -363,6 +363,11 @@ impl Renderer {
         self.image_gamma = table;
     }
 
+    /// The table [`Self::set_image_gamma`] last set.
+    pub fn image_gamma(&self) -> Option<[u8; 256]> {
+        self.image_gamma
+    }
+
     /// Reads the next frame `render` draws back for [`Self::take_capture`]
     /// (`screenshot`, `cl_avidemo`): as the screen shows it, or with
     /// `pre_gamma` the framebuffer's bytes before the gamma ramp.

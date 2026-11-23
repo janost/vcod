@@ -4348,13 +4348,19 @@ impl App {
         check_language(&mut self.shell, &self.fs);
         self.vid_restart_ui();
         self.ignore_hw_gamma = ignore_hw_gamma(&self.shell);
-        // Retail's `vid_restart` reloads every image; vcod rebuilds
-        // only when the format, the MSAA or an image setting moved.
+        // Retail's `vid_restart` reloads every image; vcod rebuilds only
+        // when what they load through moved: the format, the MSAA, an image
+        // setting or the baked table (`r_intensity`, `r_gamma` under
+        // `r_ignorehwgamma 1`; cod11-gamma.md 4).
         self.shell.cod4_set_picmip();
         let textures = self.texture_settings();
         let samples = renderer::aa_samples(self.shell.cvar_f32("r_aaSamples"));
+        let baked = image_gamma(&mut self.shell, self.ignore_hw_gamma, self.fs.game());
         if self.renderer.as_ref().is_some_and(|r| {
-            r.hdr() != hdr_cvar(&self.shell) || textures != self.textures || samples != r.samples()
+            r.hdr() != hdr_cvar(&self.shell)
+                || textures != self.textures
+                || samples != r.samples()
+                || baked != r.image_gamma()
         }) {
             self.rebuild_renderer(event_loop);
         }
@@ -4476,10 +4482,10 @@ impl App {
         Ok(r)
     }
 
-    /// `vid_restart` with a changed `vc_hdr`, MSAA or image setting (or
-    /// CoD4's `r_applyPicmip`): every world pipeline targets the scene
-    /// format and samples the images, so the renderer is rebuilt and the
-    /// map reloaded into it. The entity scene's model handles index the old renderer, so
+    /// `vid_restart` with a changed `vc_hdr`, MSAA, image setting or baked
+    /// image table (or CoD4's `r_applyPicmip`): every world pipeline targets
+    /// the scene format and samples the images, so the renderer is rebuilt
+    /// and the map reloaded into it. The entity scene's model handles index the old renderer, so
     /// a live game starts a fresh one, as a gamestate does.
     fn rebuild_renderer(&mut self, event_loop: &ActiveEventLoop) {
         let Some(window) = self.window.clone() else {
@@ -6319,5 +6325,44 @@ mod tests {
         ui.browser.list_server(Source::Internet, addr);
         restart_ui(&mut ui, &mut shell, &fs, dir.path(), "main");
         assert_eq!(ui.browser.listed(Source::Internet), vec![addr]);
+    }
+
+    /// What a `vid_restart` rebakes into uncompressed images: a latched
+    /// `r_intensity` once applied, and `r_gamma` only while the latched
+    /// `r_ignorehwgamma` is 1 (cod11-gamma.md 1, 4).
+    #[test]
+    fn vid_restart_rebakes_images_on_intensity_and_ignored_hw_gamma() {
+        use vcod_common::game::Game;
+        let mut s = console::shell::Shell::new();
+        let stock = image_gamma(&mut s, false, Game::Cod1);
+        assert_eq!(stock, None, "the defaults bake nothing");
+
+        s.execute("r_gamma 2; r_ignorehwgamma 1; r_intensity 2");
+        assert!(
+            !ignore_hw_gamma(&s),
+            "r_ignorehwgamma waits for vid_restart"
+        );
+        assert_eq!(image_gamma(&mut s, false, Game::Cod1), stock);
+
+        s.apply_latched_video();
+        assert!(ignore_hw_gamma(&s));
+        let both = image_gamma(&mut s, true, Game::Cod1).expect("a table");
+        assert_eq!(
+            both[64], 181,
+            "r_intensity 2, then r_gamma 2: 128, then 181"
+        );
+
+        s.execute("r_gamma 1");
+        let intensity = image_gamma(&mut s, true, Game::Cod1).expect("a table");
+        assert_eq!(intensity[64], 128);
+        assert_ne!(
+            both, intensity,
+            "a slider move rebakes under r_ignorehwgamma"
+        );
+        assert_eq!(
+            image_gamma(&mut s, true, Game::Cod2),
+            None,
+            "r_intensity is CoD1's"
+        );
     }
 }
