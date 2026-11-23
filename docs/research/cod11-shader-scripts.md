@@ -1362,6 +1362,23 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   no shader carries 0x1000 and the remap has nothing to act on; the
   `not precached` error is not ported either.
 
+- VERIFIED, census of every `xmodel*` file in the 1.1, 1.5 and UO stock
+  paks (5536 on 1.1, 10348 on 1.5 with UO) against every shader block
+  with a `nextbundle` (133 and 325 blocks, every `.shader` file): no model
+  names one, and the two model `.stype` files with the word
+  (`metal_env`, `wood_env`) have it commented out. The census is a byte
+  search for each block's name; the same search finds `metal_env@` in 12
+  1.1 models.
+- VERIFIED: 0x4f3660..0x4f36a2 binds the white image for `$lightmap` in
+  a material with a negative lightmap index (section 3, the impacts). A
+  model's material is one, so INFERRED: a model's `nextbundle map
+  $lightmap` modulates by white and changes nothing.
+- vcod: the entity and viewmodel passes (`dynamic_model.wgsl`,
+  `viewmodel.wgsl`) draw bundle 0 alone. A second bundle naming
+  `$lightmap` changes nothing, as above; any other warns "entity stage
+  nextbundle image not drawn" and is dropped, where retail would apply
+  its texture environment. No stock model reaches that.
+
 ### 8.3 World shader types
 
 - VERIFIED, CoDMP.exe: the shader-type path (0x4fc0c0) builds

@@ -1014,6 +1014,16 @@ impl EntityMaterials {
         }
         for (i, st) in sh.stages.iter().enumerate().filter(|_| fits) {
             let b0 = &st.bundles[0];
+            // a model's `$lightmap` is the white image, which changes nothing;
+            // no stock model names another bundle 1 (shader doc 8.2)
+            if st
+                .bundles
+                .get(1)
+                .is_some_and(|b| b.image != ImageRef::Lightmap)
+            {
+                self.warns
+                    .warn_once(skin, "entity stage nextbundle image not drawn");
+            }
             let image = match &b0.image {
                 ImageRef::White => StageImage::Own(0),
                 ImageRef::Path(p) if p.eq_ignore_ascii_case(TEXTURE_NAME) => StageImage::Skin,
