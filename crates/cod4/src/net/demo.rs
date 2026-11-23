@@ -66,6 +66,35 @@ pub struct Archive {
     pub view_angles: [f32; 3],
 }
 
+impl Archive {
+    /// The row a client that predicts nothing files and its move carries:
+    /// the newest snapshot's playerstate `snap` at `server_time`
+    /// (`cl.serverTime`, the newest cmd's), its view the newest cmd's
+    /// `angles` over `snap`'s `delta_angles` (cod4-netfields.md 13).
+    pub fn unpredicted(
+        snap: &delta::PlayerState,
+        angles: Option<[u16; 3]>,
+        server_time: i32,
+    ) -> Archive {
+        let ps = crate::pmove::PlayerState::from_wire(snap);
+        let mut view_angles = ps.view_angles;
+        if let Some(a) = angles {
+            for ((v, a), d) in view_angles.iter_mut().zip(a).zip(ps.delta_angles) {
+                let d = super::conn::angle2short(d);
+                *v = f32::from(a.wrapping_add(d) as i16) * (360.0 / 65536.0);
+            }
+        }
+        Archive {
+            server_time,
+            origin: ps.origin.to_array(),
+            velocity: ps.velocity.to_array(),
+            bob_cycle: ps.bob_cycle,
+            movement_dir: ps.movement_dir,
+            view_angles,
+        }
+    }
+}
+
 /// The archive ring and its write index (`cl` +0x666cc, +0x696cc).
 #[derive(Clone, Debug)]
 pub struct ArchiveRing {

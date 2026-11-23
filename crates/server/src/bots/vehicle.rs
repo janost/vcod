@@ -72,8 +72,9 @@ const CREW_WAIT_TICKS: u32 = 200;
 /// A seat's gun fires once laid this near the enemy in yaw, within range.
 const LAID_DEG: f32 = 4.0;
 /// A tank shelling a `bas` base whose gun has not lain on it this long
-/// gets out: its line will not come.
-const SHELL_WAIT_TICKS: u32 = 200;
+/// gets out: its line will not come. One with no line on an enemy hull
+/// this long drives on.
+pub(crate) const SHELL_WAIT_TICKS: u32 = 200;
 pub(crate) const GUN_RANGE: f32 = 3000.0;
 /// A driver held by a teammate in its way this long backs off, when the
 /// way back is clear.
@@ -214,6 +215,10 @@ pub struct ArmorView {
     /// [`ROCKET_CLEAR_MARGIN`] of the muzzle along the view or the hip
     /// cone round it (`Server::armor_view`). Set for a tank's gun.
     pub muzzle_clear: bool,
+    /// For a tank's gun: a shell fired now along [`SeatView::sight`]
+    /// strikes the hull, or the world within reach of it
+    /// (`Server::armor_view`). Set for a launcher.
+    pub shell_on: bool,
 }
 
 impl ArmorView {
@@ -263,6 +268,8 @@ pub(crate) struct Rider {
     crew_wait: bool,
     /// Ticks shelling a `bas` base since the gun last lay on it.
     shell_wait: u32,
+    /// Ticks laying the gun on an enemy hull with no shell's line on it.
+    armor_wait: u32,
     /// Stall bookkeeping: ticks stalling, back-off ticks left and the way
     /// it steers, back-offs since the ride last made [`PROGRESS`], from
     /// where.
@@ -542,18 +549,27 @@ impl Bot {
         let in_range = |p: [f32; 3]| super::dist_sq(seat.origin, p) < GUN_RANGE * GUN_RANGE;
         // A tank's driver lays its gun on an enemy vehicle with nobody
         // else to shoot.
+        let foot = view.enemy.filter(|e| in_range(e.origin));
         let armor = view
             .armor
-            .filter(|a| seat.seat == 1 && seat.tank && in_range(a.centre));
-        let enemy = view
-            .enemy
-            .filter(|e| in_range(e.origin))
+            .filter(|a| foot.is_none() && seat.seat == 1 && seat.tank && in_range(a.centre));
+        let enemy = foot
             .map(|e| (e.origin, e.velocity))
             .or(armor.map(|a| (a.centre, a.velocity)));
-        let friend_in_line = match view.enemy.filter(|e| in_range(e.origin)) {
+        let friend_in_line = match foot {
             Some(_) => view.friend_in_line,
             None => armor.is_some_and(|a| a.friend_in_line),
         };
+        // The shell goes only along a line that meets the hull. One with
+        // none for `SHELL_WAIT_TICKS` holds the tank no longer: it drives
+        // on with the gun on the hull (bot-objectives.md 10.4).
+        let line_on = armor.is_none_or(|a| a.shell_on);
+        self.rider.armor_wait = if line_on {
+            0
+        } else {
+            self.rider.armor_wait + 1
+        };
+        let held = !(armor.is_some() && self.rider.armor_wait > SHELL_WAIT_TICKS);
         // With nobody to shoot, a `bas` base the gun has a shot at.
         let shell = seat
             .sight
@@ -563,7 +579,7 @@ impl Bot {
             Some((_, (_, true))) | None => 0,
             Some(_) => self.rider.shell_wait + 1,
         };
-        self.rider.fighting = enemy.is_some() || shell.is_some();
+        self.rider.fighting = enemy.is_some() && held || shell.is_some();
         if seat.seat == 1 {
             self.drive(view, seat, &mut cmd);
         } else if enemy.is_some() || seat.driven && seat.speed.abs() >= STALL_SPEED {
@@ -610,7 +626,7 @@ impl Bot {
                 None => seat.seat > 2 && yaw_diff(yaw, view.view[1]).abs() < LAID_DEG,
             };
             let gun = seat.gun_yaw.is_some() || seat.seat > 2;
-            if self.shoot && gun && laid && !friend_in_line {
+            if self.shoot && gun && laid && !friend_in_line && line_on {
                 let tap =
                     seat.gun_yaw.is_some() || view.automatic || self.rider.seated.is_multiple_of(2);
                 if tap {

@@ -3,12 +3,11 @@
 
 use anyhow::{Result, bail};
 use glam::Vec3;
-use vcod_cod4::net::conn::angle2short;
 use vcod_cod4::net::parse::{Client, Op};
 use vcod_cod4::pmove as pm;
 
 use super::scene::lerp_angles;
-use super::{Cod4Session, Source, info_value, ps_f32};
+use super::{Cod4Session, Source, info_value};
 
 /// `demo` / `timedemo`: `CL_PlayDemo_f`'s `clc` fields (`iw3mp.exe`
 /// 0x469120) and `CL_SetCGameTime`'s demo arm (0x45c440).
@@ -171,23 +170,15 @@ impl Cod4Session {
         predicted: Option<&pm::PlayerState>,
     ) -> Option<vcod_cod4::net::demo::Archive> {
         let time = self.cg_time?;
-        let built;
-        let ps = match predicted {
-            Some(p) => p,
-            None => {
-                // Unpredicted, the view is the last cmd's over the newest
-                // `delta_angles`, as the scene draws it.
-                let snap = &self.client().snapshots.last()?.ps;
-                let mut ps = pm::PlayerState::from_wire(snap);
-                if let Some(a) = self.cmd_angles {
-                    for (k, (v, a)) in ps.view_angles.iter_mut().zip(a).enumerate() {
-                        let d = angle2short(ps_f32(snap, &format!("delta_angles[{k}]")));
-                        *v = f32::from(a.wrapping_add(d) as i16) * (360.0 / 65536.0);
-                    }
-                }
-                built = ps;
-                &built
-            }
+        // Unpredicted, the view is the last cmd's over the newest
+        // `delta_angles`, as the scene draws it.
+        let Some(ps) = predicted else {
+            let snap = &self.client().snapshots.last()?.ps;
+            return Some(vcod_cod4::net::demo::Archive::unpredicted(
+                snap,
+                self.cmd_angles,
+                time,
+            ));
         };
         Some(vcod_cod4::net::demo::Archive {
             server_time: time,

@@ -109,9 +109,8 @@ pub(super) fn shell_aim(
     })
 }
 
-/// Whether a shell from `muzzle` along `dir` at `speed`, falling at
-/// `DEFAULT_GRAVITY`, strikes the base at `base` as [`breach_line`] takes
-/// it, traced along its arc in [`SHELL_ARC_STEPS`] chords. A straight
+/// Whether a shell from `muzzle` along `dir` at `speed` strikes the base
+/// at `base` as [`breach_line`] takes it ([`shell_strike`]). A straight
 /// line grazed the rise in front of mp_foy's western axis bunker, where
 /// every shell from the south fell into it 345 units short.
 pub(super) fn shell_lands(
@@ -123,7 +122,32 @@ pub(super) fn shell_lands(
     speed: f32,
     base: glam::Vec3,
 ) -> bool {
-    let flight = (muzzle.distance(base) + crate::bots::BREACH_NEAR) / speed;
+    let reach = muzzle.distance(base) + crate::bots::BREACH_NEAR;
+    let Some((burst, model)) = shell_strike(world, models, hull, muzzle, dir, speed, reach) else {
+        return false;
+    };
+    burst.distance(muzzle) >= crate::bots::BREACH_CLEAR
+        && match model {
+            Some(m) => m.origin == base,
+            None => burst.distance(base) < crate::bots::BREACH_NEAR,
+        }
+}
+
+/// Where a shell from `muzzle` along `dir` at `speed`, falling at
+/// `DEFAULT_GRAVITY`, first strikes the world or one of `models` but its
+/// own `hull` within `reach` units of flight, and the model it strikes;
+/// `None` when it strikes nothing. Traced along its arc in
+/// [`SHELL_ARC_STEPS`] chords.
+pub(super) fn shell_strike<'m>(
+    world: &vcod_common::collision::CollisionWorld,
+    models: &'m [crate::game::combat::PlacedModel],
+    hull: vcod_gsc::EntId,
+    muzzle: glam::Vec3,
+    dir: glam::Vec3,
+    speed: f32,
+    reach: f32,
+) -> Option<(glam::Vec3, Option<&'m crate::game::combat::PlacedModel>)> {
+    let flight = reach / speed;
     let at = |i: usize| {
         let t = flight * i as f32 / SHELL_ARC_STEPS as f32;
         muzzle + dir * speed * t
@@ -135,19 +159,14 @@ pub(super) fn shell_lands(
         let mut best = (tr.fraction, None);
         for m in models.iter().filter(|m| m.id != hull) {
             if let Some((f, ..)) = m.clip(a, b, crate::game::missile::MISSILE_MODEL_MASK, best.0) {
-                best = (f, Some(m.origin));
+                best = (f, Some(m));
             }
         }
         if best.0 < 1.0 {
-            let burst = a + (b - a) * best.0;
-            return burst.distance(muzzle) >= crate::bots::BREACH_CLEAR
-                && match best.1 {
-                    Some(o) => o == base,
-                    None => burst.distance(base) < crate::bots::BREACH_NEAR,
-                };
+            return Some((a + (b - a) * best.0, best.1));
         }
     }
-    false
+    None
 }
 
 /// Chords a shell's arc is traced in: over 2000 units it falls 16, so

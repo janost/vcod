@@ -703,11 +703,27 @@ playerstate's and its time equals `commandTime` (section 3). VERIFIED
   which `Conn::send` writes into the move and adds to the ring. A
   packet no scene sent goes out at the next step with the far origin
   at time 0. vcod's client makes no cmd on a millisecond it already
-  stamped, where 1.7 makes one the server then skips. vcod-server
-  leaves origin out as 0x813f586 does (section 3). The CoD4 bot
-  `NETDIGEST=600` lines (seeds 1 and 2, 6000 ticks) stay the same:
-  `bot_match`'s observer still echoes the far origin and its bots send
-  no moves, so no slot leaves origin out (2026-11-21).
+  stamped, where 1.7 makes one the server then skips; either way the
+  server thinks the same cmds. vcod-server leaves origin out as
+  0x813f586 does (section 3).
+- vcod's in-process clients: a row with no prediction behind it is
+  the newest snapshot's origin, velocity, `bobCycle` and `movementDir`,
+  its view the newest cmd's angles over `delta_angles`, at the newest
+  cmd's time (`Archive::unpredicted`, the live client's own when it
+  predicts nothing). `bot_match`'s CoD4 observer sends and files it, so
+  its playerstates go without origin while it stands. VERIFIED (release,
+  `GAME=cod4 NETDIGEST=600 TICKS=6000`, mp_crash `war`, master
+  37fc04040 then this, 2026-11-23): the matches play the same (seed 1
+  49 kills, 181 hits; seed 2 39 kills, 163 hits, both runs) and only
+  the observer's datagrams change: `net` seed 1 8d980153d0bde743 →
+  6a136093f2e819fb, seed 2 f3eb2a13b4fa8fb2 → a64d95f215e39b91; over
+  seed 1's first 600 ticks its 518 datagrams fall from 49885 bytes to
+  41912, the first at tick 95 (68 → 52). The test harness's `Probe`
+  sends it only with `echo_origin`
+  (`a_still_client_echoing_its_origin_gets_playerstates_without_it`):
+  its A/B twins replay captures whose client sent the far origin, and
+  `cod4_probe` keeps sending that, since a playerstate without bit 0
+  leaves a capture no way to read its velocity and view.
 - A spawn's think puts `commandTime` at the level's time, which runs
   ahead of `cl.serverTime`, so the cmds of the first 100 to 150 ms
   after a spawn fall under it and the server skips them, a press with
