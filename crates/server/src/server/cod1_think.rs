@@ -227,6 +227,14 @@ impl Cod1Module {
         } else {
             pmove(eng, tick, slot, &cmd, overlap, &pm)
         };
+        if crate::client_log::on() && !raised.is_empty() {
+            let ev: Vec<String> = raised
+                .iter()
+                .map(|e| format!("{}:{}", e.event, e.parm))
+                .collect();
+            let st = cmd.server_time;
+            crate::client_log::write(|_| format!("ran slot={slot} st={st} ev={}", ev.join(",")));
+        }
         player_events(eng, &tick.weapons, slot, &raised);
         let (attacks, take) = self.client_events(eng, tick, slot, &cmd, &raised);
         let t = end_move(

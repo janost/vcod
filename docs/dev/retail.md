@@ -73,6 +73,10 @@ them on vcod.
 - `--set NAME=VALUE` is retail's `+set`.
 - `--bots N [--bots-peaceful]` adds clients.
 - `--trace` logs per-snapshot timing.
+- `--client-log <file>` logs each human client's usercmds, client commands,
+  the events its cmds raised and the snapshots it was sent
+  (`crates/server/src/client_log.rs` has the line format): how a retail
+  client is measured ([Retail client captures](#retail-client-captures)).
 
 ## A retail client against vcod-server
 
@@ -94,6 +98,106 @@ neither side prints `EXE_SERVER_IS_DIFFERENT_VER`.
 | `Illegible server message N` right after the map loads | the missing `svc_EOF` terminator (`ServerNetchan::transmit`) |
 | the client disconnects right after the gamestate with another error | the configstring table in `crates/server/src/configstrings.rs` |
 | no `connectResponse` | `parse_connect` (`crates/common/src/net/connectionless.rs`) |
+
+## Retail client captures
+
+What only a retail client can show (the usercmds it builds, what it
+draws) is captured against vcod-server, which records the client
+through `--client-log`. `tools/capture/retail-client/wizard.sh` runs the
+session: per step it boots vcod-server (`--vanilla`, `sv_pure` 1, so the
+client loads stock paks only) with the step's `client-probes/probe_rc_*`
+gametype, prints what to do in the client, waits, checks the capture with
+`analyze.py` and goes on. Its header lists the options.
+
+```
+COD_DIR=<1.1 install> COD_UO_DIR=<stock 1.5 main/ + uo/ tree> \
+    tools/capture/retail-client/wizard.sh [--addr <this box's LAN ip>] \
+    [--shots-11 <1.1 install>/main/screenshots] [--shots-uo <UO install>/uo/screenshots]
+```
+
+- The client: CoD 1.1 `CoDMP.exe` for the first three steps, United
+  Offensive 1.51 `CoDUOMP.exe` for the last two, under Wine here
+  (`--addr` defaults to 127.0.0.1) or on a LAN PC. No cfg or binds: each
+  step joins with `/connect <addr>:<port>` in the console (port 28963),
+  and the probes answer the team and weapon menus for the client.
+- Screenshots: the probe puts `screenshot rc_<phase>_1; wait 25; ...` in
+  the client's `rc_shot` cvar (a server `v`, cod11-hud-protocol.md 0), so
+  every phase's console line is the same, `toggleconsole; wait 60; vstr
+  rc_shot`. With `--shots-*` the wizard picks the files up itself;
+  without, it asks for the step's `rc_*.tga` to be copied over at its end.
+- Output: `tmp/captures/retail-client-<date>/<n>-<step>/` holds
+  `client.log`, `server.log`, the probe's `games_mp.log` (under `main/` or
+  `uo/`), the `rc_*.tga` shots, `analysis.txt` and `DONE`. A rerun skips
+  done steps; `--from <step>` redoes from one, `--only` runs one.
+- Time: about 3 minutes a step with the client already running, 15 to 20
+  for the session.
+- `--standin` is the dry run: vcod's probe client joins in the retail
+  client's place (`--probe-uo-weapon direct` where the step needs a held
+  view or trigger taps from the probe's `PROBE_IN` lines, `--probe-flame`
+  as the UO victim), so every server, probe and log step runs without the
+  retail client; only the kick and the screenshots stay unmeasured.
+- `python3 -m unittest discover -s tools/capture/retail-client` tests
+  `analyze.py`'s readers (not in CI).
+
+### Kick: usercmd angles around a shot (1.1)
+
+`probe_rc_kick` spawns the client with the m1 carbine, view level; ten
+single hip shots, mouse untouched. Measures which usercmd first carries
+the view kick relative to the cmd that fired, and the kick's shape cmd by
+cmd (`cod11-combat.md` 15.7, "The frame a shot kicks": the kick the cgame
+steps in the frame it predicts the shot rides the next frame's cmd, so
+offset 1). `analyze.py kick` prints each shot's cmd-by-cmd pitch and yaw
+change from the cmd before it and the first-change offsets.
+
+Fixture: per shot, the `cmd` lines from a few before the `ran` line's
+`st` (its `ev=159`) to 40 after, deduplicated as `analyze.cmd_stream`
+does (a packet repeats its predecessor's cmds). A client gate drives
+`play::input::PlayInput` and the recoil with the same frame times (the
+cmds' `st` steps) and the press on the shot's cmd, and compares pitch per
+cmd exactly and yaw within the weapon's random bounds.
+
+### Intermission: hudelems at pm_type 5 (1.1)
+
+`probe_rc_intermission` draws a level hudelem (magenta) and a client one
+(green) outside the scoreboard's frame, then `rc_phase intermission` runs
+dm's `spawnIntermission`. Three shots alive, three at intermission.
+`analyze.py intermission` checks the snapshots' `pm_type` per phase and
+samples both boxes on each shot; the alive shots prove the sampling. It
+measures whether the 2D pass at `pm_type` 5 (`cod11-hud-protocol.md` 9.1)
+draws either kind of hudelem.
+
+Fixture: the verdict per box with the `snap` lines that carried the
+elements (`hud=`), so a HUD test builds that frame and asserts the
+elements drawn or not; the shots stay in `tmp/`.
+
+### Cursor hint width (1.1 and UO)
+
+`probe_rc_hint` holds the client looking at a floor spot, owning the m1
+carbine (`wideListIcon` 1) and the colt (0) with no reserve ammo, and puts
+one hidden suspended weapon item there per phase: `none`,
+`unowned_wide` (kar98k), `owned_wide` (carbine), `unowned_narrow` (luger),
+`owned_narrow` (colt). The playerstate's hint (`snap ... hint=`) is what
+the client draws whatever it shows of the item. `analyze.py hint` diffs
+each phase's shots against `none` in a band under the hint text and left
+of where the gun reaches, and reads the icon's left edge: 300 narrow, 280
+wide (`cod11-hud-protocol.md` 9.12). Measures whether the owned (ammo
+icon) range draws wide too.
+
+Fixture: the hint value and the edge per phase; a HUD test asserts the
+icon rect for that hint and weapon table.
+
+### fdc cadence (UO)
+
+`probe_rc_flame` makes the first client (the retail one) the victim and a
+second, vcod's `--probe-uo-weapon direct` client the wizard starts, the
+flamethrower, pulsing 0.2 s of every 0.5 s, 100 units off; nobody takes
+damage. 50 s of `fdc` client commands (`ccmd ... text=fdc`) with their
+arrival (`w=`) and whether the flood window dropped them (`ok=0`), and the
+`wbuttons` 0x1 flag on every `cmd` (`coduo-diff.md` 19.3, "The flame
+report"). `analyze.py fdc` prints the arrival gaps.
+
+Fixture: the `ccmd` fdc lines and the victim's `cmd` lines' `wb`, against
+which a client test runs `FlameSystem::report` on the same chunk exposure.
 
 ## Public servers and the master
 

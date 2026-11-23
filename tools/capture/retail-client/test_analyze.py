@@ -1,0 +1,114 @@
+"""analyze.py's readers: python3 -m unittest discover -s tools/capture/retail-client"""
+
+import os
+import struct
+import tempfile
+import unittest
+
+import analyze
+
+
+def write_tga(path, w, h, pixel, top_down=False, rle=False):
+    """A 24-bit TGA of pixel(x, y) -> (r, g, b), y counted from the top."""
+    rows = []
+    for y in range(h):
+        rows.append(b"".join(bytes((b, g, r)) for r, g, b in (pixel(x, y) for x in range(w))))
+    if not top_down:
+        rows.reverse()
+    body = b"".join(rows)
+    if rle:
+        # One raw packet per pixel: valid RLE, and exercises the reader's path.
+        body = b"".join(b"\x00" + body[i:i + 3] for i in range(0, len(body), 3))
+    head = struct.pack("<BBBHHBHHHHBB", 0, 0, 10 if rle else 2, 0, 0, 0, 0, 0, w, h, 24,
+                       0x20 if top_down else 0)
+    with open(path, "wb") as f:
+        f.write(head + body)
+
+
+def log_lines(text):
+    return [analyze.fields(l) for l in text.strip().splitlines()]
+
+
+class ClientLog(unittest.TestCase):
+    def test_a_packet_dup_cmd_is_read_once(self):
+        log = log_lines("""
+enter w=1 svs=1 slot=0 proto=1 addr=x name=a b
+move w=1 svs=1 slot=0 seq=1 ack=0 delta=1 n=2
+cmd slot=0 st=100 b=0 wb=0 w=1 fl=0 a=0,0,0 mv=0,0,0
+cmd slot=0 st=110 b=0 wb=0 w=1 fl=0 a=0,0,0 mv=0,0,0
+move w=2 svs=2 slot=0 seq=2 ack=0 delta=1 n=2
+cmd slot=0 st=110 b=0 wb=0 w=1 fl=0 a=0,0,0 mv=0,0,0
+cmd slot=0 st=120 b=1 wb=0 w=1 fl=0 a=0,0,0 mv=0,0,0
+""")
+        self.assertEqual([c["st"] for c in analyze.cmd_stream(log, 0)], [100, 110, 120])
+        self.assertEqual(log[0][1]["name"], "a b")
+
+    def test_a_shot_s_kick_is_counted_from_its_own_cmd(self):
+        lines = ["enter w=1 svs=1 slot=0 proto=1 addr=x name=a"]
+        pitch = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: -60, 8: -100, 9: -90}
+        for i, p in pitch.items():
+            lines.append(f"move w={i} svs={i} slot=0 seq={i} ack=0 delta=1 n=1")
+            lines.append(f"cmd slot=0 st={1000 + 10 * i} b={1 if i == 6 else 0} wb=0 w=1 fl=0 "
+                         f"a={p % 65536},5,0 mv=0,0,0")
+        lines.append("ran slot=0 st=1060 ev=159:0")
+        _, shots = analyze.kick_shots(log_lines("\n".join(lines)), 0)
+        self.assertEqual(len(shots), 1)
+        s = shots[0]
+        self.assertTrue(s["still"])
+        self.assertEqual(s["kick"], 1)
+        self.assertEqual(s["trail"][1]["d"], [-60, 0])
+
+    def test_angle_shorts_wrap(self):
+        self.assertEqual(analyze.short_delta(65530, 4), 10)
+        self.assertEqual(analyze.short_delta(4, 65530), -10)
+
+
+class Screenshots(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def path(self, name):
+        return os.path.join(self.dir.name, name)
+
+    def test_tga_rows_read_top_down_whatever_the_file_order(self):
+        for top_down, rle in ((False, False), (True, False), (False, True)):
+            p = self.path("t.tga")
+            write_tga(p, 4, 2, lambda x, y: (255, 0, 0) if y == 0 else (0, 0, 255), top_down, rle)
+            w, h, rows = analyze.read_tga(p)
+            self.assertEqual((w, h), (4, 2))
+            self.assertEqual(rows[0][:3], b"\xff\x00\x00")
+            self.assertEqual(rows[1][:3], b"\x00\x00\xff")
+
+    def test_the_boxes_are_found_on_a_stretched_shot(self):
+        # 800x600: virtual (16, 216, 48) is pixels (20, 270, 60).
+        def pixel(x, y):
+            if 20 <= x < 80 and 270 <= y < 330:
+                return (255, 0, 255)
+            return (40, 40, 40)
+        p = self.path("rc_play_1.tga")
+        write_tga(p, 800, 600, pixel)
+        self.assertEqual(analyze.boxes_seen(p), {"level": True, "client": False})
+
+    def test_a_wide_icon_reaches_left_of_a_narrow_one(self):
+        def shot(left):
+            def pixel(x, y):
+                vx, vy = x * 640 / 320, y * 480 / 240
+                if left <= vx < 340 and 325 <= vy < 365:
+                    return (230, 230, 200)
+                return (60, 50, 40)
+            return pixel
+        base, narrow, wide = self.path("b.tga"), self.path("n.tga"), self.path("w.tga")
+        write_tga(base, 320, 240, shot(1000))
+        write_tga(narrow, 320, 240, shot(300))
+        write_tga(wide, 320, 240, shot(280))
+        b = analyze.read_tga(base)
+        self.assertEqual(analyze.icon_left(analyze.read_tga(narrow), b), 300)
+        self.assertEqual(analyze.icon_left(analyze.read_tga(wide), b), 280)
+        self.assertIsNone(analyze.icon_left(b, b))
+
+
+if __name__ == "__main__":
+    unittest.main()

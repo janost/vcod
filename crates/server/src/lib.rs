@@ -10,6 +10,7 @@ pub mod area;
 pub mod botmgmt;
 pub mod bots;
 pub mod client;
+pub mod client_log;
 pub mod cod2;
 pub mod cod4;
 pub mod compass;

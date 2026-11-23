@@ -545,6 +545,34 @@ impl Server {
                 ps.arrays.hud_archived.clear();
                 ps.arrays.hud_current.clear();
             }
+            if crate::client_log::on() && !c.is_bot {
+                let f = |n: &str| ps.field_i32(self.game.proto, n);
+                let ev: Vec<String> = (0..4)
+                    .map(|i| {
+                        format!(
+                            "{}:{}",
+                            f(&format!("events[{i}]")),
+                            f(&format!("eventParms[{i}]"))
+                        )
+                    })
+                    .collect();
+                let line = format!(
+                    "snap svs={svs_ms} slot={slot} msg={message_num} time={} ct={command_time} \
+pm_type={} health={} weapon={} hint={},{},{} hud={},{} es={} ev={}",
+                    self.core.sv_time_ms,
+                    f("pm_type"),
+                    ps.health(),
+                    f("weapon"),
+                    f("serverCursorHint"),
+                    f("serverCursorHintVal"),
+                    f("serverCursorHintString"),
+                    ps.arrays.hud_archived.len(),
+                    ps.arrays.hud_current.len(),
+                    f("eventSequence"),
+                    ev.join(",")
+                );
+                crate::client_log::write(|_| line);
+            }
             let frame = snapshot::SentSnapshot {
                 server_time: Msec::from_raw(self.core.sv_time_ms),
                 message_num,
