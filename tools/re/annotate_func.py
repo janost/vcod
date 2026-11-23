@@ -27,13 +27,16 @@ def relocations(elf):
 
 
 def symbol(elf, name):
-    out = subprocess.run(
-        ["nm", "-D", "--defined-only", "-S", elf], capture_output=True, text=True
-    ).stdout
-    for line in out.splitlines():
-        f = line.split()
-        if len(f) == 4 and f[3] == name:
-            return int(f[0], 16), int(f[1], 16)
+    # The dynamic table first (the game modules), then the full one (an
+    # unstripped executable such as CoD4x's server).
+    for table in (["-D"], []):
+        out = subprocess.run(
+            ["nm", *table, "--defined-only", "-S", elf], capture_output=True, text=True
+        ).stdout
+        for line in out.splitlines():
+            f = line.split()
+            if len(f) == 4 and f[3] == name:
+                return int(f[0], 16), int(f[1], 16)
     raise SystemExit(f"no symbol {name}")
 
 
