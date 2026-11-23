@@ -280,6 +280,24 @@ turn is a reading of the matrices (INFERRED). A jeep driver's view swings
 with the jeep unless `upmove` is held, which steers toward the view
 instead (section 2).
 
+**The riders' roll** (0x30040770..0x3004078e, VERIFIED (the instructions)).
+After trap 0xf7 the same arm multiplies the view's axis, built from the
+predicted `viewangles` before the pitch and yaw writes (0x300406b3), by
+this frame's vehicle axis transposed (0x30489ef8, which 0x3004ac80 has just
+filled with the transpose), runs `AxisToAngles` (0x3004c2a0) and stores the
+negated roll into the predicted `viewangles[2]` (0x304832b4). 0x3004a5b0 is
+`MatrixMultiply(in1 = ecx, in2 = eax, out = edx)` and 0x3004ac80
+`MatrixTranspose(in = ecx, out = eax)` (VERIFIED, the instructions). So the
+roll is written whatever the sight, for the seats the turn covers.
+`CG_CalcViewValues` copies `viewangles` into `refdefViewAngles`
+(0x30041bd2..0x30041bff) after the arm; the chase camera zeroes the roll
+(0x30040dc0) and the first-person branch keeps it (VERIFIED, the
+instructions). Looking along the hull the drawn roll is the hull's roll,
+looking back its opposite, looking aside its pitch (INFERRED from the
+matrices; `seat::tests::a_four_wheel_rolls_its_riders_with_the_hull`). The
+arm reads `cg.predictedPlayerState`, which a followed player's snapshot
+fills, so a followed jeep driver rolls too (INFERRED).
+
 **Which angles.** The four-wheel turn builds the vehicle's axis from the
 centity's `lerpAngles` (+0x214, `AnglesToAxis` at 0x3004060f, VERIFIED
 disassembly) after a `tag_player` lookup that only gates it (string
@@ -435,7 +453,9 @@ capture in `crates/common/tests/fixtures/net/` with its trajectory fields.
   `EntityScene::tag_pose` on the drawn vehicle and the world's box trace,
   with the gunner's sway (`play::seat::GunnerSway`, `aim::step_turn_sway`
   off configstring 7's `thompson_mp`) and firing shake
-  (`play::seat::gunner_shakes`, `shake_phase`).
+  (`play::seat::gunner_shakes`, `shake_phase`). The four-wheel riders'
+  roll is `play::seat::seat_roll`, drawn in first person, a followed
+  rider's included.
 - **The own body.** `play::seat::own_body_drawn` is 0x30032fe0's gate,
   read on the previous frame's predicted sight; `play::seat::own_body`
   builds the entity `BG_PlayerStateToEntityState` would, drawn by the seat
@@ -547,7 +567,7 @@ capture in `crates/common/tests/fixtures/net/` with its trajectory fields.
   `the_jeep_gun_replays_on_ours` replays the capture on vcod-server: every
   vehicle field matches on all 501 seated snapshots, view and cone
   included (VERIFIED, replay).
-- **Not done.** The roll 0x30040580 writes; the push-off 0x30035800 gives
+- **Not done.** The push-off 0x30035800 gives
   a body that walks into a vehicle. The hatch needs nothing: retail
   disabled it (section 1). Vehicle sounds and the vehicle MG's
   client-traced impacts are `coduo-diff.md` 19's; wheel dust and a

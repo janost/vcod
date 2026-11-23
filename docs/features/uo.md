@@ -70,7 +70,7 @@ Vehicles:
   alternate guns fire.
 - The camera sits where UO's does: the tank driver's chase camera and
   gunsight, the gunner on his gun with sway and firing shake, a jeep's
-  riders turning with it. Your own body draws in the seat.
+  riders turning and rolling with it. Your own body draws in the seat.
 - Prediction holds a seat's view clamps and sight, replayed against retail
   captures.
 
