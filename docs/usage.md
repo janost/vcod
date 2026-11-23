@@ -509,9 +509,10 @@ Client:
     No, joins it.
   - Join Game lists LAN servers (Source: Local), favourites and, on
     Refresh List, `master.cod.pm`'s CoD4 list. Password sets a server's
-    password. CoD4x servers stay out of the lists unless
-    `ui_browserShowCoD4x` is 1 (vcod's own cvar); vcod plays only on
-    those that run without client authentication.
+    password. CoD4x servers are listed with `[CoD4x]` before their
+    names; vcod plays only on those that run without client
+    authentication, and a join of any other ends with that reason.
+    `ui_browserShowCoD4x 0` (vcod's own cvar) leaves them out.
   - Mods runs a `mods/<dir>` mod. Options and Controls set the options
     and binds vcod has.
   - Select Profile creates, deletes and loads a profile in

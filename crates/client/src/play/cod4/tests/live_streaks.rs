@@ -239,6 +239,82 @@ fn selector_attack(up: i32) -> bool {
     up >= 150 && (up - 150) % 200 < 100
 }
 
+/// The airstrike's confirm with the first packet carrying it lost on
+/// the way: the next packet carries its cmd again (`cl_packetdup` 1,
+/// cod4-netfields.md 14) and the selection still ends. With
+/// `cl_packetdup` 0 the confirm is gone and the map stays up.
+#[test]
+fn cod4_live_airstrike_confirm_survives_a_lost_packet() {
+    use crate::play::cod4::cmd::BUTTON_CONFIRM_LOCATION;
+    use crate::play::input::Action;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use vcod_cod4::net::clmsg::ClOp;
+    #[derive(Default)]
+    struct Seen {
+        given: bool,
+        pressed: bool,
+        frames: u32,
+        ended: bool,
+    }
+    let lost = Arc::new(AtomicUsize::new(0));
+    let loss = lost.clone();
+    let setup = move |sv: &mut vcod_server::cod4::Cod4Server| {
+        sv.set_test_loss(move |_, ops| {
+            let confirms = ops.iter().any(|o| match o {
+                ClOp::Move { cmds, .. } => cmds
+                    .iter()
+                    .any(|(c, _)| c.buttons & BUTTON_CONFIRM_LOCATION != 0),
+                _ => false,
+            });
+            confirms && loss.fetch_add(1, Ordering::Relaxed) == 0
+        })
+    };
+    let mut seen = Seen::default();
+    let classes = ["assault_mp,0"; 2];
+    let Some(out) = live_war_pair_with(["allies", "axis"], classes, None, setup, move |f| {
+        if f.both && !seen.given && f.level > 9000 {
+            seen.given = true;
+            f.tx.send((
+                0,
+                "maps/mp/gametypes/_hardpoints",
+                "giveHardpointItem",
+                "airstrike_mp",
+            ))
+            .ok();
+        }
+        if seen.given && !seen.pressed && f.s.action_slot(4) {
+            seen.pressed = true;
+        }
+        if f.s.selecting_location() == 0 {
+            if seen.frames > 10 {
+                seen.ended = true;
+                return Some(std::mem::take(&mut seen));
+            }
+            return None;
+        }
+        seen.frames += 1;
+        match seen.frames {
+            10 => f.s.input.key(Action::Attack, true),
+            14 => f.s.input.key(Action::Attack, false),
+            // 3 s: the confirm never landed.
+            200 => return Some(std::mem::take(&mut seen)),
+            _ => {}
+        }
+        None
+    }) else {
+        return;
+    };
+    let out = out.expect("the airstrike's selection never came in 120 s");
+    assert!(out.ended, "the selection outlived the lost packet");
+    // The lost one and the next, which ran it; none after.
+    assert_eq!(
+        lost.load(Ordering::Relaxed),
+        2,
+        "packets carrying the confirm"
+    );
+}
+
 /// What [`streak_run`] saw: the HUD's texts, and when each step came.
 #[derive(Default)]
 struct Streak {

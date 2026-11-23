@@ -115,6 +115,10 @@ The weapon byte is the client's own pick
   switches and footsteps play the frame the predicted move raises them,
   and not again from the snapshot. Item pickups stay the snapshot's (5).
 - A lean moves the eye sideways as 1.7's does (7).
+- 30 packets a second, each repeating the last packet's cmds
+  (`cl_packetdup` 1, [cod4-netfields.md](../research/cod4-netfields.md)
+  14), so one lost packet loses no press. 1.7 sends one a frame to a LAN
+  server; vcod keeps 30 there too.
 
 **Bodies and entities**
 ([cod4-player-anims.md](../research/cod4-player-anims.md)):
@@ -474,11 +478,13 @@ Ranked by how much a player notices. The research-side lists are
    the team and class menus, the spawn and play. That works only on a
    server running without client authentication (`sv_noauth 1`, or no
    Steam library), 2 of 40 public ones sampled; vcod does not do the
-   authentication. On one that does, the join waits 30 s for a gamestate
-   and fails with `no gamestate`, with no clearer reason yet. The browser
-   hides CoD4x servers unless `ui_browserShowCoD4x` is 1, and a CoD4x
-   server's mod files do not download. Details:
-   [cod4x-protocol.md](../research/cod4x-protocol.md) 18.3.
+   authentication. On one that does, the join ends at once with `This
+   CoD4x server requires CoD4x client authentication, which vcod does
+   not support.` The browser lists CoD4x servers, their names marked
+   `[CoD4x]`, but cannot tell which ones authenticate: only a join shows
+   it. `ui_browserShowCoD4x 0` hides them. A CoD4x server's mod files
+   do not download. Details:
+   [cod4x-protocol.md](../research/cod4x-protocol.md) 18.3, 18.4.
 2. **Ranks start fresh.** vcod keeps its own stats file per profile
    (`vcod_mpdata`) and never reads retail's `mpdata`: your retail rank
    and custom classes are safe, and no use here. Create a Class opens at

@@ -182,7 +182,14 @@ pub struct Cod4Game {
     /// is the one the game draws from too (0x8272078); ours is the
     /// engine's own, so the draws differ and their bounds hold.
     hold: vcod_common::rng::HoldRand,
+    /// [`Cod4Server::set_test_loss`].
+    #[cfg(any(test, feature = "testing"))]
+    test_loss: Option<TestLoss>,
 }
+
+/// A test's packet loss: whether to drop a slot's message, by its ops.
+#[cfg(any(test, feature = "testing"))]
+type TestLoss = Box<dyn FnMut(usize, &[ClOp]) -> bool>;
 
 impl Cod4Game {
     /// The cvar table: the level's while one runs (its scripts and the
@@ -535,6 +542,8 @@ impl Cod4Server {
                 killed: false,
                 fatal: None,
                 hold: vcod_common::rng::HoldRand(seed as u32),
+                #[cfg(any(test, feature = "testing"))]
+                test_loss: None,
                 // `sv_fps`, registered by `SV_Init` (0x81735c8).
                 domains: [(
                     "sv_fps".to_string(),
@@ -558,6 +567,14 @@ impl Cod4Server {
     /// (cod4-combat.md 10.9).
     pub fn pin_game_seed(&mut self, seed: u32) {
         self.game.game_seed = Some(seed);
+    }
+
+    /// Test-facing: a client message of the running level whose ops `lose`
+    /// returns true for (its slot, the ops) is dropped before the netchan
+    /// takes it, as one lost on the wire.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn set_test_loss(&mut self, lose: impl FnMut(usize, &[ClOp]) -> bool + 'static) {
+        self.game.test_loss = Some(Box::new(lose));
     }
 
     /// Each level reads the loose `.gsc` under `dir` over the zones'
@@ -953,6 +970,13 @@ impl Cod4Server {
         } else {
             Vec::new()
         };
+        #[cfg(any(test, feature = "testing"))]
+        if !ops.is_empty()
+            && let Some(lose) = &mut self.game.test_loss
+            && lose(slot, &ops)
+        {
+            return;
+        }
         let c = self.core.clients[slot].as_mut().unwrap();
         conn::commit(c, from, &m);
         if c.state == State::Zombie {

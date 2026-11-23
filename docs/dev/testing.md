@@ -246,6 +246,7 @@ ignored_tests_named` fails on one that is not.
 | CoD2 maps, CoD2 load path | `cod2_map_census`, `cod2_load_profile` | |
 | CoD4 maps, gametypes | `cod4_map_sweep` | 6-8 min and ~3 GB a map |
 | the CoD4x join (`net::conn`'s 21 dialect, `net::reliable::Link`) | `COD4X_DEDRUN=<the release's cod4x18_dedrun> cargo test -p vcod --bins -- --ignored --exact play::cod4::tests::cod4x::cod4x_live_join_spawns_and_leaves` (`COD4_DIR`; `COD4X_OUT=<dir>` keeps the capture) | ~12 s past the build |
+| the CoD4x join's gamestate timeout (`conn::GAMESTATE_WAIT`) | the same with `--exact play::cod4::tests::cod4x::cod4x_live_withheld_gamestate_times_out` | ~22 s past the build |
 
 `nav_census` builds every stock nav graph (at UO, the 19-map UO census).
 `server/tests/bots.rs` and `bot_vehicles.rs` hold one map scenario a test,
@@ -420,10 +421,11 @@ in process, on `play::cod4`'s `tests::sim` clock.
   polling the loader waits off the clock, so only the worker moves it. `play/cod4_sweep.rs`'s `rig` and
   `answer_menu` wait on the thread's `sim` clock, the wall off one (the
   sweep and the soak).
-- `cod4x_live_join_spawns_and_leaves` is the exception: it joins the CoD4x
-  release on the wall clock. It runs `tools/cod4x_capture.sh` and its own
-  binary again inside that script's namespace (`COD4X_INNER_ADDR`), where
-  the second run joins (cod4x-protocol.md 18.3).
+- `play::cod4::tests::cod4x`'s live tests are the exception: they join the
+  CoD4x release on the wall clock. Each runs `tools/cod4x_capture.sh` and
+  its own binary again inside that script's namespace
+  (`COD4X_INNER_ADDR`), where the second run joins (cod4x-protocol.md
+  18.3, 18.4).
 - CoD2's live tests (`cod2_live_*`, `COD2_DIR`) run on the same clock:
   `play::cod2::clock_now` is the session's, and `tests::run_held` serves a
   `Cod2Server` (`tests::Held`: `drain_console`, then the frame). A

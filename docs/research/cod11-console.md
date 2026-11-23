@@ -384,6 +384,7 @@ after the upgrade.
 |---|---|---|---|---|
 | 1 | `r_aaSamples` | 4 | CoD1, CoD4 | 1 |
 | 1 | `name` | `vcod` | all | `Unknown Soldier` |
+| 2 | `ui_browserShowCoD4x` | 0 | all | 1 (cod4x-protocol.md 18.4) |
 
 The rows are vcod's own defaults. An old default that was retail's
 has no row: `com_maxfps` 85 (vcod's for a day, then 0), `rate` 5000

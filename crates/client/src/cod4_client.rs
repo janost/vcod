@@ -624,6 +624,8 @@ impl Cod4Client {
         }
         self.session
             .set_freeze_demo(cx.shell.cvar_f32("cl_freezeDemo") != 0.0);
+        self.session
+            .set_packet_dup(cx.shell.cvar_f32("cl_packetdup") as i32);
         if let Err(e) = self.session.step(now) {
             log::warn!("cod4: {e:#}");
         }

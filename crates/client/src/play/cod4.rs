@@ -581,6 +581,13 @@ impl Cod4Session {
         matches!(self.source, Source::Live { .. })
     }
 
+    /// `cl_packetdup` for a live session's next packets.
+    pub fn set_packet_dup(&mut self, n: i32) {
+        if let Source::Live { conn, .. } = &mut self.source {
+            conn.set_packet_dup(n);
+        }
+    }
+
     /// A capture read to its end.
     pub fn finished(&self) -> bool {
         match &self.source {
