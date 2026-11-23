@@ -105,6 +105,18 @@ pub struct TagPose {
     pub axis: [Vec3; 3],
 }
 
+impl TagPose {
+    /// A muzzle known only by its forward: the frame `MakeNormalVectors`
+    /// builds on it, as a `Directed` spawn has.
+    pub fn along(origin: Vec3, dir: Vec3) -> TagPose {
+        let (x, y, z) = tangent_basis(dir.normalize_or_zero());
+        TagPose {
+            origin,
+            axis: [x, y, z],
+        }
+    }
+}
+
 /// What a played effect is bolted to (the bolt record of R10).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Bolt {
@@ -300,9 +312,8 @@ struct Chain {
     repose: bool,
 }
 
-/// A tag an effect was played on, this frame: its origin and axis. A
-/// muzzle's axis is the frame [`tangent_basis`] builds on its forward, as
-/// a `Directed` spawn has; a `playFxOnTag` tag's is its own.
+/// A tag an effect was played on, this frame: its origin and its own
+/// axis, a muzzle's and a `playFxOnTag` tag's alike (0x49e8d0).
 #[derive(Clone, Copy)]
 struct BoltFrame {
     origin: Vec3,
@@ -310,13 +321,6 @@ struct BoltFrame {
 }
 
 impl BoltFrame {
-    fn new((origin, dir): (Vec3, Vec3)) -> BoltFrame {
-        BoltFrame {
-            origin,
-            axis: tangent_basis(dir.normalize_or_zero()),
-        }
-    }
-
     fn tag(pose: TagPose) -> BoltFrame {
         let [x, y, z] = pose.axis;
         BoltFrame {
@@ -760,13 +764,19 @@ fn spawn_emitter(rng: &mut Rng, out: &mut SpawnOut, em: &Emitter, cx: &SpawnCx) 
     // Clamped so a malformed count (1e9) does not spin the loop before
     // push_capped evicts.
     let count = (sample_r1(rng, em.count).round().max(0.0) as usize).min(MAX_PARTICLES);
-    // CoD2's `evenDistribution` spreads the delays over the range by the
-    // spawn's index instead of drawing them (FxScheduler::PlayEffect).
-    let even = em
-        .cod2
-        .as_ref()
-        .filter(|el| el.prim.has_spawn(vcod_cod2::efx::spawn::EVEN_DISTRIBUTION))
-        .map(|el| (el.prim.delay.1 - el.prim.delay.0).abs() / count.max(1) as f32);
+    // `evenDistribution` spreads the delays from 0 over the range's width
+    // by the spawn's index instead of drawing them: CoD1's runner
+    // (CoDMP.exe 0x493a6b..0x493ae8, grammar doc R6), CoD2's
+    // FxScheduler::PlayEffect.
+    let span = match &em.cod2 {
+        Some(el) => el
+            .prim
+            .has_spawn(vcod_cod2::efx::spawn::EVEN_DISTRIBUTION)
+            .then(|| (el.prim.delay.1 - el.prim.delay.0).abs()),
+        None => (em.spawn_flags & spawn::EVEN_DISTRIBUTION != 0)
+            .then(|| (em.delay.b - em.delay.a).abs()),
+    };
+    let even = span.map(|span| span / count.max(1) as f32);
     for index in 0..count {
         if *out.budget == 0 {
             break;
@@ -833,8 +843,6 @@ fn spawn_emitter(rng: &mut Rng, out: &mut SpawnOut, em: &Emitter, cx: &SpawnCx) 
             }
         }
 
-        // CoD1's `evenDistribution` is not implemented (efx-grammar.md R6);
-        // CoD2's spreads the delays above.
         let (center, base) = element_origin(rng, em, at, frame);
 
         // axisFromSphere: velocity points radially out from the spawn center,
@@ -871,13 +879,9 @@ fn spawn_emitter(rng: &mut Rng, out: &mut SpawnOut, em: &Emitter, cx: &SpawnCx) 
         };
         let (alpha0, alpha1) = sample_curve(rng, &em.alpha);
         let (rgb0, rgb1) = sample_curve_v3(rng, &em.rgb);
-        // `bounce` and an `impactfx` list each turn physics on (R9). A
-        // bolted particle does not trace: vcod integrates it in the tag's
-        // frame.
-        let physics = bolt.is_none()
-            && (em.flags & attr::USE_PHYSICS != 0
-                || em.bounce.is_some()
-                || !em.impact_fx.is_empty());
+        // `bounce` and an `impactfx` list each turn physics on (R9).
+        let physics =
+            em.flags & attr::USE_PHYSICS != 0 || em.bounce.is_some() || !em.impact_fx.is_empty();
         let impact_kills = em.flags & attr::IMPACT_KILLS != 0;
         let elasticity = em.bounce.map_or(0.0, |b| sample_r1(rng, b));
         let impact_fx = pick(rng, &em.impact_fx).cloned();
@@ -1179,7 +1183,7 @@ fn step_pool(pool: &mut VecDeque<Particle>, cx: &StepCx, rng: &mut Rng, chains: 
             return false;
         }
         let before = p.pos;
-        if !update_origin(p, dt, cx.world, now, chains) {
+        if !update_origin(p, frame, dt, cx.world, now, chains) {
             return false;
         }
         if let Some(l) = &p.cod2 {
@@ -1361,9 +1365,13 @@ fn emit_along(e: &mut Emit, accel: Vec3, now_ms: i64, rng: &mut Rng) -> Vec<Vec3
 /// on the new velocity plus half the acceleration. A physics particle
 /// traces that move against solid brushes; a hit plays its impact effect,
 /// kills an `impactKills` particle, or reflects the velocity scaled by
-/// `bounce` and parks the particle at the hit. False when it dies.
+/// `bounce` and parks the particle at the hit. False when it dies. A
+/// bolted particle moves in `frame`, its tag's pose this frame, and traces
+/// both ends posed on it; it reflects off the normal taken into the frame
+/// (0x48dfa3..0x48e0b1, 0x48e1a5, R10).
 fn update_origin(
     p: &mut Particle,
+    frame: Option<BoltFrame>,
     dt: f32,
     world: Option<&CollisionWorld>,
     now: f64,
@@ -1386,7 +1394,8 @@ fn update_origin(
     if p.physics
         && let Some(world) = world
     {
-        let tr = world.point_trace(p.pos, new_pos, CONTENTS_SOLID, false);
+        let world_pos = |v: Vec3| frame.map_or(v, |f| f.origin + f.rotate(v));
+        let tr = world.point_trace(world_pos(p.pos), world_pos(new_pos), CONTENTS_SOLID, false);
         if tr.fraction < 1.0 && !tr.startsolid && !tr.allsolid {
             if let Some(fx) = &p.impact_fx {
                 chains.push(Chain {
@@ -1413,7 +1422,8 @@ fn update_origin(
                 p.accel = l.up * (2.0 * l.gravity);
             }
             p.vel += p.accel * (tr.fraction * dt);
-            p.vel = (p.vel - 2.0 * p.vel.dot(tr.normal) * tr.normal) * p.elasticity;
+            let n = frame.map_or(tr.normal, |f| f.unrotate(tr.normal));
+            p.vel = (p.vel - 2.0 * p.vel.dot(n) * n) * p.elasticity;
             // Too slow off a floor: it rests, and stops tracing.
             if tr.normal.z > 0.0 && p.vel.z < 4.0 {
                 p.vel = Vec3::ZERO;
@@ -1976,12 +1986,12 @@ impl FxSystem {
     /// This frame's tags, as (origin, forward) by key: the shooters'
     /// muzzles, `u32::MAX` the viewmodel's. A `relative` element of an
     /// effect played on one rides it, and dies with it.
-    pub fn set_bolts(&mut self, bolts: &HashMap<u32, (Vec3, Vec3)>) {
+    pub fn set_bolts(&mut self, bolts: &HashMap<u32, TagPose>) {
         self.bolts.retain(|b, _| !matches!(b, Bolt::Muzzle(_)));
         self.bolts.extend(
             bolts
                 .iter()
-                .map(|(&id, &f)| (Bolt::Muzzle(id), BoltFrame::new(f))),
+                .map(|(&id, &pose)| (Bolt::Muzzle(id), BoltFrame::tag(pose))),
         );
     }
 
@@ -2107,6 +2117,14 @@ impl FxSystem {
         let first_mark = self.marks.len();
         let first_chain = self.chains.len();
         let bolt = bolt.map(Bolt::Muzzle);
+        // PlayEffect spawns on a posed bolt's whole pose (0x493912..0x49397d)
+        let at = match bolt.and_then(|b| self.bolts.get(&b)) {
+            Some(f) => SpawnAt::Oriented {
+                pos: f.origin,
+                axis: [f.axis.0, f.axis.1, f.axis.2],
+            },
+            None => at,
+        };
         self.budget = MAX_SPAWN_BUDGET;
         let mut sounds = self.spawn_effect(fs, path, at, now, 0, bolt, cull_from);
         // An `FxRunner` without a delay plays inside PlayEffect (0x493870).
@@ -4135,7 +4153,7 @@ mod tests {
         let mut fixed = rel.clone();
         fixed.flags &= !attr::RELATIVE;
         let mut s = sys_with_files(&[("fx/flash.efx", vec![rel, fixed])]);
-        let mut bolts = HashMap::from([(7, (Vec3::ZERO, Vec3::X))]);
+        let mut bolts = HashMap::from([(7, TagPose::along(Vec3::ZERO, Vec3::X))]);
         s.set_bolts(&bolts);
         let at = SpawnAt::Directed {
             pos: Vec3::ZERO,
@@ -4143,7 +4161,7 @@ mod tests {
         };
         s.spawn_marked(&Pk3Fs::empty(), "fx/flash.efx", at, Some(7), 0.0, true);
         assert_eq!(s.counts().0, 2);
-        bolts.insert(7, (Vec3::new(100.0, 0.0, 0.0), Vec3::Y));
+        bolts.insert(7, TagPose::along(Vec3::new(100.0, 0.0, 0.0), Vec3::Y));
         s.set_bolts(&bolts);
         s.step(0.01, 0.01, None);
         let mut c = centers(&s, 0.01);
@@ -4153,6 +4171,93 @@ mod tests {
         s.set_bolts(&HashMap::new());
         s.step(0.01, 0.02, None);
         assert_eq!(s.counts().0, 1);
+    }
+
+    /// A flash spawns on its muzzle's whole pose (PlayEffect with a bolt,
+    /// 0x493912..0x49397d): a gun rolled a quarter turn puts an element
+    /// offset along the tag's left above the barrel, and a `relative` one
+    /// turns back with the tag.
+    #[test]
+    fn a_muzzle_flash_spawns_on_its_tags_whole_pose() {
+        let mut rel = still_particle();
+        rel.flags |= attr::RELATIVE;
+        rel.origin = R3 {
+            a: [0.0, 5.0, 0.0],
+            b: [0.0, 5.0, 0.0],
+        };
+        let mut fixed = rel.clone();
+        fixed.flags &= !attr::RELATIVE;
+        let mut s = sys_with_files(&[("fx/flash.efx", vec![rel, fixed])]);
+        let rolled = TagPose {
+            origin: Vec3::ZERO,
+            axis: [Vec3::X, Vec3::Z, -Vec3::Y],
+        };
+        s.set_bolts(&HashMap::from([(7, rolled)]));
+        let at = SpawnAt::Directed {
+            pos: Vec3::ZERO,
+            dir: Vec3::X,
+        };
+        s.spawn_marked(&Pk3Fs::empty(), "fx/flash.efx", at, Some(7), 0.0, true);
+        for c in centers(&s, 0.0) {
+            assert!((c - Vec3::new(0.0, 0.0, 5.0)).length() < 1e-4, "{c:?}");
+        }
+        let level = TagPose {
+            origin: Vec3::new(10.0, 0.0, 0.0),
+            axis: [Vec3::X, Vec3::Y, Vec3::Z],
+        };
+        s.set_bolts(&HashMap::from([(7, level)]));
+        s.step(0.01, 0.01, None);
+        let mut c = centers(&s, 0.01);
+        c.sort_by(|a, b| a.x.total_cmp(&b.x));
+        assert!((c[0] - Vec3::new(0.0, 0.0, 5.0)).length() < 1e-4, "{c:?}");
+        assert!((c[1] - Vec3::new(10.0, 5.0, 0.0)).length() < 1e-4, "{c:?}");
+    }
+
+    /// A bolted physics particle traces its move posed on the tag, so it
+    /// stops on the floor instead of falling through (0x48dfa3..0x48e0b1).
+    #[test]
+    fn a_bolted_physics_particle_traces_its_move() {
+        let world = vcod_common::collision::test_world(&[]);
+        let mut e = simple_emitter();
+        e.velocity = R3 {
+            a: [0.0, 0.0, -50.0],
+            b: [0.0, 0.0, -50.0],
+        };
+        e.gravity = R1 { a: 0.0, b: 0.0 };
+        e.flags |= attr::USE_PHYSICS | attr::RELATIVE;
+        let mut s = sys_with_files(&[("fx/flash.efx", vec![e])]);
+        let tag = TagPose {
+            origin: Vec3::new(0.0, 0.0, 1.0),
+            axis: [Vec3::X, Vec3::Y, Vec3::Z],
+        };
+        s.set_bolts(&HashMap::from([(7, tag)]));
+        let at = SpawnAt::Point {
+            pos: Vec3::new(0.0, 0.0, 1.0),
+        };
+        s.spawn_marked(&Pk3Fs::empty(), "fx/flash.efx", at, Some(7), 0.0, true);
+        s.step(0.1, 0.1, Some(&world));
+        let c = centers(&s, 0.1);
+        assert_eq!(c.len(), 1);
+        assert!(c[0].z > 0.0 && c[0].z < 1.0, "{c:?}");
+    }
+
+    /// CoD1's `evenDistribution` sets the `i`th spawn's delay to `i` times
+    /// the range's width over the count, from 0, not `delay`'s low end
+    /// (0x493a6b..0x493ae8).
+    #[test]
+    fn cod1_even_distribution_spreads_the_delays_from_zero() {
+        let mut e = still_particle();
+        e.count = R1 { a: 4.0, b: 4.0 };
+        e.delay = R1 { a: 100.0, b: 300.0 };
+        e.spawn_flags |= spawn::EVEN_DISTRIBUTION;
+        let s = sys_with(e, SpawnAt::Point { pos: Vec3::ZERO });
+        let mut due: Vec<f64> = s
+            .particles
+            .iter()
+            .map(|p| (p.spawn * 1000.0).round())
+            .collect();
+        due.sort_by(f64::total_cmp);
+        assert_eq!(due, [0.0, 50.0, 100.0, 150.0]);
     }
 
     /// `playFxOnTag` plays on the tag's own axis (syscall 0xe5); its

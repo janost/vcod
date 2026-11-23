@@ -1363,6 +1363,9 @@ pub struct BuiltScene {
     /// the held weapon's `tag_flash`. Only entities that drew a held weapon
     /// with that tag this frame.
     pub muzzles: HashMap<u32, (Vec3, Vec3)>,
+    /// The tags of `muzzles` with their whole axis, which a flash spawns
+    /// on and its `relative` elements ride (CoDMP.exe 0x49e8d0).
+    pub muzzle_poses: HashMap<u32, TagPose>,
     /// Per drawn player body with no `tag_flash`: where `CG_CalcMuzzlePoint`
     /// starts its tracers instead ([`crate::fx::registry::muzzle_fallback`]).
     /// It plays no flash there.
@@ -2547,6 +2550,15 @@ fn draw_player(
             let world_pos = transform.transform_point3(local_pos);
             let world_dir = transform.transform_vector3(local_rot * Vec3::X);
             out.muzzles.insert(num, (world_pos, world_dir));
+            let axis =
+                [Vec3::X, Vec3::Y, Vec3::Z].map(|v| transform.transform_vector3(local_rot * v));
+            out.muzzle_poses.insert(
+                num,
+                TagPose {
+                    origin: world_pos,
+                    axis,
+                },
+            );
             if etype == ET_PLAYER && num < MAX_CLIENTS {
                 st.shot = Some(ShotPoint {
                     tag: Some(local_pos),
@@ -2888,6 +2900,13 @@ fn draw_turret(
     // even for the gunner (`CG_FireWeapon` 0x30038bdd).
     if let Some((at, r)) = tag("tag_flash") {
         out.muzzles.insert(num, (at, r * Vec3::X));
+        out.muzzle_poses.insert(
+            num,
+            TagPose {
+                origin: at,
+                axis: [Vec3::X, Vec3::Y, Vec3::Z].map(|v| r * v),
+            },
+        );
     }
     if let Some(path) = flash {
         out.weapon_flash.entry(weapon as i32).or_insert(path);

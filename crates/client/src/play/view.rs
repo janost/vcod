@@ -251,8 +251,8 @@ pub struct OnlineView {
     trend: i32,
     sight: SightDirection,
     /// `tag_flash` as last drawn, view space (X right, Y up, -Z forward):
-    /// position and the tag's forward.
-    flash: Option<(Vec3, Vec3)>,
+    /// position and the tag's forward, left and up.
+    flash: Option<(Vec3, [Vec3; 3])>,
     /// `tag_brass` as last posed, the same space; kept under a scope, as
     /// `CG_EjectBrass` reads the viewmodel's tag whether it is drawn.
     brass: Option<(Vec3, Vec3)>,
@@ -568,11 +568,11 @@ impl OnlineView {
             let (pos, rot) = w.pose.bone_world(&w.skeleton, w.skeleton.bone_index(name)?);
             Some((
                 transform.transform_point3(pos),
-                transform.transform_vector3(rot * Vec3::X),
+                [Vec3::X, Vec3::Y, Vec3::Z].map(|v| transform.transform_vector3(rot * v)),
             ))
         };
         self.flash = tag("tag_flash");
-        self.brass = tag("tag_brass");
+        self.brass = tag("tag_brass").map(|(pos, axis)| (pos, axis[0]));
         // Posed all the same, so the clips run on under the scope.
         let drawn = match self.draw_gun {
             DrawGun::Never => false,
@@ -598,7 +598,22 @@ impl OnlineView {
     /// `eye` with basis `(forward, right, up)`. The viewmodel shares the
     /// world's fov, so view space maps straight onto the camera basis.
     pub fn muzzle(&self, eye: Vec3, basis: (Vec3, Vec3, Vec3)) -> Option<(Vec3, Vec3)> {
-        self.flash.map(|tag| view_to_world(tag, eye, basis))
+        self.flash
+            .map(|(pos, axis)| view_to_world((pos, axis[0]), eye, basis))
+    }
+
+    /// [`Self::muzzle`] with the tag's whole axis, world space: the bolt
+    /// its flash spawns on (CoDMP.exe 0x49e8d0 poses the viewmodel's tag
+    /// off the view weapon's refEntity axis).
+    pub fn muzzle_pose(
+        &self,
+        eye: Vec3,
+        basis: (Vec3, Vec3, Vec3),
+    ) -> Option<crate::fx::sim::TagPose> {
+        self.flash.map(|(pos, axis)| crate::fx::sim::TagPose {
+            origin: view_to_world((pos, axis[0]), eye, basis).0,
+            axis: axis.map(|v| view_to_world((Vec3::ZERO, v), eye, basis).1),
+        })
     }
 
     /// The posed viewmodel's `tag_brass` and its forward in world space,
@@ -857,7 +872,7 @@ mod tests {
         let aspect = 16.0 / 9.0;
         let at = Vec3::new(3.0, -2.5, -22.0);
         let mut view = OnlineView {
-            flash: Some((at, Vec3::NEG_Z)),
+            flash: Some((at, [Vec3::NEG_Z, Vec3::NEG_X, Vec3::Y])),
             ..OnlineView::default()
         };
         let eye = Vec3::new(100.0, -40.0, 60.0);
