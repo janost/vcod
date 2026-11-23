@@ -79,7 +79,8 @@ not: 64118 on mp_carentan, 26647 on mp_cassino, 58901 on mp_depot.)
    and the per-pass GPU stamps run on this path too.
 
 Pixel output: the frame digest (`frame_digest.rs`: the view, every
-dynamic model's transform and bone matrices, HUD, sound, effects) of the
+dynamic model's transform and bone matrices, HUD, sound, effects; no
+pixels) of the
 1.1 and UO bot demos under `timedemo` is identical before and after,
 843 and 847 frames, and the renderer's code is unchanged, so the frames
 are too.

@@ -184,6 +184,16 @@ switches with the window as retail's does at its `vid_restart`:
   shifts each and blends them (`lightmap_lit`), which is the same pixel
   without a reload when the window mode switches. Under `vc_bicubic`
   (vcod's own filter) it shifts the filtered sample.
+  VERIFIED (the stock 1.1 BSPs, read with `vcod_common::mapworld::load`,
+  2026-11-23): the share of lightmap texels with a channel over 127, the
+  ones the doubling clamps, is mp_carentan 13.7% (179,772 of 1,310,720),
+  mp_harbor 9.9%, mp_railyard 8.8%, mp_dawnville 6.9%, mp_powcamp 1.9%,
+  mp_brecourt 0.8%, mp_chateau 0.2%, mp_pavlov, mp_depot, mp_ship and
+  mp_rocket under 0.05%, mp_hurtgen none. On mp_carentan, at 16 points of
+  each 2x2 texel cell holding such a texel, filtering before the shift
+  (vcod before f1808d2b9) and after it (retail) round to different bytes
+  at 66% of the points, 3.7% by 7 steps or more, at most 127 (a clamped
+  texel beside a dark one: the old way saturates the blend).
 - Stage gens (section 5): `vertex` scales the vertex colour by
   `identityLight`; `identityLighting`, `constLighting` and `wave` scale
   the tint (`STAGE_FLAG_VERTEX_RGB_HALF`, `STAGE_FLAG_TINT_LIGHT`).
