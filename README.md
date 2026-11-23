@@ -113,8 +113,9 @@ The ones you'll hit first, in every game. Each game's page lists the rest.
 - No PunkBuster, no anti-cheat.
 - Audio follows the engine on paper but has had little checking by ear.
 - CoD 4: most public servers run CoD4x with client authentication, which
-  vcod does not do. It joins the few CoD4x servers that run without it
-  (`--connect`) and hides CoD4x servers in the browser.
+  vcod does not do. It joins the few CoD4x servers that run without it and
+  refuses the others with that reason. The browser lists CoD4x servers but
+  cannot tell the two kinds apart.
 
 And one that looks like a fix and is one. Asphalt footsteps are silent in
 CoD 1 retail because the engine asks for `asphalt` and the sound table

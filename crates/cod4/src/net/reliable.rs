@@ -28,6 +28,9 @@ const MAX_AHEAD: i32 = 256;
 pub const CMD_GAMESTATE: i32 = 1;
 pub const CMD_DOWNLOAD: i32 = 5;
 pub const CMD_STATS: i32 = 9;
+/// The authentication library's messages (cod4x-protocol.md 5, 19.2): only
+/// that one came is read, never what it holds.
+pub const CMD_AUTH: i32 = 8;
 
 /// The stats block's size in modes 1 and 2 (`SV_ReceiveStats_f` 0x10f5b0).
 pub const STATS_LEN: usize = 0x2000;

@@ -96,6 +96,7 @@ impl ServerInfo {
     pub fn parse(info: &str) -> ServerInfo {
         let s = |k| info_value_for_key(info, k).unwrap_or("");
         let n = |k| atoi(s(k));
+        let cod4x = info_is_cod4x(info);
         ServerInfo {
             clients: n("clients") as u8,
             hostname: field(s("hostname"), 32),
@@ -111,14 +112,15 @@ impl ServerInfo {
             password: n("pswrd") as u8,
             pure: n("pure") as u8,
             ff: n("ff") as u8,
-            kc: n("kc") as u8,
+            // CoD4x names it `ki` (cod4x-protocol.md 2).
+            kc: n(if cod4x { "ki" } else { "kc" }) as u8,
             hc: n("hc") as u8,
             od: n("od") as u8,
             hw: n("hw") as u8,
             modded: n("mod") as u8,
             voice: n("voice") as u8,
             pb: n("pb") > 0,
-            cod4x: info_is_cod4x(info),
+            cod4x,
         }
     }
 }

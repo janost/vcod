@@ -400,11 +400,12 @@ pub const UI_DVARS: [(&str, &str); 15] = [
     ("password", ""),
 ];
 
-/// vcod's own dvar, no retail one: 1 lists CoD4x servers, 0 (the
-/// default) leaves them out of every list. A shell cvar, archived.
+/// vcod's own dvar, no retail one: 1 (the default) lists CoD4x servers,
+/// 0 leaves them out of every list. A shell cvar, archived.
 pub const SHOW_COD4X: &str = "ui_browserShowCoD4x";
-/// What a CoD4x row's name column starts with, so the refused join is
-/// no surprise.
+/// What a CoD4x row's name column starts with: vcod joins one only when it
+/// does not authenticate clients, which no answer shows
+/// (cod4x-protocol.md 14, 18.4).
 const COD4X_TAG: &str = "[CoD4x] ";
 
 /// A dvar the browser's menus own: drawn and set though vcod has no cvar.
@@ -555,9 +556,8 @@ impl ScriptMenus {
 
     /// `UI_BuildServerDisplayList` (0x5472b0): the source's marked rows
     /// with a ping (any favourite), through the filter dvars, sorted.
-    /// vcod also leaves out CoD4x servers, which it joins only without
-    /// client authentication (cod4x-protocol.md 18.3), unless
-    /// [`SHOW_COD4X`] is set.
+    /// vcod also leaves out CoD4x servers when [`SHOW_COD4X`] is 0
+    /// (cod4x-protocol.md 18.4).
     pub(super) fn build_display(&mut self) {
         let src = self.net_source();
         let d = |m: &Self, n: &str| atoi(&m.dvar(n).unwrap_or_default());
@@ -576,7 +576,7 @@ impl ScriptMenus {
             d(self, "ui_browserOldSchool"),
             d(self, "ui_browserShowPunkBuster"),
         ];
-        let cod4x = d(self, SHOW_COD4X) != 0;
+        let cod4x = self.dvar(SHOW_COD4X).is_none_or(|v| atoi(&v) != 0);
         let gametype = self.join_gametype().map(|(g, _)| g.clone());
         let list = self.browser.list(src);
         let mut rows: Vec<usize> = (0..list.len())
@@ -1388,13 +1388,14 @@ mod tests {
         (addr, h)
     }
 
-    /// CoD4x servers stay out of the lists (cod4-handshake.md 13): a fake
-    /// master on loopback lists a stock 1.7 server and a CoD4x one
-    /// (`shortversion\x21` in its `infoResponse`); Internet shows only the
-    /// stock one until `ui_browserShowCoD4x` is 1, then both, the CoD4x
-    /// row's name marked. Local's broadcast finds both and does the same.
+    /// CoD4x servers are listed and marked (cod4x-protocol.md 14, 18.4): a
+    /// fake master on loopback lists a stock 1.7 server (`kc\\1`) and a
+    /// CoD4x one (`shortversion\\x21`, `ki\\1`); Internet shows both, the
+    /// CoD4x row's name marked, and the killcam filter reads `ki` on it.
+    /// `ui_browserShowCoD4x` 0 leaves it out, there and in Local's
+    /// broadcast.
     #[test]
-    fn cod4_browser_hides_cod4x_servers() {
+    fn cod4_browser_lists_and_marks_cod4x_servers() {
         use std::sync::atomic::{AtomicBool, Ordering};
         let Some(install) = vcod_cod4::testing::cod4_install() else {
             return;
@@ -1405,11 +1406,11 @@ mod tests {
         let gs = Gamestate::default();
         let run = std::sync::Arc::new(AtomicBool::new(true));
         let (stock, h1) = fake_server(
-            "\\protocol\\6\\hostname\\stock host\\mapname\\mp_crash\\clients\\1\\sv_maxclients\\8\\gametype\\war\\pure\\1\\hw\\1",
+            "\\protocol\\6\\hostname\\stock host\\mapname\\mp_crash\\clients\\1\\sv_maxclients\\8\\gametype\\war\\pure\\1\\kc\\1\\hw\\1",
             &run,
         );
         let (x, h2) = fake_server(
-            "\\protocol\\6\\hostname\\x host\\mapname\\mp_crash\\clients\\1\\sv_maxclients\\8\\gametype\\war\\pure\\1\\hw\\1\\shortversion\\x21\\build\\1",
+            "\\voice\\0\\mod\\0\\hw\\1\\od\\0\\hc\\0\\ki\\1\\ff\\0\\pswrd\\0\\shortversion\\x21\\build\\1231\\pure\\1\\gametype\\war\\sv_maxclients\\8\\g_humanplayers\\1\\clients\\1\\mapname\\mp_crash\\hostname\\x host\\protocol\\6",
             &run,
         );
         let master = UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -1443,25 +1444,37 @@ mod tests {
         assert!(pump_until(&mut m, |m| answered(m, Source::Internet)));
         assert!(answer.join().unwrap().is_some());
         let shown = |m: &ScriptMenus| -> Vec<SocketAddrV4> {
-            m.shown_servers().iter().map(|s| s.rec.addr).collect()
+            let mut v: Vec<_> = m.shown_servers().iter().map(|s| s.rec.addr).collect();
+            v.sort();
+            v
         };
-        assert_eq!(shown(&m), [stock]);
-        let t: Vec<String> = texts(&m, &a).into_iter().map(|(s, _)| s).collect();
-        assert!(t.iter().any(|s| s == "stock host"), "{t:?}");
-        assert!(!t.iter().any(|s| s.contains("x host")), "{t:?}");
-
-        m.set_dvar(SHOW_COD4X, "1");
-        m.pump_browser(Instant::now());
-        let mut both = shown(&m);
+        let mut both = vec![stock, x];
         both.sort();
-        let mut want = vec![stock, x];
-        want.sort();
-        assert_eq!(both, want);
+        assert_eq!(shown(&m), both);
         let t: Vec<String> = texts(&m, &a).into_iter().map(|(s, _)| s).collect();
         assert!(t.iter().any(|s| s == "[CoD4x] x host"), "{t:?}");
+        assert!(t.iter().any(|s| s == "stock host"), "{t:?}");
+        let row = |m: &ScriptMenus, at: SocketAddrV4| {
+            let l = m.browser.list(Source::Internet);
+            l.iter().find(|s| s.rec.addr == at).unwrap().info().clone()
+        };
+        assert!(row(&m, x).cod4x && !row(&m, stock).cod4x);
+        assert_eq!((row(&m, x).kc, row(&m, stock).kc), (1, 1));
+        m.set_dvar("ui_browserKillcam", "1");
+        m.pump_browser(Instant::now());
+        assert_eq!(shown(&m), both);
+        m.set_dvar("ui_browserKillcam", "0");
+        m.pump_browser(Instant::now());
+        assert!(shown(&m).is_empty());
+        m.set_dvar("ui_browserKillcam", "-1");
+
+        m.set_dvar(SHOW_COD4X, "0");
+        m.pump_browser(Instant::now());
+        assert_eq!(shown(&m), [stock]);
+        let t: Vec<String> = texts(&m, &a).into_iter().map(|(s, _)| s).collect();
+        assert!(!t.iter().any(|s| s.contains("x host")), "{t:?}");
 
         // Local: the broadcast pointed at both.
-        m.set_dvar(SHOW_COD4X, "0");
         m.browser.lan_targets = vec![stock, x];
         m.set_dvar("ui_netSource", "0");
         m.refresh(Source::Local, true);
@@ -1469,7 +1482,7 @@ mod tests {
         assert_eq!(shown(&m), [stock]);
         m.set_dvar(SHOW_COD4X, "1");
         m.pump_browser(Instant::now());
-        assert_eq!(shown(&m).len(), 2);
+        assert_eq!(shown(&m), both);
         run.store(false, Ordering::Relaxed);
         let _ = (h1.join(), h2.join());
     }
