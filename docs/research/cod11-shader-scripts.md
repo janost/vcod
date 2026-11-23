@@ -1297,6 +1297,25 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   any entity that is not the world), and 0x514d40 reflects in the
   model's frame; the cache, having no normals, cannot carry an
   environment stage.
+- VERIFIED (the instructions), `CoDMP.exe` 0x4d3630..0x4d37c9 (Q3's
+  `R_RotateForEntity` shape): the orientation takes the entity's origin
+  (`+0x44`) and axes (`+0x1c..+0x3c`), and its `viewOrigin` is the eye
+  minus that origin dotted with each axis (0x4d3703..0x4d3752). When the
+  float at `+0x40` is non-zero (against 0.0 at 0x568e64, 0x4d3755) each
+  `viewOrigin` component is divided by its own axis's length
+  (0x4d3780..0x4d37c6), so a scaled axis yields the eye in the rotated,
+  unscaled frame. INFERRED: `+0x40` is Q3's `nonNormalizedAxes`. Not
+  traced: whether a scaled `misc_model`'s placement reaches 0x4d3630
+  with scaled axes and that flag, so retail's environment reflection on a
+  scaled static model stays open.
+- VERIFIED, census of every `misc_model` on the 35 stock MP maps (1.1
+  paks; 1.5 `main/`; UO's `pakuo*` and `uomappack00`): three placements
+  carry a reflecting skin (a `metal_env`, `wood_env` or airplane/bomber
+  template, or a `skins/` block with `tcGen environment`), the two
+  mp_chateau cars above and mp_bocage's `vehicle_peugeot_static`, all
+  unscaled; 64 models are placed with a non-uniform `modelscale_vec`
+  (mp_brecourt's hedgerows and others), none reflecting. So vcod's unit
+  `model_axes` (below) differ from retail on no stock prop.
 - vcod: a skin whose script or template takes `tcGen environment`
   (`Shader::reflects`) batches per placement (`props::Batch::model_axes`,
   the model's left and up axes in the world), and that batch's copy of
