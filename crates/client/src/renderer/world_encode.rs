@@ -284,9 +284,9 @@ impl Renderer {
             }
             DrawRef::Stage(sb_idx) => {
                 let sb = &world.stage_batches[sb_idx as usize];
-                let key = Bound::Stage(sb.variant, sb.two_sided, sb.bias);
+                let key = Bound::Stage(sb.variant, sb.two_sided, sb.offset());
                 if *bound != Some(key) {
-                    pass.pipeline(self.stage_pipeline(sb.variant, sb.two_sided, sb.bias));
+                    pass.pipeline(self.stage_pipeline(sb.variant, sb.two_sided, sb.offset()));
                     *bound = Some(key);
                     *groups = WorldGroups::default();
                     tally(&self.census, |c| c.pipelines += 1);

@@ -2141,7 +2141,7 @@ impl Renderer {
                 for ds in &dome.stages {
                     let key = (ds.variant, ds.two_sided);
                     if bound != Some(key) {
-                        pass.set_pipeline(self.stage_pipeline(ds.variant, ds.two_sided, false));
+                        pass.set_pipeline(self.stage_pipeline(ds.variant, ds.two_sided, None));
                         bound = Some(key);
                         tally(&self.census, |c| c.pipelines += 1);
                     }

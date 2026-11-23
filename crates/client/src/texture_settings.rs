@@ -267,8 +267,7 @@ pub fn path_levels(fs: &dyn AssetSource) -> impl Fn(&str) -> Option<Image> + '_ 
     |name| assets::resolve_bundle_image(fs, name).map(|p| assets::load_path_image(fs, &p))
 }
 
-/// A `#N` level of a model skin, through `load_skin_image` so foliage masks
-/// invert like their level 0.
+/// A `#N` level of a model skin, probed as `load_skin_image` probes it.
 pub fn skin_levels(fs: &dyn AssetSource) -> impl Fn(&str) -> Option<Image> + '_ {
     |name| {
         assets::resolve_bundle_image(fs, &format!("skins/{name}"))
