@@ -620,6 +620,20 @@ impl Vehicle {
     }
 }
 
+/// `setModel` on a vehicle: the suspension reads the wheel tags off the
+/// DObj every step (0x7c488), so a jeep's wreck settles on its death
+/// model's wheels (coduo-vehicles.md 17.6).
+pub(crate) fn model_changed(host: &mut GameHost, cx: &mut Cx, id: EntId) {
+    if !host.vehicles.live.contains_key(&id) {
+        return;
+    }
+    let name = field_string(host, cx, id, "model");
+    let model = vehicle_model(host, &name);
+    if let Some(v) = host.vehicles.live.get_mut(&id) {
+        v.phys.model = model;
+    }
+}
+
 /// The wheel and gun tags the step reads off the vehicle's model.
 fn vehicle_model(host: &mut GameHost, model: &str) -> physics::VehicleModel {
     let Some(fs) = host.fs.clone() else {

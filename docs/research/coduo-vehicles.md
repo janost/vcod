@@ -3251,3 +3251,22 @@ capture's 27150 (VERIFIED, gdb, 2026-11-21).
   pushed each component an ulp high; it now matches the struck tank's
   pushed velocity to the bit (41a5c060 41121df8 bf356778) (VERIFIED, gdb
   on a rerun of `vehicle_runover_ab`'s capture).
+
+### 17.6 A wreck beside its duplicate
+
+Addresses are `game.mp.uo.i386.so`'s.
+
+- **The wreck settles on its death model.** `_jeepeffects_gmi::death`
+  sets a jeep's `deathmodel` at the death (`xmodel/v_us_lnd_willysjeep_d`
+  for the Willys); the tanks' swap is commented out (15.2) (VERIFIED, the
+  scripts in `pakuo0*.pk3`). The suspension (0x81331) reads each wheel's
+  tag off the entity's DObj on every step: its wheel loop
+  (0x813e0..0x8171d) calls 0x7c488, which is `G_DObjGetLocalTagMatrix(ent,
+  tag)` on the tag name table at GOT - 0x4ea0, with `Com_Error` when one is
+  missing (0x7c4ae..0x7c4f3) (VERIFIED (the instructions)). On a rerun of
+  the mp_peaks blast capture under `tools/re/gdb_vehicle.py` (2026-11-21)
+  the wreck, at rest since the kill, steps at its duplicate's first frame
+  and rises 0.12 (z -110.5165 to -110.3952) and rolls -0.846 to -0.912
+  with no velocity: the death model's wheels (VERIFIED, gdb). vcod kept
+  the spawn model's wheel tags; `setModel` on a vehicle now re-reads them
+  (`vehicle::model_changed`).

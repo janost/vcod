@@ -801,6 +801,9 @@ otherwise.
   (`clip_brush_box`): its leave fraction takes no epsilon. Q3's backed-off
   leave cleared mp_peaks' clip post where retail's probe struck it
   (`coduo-vehicles.md` 17.5).
+- A vehicle's step reads its wheel tags off its current model, so
+  `setModel` re-reads them (a jeep's wreck settles on its death model,
+  `coduo-vehicles.md` 17.6).
 - A vehicle's collmap clips as that vehicle's own model instance
   (`CollisionWorld::set_model_instance`; one inline model serves every
   vehicle of a kind), passed by its own traces as `Pusher::Copy(entity)`.
