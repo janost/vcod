@@ -49,6 +49,10 @@ struct StageParams {
     // the deform records and their kinds (deform.wgsl)
     deform: array<vec4<f32>, 3>,
     deform_kinds: vec4<u32>,
+    // the falloff and the CoD4 world fx, unread here
+    tail: array<vec4<f32>, 3>,
+    // the deforms' clock terms (deform.wgsl)
+    deform_ext: array<vec4<f32>, 3>,
 };
 @group(3) @binding(0) var<uniform> stage: StageParams;
 
@@ -143,7 +147,7 @@ fn vs_main(
     }
     // the bones are view space here, so a deform's world terms (the
     // wave's x+y+z, the normal's noise) read view-space coordinates
-    let d = deform_vertex(p.xyz, n, uv);
+    let d = deform_vertex(p.xyz, n, uv, 0.0);
     p = vec4<f32>(d.pos, 1.0);
     n = d.normal;
     let view = u.model * p;

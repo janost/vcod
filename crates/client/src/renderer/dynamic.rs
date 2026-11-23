@@ -1213,6 +1213,7 @@ impl Renderer {
             m.surfaces(),
             m.materials(),
             true,
+            &|_| None,
             &mut |skin| {
                 let (img, levels) = self.skin_image(fs, skin);
                 let view = upload_levels(&self.device, &self.queue, skin, &img, &levels);
@@ -1360,6 +1361,13 @@ impl Renderer {
             };
             self.dynamic.skin_groups.insert(skin, g);
         }
+        let sprites: HashMap<String, Sprite> = drawn_skins(std::iter::once((surfaces, materials)))
+            .into_iter()
+            .filter_map(|skin| {
+                let sprite = self.dynamic.materials.sprite(&skin)?;
+                Some((skin, sprite))
+            })
+            .collect();
         let mut groups = std::mem::take(&mut self.dynamic.skin_groups);
         let uploaded = upload_vm_model(
             &self.device,
@@ -1367,6 +1375,7 @@ impl Renderer {
             surfaces,
             materials,
             false,
+            &|skin| sprites.get(skin).copied(),
             &mut |skin| {
                 if let Some(g) = groups.get(skin) {
                     return g.clone();
@@ -1902,13 +1911,15 @@ pub(super) fn vm_skin_group(
 /// `None` when nothing is drawable (empty buffers are invalid to create).
 /// `bind_skin` gives a skin name's image group, called once per skin the
 /// upload binds, in surface order; `bones` makes the view model's own
-/// bone buffer.
+/// bone buffer. A surface whose skin `sprite` names goes up encoded for
+/// `dynamic_model.wgsl`'s sprite step ([`encode_entity_sprite`]).
 pub(super) fn upload_vm_model(
     device: &wgpu::Device,
     vm: &VmPass,
     model_surfaces: &[model::Surface],
     materials: &[String],
     bones: bool,
+    sprite: &dyn Fn(&str) -> Option<Sprite>,
     bind_skin: &mut dyn FnMut(&str) -> wgpu::BindGroup,
 ) -> Option<VmModel> {
     let mut verts: Vec<VmVert> = Vec::new();
@@ -1933,18 +1944,23 @@ pub(super) fn upload_vm_model(
         });
         skins.push(skin.to_string());
         let base = verts.len();
+        let mut surf_verts = surf.verts.clone();
+        let mut surf_indices = surf.indices.clone();
+        if let Some(k) = sprite(skin) {
+            encode_entity_sprite(skin, k, &mut surf_verts, &mut surf_indices);
+        }
         surfaces.push(VmSurface {
             first_index: indices.len() as u32,
-            index_count: surf.indices.len() as u32,
+            index_count: surf_indices.len() as u32,
             base_vertex: if rebase { 0 } else { base as i32 },
             bind_group,
             src: src as u32,
         });
-        verts.extend_from_slice(&surf.verts);
+        verts.extend_from_slice(&surf_verts);
         match rebase {
             // `base + i` stays under 1 << 16: the total is.
-            true => indices.extend(surf.indices.iter().map(|&i| (base + usize::from(i)) as u16)),
-            false => indices.extend_from_slice(&surf.indices),
+            true => indices.extend(surf_indices.iter().map(|&i| (base + usize::from(i)) as u16)),
+            false => indices.extend_from_slice(&surf_indices),
         }
     }
     if surfaces.is_empty() {
@@ -1984,6 +2000,62 @@ pub(super) fn upload_vm_model(
         skins,
         bones,
     })
+}
+
+/// An entity surface under `autosprite` or `autosprite2`, encoded in model
+/// space as the world's soups are (`vcod_common::deform`): the centre or
+/// end midpoint in `pos`, the stamp corner in `uv`, autosprite2's axis in
+/// `normal`, the half-width or signed half end-length in `tangent[0]`.
+/// Retail runs the deform on the entity's posed tess with the view's axes
+/// brought into the entity's frame (CoDMP.exe 0x514080, 0x514330 through
+/// 0x514010); `dynamic_model.wgsl` adds the world-space view axes after the
+/// pose, the same corners. Autosprite's quad takes its first vertex's bones,
+/// as its centre is that vertex's quad.
+pub(super) fn encode_entity_sprite(
+    skin: &str,
+    sprite: Sprite,
+    verts: &mut [VmVert],
+    indices: &mut Vec<u16>,
+) {
+    let mut dv: Vec<vcod_common::mapworld::DrawVert> = verts
+        .iter()
+        .map(|v| vcod_common::mapworld::DrawVert {
+            pos: v.pos,
+            uv: v.uv,
+            lm_uv: [0.0; 2],
+            normal: v.normal,
+            color: v.color,
+        })
+        .collect();
+    match sprite {
+        Sprite::Auto if dv.len().is_multiple_of(4) && indices.len() == dv.len() / 4 * 6 => {
+            *indices = vcod_common::deform::encode_autosprite(&mut dv, 0)
+                .into_iter()
+                .map(|i| i as u16)
+                .collect();
+            for quad in verts.as_chunks_mut::<4>().0 {
+                let (bi, bw) = (quad[0].bone_indices, quad[0].bone_weights);
+                for v in quad {
+                    (v.bone_indices, v.bone_weights) = (bi, bw);
+                }
+            }
+        }
+        Sprite::Auto => {
+            log::warn!("Autosprite shader {skin} had odd vertex or index count");
+            return;
+        }
+        Sprite::Auto2 => {
+            let idx: Vec<u32> = indices.iter().map(|&i| u32::from(i)).collect();
+            vcod_common::deform::encode_autosprite2(&mut dv, &idx, 0);
+        }
+    }
+    for (v, d) in verts.iter_mut().zip(&dv) {
+        v.pos = d.pos;
+        v.uv = d.uv;
+        v.normal = d.normal;
+        v.color = d.color;
+        v.tangent = [d.lm_uv[0], 0.0, 0.0];
+    }
 }
 
 /// The skins `upload_vm_model` binds for these meshes, each once, in
@@ -2047,6 +2119,79 @@ mod light_tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use vcod_common::mapworld::{EntityLight, EntityLighter};
+
+    fn sprite_vert(p: [f32; 3], bone: u8) -> VmVert {
+        VmVert {
+            pos: p,
+            normal: [0.0, -1.0, 0.0],
+            uv: [0.3, 0.7],
+            bone_indices: [bone, 0, 0, 0],
+            bone_weights: [1.0, 0.0, 0.0, 0.0],
+            color: [255; 4],
+            tangent: [0.0; 3],
+            binormal: [0.0; 3],
+        }
+    }
+
+    /// An entity's autosprite quad uploads as the world's: its centre, the
+    /// stamp corners and indices, the half-width in `tangent[0]` (0.707 of
+    /// the corner distance, 0x5691cc), and one bone set, so the posed
+    /// corners face the view as `autosprite_corner` puts them.
+    #[test]
+    fn an_entity_autosprite_quad_uploads_encoded() {
+        let mut v: Vec<VmVert> = [[-8., 0., -8.], [8., 0., -8.], [8., 0., 8.], [-8., 0., 8.]]
+            .iter()
+            .enumerate()
+            .map(|(i, p)| sprite_vert(*p, i as u8))
+            .collect();
+        let mut idx = vec![0, 1, 2, 0, 2, 3];
+        encode_entity_sprite("light_sprite", Sprite::Auto, &mut v, &mut idx);
+        assert_eq!(idx, vec![0, 1, 3, 3, 1, 2]);
+        let r = 128f32.sqrt() * vcod_common::deform::AUTOSPRITE_RADIUS_SCALE;
+        for (k, x) in v.iter().enumerate() {
+            assert_eq!(x.pos, [0.0; 3]);
+            assert!((x.tangent[0] - r).abs() < 1e-5);
+            assert_eq!(x.bone_indices, [0; 4], "vertex {k}");
+        }
+        assert_eq!(
+            v.iter().map(|x| x.uv).collect::<Vec<_>>(),
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+        );
+        // seen down +y: left -x, up +z; the first corner is top left
+        let d = vcod_common::mapworld::DrawVert {
+            pos: v[0].pos,
+            uv: v[0].uv,
+            lm_uv: [v[0].tangent[0], 0.0],
+            normal: v[0].normal,
+            color: v[0].color,
+        };
+        let c = vcod_common::deform::autosprite_corner(&d, -glam::Vec3::X, glam::Vec3::Z);
+        assert!((c - glam::Vec3::new(-r, 0.0, r)).length() < 1e-4);
+    }
+
+    /// autosprite2 keeps the ribbon's indices and moves each end onto its
+    /// midpoint, the axis in the normal and the signed half end in
+    /// `tangent[0]`; an odd autosprite surface stays as it is.
+    #[test]
+    fn an_entity_autosprite2_ribbon_uploads_encoded() {
+        let mut v: Vec<VmVert> = [[0., 0., -2.], [100., 0., -2.], [100., 0., 2.], [0., 0., 2.]]
+            .map(|p| sprite_vert(p, 0))
+            .to_vec();
+        let mut idx = vec![0, 1, 2, 0, 2, 3];
+        encode_entity_sprite("beam", Sprite::Auto2, &mut v, &mut idx);
+        assert_eq!(idx, vec![0, 1, 2, 0, 2, 3]);
+        assert_eq!([v[0].pos, v[3].pos], [[0.0; 3]; 2]);
+        assert_eq!([v[1].pos, v[2].pos], [[100.0, 0.0, 0.0]; 2]);
+        assert!(v.iter().all(|x| x.normal[0].abs() == 100.0));
+        assert!(v.iter().all(|x| x.tangent[0].abs() == 2.0));
+        assert_eq!(v[0].tangent[0], -v[3].tangent[0]);
+
+        let mut odd: Vec<VmVert> = (0..3).map(|i| sprite_vert([i as f32, 0., 0.], 0)).collect();
+        let mut idx = vec![0, 1, 2];
+        encode_entity_sprite("odd", Sprite::Auto, &mut odd, &mut idx);
+        assert_eq!(odd[1].pos, [1.0, 0.0, 0.0]);
+        assert_eq!(idx, vec![0, 1, 2]);
+    }
 
     /// A lighter whose texels read the origin's x and the box's low z,
     /// counting its lookups.

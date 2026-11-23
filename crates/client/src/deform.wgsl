@@ -1,7 +1,7 @@
 // deformVertexes, appended to every module that draws a shader stage
 // (world, shadow cutouts, entities, viewmodel). The module's `stage`
-// carries `deform` and `deform_kinds` (renderer::StageParams) and
-// noise.wgsl rides along. Retail runs a shader's records in script order
+// carries `deform`, `deform_kinds` and `deform_ext` (renderer::StageParams)
+// and noise.wgsl rides along. Retail runs a shader's records in script order
 // on the same vertices (CoDMP.exe 0x5149b0), so each reads the position
 // and normal the one before it left.
 
@@ -46,19 +46,22 @@ struct Deformed {
     normal: vec3<f32>,
 };
 
-fn deform_vertex(pos: vec3<f32>, normal: vec3<f32>, uv: vec2<f32>) -> Deformed {
+// `dt`: seconds the drawn entity's material clock runs past the frame's
+// (its refEntity shaderTime, 0x4d68df); 0 for the world.
+fn deform_vertex(pos: vec3<f32>, normal: vec3<f32>, uv: vec2<f32>, dt: f32) -> Deformed {
     var p = pos;
     var n = normal;
     for (var i = 0u; i < 3u; i++) {
         let k = stage.deform_kinds[i] & ((1u << DEFORM_FORM_SHIFT) - 1u);
         let form = stage.deform_kinds[i] >> DEFORM_FORM_SHIFT;
         let d = stage.deform[i];
+        let e = stage.deform_ext[i];
         if (k == DEFORM_WAVE || k == DEFORM_FLAP_S || k == DEFORM_FLAP_T) {
             // wave (0x513570): travelling along +x+y+z, along the normal,
             // through the form's table at fistp's nearest-even index;
             // flap (0x5136e0) scales it by the base s or t. A noise form
             // finds no table (0x5133d0) and holds its base.
-            let at = i32(round((d.z + (p.x + p.y + p.z) * d.w) * 1024.0));
+            let at = i32(round((d.z + e.x * dt + (p.x + p.y + p.z) * d.w) * 1024.0));
             var scale = d.x;
             if (form != FORM_NOISE) {
                 scale += d.y * table_entry(form, at);
@@ -73,10 +76,11 @@ fn deform_vertex(pos: vec3<f32>, normal: vec3<f32>, uv: vec2<f32>) -> Deformed {
             // normal (0x513990): each axis takes amp times the noise at
             // 0.98 * the vertex (x offset 0, 100, 200), then renormalizes
             let q = p * 0.98;
+            let w = d.y + e.x * dt;
             let m = n + d.x * vec3<f32>(
-                noise_get4f(vec4<f32>(q, d.y)),
-                noise_get4f(vec4<f32>(q.x + 100.0, q.y, q.z, d.y)),
-                noise_get4f(vec4<f32>(q.x + 200.0, q.y, q.z, d.y)),
+                noise_get4f(vec4<f32>(q, w)),
+                noise_get4f(vec4<f32>(q.x + 100.0, q.y, q.z, w)),
+                noise_get4f(vec4<f32>(q.x + 200.0, q.y, q.z, w)),
             );
             n = select(m, normalize(m), dot(m, m) > 0.0);
         } else if (k == DEFORM_BULGE) {
@@ -85,8 +89,13 @@ fn deform_vertex(pos: vec3<f32>, normal: vec3<f32>, uv: vec2<f32>) -> Deformed {
             let at = i32((uv.x * d.x + d.z) * 162.97466);
             p = p + n * (table_entry(0u, at) * d.y);
         } else if (k == DEFORM_MOVE) {
-            // move (0x513b70): one offset for every vertex
-            p = p + d.xyz;
+            // move (0x513b70): the vector times one table wave, the same
+            // offset for every vertex; a noise form holds its base
+            var scale = e.x;
+            if (form != FORM_NOISE) {
+                scale += e.y * table_entry(form, i32(round((e.z + e.w * dt) * 1024.0)));
+            }
+            p = p + d.xyz * scale;
         }
     }
     return Deformed(p, n);

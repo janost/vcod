@@ -589,7 +589,7 @@ fn over_cap_bone_set_truncates() {
 
 #[test]
 fn stage_params_is_std140_shaped_and_pod_roundtrips() {
-    assert_eq!(std::mem::size_of::<StageParams>(), 288);
+    assert_eq!(std::mem::size_of::<StageParams>(), 336);
     let p = StageParams {
         uv0: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
         uv1: [7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
@@ -610,6 +610,7 @@ fn stage_params_is_std140_shaped_and_pod_roundtrips() {
         deform_kinds: [DEFORM_WAVE, DEFORM_BULGE, DEFORM_MOVE, 0],
         falloff: [[0.0; 4]; 2],
         fx: [0.0; 4],
+        deform_ext: [[2.0, 0.0, 0.0, 0.0], [0.0; 4], [1.0, 2.0, 0.5, 3.0]],
     };
     // slot-shaped write/read, like the UBO dynamic-offset path
     let mut slot = [0u8; std::mem::size_of::<StageParams>()];
@@ -938,6 +939,34 @@ fn parsed(text: &str) -> Material {
     Material::from_shader(&parse_shader(&name, &body, &mut WarnSet::new()))
 }
 
+/// An entity whose material clock runs `dt` past the frame's moves each
+/// deform as the frame's record at `t + dt` would: `deform.wgsl` adds
+/// `deform_ext`'s rate times `dt`, as retail moves shaderTime per entity
+/// (CoDMP.exe 0x4d68df). The bulge reads the refdef's time (0x16d8a08)
+/// and takes no rate.
+#[test]
+fn an_entity_clock_moves_the_deforms_by_their_rates() {
+    let sh = parsed(
+        "t\n{\ndeformVertexes wave 64 sin 0 2 0.1 0.75\ndeformVertexes normal .5 2\ndeformVertexes move 0 0 2 sawtooth 1 2 0.25 0.5\n{\nmap a.tga\n}\n}",
+    );
+    let (t, dt) = (2.0f32, 0.3f32);
+    let now = stage_params(&sh, 0, t).unwrap();
+    let later = stage_params(&sh, 0, t + dt).unwrap();
+    let wave_phase = (now.deform[0][2] + now.deform_ext[0][0] * dt).rem_euclid(1.0);
+    assert!((wave_phase - later.deform[0][2]).abs() < 1e-5);
+    let noise_time = now.deform[1][1] + now.deform_ext[1][0] * dt;
+    assert!((noise_time - later.deform[1][1]).abs() < 1e-5);
+    // move: the shader's table read at the entity's phase is the wave at t + dt
+    let [base, amp, phase, rate] = now.deform_ext[2];
+    let at = ((phase + rate * dt) * 1024.0).round_ties_even() as i64 & 1023;
+    let Deform::Move { wave: w, .. } = &sh.deforms[2] else {
+        panic!("move")
+    };
+    let k = vcod_common::material::wave_value(w, t + dt);
+    assert!((base + amp * at as f32 / 1024.0 - k).abs() < 1e-5, "{k}");
+    assert_eq!(now.deform[2], [0.0, 0.0, 2.0, 0.0]);
+}
+
 /// deform.wgsl's kind codes are the ones `stage_params` writes.
 #[test]
 fn deform_wgsl_codes_are_the_renderer_ones() {
@@ -1072,14 +1101,20 @@ fn stage_params_carry_the_deforms_in_script_order() {
     );
     assert!(stage_animated(&sh, 0));
     let p = stage_params(&sh, 0, 2.0).unwrap();
+    let square = 1 << DEFORM_FORM_SHIFT;
     assert_eq!(
         p.deform_kinds,
-        [DEFORM_BULGE, DEFORM_MOVE, DEFORM_NORMAL, 0]
+        [DEFORM_BULGE, DEFORM_MOVE | square, DEFORM_NORMAL, 0]
     );
     assert_eq!(p.deform[0], [3.0, 4.0, 10.0, 0.0]);
-    // square at phase 0 reads +1: 2 * (1 + 2 * 1) along z
-    assert_eq!(p.deform[1], [0.0, 0.0, 6.0, 0.0]);
+    // move: its vector, and its wave for the shader to read (square at
+    // phase 0 reads +1, so 1 + 2 * 1 along z)
+    assert_eq!(p.deform[1], [0.0, 0.0, 2.0, 0.0]);
+    assert_eq!(p.deform_ext[1], [1.0, 2.0, 0.0, 0.0]);
     assert_eq!(p.deform[2], [0.5, 4.0, 0.0, 0.0]);
+    // the rates an entity's own clock runs further: none for a bulge
+    assert_eq!(p.deform_ext[0], [0.0; 4]);
+    assert_eq!(p.deform_ext[2], [2.0, 0.0, 0.0, 0.0]);
     // reordered, the slots follow
     let sh = parsed(
         "t\n{\ndeformVertexes normal .5 2\ndeformVertexes wave 64 sin 0 2 0 1\n{\nmap a.tga\n}\n}",
@@ -1091,7 +1126,7 @@ fn stage_params_carry_the_deforms_in_script_order() {
         "t\n{\ndeformVertexes autosprite\ndeformVertexes move 0 0 2 square 1 2 0 0\n{\nmap a.tga\n}\n}",
     );
     let p = stage_params(&sh, 0, 2.0).unwrap();
-    assert_eq!(p.deform_kinds, [DEFORM_MOVE, 0, 0, 0]);
+    assert_eq!(p.deform_kinds, [DEFORM_MOVE | square, 0, 0, 0]);
     let plain = parsed("t\n{\n{\nmap a.tga\n}\n}");
     let p = stage_params(&plain, 0, 2.0).unwrap();
     assert_eq!(p.deform_kinds, [0; 4]);
@@ -1290,7 +1325,7 @@ fn wgsl_modules_validate() {
         ("cod2_cookie", cod2_cookie::COOKIE_WGSL),
         ("fx_cloud", fx_cloud::FX_CLOUD_WGSL),
         ("scene_copy", include_str!("../scene_copy.wgsl")),
-        ("shadow_cast", include_str!("../shadow_cast.wgsl")),
+        ("shadow_cast", crate::shadows::SHADOW_CAST_WGSL),
         ("shadow_cut", crate::shadows::SHADOW_CUT_WGSL),
         ("shadow_mask", include_str!("../shadow_mask.wgsl")),
     ];
@@ -1876,6 +1911,7 @@ fn ent_skin(stages: usize) -> Rc<EntSkin> {
         cookie_caster: false,
         sun_caster: false,
         sun_cut: None,
+        sprite: None,
     })
 }
 
@@ -2415,6 +2451,7 @@ fn entity_draws_sort_by_material_sort_then_load_order_then_entity() {
         cookie_caster: false,
         sun_caster: false,
         sun_cut: None,
+        sprite: None,
     };
     let (blend, opaque_late, opaque_early) = (skin(15.0, 0), skin(5.0, 2), skin(5.0, 1));
     let surfs = [
@@ -2441,6 +2478,7 @@ fn the_gun_interleaves_with_the_world_and_entities_by_material() {
         cookie_caster: false,
         sun_caster: false,
         sun_cut: None,
+        sprite: None,
     };
     let (flesh, rifle, glass, smoke) = (
         skin(SORT_OPAQUE, 0),
@@ -2512,6 +2550,7 @@ fn kept_entity_sort_matches_a_fresh_sort() {
             cookie_caster: false,
             sun_caster: false,
             sun_cut: None,
+            sprite: None,
         })
     };
     let (a, b, c, d) = (
