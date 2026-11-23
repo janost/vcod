@@ -509,8 +509,8 @@ has the seats, the drive step and vcod-server's vehicles.
   0x30022040 for the same two types (INFERRED, disassembly). The first skips
   the model under `eFlags` 0x80, takes it from the `xmodel` field, sets the
   refEntity's `shaderTime` to `(cg.time - cent+0x1fc) / 1000` and draws a
-  team head icon sprite over the driver (0x300213c0) (INFERRED,
-  disassembly). The callback:
+  team head icon sprite over the vehicle ("The vehicle's head icon",
+  below). The callback:
   - Writes each control through 0x3001fbb0: `yaw ⊗ pitch ⊗ roll` and a
     translation into the bone's 32-byte slot of the DObj's control array
     (trap 0xa1), gated by trap 0xa2 (INFERRED, disassembly).
@@ -567,6 +567,40 @@ has the seats, the drive step and vcod-server's vehicles.
     disassembly).
   - The seat view sits at the seat tag of `viewlocked_entNum` (0x30040810)
     (INFERRED, decompile).
+- **The vehicle's head icon** (0x30021771..0x3002183c, VERIFIED (the
+  instructions)). It runs only past the model's two early outs (`eFlags`
+  0x80, no DObj). It returns when `otherEntityNum` (`+0x74`) is 1023 or
+  `cg.snap->ps.clientNum`, or when the snapshot's playerstate has `eFlags`
+  0x100000 and `viewlocked_entNum` (`ps+0x5c8`) is this vehicle. It then
+  needs `infoValid` (clientinfo `+0x0`, stride 0x4d0 at 0x305e1f34) for
+  the driver, for `cg_entities[driver].currentState.clientNum` (0x3048c774)
+  and for the viewer. The icon is the vehicle's own `iHeadIcon` (`+0x98`)
+  and `iHeadIconTeam` (`+0x9c`), filtered as the player pass filters
+  (`cod11-gametypes-re-bel.md` 7.3): a team other than 0 shows only to that
+  team or to a spectator (team 3). Configstring `0x25 + iHeadIcon`, the
+  player pass's block, registers as a type 5 shader. The sprite helper
+  0x300213c0 gets height 100, no distance scale and alpha 1.0. It centres
+  the sprite at `lerpOrigin` (`+0x208`) plus `100 + 72` in z (72.0 at
+  0x3007be18), radius 20.0 (0x3007be04, the player pass's is 6.66), colour
+  white, `reType` 4. The helper's distance scale (`d / 256 + 0.2`, at
+  least 0.6) is the player pass's, unused here.
+
+  Where the icon comes from (VERIFIED (the instructions), the Windows
+  server module `uo_game_mp_x86.dll`, base 0x20000000): the driven
+  vehicle's think copies `iHeadIcon` and `iHeadIconTeam` of
+  `g_entities[ent+0x154]` (stride 0x34c at 0x20118d40) onto the vehicle
+  (0x20045e84..0x20045ead). It does so
+  only inside the driver's weapon reader: past a non-empty weapon name in
+  the vehicle file, a weapon index other than 0 written to `s.weapon`, and
+  `+0x318` 0. `VEH_LinkPlayer`'s twin writes the driver's number to
+  `+0x154` and `otherEntityNum` (0x20047f18, 0x20047f20), and the unlink
+  puts 0x3ff in both and zeroes `iHeadIcon` (0x200481c7..0x200481da), not
+  the team. VERIFIED live: retail's tank drive and closespeed captures
+  carry `iHeadIcon` 1 and `iHeadIconTeam` 1 on all 418 snapshots, the
+  jeep's (no driver weapon) neither. The tank gun capture keeps the team
+  after its driver leaves. vcod-server copies it in that reader
+  (`vehicle::think`), and `vehicle_ab` compares both fields. The client
+  draws it in `head_icon::vehicle_icon`.
 
 ## 10. Gametypes
 
@@ -1136,8 +1170,8 @@ The client side: vcod watches and plays on a UO server.
   models' tag binds.
 - **Events, effects, HUD.** Section 19.
 - **Wheel dust** is `coduo-vehicles.md` 15.
-- **Not done.** The wheel suspension (under 0.03 units) of section 9, the
-  head icon over a driver, `lofx/`, soundloadspecs on the client and the
+- **Not done.** The wheel suspension (under 0.03 units) of section 9,
+  `lofx/`, soundloadspecs on the client and the
   rest of section 19's "Not done". The own gunner's gun and the drawn steer
   are `coduo-vehicles.md` 9, a shell's sound blend section 16, the server
   sections 20 to 22.

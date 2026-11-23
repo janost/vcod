@@ -724,6 +724,8 @@ const VEH_FIELDS: &[(&str, Kind)] = &[
     ("fTorsoPitch", Kind::Float(0.0)),
     ("fWaistPitch", Kind::Float(0.0)),
     ("loopSound", Kind::Int),
+    ("iHeadIcon", Kind::Int),
+    ("iHeadIconTeam", Kind::Int),
     ("eventSequence", Kind::Int),
     ("events[0]", Kind::Int),
     ("events[1]", Kind::Int),

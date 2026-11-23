@@ -1837,6 +1837,9 @@ impl LiveCx<'_> {
                     eye: cam.pos,
                     heads,
                     entity_pos,
+                    riding: (newest.ps.field_i32(p, "eFlags") & net::flags::EF_IN_VEHICLE_V22 != 0)
+                        .then(|| u32::try_from(newest.ps.field_i32(p, "viewlocked_entNum")).ok())
+                        .flatten(),
                 },
                 cam_right,
                 cam_up,
