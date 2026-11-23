@@ -1927,6 +1927,30 @@ mod tests {
         assert_ne!(cmd.buttons & BUTTON_ATTACK, 0, "the laid gun did not fire");
     }
 
+    /// A tank's main gun lays the view from the chase camera onto the hull,
+    /// as onto a base: the shell bends toward where that view meets the
+    /// world (bot-objectives.md 10.11.1).
+    #[test]
+    fn a_tank_gun_aims_at_a_hull_from_the_chase_camera() {
+        let mut bot = Bot::new("allies", true, 1);
+        let mut v = shelling(true);
+        let at = [1500.0, 300.0, 100.0];
+        v.armor = Some(ArmorView {
+            num: 90,
+            centre: at,
+            velocity: [0.0; 3],
+            crew: 1 << 5,
+            shot_speed: 10000.0,
+            friend_in_line: false,
+            muzzle_clear: true,
+            shell_on: true,
+        });
+        let want = vehicle::angles_from([-100.0, 0.0, 160.0], at);
+        assert_eq!(bot.think(&v).angles, cmd_angles(&v, want));
+        let (pitch, _) = aim_angles(&v, at);
+        assert!(want[0] > pitch, "the camera's view looks further down");
+    }
+
     /// A gun laid on an enemy hull in yaw whose shell would miss it (over
     /// it, into a wall past it: mp_cassino, bot-objectives.md 10.11) holds
     /// its fire, and after 10 s the tank drives on with the gun still on

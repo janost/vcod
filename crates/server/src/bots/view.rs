@@ -672,6 +672,8 @@ pub struct BotBody {
     pub boardings: u32,
     /// Rockets it fired on foot at enemy vehicles.
     pub rockets_at_armor: u32,
+    /// Ticks it held a tank's gun on an enemy hull with no shell's line on it.
+    pub shell_held: u32,
     /// The client slot the bot tracks ([`Bot::target_slot`]), and whether
     /// its last cmd held the trigger.
     pub target: Option<usize>,

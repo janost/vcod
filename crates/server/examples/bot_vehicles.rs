@@ -1,7 +1,8 @@
 //! Bots and United Offensive vehicles: per seed, one game with
 //! `vc_bot_vehicles 0` and one with 1, each printing the kills, those off a
 //! vehicle's guns, the boardings, the bot-ticks spent seated, how far
-//! the driven vehicles went, the stuck kills and the drivers stalled 12 s.
+//! the driven vehicles went, the stuck kills, the drivers stalled 12 s and
+//! the bot-ticks a tank's driver held its fire for want of a shell's line.
 //! The measurement behind
 //! docs/research/bot-objectives.md section 10.
 //! Run: COD_DIR=<UO install> cargo run --release -p vcod-server --example bot_vehicles [seed...]
@@ -34,6 +35,9 @@ struct Tally {
     /// hull stayed within 150 units of one spot with no enemy in range.
     stuck_kills: u32,
     stuck_drivers: usize,
+    /// Bot-ticks a tank's driver held its fire on an enemy hull for want
+    /// of a shell's line on it.
+    shell_held: u32,
 }
 
 fn game(
@@ -123,6 +127,7 @@ fn game(
     for slot in sv.bot_slots() {
         t.boardings += sv.bot_body(slot).map_or(0, |b| b.boardings);
         t.rockets += sv.bot_body(slot).map_or(0, |b| b.rockets_at_armor);
+        t.shell_held += sv.bot_body(slot).map_or(0, |b| b.shell_held);
     }
     for l in sv.script_log() {
         let d: Vec<&str> = l.trim_end().split(';').collect();
@@ -185,7 +190,7 @@ fn main() {
     }
     println!(
         "seed vehicles kills gun_kills gun_hits crush_team crush_team_dmg crush_enemy rockets wrecks \
-         boardings seated_ticks driven stuck_kills stuck_drivers"
+         boardings seated_ticks driven stuck_kills stuck_drivers shell_held"
     );
     for seed in seeds {
         let modes: &[bool] = if std::env::var("ON_ONLY").is_ok() {
@@ -196,7 +201,7 @@ fn main() {
         for &on in modes {
             let t = game(&fs, &bsp, seed, on);
             println!(
-                "{seed} {} {} {} {} {} {} {} {} {} {} {} {:.0} {} {}",
+                "{seed} {} {} {} {} {} {} {} {} {} {} {} {:.0} {} {} {}",
                 u8::from(on),
                 t.kills,
                 t.gun_kills,
@@ -210,7 +215,8 @@ fn main() {
                 t.seated,
                 t.driven,
                 t.stuck_kills,
-                t.stuck_drivers
+                t.stuck_drivers,
+                t.shell_held
             );
         }
     }

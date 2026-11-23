@@ -891,6 +891,13 @@ impl Server {
                 .bots
                 .get(&slot)
                 .map_or(0, |b| b.rockets_at_armor()),
+            shell_held: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .map_or(0, |b| b.shell_held_ticks()),
             target: self
                 .game
                 .module
