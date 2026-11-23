@@ -473,7 +473,8 @@ Ranked by how much a player notices. The research-side lists are
    them at the challenge and hides them in the browser unless
    `ui_browserShowCoD4x` is 1 ([cod4-handshake.md](../research/cod4-handshake.md)
    13). vcod joins stock 1.7 servers only, which are rarer than they
-   should be.
+   should be. What playing on one would take:
+   [cod4x-protocol.md](../research/cod4x-protocol.md).
 2. **Ranks start fresh.** vcod keeps its own stats file per profile
    (`vcod_mpdata`) and never reads retail's `mpdata`: your retail rank
    and custom classes are safe, and no use here. Create a Class opens at

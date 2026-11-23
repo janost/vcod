@@ -93,6 +93,7 @@ The CoD1 view weapon: `cod11-combat.md` (its offsets), `xanim-v14-format.md` (th
 | Doc | Covers |
 |---|---|
 | [cod4-handshake.md](cod4-handshake.md) | Handshake, stats phase and block, pure `cp` (8), netchan, Huffman, configstrings, what vcod-server sends (9), downloads (11), the server browser (12), CoD4x servers (13), the console and rcon (14), off the LAN: authorize, `requeststats`, pacing (15) |
+| [cod4x-protocol.md](cod4x-protocol.md) | CoD4x 21.3's server against a 1.7 and a protocol 21 client: protocol numbers and refusals, the update proxy, where authentication is enforced (5), the reliable side channel with stats and downloads (7), the 16-byte client header, the gamestate, origin floats, client config data, the browser keys; the design proposal (18) |
 | [cod4-netfields.md](cod4-netfields.md) | Netfield tables, delta codec, gamestate end, snapshots, the move message |
 | [cod4-server-frame.md](cod4-server-frame.md) | `SV_Frame`'s order: cmds, zombies, archive, message order; `sv_fps` (8); vcod-server's tick cost, measured: slow ticks (9), full servers of every game (10), 32 bots (11), off-LAN pacing (12) |
 | [cod4-map-cycle.md](cod4-map-cycle.md) | `map`, `fast_restart`, `map_rotate`, the client's map change, votes, the menu answers' one-packet rule |

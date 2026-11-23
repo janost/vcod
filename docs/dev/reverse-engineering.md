@@ -23,6 +23,7 @@ names it, is INFERRED.
 | CoD4 1.7 | `cod4_lnxded` (md5 `bf8448740b3f4cb74c2254f01af14cdd`) | the server; stripped, read with `objdump` |
 | CoD4 1.7 | `cod4_lnxded-bin` (md5 `6b9995fa2e800664644da1c067779414`) | an earlier build beside it (`May 20 2008`); only `cod4-fastfile.md`'s `Load_*` addresses are in it |
 | CoD4 1.7 | `iw3mp.exe` | the client: menu commands, vision fields, default stats |
+| CoD4x 21.3 | `cod4x18_dedrun` (md5 `543d59bdc5109556460d4562a7481681`) | the CoD4x server release, unstripped PIE; the binary only, never its source (`cod4x-protocol.md`) |
 
 The md5s of the CoD1 modules are in `docs/research/cod11-events-and-fx.md`.
 CoD4 1.7 is the only CoD4 target. Its sources are the 1.7 binaries
@@ -53,8 +54,8 @@ CoD1 (1.1d, 1.5b, UO):
   every vehicle record's physics state, sway and jolt at each think's track
   clock, and its velocity and committed copy at the think's entry, every
   float as its bits (coduo-vehicles.md 17.5).
-- `annotate_func.py`: one function of a PIC ELF with its relocations
-  resolved. Run it first: a plain `objdump` of `game.mp.i386.so` hides every
+- `annotate_func.py`: one function of a PIC ELF (or an unstripped
+  executable, by its full symbol table) with its relocations resolved. Run it first: a plain `objdump` of `game.mp.i386.so` hides every
   call and cvar behind PIC relocations.
 - `dump_script_fields.py`, `dump_builtins.py`, `dump_cvars.py`,
   `dump_itemlist.py`: the game module's script fields, builtins and spawn
