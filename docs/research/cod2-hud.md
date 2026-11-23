@@ -375,8 +375,7 @@ INFERRED.
 ## 12. What vcod leaves out
 
 - The health bar (off by default).
-- On the board (13): style 3's exact shadow. The voice column and the
-  mute list it reads are cod2-voice.md 5.
+- The voice column and the mute list it reads are cod2-voice.md 5.
 - Pending: pixel checks against retail. The headless frames come from
   `VCOD_UI_SHOT` (`renderer/hud_shot.rs`).
 
@@ -463,8 +462,9 @@ cited function and the `__const` floats:
   only. VERIFIED. That this is black at the text's alpha is INFERRED. The
   board's title, headers, banners and objective are style 3; a row's cell
   only while its scale is 0.16 or more, else 0 (`(scale >= 0.16) * 3`).
-  VERIFIED. vcod keeps its 1-pixel shadow at 0.8 of the alpha for the
-  shadowed text and drops it from a cell shrunk below 0.16.
+  VERIFIED. The Windows renderer draws each once, the shadow black at the
+  text's alpha (cod2-fonts-menus.md 1.1); vcod draws that and drops the
+  shadow from a cell shrunk below 0.16.
 
 Team names, colours and banners are server dvars (flag 0x100) that
 `G_InitGame` (0x1addca) registers. VERIFIED.
@@ -1010,7 +1010,7 @@ in through `GunInput::recoil`).
   client info), font 0 at 1/3, centred at y 40 and 65, aligned (7, 1),
   style 3. VERIFIED. The killcam flag (`cg + 0x2cd14`) is `ps.deltaTime`
   non-zero (`CG_SetNextSnap`, 0x1dee08). VERIFIED.
-- vcod draws all three without the style 3 shadow.
+- vcod draws all three in style 3 (cod2-fonts-menus.md 1.1).
 
 ### 19.4 Objectives on vcod-server
 
@@ -1108,4 +1108,4 @@ vcod draws the clocks and the scale (`hud::cod2elem`).
   collision world; script models' xmodel collision does not stop it.
   vcod's client traces the prediction's collision world and the
   snapshot's packed boxes (`cod2_names`), leaving brush models out, and
-  draws without the style 3 shadow.
+  draws in style 3 (cod2-fonts-menus.md 1.1).

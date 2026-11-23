@@ -1212,8 +1212,8 @@ and menu string: `hudelem::text` under `player::menu_text_rgba`, and the
 front end's `Painter::text` with the item's `text_style`. The draws above
 pass their retail style; owner draws vcod draws natively take the stock
 `hud.menu`'s. vcod's own spectator header (`hud::status`) keeps vcod's 1 px
-shadow at 0.8, as do CoD2's shared draws (`TextStyle::Vcod`), not yet read
-against CoD2. The UI's blink and pulse colours (`Item_TextColor`,
+shadow at 0.8. CoD2's draws take `TextStyle::Cod2` (cod2-fonts-menus.md
+1.1). The UI's blink and pulse colours (`Item_TextColor`,
 cod11-front-end.md 20.7) are not drawn.
 
 ---

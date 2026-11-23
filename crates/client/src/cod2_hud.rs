@@ -249,19 +249,27 @@ impl HudDvars {
     }
 }
 
+/// `Con_DrawMessageWindow`'s lines (CoD2MP_s.exe 0x4066b0): style 3 through
+/// the console text draw, no snap (cod2-fonts-menus.md 1.1).
+const MESSAGE_STYLE: TextStyle = TextStyle::Cod2 {
+    style: 3,
+    snap: false,
+};
+
 impl Default for Cod2Hud {
     fn default() -> Self {
         let mut scoreboard = Scoreboard::default();
         scoreboard.style = &scoreboard::COD2;
         let mut kills = Window::new(Kind::Game);
         kills.origin = Some(GAME_MESSAGES);
-        kills.style = TextStyle::Vcod;
+        // Message window lines: style 3, unsnapped (0x406836 in 0x4066b0).
+        kills.style = MESSAGE_STYLE;
         let mut subtitles = Window::new(Kind::Subtitle);
-        subtitles.style = TextStyle::Vcod;
+        subtitles.style = MESSAGE_STYLE;
         let mut center = CenterPrint::default();
         center.cod2 = true;
         let mut vote = crate::hud::vote::Vote::default();
-        vote.style = TextStyle::Vcod;
+        vote.style = TextStyle::COD2;
         Cod2Hud {
             fonts: None,
             player: PlayerHud::default(),
@@ -315,7 +323,7 @@ fn connection_interrupted(
         (x, 100.0),
         0.5,
         [1.0; 4],
-        TextStyle::Vcod,
+        TextStyle::COD2,
         v,
         out,
     );

@@ -185,6 +185,55 @@ impl Field {
         }
     }
 
+    /// CoD2's read (CoD2MP_s.exe 0x53d5c5..0x53d61a), which also ends the
+    /// buffer at a `len` held to `maxChars`.
+    fn read_cod2(value: &str, item: &UiItem) -> Field {
+        let mut f = Field::read(value, item);
+        f.buf[f.len] = '\0';
+        f
+    }
+
+    /// CoD2's cursor step (0x546da0): `n` characters on from `from`, or
+    /// `-n` back, a `^N` code (N a digit) passing whole and counting none.
+    /// Forward stops at the NUL and passes the codes after the last step.
+    fn cod2_step(&self, from: usize, n: i32) -> usize {
+        let at = |i: usize| self.buf.get(i).copied().unwrap_or('\0');
+        let mut pos = from;
+        let mut n = n;
+        if n <= 0 {
+            while pos != 0 && n != 0 {
+                if pos >= 2 && at(pos - 2) == '^' && at(pos - 1).is_ascii_digit() {
+                    pos -= 2;
+                } else {
+                    pos -= 1;
+                    n += 1;
+                }
+            }
+            return pos;
+        }
+        loop {
+            while at(pos) == '^' && at(pos + 1).is_ascii_digit() {
+                pos += 2;
+            }
+            if at(pos) == '\0' || n == 0 {
+                return pos;
+            }
+            pos += 1;
+            n -= 1;
+        }
+    }
+
+    /// CoD2's paint-offset fixup (0x53d550): the offset comes down to the
+    /// cursor, or up to `maxPaintChars` characters back from it.
+    fn cod2_fixup(&self, pos: &mut EditPos) {
+        if pos.offset > pos.cursor {
+            pos.offset = pos.cursor;
+        } else if self.paint != 0 {
+            let lo = self.cod2_step(pos.cursor, -(self.paint as i32));
+            pos.offset = pos.offset.max(lo);
+        }
+    }
+
     /// The text up to the first NUL.
     fn text(&self) -> String {
         self.buf.iter().take_while(|&&c| c != '\0').collect()
@@ -467,7 +516,7 @@ impl Ui {
     /// renderer draws it on that character's spot (none past the painted
     /// text's end) every other 256 ms (CoDMP.exe 0x4d8110..0x4d81a3).
     pub(super) fn edit_cursor(&self, m: usize, i: usize) -> Option<(usize, char)> {
-        if self.cod2.is_some() || !self.editing() || self.focus.get(&m) != Some(&i) {
+        if !self.editing() || self.focus.get(&m) != Some(&i) {
             return None;
         }
         let pos = self.state[m][i].edit;
@@ -561,80 +610,162 @@ impl Ui {
         out
     }
 
-    /// CoD2's edit key, vcod's own: typed text appends up to `maxChars`,
-    /// Backspace deletes, Enter and Escape end the edit, and Tab and the
-    /// arrows up and down step the focus, taking the edit along to an edit
-    /// field. CoD2's handler (CoD2MP_s.exe 0x53d6e9..0x53dabd) moves its
-    /// cursor unlike 1.1's (cod2-fonts-menus.md 4.2), so CoD2 keeps this
-    /// until that is ported.
+    /// CoD2's `Item_TextField_HandleKey` (CoD2MP_s.exe 0x53d590,
+    /// cod2-fonts-menus.md 4.2.1): 1.1's keys, but the cursor steps over a
+    /// `^N` colour code whole, every move clamps the paint offset to the
+    /// cursor's window (0x53d550), End keeps it, Backspace and every typed
+    /// character move the cursor that way too, and types 16, 17 and 18 test
+    /// their characters.
     fn edit_key_cod2(&mut self, code: KeyCode, text: Option<&str>, shell: &Shell) -> Vec<UiEffect> {
         let mut out = Vec::new();
         let Some((m, i)) = self.options.editing else {
             return out;
         };
         let item = &self.menus[m].items[i];
-        // Q3's `Item_TextField_HandleKey`: a numeric field takes digits only.
-        let numeric = item.kind == ITEM_TYPE_NUMERICFIELD;
-        let upper = item.kind == super::ITEM_TYPE_UPREDITFIELD;
-        let file_name = item.file_name_only;
         let accept = item.accept.clone();
-        let goto_next = item.max_chars_goto_next;
-        let (Some(cvar), max) = (item.cvar.clone(), item.max_chars) else {
+        let Some(cvar) = item.cvar.clone() else {
             self.options.editing = None;
             return out;
         };
-        let mut value = self.cvar(&cvar, shell).unwrap_or_default();
+        let mut field = Field::read_cod2(&self.cvar(&cvar, shell).unwrap_or_default(), item);
+        let mut pos = self.state[m][i].edit;
+        let pad = text.is_none_or(str::is_empty);
         match code {
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape => {
                 self.options.editing = None;
-                // CoD2's `accept` runs on Enter (Mac 0x16ee5e).
+                // `accept` runs on Enter (0x53da09..0x53da16).
                 if code != KeyCode::Escape && !accept.is_empty() {
                     self.run(m, &accept, shell, &mut out);
                 }
                 return out;
             }
-            // The keypad's arrows only with Num Lock off, when they type
-            // nothing.
-            KeyCode::Tab
-            | KeyCode::ArrowDown
-            | KeyCode::ArrowUp
-            | KeyCode::Numpad2
-            | KeyCode::Numpad8
-                if !matches!(code, KeyCode::Numpad2 | KeyCode::Numpad8)
-                    || text.is_none_or(str::is_empty) =>
-            {
-                let down = !matches!(code, KeyCode::ArrowUp | KeyCode::Numpad8);
-                self.edit_step(down, shell, &mut out);
+            KeyCode::Tab | KeyCode::ArrowDown | KeyCode::ArrowUp => {
+                self.edit_step(code != KeyCode::ArrowUp, shell, &mut out);
                 return out;
             }
-            KeyCode::Backspace => {
-                value.pop();
+            KeyCode::Numpad2 | KeyCode::Numpad8 if pad => {
+                self.edit_step(code == KeyCode::Numpad2, shell, &mut out);
+                return out;
             }
+            // Char 8 (0x53d63c..0x53d6e4): the cvar is set either way.
+            KeyCode::Backspace => {
+                if pos.cursor > 0 {
+                    let at = pos.cursor.min(field.len + 1);
+                    field.buf.copy_within(at..field.len + 1, at - 1);
+                }
+                // The cvar read back before the cursor steps (0x53d659..0x53d694).
+                field = Field::read_cod2(&field.text(), &self.menus[m].items[i]);
+                field.changed = true;
+                pos.cursor = field.cod2_step(pos.cursor, -1);
+                field.cod2_fixup(&mut pos);
+            }
+            KeyCode::Delete => field.delete(pos),
+            KeyCode::NumpadDecimal if pad => field.delete(pos),
+            KeyCode::ArrowLeft | KeyCode::ArrowRight | KeyCode::Numpad4 | KeyCode::Numpad6
+                if pad || matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) =>
+            {
+                let right = matches!(code, KeyCode::ArrowRight | KeyCode::Numpad6);
+                pos.cursor = field.cod2_step(pos.cursor, if right { 1 } else { -1 });
+                field.cod2_fixup(&mut pos);
+            }
+            KeyCode::Home => pos = EditPos::default(),
+            KeyCode::Numpad7 if pad => pos = EditPos::default(),
+            KeyCode::End | KeyCode::Numpad1 if pad || code == KeyCode::End => {
+                pos.cursor = field.len;
+                field.cod2_fixup(&mut pos);
+            }
+            KeyCode::Insert => self.options.overstrike = !self.options.overstrike,
+            KeyCode::Numpad0 if pad => self.options.overstrike = !self.options.overstrike,
             _ => {
-                // A quote would end the `set` line's quoted value early.
-                for c in text
-                    .unwrap_or("")
-                    .chars()
-                    .filter(|c| !c.is_control() && *c != '"')
-                    .filter(|c| !numeric || c.is_ascii_digit())
-                    .filter(|&c| !file_name || c.is_ascii_alphanumeric() || c == '_' || c == '-')
-                    .map(|c| if upper { c.to_ascii_uppercase() } else { c })
-                {
-                    if max == 0 || value.chars().count() < max {
-                        value.push(c);
-                        // `maxCharsGotoNext`: the character that fills the
-                        // field steps on as Tab does (0x40012690).
-                        if goto_next && value.chars().count() == max {
-                            self.set_cvar(&cvar, &value, &mut out);
-                            self.edit_step(true, shell, &mut out);
-                            return out;
-                        }
+                for c in text.unwrap_or("").chars() {
+                    if !self.edit_char_cod2(c, shell, &mut out) {
+                        break;
                     }
                 }
+                return out;
             }
         }
-        self.set_cvar(&cvar, &value, &mut out);
+        self.state[m][i].edit = pos;
+        if field.changed {
+            self.set_cvar(&cvar, &field.text(), &mut out);
+        }
         out
+    }
+
+    /// One typed character for CoD2's edit field (0x53d6e9..0x53d87a).
+    /// False once the edit has ended.
+    fn edit_char_cod2(&mut self, c: char, shell: &Shell, out: &mut Vec<UiEffect>) -> bool {
+        let Some((m, i)) = self.options.editing else {
+            return false;
+        };
+        let item = &self.menus[m].items[i];
+        // Type 16 takes `I_isforfilename`'s characters (0x44a610); a control
+        // character does nothing. A quote would end the `set` line's quoted
+        // value early.
+        if (item.file_name_only && !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+            || c.is_control()
+            || c == '"'
+        {
+            return true;
+        }
+        let c = match item.kind {
+            // Type 9's other character ends the edit (0x53d71a..0x53d728).
+            ITEM_TYPE_NUMERICFIELD if !c.is_ascii_digit() => {
+                self.options.editing = None;
+                return false;
+            }
+            // Type 17 takes the language's decimal point too, stored as `.`
+            // (0x53d72e..0x53d761); vcod's is always `.`.
+            ITEM_TYPE_DECIMALFIELD if !c.is_ascii_digit() && c != '.' => {
+                self.options.editing = None;
+                return false;
+            }
+            // Type 18 through the CRT's `toupper` (0x53d764..0x53d775).
+            super::ITEM_TYPE_UPREDITFIELD => c.to_ascii_uppercase(),
+            _ => c,
+        };
+        let goto_next = item.max_chars_goto_next;
+        let Some(cvar) = item.cvar.clone() else {
+            return true;
+        };
+        let mut field = Field::read_cod2(&self.cvar(&cvar, shell).unwrap_or_default(), item);
+        let mut pos = self.state[m][i].edit;
+        if self.options.overstrike {
+            // A cursor at `maxChars` drops it, stepping on with
+            // `maxCharsGotoNext` (0x53d87f..0x53d8c6).
+            if field.max != 0 && pos.cursor >= field.max {
+                if goto_next {
+                    self.edit_step(true, shell, out);
+                }
+                return true;
+            }
+        } else {
+            if field.len == EDIT_MAX || (field.max != 0 && field.len >= field.max) {
+                return true;
+            }
+            let at = pos.cursor.min(field.len + 1);
+            field.buf.copy_within(at..field.len + 1, at + 1);
+        }
+        let Some(slot) = field.buf.get_mut(pos.cursor) else {
+            return true;
+        };
+        *slot = c;
+        let text = field.text();
+        self.set_cvar(&cvar, &text, out);
+        // The cvar read back, the cursor one step on (0x53d7c0..0x53d81a).
+        let field = Field::read_cod2(&text, &self.menus[m].items[i]);
+        pos.cursor = field.cod2_step(pos.cursor, 1);
+        field.cod2_fixup(&mut pos);
+        self.state[m][i].edit = pos;
+        // At `maxChars` with `maxCharsGotoNext` the next item's cursor goes
+        // to 0 and the edit follows it to an edit field (0x53d81f..0x53d874).
+        if field.max != 0 && pos.cursor >= field.max && goto_next {
+            self.edit_step(true, shell, out);
+            if let Some(&next) = self.focus.get(&m) {
+                self.state[m][next].edit.cursor = 0;
+            }
+        }
+        true
     }
 
     /// One typed character for the edit field (the `K_CHAR_FLAG` arm of
@@ -732,10 +863,14 @@ impl Ui {
                     }
                 },
             },
-            // `Item_TextField_Paint` (Mac 0x16994a): a decimal field shows
-            // its float dvar through `Com_LocalizedFloatToString` at two
-            // places.
-            ITEM_TYPE_DECIMALFIELD => format!("{:.2}", self.cvar_value(cvar, shell)),
+            // `Item_TextField_Paint` (Mac 0x16994a, CoD2MP_s.exe 0x53fbc8):
+            // a decimal field shows its float dvar through
+            // `Com_LocalizedFloatToString` at two places, even while its
+            // edit changes the dvar's own text, from the paint offset.
+            ITEM_TYPE_DECIMALFIELD => {
+                let v = format!("{:.2}", self.cvar_value(cvar, shell));
+                self.painted_field(&v, m, i)
+            }
             ITEM_TYPE_YESNO => {
                 let key = if self.cvar_value(cvar, shell) != 0.0 {
                     "@EXE_YES"
@@ -752,32 +887,25 @@ impl Ui {
             }
             // `Item_TextField_Paint` (0x40014600): from the paint offset, at
             // most `maxPaintChars` (none with 0).
-            // CoD2 keeps vcod's own look: the head, or while editing the
-            // tail and a `|`.
-            k if super::is_edit_field(k) && self.cod2.is_some() => {
-                let v: Vec<char> = self.cvar(cvar, shell).unwrap_or_default().chars().collect();
-                let n = if item.max_paint_chars == 0 {
-                    v.len()
-                } else {
-                    item.max_paint_chars
-                };
-                if self.options.editing == Some((m, i)) {
-                    let tail: String = v[v.len().saturating_sub(n)..].iter().collect();
-                    format!("{tail}|")
-                } else {
-                    v.iter().take(n).collect()
-                }
-            }
             k if super::is_edit_field(k) => {
                 let v = self.cvar(cvar, shell).unwrap_or_default();
-                let from = v.chars().skip(self.state[m][i].edit.offset);
-                match item.max_paint_chars {
-                    0 => from.collect(),
-                    n => from.take(n).collect(),
-                }
+                self.painted_field(&v, m, i)
             }
             _ => return None,
         })
+    }
+
+    /// An edit field's text from its paint offset, at most `maxPaintChars`
+    /// (none with 0). CoD2's renderer counts glyphs only, so its colour
+    /// codes take none of them (`gfx_d3d_mp_x86_s.dll` 0x10032a30,
+    /// 0x10032c86).
+    fn painted_field(&self, v: &str, m: usize, i: usize) -> String {
+        let from: String = v.chars().skip(self.state[m][i].edit.offset).collect();
+        match self.menus[m].items[i].max_paint_chars {
+            0 => from,
+            n if self.cod2.is_some() => super::paint::truncate_visible(&from, n),
+            n => from.chars().take(n).collect(),
+        }
     }
 
     /// The x the last frame drew a slider's bar at; the label's width it
@@ -1077,27 +1205,65 @@ mod tests {
         assert_eq!(shell.cvar("field"), Some("72"));
     }
 
-    /// CoD2 keeps vcod's own edit: typed text appends at the end, the
-    /// field paints its tail and a `|`, and no cursor blinks
-    /// (cod2-fonts-menus.md 4.2).
+    /// CoD2's edit (CoD2MP_s.exe 0x53d590, cod2-fonts-menus.md 4.2.1):
+    /// 1.1's cursor and overstrike, but a `^N` code passes whole, the paint
+    /// offset stays in the cursor's window of `maxPaintChars` glyphs, and
+    /// End keeps the text painted.
     #[test]
-    fn a_cod2_edit_appends_at_the_end() {
-        let (mut ui, f) = field_ui(4, "maxPaintChars 3");
+    fn a_cod2_edit_steps_over_colour_codes() {
+        let (mut ui, f) = field_ui(4, "maxPaintChars 2");
         ui.cod2 = Some(Default::default());
-        let mut shell = Shell::new();
-        shell.force("field", "abcd");
-        ui.open_menu("m", &shell, &mut Vec::new());
-        ui.start_edit(f.0, f.1, true);
+        let mut shell = start(&mut ui, f, "ab^1cd");
+        let loc = Localized::default();
+        assert_eq!(ui.edit_cursor(f.0, f.1), Some((0, '_')));
+        keys(&mut ui, &mut shell, &[(KeyCode::End, None)]);
+        assert_eq!(pos(&ui, f), (6, 4));
+        assert_eq!(value(&ui, f, &loc, &shell), "cd");
+        keys(&mut ui, &mut shell, &[(KeyCode::ArrowLeft, None); 3]);
+        assert_eq!(pos(&ui, f), (1, 1), "the third Left passes ^1 and b");
+        assert_eq!(
+            value(&ui, f, &loc, &shell),
+            "b^1c",
+            "the code takes no glyph"
+        );
+        keys(&mut ui, &mut shell, &[(KeyCode::ArrowRight, None)]);
+        assert_eq!(pos(&ui, f).0, 4, "Right lands past the code");
         keys(
             &mut ui,
             &mut shell,
-            &[(KeyCode::KeyX, Some("x")), (KeyCode::Home, None)],
+            &[(KeyCode::Insert, None), (KeyCode::KeyX, Some("x"))],
         );
-        keys(&mut ui, &mut shell, &[(KeyCode::KeyY, Some("y"))]);
-        assert_eq!(shell.cvar("field"), Some("abcdxy"));
-        let loc = Localized::default();
-        assert_eq!(value(&ui, f, &loc, &shell), "dxy|");
-        assert!(ui.edit_cursor(f.0, f.1).is_none());
+        assert_eq!(shell.cvar("field"), Some("ab^1xcd"));
+        assert_eq!(pos(&ui, f), (5, 1));
+        keys(&mut ui, &mut shell, &[(KeyCode::Backspace, None); 2]);
+        assert_eq!(shell.cvar("field"), Some("ab^cd"));
+        assert_eq!(pos(&ui, f).0, 3, "^c is no code");
+
+        let (mut ui, f) = field_ui(4, "");
+        ui.cod2 = Some(Default::default());
+        let mut shell = start(&mut ui, f, "abc");
+        keys(&mut ui, &mut shell, &[(KeyCode::End, None)]);
+        assert_eq!(pos(&ui, f), (3, 0));
+        assert_eq!(value(&ui, f, &loc, &shell), "abc");
+    }
+
+    /// CoD2's decimal field takes digits and `.`, its other characters end
+    /// the edit; its upper-case field (CoD2's 18) types capitals
+    /// (0x53d71a..0x53d775).
+    #[test]
+    fn cod2_fields_test_their_characters() {
+        let (mut ui, f) = field_ui(ITEM_TYPE_DECIMALFIELD, "");
+        ui.cod2 = Some(Default::default());
+        let mut shell = start(&mut ui, f, "");
+        keys(&mut ui, &mut shell, &[(KeyCode::KeyX, Some("1.5,"))]);
+        assert_eq!(shell.cvar("field"), Some("1.5"));
+        assert!(!ui.editing());
+
+        let (mut ui, f) = field_ui(super::super::ITEM_TYPE_UPREDITFIELD, "");
+        ui.cod2 = Some(Default::default());
+        let mut shell = start(&mut ui, f, "");
+        keys(&mut ui, &mut shell, &[(KeyCode::KeyX, Some("ab"))]);
+        assert_eq!(shell.cvar("field"), Some("AB"));
     }
 
     #[test]

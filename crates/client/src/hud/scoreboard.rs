@@ -88,7 +88,8 @@ pub struct Style {
     /// The title's fit measures the game type at 0.41 whatever the map's
     /// scale (1.1); CoD2 measures both at the shrinking scale.
     title_fixed_left: bool,
-    /// Every string's style: 1.1's draws all pass 3 (`0x30029cc0` on).
+    /// Every string's style: 1.1's draws all pass 3 (`0x30029cc0` on),
+    /// CoD2's `UI_DrawText` 3 (CoD2MP_s.exe 0x4d9067..0x4da19f).
     text_style: TextStyle,
 }
 
@@ -121,7 +122,7 @@ pub const COD2: Style = Style {
     objective_text_y: 10.08,
     shrink_cells: true,
     title_fixed_left: false,
-    text_style: TextStyle::Vcod,
+    text_style: TextStyle::COD2,
 };
 
 /// One `b` row (doc section 3). `team` is not on the wire: `parse_scores`
@@ -578,7 +579,7 @@ impl Draw<'_> {
         rgb: [f32; 3],
         out: &mut Vec<HudQuad>,
     ) {
-        self.text_in(TextStyle::NORMAL, s, (x, y), scale, rgb, out);
+        self.text_in(self.style.text_style.plain(), s, (x, y), scale, rgb, out);
     }
 
     fn text_in(

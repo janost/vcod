@@ -250,11 +250,14 @@ impl Ui {
                     p.text(&v, x, y, item.text_scale, color, style, &mut out);
                     if let Some((at, glyph)) = self.edit_cursor(m, i)
                         && at <= v.chars().count()
-                        && cursor_blink_on(blink_clock())
+                        && cursor_blink_on(blink_clock(), self.cod2.is_some())
                     {
                         let head: String = v.chars().take(at).collect();
                         let cx = x + p.width(&head, item.text_scale);
                         let glyph = glyph.to_string();
+                        // CoD2 draws the cursor glyph once, unshadowed
+                        // (`gfx_d3d_mp_x86_s.dll` 0x10032877..0x100328e5).
+                        let style = if self.cod2.is_some() { 0 } else { style };
                         p.text(&glyph, cx, y, item.text_scale, color, style, &mut out);
                     }
                 }
@@ -495,17 +498,25 @@ fn blink_clock() -> u128 {
 }
 
 /// The edit cursor shows in the odd 256 ms steps of [`blink_clock`]
-/// (`sar 8; test 1`, CoDMP.exe 0x4d8142..0x4d8150).
-fn cursor_blink_on(ms: u128) -> bool {
-    (ms >> 8) & 1 == 1
+/// (`sar 8; test 1`, CoDMP.exe 0x4d8142..0x4d8150); CoD2's in the even
+/// ones, off the engine clock with no base taken (`gfx_d3d_mp_x86_s.dll`
+/// 0x10032861..0x10032875), whose phase vcod's first-cursor clock stands in
+/// for.
+fn cursor_blink_on(ms: u128, cod2: bool) -> bool {
+    ((ms >> 8) & 1 == 1) != cod2
 }
 
 /// The types `Item_HandleKey` edits (`ui_mp_x86.dll` 1.1 0x400139da,
-/// 0x40013a42: 4, 9 and 15); 15 types upper case (0x400127a5).
+/// 0x40013a42: 4, 9 and 15); 15 types upper case (0x400127a5). CoD2's
+/// test (CoD2MP_s.exe 0x53d4d0) adds its decimal field; its 16 and 18
+/// read as vcod's 4 and 15.
 pub(crate) fn is_edit_field(kind: i32) -> bool {
     matches!(
         kind,
-        ITEM_TYPE_EDITFIELD | ITEM_TYPE_NUMERICFIELD | ITEM_TYPE_UPREDITFIELD
+        ITEM_TYPE_EDITFIELD
+            | ITEM_TYPE_NUMERICFIELD
+            | ITEM_TYPE_UPREDITFIELD
+            | ITEM_TYPE_DECIMALFIELD
     )
 }
 
@@ -787,8 +798,8 @@ impl Painter<'_> {
     }
 
     /// `text` with its baseline at grid `(x, y)`, in an item's `textstyle`
-    /// on CoD1 (every `Item_*_Paint` passes item `+0xe4`); CoD2 keeps
-    /// vcod's shadow.
+    /// (every 1.1 `Item_*_Paint` passes item `+0xe4`, CoD2's `+0x290`
+    /// through `UI_DrawText`).
     pub(crate) fn text(
         &self,
         text: &str,
@@ -803,12 +814,11 @@ impl Painter<'_> {
         let top = y - f.max_height as f32 * f.glyph_scale * scale;
         let [px, py] = self.v.point(x, top);
         let px_scale = scale * self.v.scale / f.unit_scale();
-        if self.exact {
-            font::layout(f, text, px, py, px_scale, color, out);
-        } else {
-            let style = TextStyle::Retail(style);
-            font::layout_styled(f, text, px, py, px_scale, color, style, self.v.scale, out);
-        }
+        let style = match self.exact {
+            true => TextStyle::Cod2 { style, snap: true },
+            false => TextStyle::Retail(style),
+        };
+        font::layout_styled(f, text, px, py, px_scale, color, style, self.v.scale, out);
     }
 }
 
@@ -831,10 +841,10 @@ mod tests {
         }
     }
 
-    /// CoD1 menu text takes the item's `textstyle`; CoD2's keeps vcod's
-    /// 1 px shadow at 0.8.
+    /// Menu text takes the item's `textstyle`: CoD1's shadow offset is in
+    /// virtual units, CoD2's in window px (cod2-fonts-menus.md 1.1).
     #[test]
-    fn menu_text_draws_in_the_items_style_on_cod1() {
+    fn menu_text_draws_in_the_items_style() {
         let fonts = crate::hud::hudelem::tests::test_fonts();
         let draw = |exact, style| {
             let p = Painter {
@@ -850,8 +860,9 @@ mod tests {
         assert_eq!(draw(false, 0).len(), 1);
         let q = draw(false, 6);
         assert_eq!((offset(&q), q[0].rgba[3]), (4.0, 1.0));
-        let q = draw(true, 0);
-        assert_eq!((offset(&q), q[0].rgba[3]), (1.0, 0.8));
+        assert_eq!(draw(true, 0).len(), 1);
+        let q = draw(true, 6);
+        assert_eq!((offset(&q), q[0].rgba[3]), (2.0, 1.0));
     }
 
     /// `Window_Paint` style 3 draws its handle whatever it is: no
@@ -1317,10 +1328,14 @@ mod tests {
         assert_eq!(ui.map_preview(), "menu/art/unknownmap");
     }
 
-    /// The edit cursor blinks on the renderer's 256 ms steps, off first.
+    /// The edit cursor blinks on the renderer's 256 ms steps: off first on
+    /// CoD1, on first on CoD2.
     #[test]
     fn the_edit_cursor_shows_every_other_256_ms() {
-        let on: Vec<bool> = [0, 255, 256, 511, 512, 768].map(cursor_blink_on).to_vec();
+        let on: Vec<bool> = [0, 255, 256, 511, 512, 768]
+            .map(|ms| cursor_blink_on(ms, false))
+            .to_vec();
         assert_eq!(on, [false, false, true, true, false, true]);
+        assert!(cursor_blink_on(0, true) && !cursor_blink_on(256, true));
     }
 }

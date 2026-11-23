@@ -950,12 +950,14 @@ mod cod2 {
 
     /// CoD2's `ITEM_TYPE_*` onto vcod's: 0..12 are CoD1's, its bind (14)
     /// is CoD1's 13, its file name field (16) an edit field
-    /// ([`super::UiItem::file_name_only`]), the rest `100 +` their number.
+    /// ([`super::UiItem::file_name_only`]), its upper-case field (18)
+    /// CoD1's 15, the rest `100 +` their number.
     pub(super) fn item_type(t: i32) -> i32 {
         match t {
             0..=12 => t,
             14 => super::ITEM_TYPE_BIND,
             16 => super::ITEM_TYPE_EDITFIELD,
+            18 => 15,
             _ => t.saturating_add(100),
         }
     }
