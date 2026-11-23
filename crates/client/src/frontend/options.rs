@@ -102,6 +102,9 @@ pub(super) struct State {
     waiting: Option<(usize, usize)>,
     /// The edit field taking typed text.
     pub(super) editing: Option<(usize, usize)>,
+    /// `key_overstrikeMode` (CoDMP.exe 0x142f628, UI traps 0x2d and 0x2e):
+    /// an edit starts it on and Insert toggles it; it outlives the edit.
+    pub(super) overstrike: bool,
     /// The slider following the mouse until the button comes up.
     drag: Option<(usize, usize)>,
     /// Cvars this input set, which the shell sees only once the effects
@@ -141,6 +144,136 @@ impl State {
     pub(super) fn new_input(&mut self) {
         self.pending.clear();
     }
+}
+
+/// An edit field's cursor and the first character it paints.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub(super) struct EditPos {
+    pub(super) cursor: usize,
+    pub(super) offset: usize,
+}
+
+/// `Item_TextField_HandleKey`'s 1024-byte buffer (0x40012690): the cvar's
+/// text, NUL-padded, with `len` its length held to `maxChars`. The edits
+/// move characters as its `memmove`s do, so a cursor past the text leaves
+/// a gap that ends it.
+struct Field {
+    buf: Vec<char>,
+    len: usize,
+    max: usize,
+    paint: usize,
+    changed: bool,
+}
+
+/// `MAX_EDITFIELD` less one: an insert stops at 255 characters (0x400127ca).
+const EDIT_MAX: usize = 255;
+
+impl Field {
+    fn read(value: &str, item: &UiItem) -> Field {
+        let mut buf: Vec<char> = value.chars().take(1023).collect();
+        let len = match item.max_chars {
+            0 => buf.len(),
+            max => buf.len().min(max),
+        };
+        buf.resize(1024, '\0');
+        Field {
+            buf,
+            len,
+            max: item.max_chars,
+            paint: item.max_paint_chars,
+            changed: false,
+        }
+    }
+
+    /// The text up to the first NUL.
+    fn text(&self) -> String {
+        self.buf.iter().take_while(|&&c| c != '\0').collect()
+    }
+
+    /// Char 8 (0x4001271a): the character left of the cursor goes; the
+    /// cvar is set either way.
+    fn backspace(&mut self, pos: &mut EditPos) {
+        if pos.cursor > 0 {
+            let at = pos.cursor.min(self.len + 1);
+            self.buf.copy_within(at..self.len + 1, at - 1);
+            pos.cursor -= 1;
+            if pos.cursor < pos.offset {
+                pos.offset -= 1;
+            }
+        }
+        self.changed = true;
+    }
+
+    /// Del (0x40012ac6): the character under the cursor goes.
+    fn delete(&mut self, pos: EditPos) {
+        if pos.cursor < self.len {
+            self.buf
+                .copy_within(pos.cursor + 1..self.len + 1, pos.cursor);
+            self.changed = true;
+        }
+    }
+
+    /// Left (0x40012a70).
+    fn left(&self, pos: &mut EditPos) {
+        pos.cursor = pos.cursor.saturating_sub(1);
+        if pos.cursor < pos.offset {
+            pos.offset -= 1;
+        }
+    }
+
+    /// Right (0x40012a92): past `maxPaintChars` the paint offset follows.
+    fn right(&self, pos: &mut EditPos) {
+        if pos.cursor < self.len {
+            if self.paint != 0 && pos.cursor >= self.paint {
+                pos.offset += 1;
+            }
+            pos.cursor += 1;
+        }
+    }
+
+    /// End (0x40012a47): with no `maxPaintChars` the offset goes to the
+    /// end too, so the field paints nothing until Home or a click.
+    fn end(&self, pos: &mut EditPos) {
+        pos.cursor = self.len;
+        if self.len > self.paint {
+            pos.offset = self.len - self.paint;
+        }
+    }
+
+    /// A typed character at the cursor (0x400127b6..0x40012845).
+    fn type_char(&mut self, c: char, pos: &mut EditPos, overstrike: bool) -> Typed {
+        if !overstrike {
+            if self.len == EDIT_MAX || (self.max != 0 && self.len >= self.max) {
+                return Typed::Full;
+            }
+            let at = pos.cursor.min(self.len + 1);
+            self.buf.copy_within(at..self.len + 1, at + 1);
+        } else if self.max != 0 && pos.cursor >= self.max {
+            return Typed::AtMax;
+        }
+        let Some(slot) = self.buf.get_mut(pos.cursor) else {
+            return Typed::Full;
+        };
+        *slot = c;
+        self.changed = true;
+        if pos.cursor < self.len + 1 {
+            pos.cursor += 1;
+            if self.paint != 0 && pos.cursor > self.paint {
+                pos.offset += 1;
+            }
+        }
+        Typed::Written
+    }
+}
+
+/// What [`Field::type_char`] did with a character.
+#[derive(PartialEq)]
+enum Typed {
+    Written,
+    /// Outside overstrike the field holds `maxChars` (or 255) already.
+    Full,
+    /// In overstrike the cursor stands at `maxChars`.
+    AtMax,
 }
 
 impl Ui {
@@ -193,7 +326,7 @@ impl Ui {
                 }
             }
             k if super::is_edit_field(k) => {
-                self.options.editing = Some((m, i));
+                self.start_edit(m, i, true);
                 return false;
             }
             _ => {}
@@ -328,11 +461,41 @@ impl Ui {
         self.options.editing.is_some()
     }
 
-    /// A key for the edit field (`Item_TextField_HandleKey`, 0x40012690):
-    /// typed text appends up to `maxChars`, Backspace deletes, Enter and
-    /// Escape end the edit, and Tab and the arrows up and down step the
-    /// focus, taking the edit along to an edit field. The cvar follows
-    /// every change.
+    /// The cursor `Item_TextField_Paint` (0x4001473c..0x400147ac) draws in
+    /// `menu`'s item `i` while an edit runs and the item has the focus: its
+    /// index in the painted text and `_` in overstrike, `|` else. The
+    /// renderer draws it on that character's spot (none past the painted
+    /// text's end) every other 256 ms (CoDMP.exe 0x4d8110..0x4d81a3).
+    pub(super) fn edit_cursor(&self, m: usize, i: usize) -> Option<(usize, char)> {
+        if !self.editing() || self.focus.get(&m) != Some(&i) {
+            return None;
+        }
+        let pos = self.state[m][i].edit;
+        let at = pos.cursor.checked_sub(pos.offset)?;
+        let glyph = if self.options.overstrike { '_' } else { '|' };
+        Some((at, glyph))
+    }
+
+    /// Starts an edit of `menu`'s item `i` as `Item_HandleKey` does
+    /// (0x40013a27..0x40013a77): the cursor at 0 and overstrike on; a click
+    /// zeroes the paint offset too, Enter keeps it.
+    pub(super) fn start_edit(&mut self, m: usize, i: usize, click: bool) {
+        let pos = &mut self.state[m][i].edit;
+        pos.cursor = 0;
+        if click {
+            pos.offset = 0;
+        }
+        self.options.editing = Some((m, i));
+        self.options.overstrike = true;
+    }
+
+    /// A key for the edit field (`Item_TextField_HandleKey`, 0x40012690,
+    /// docs/research/cod11-front-end.md 20.5): typed text writes at the
+    /// cursor, over the next character in overstrike, Backspace and Del
+    /// delete, the arrows, Home and End move the cursor, Insert toggles
+    /// overstrike, Enter and Escape end the edit, and Tab and the arrows up
+    /// and down step the focus, taking the edit along to an edit field. The
+    /// cvar follows every change.
     pub fn edit_key(&mut self, code: KeyCode, text: Option<&str>, shell: &Shell) -> Vec<UiEffect> {
         let mut out = Vec::new();
         self.options.new_input();
@@ -340,68 +503,104 @@ impl Ui {
             return out;
         };
         let item = &self.menus[m].items[i];
-        // Q3's `Item_TextField_HandleKey`: a numeric field takes digits only.
-        let numeric = item.kind == ITEM_TYPE_NUMERICFIELD;
-        let upper = item.kind == super::ITEM_TYPE_UPREDITFIELD;
-        let file_name = item.file_name_only;
         let accept = item.accept.clone();
-        let goto_next = item.max_chars_goto_next;
-        let (Some(cvar), max) = (item.cvar.clone(), item.max_chars) else {
+        let Some(cvar) = item.cvar.clone() else {
             self.options.editing = None;
             return out;
         };
-        let mut value = self.cvar(&cvar, shell).unwrap_or_default();
+        let mut field = Field::read(&self.cvar(&cvar, shell).unwrap_or_default(), item);
+        let mut pos = self.state[m][i].edit;
+        // The keypad's keys only with Num Lock off, when they type nothing.
+        let pad = text.is_none_or(str::is_empty);
         match code {
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape => {
                 self.options.editing = None;
-                // CoD2's `accept` runs on Enter (Mac 0x16ee5e).
+                // `accept` runs on Enter (1.1 0x40012914, CoD2 Mac 0x16ee5e).
                 if code != KeyCode::Escape && !accept.is_empty() {
                     self.run(m, &accept, shell, &mut out);
                 }
                 return out;
             }
-            // The keypad's arrows only with Num Lock off, when they type
-            // nothing.
-            KeyCode::Tab
-            | KeyCode::ArrowDown
-            | KeyCode::ArrowUp
-            | KeyCode::Numpad2
-            | KeyCode::Numpad8
-                if !matches!(code, KeyCode::Numpad2 | KeyCode::Numpad8)
-                    || text.is_none_or(str::is_empty) =>
-            {
-                let down = !matches!(code, KeyCode::ArrowUp | KeyCode::Numpad8);
-                self.edit_step(down, shell, &mut out);
+            KeyCode::Tab | KeyCode::ArrowDown | KeyCode::ArrowUp => {
+                self.edit_step(code != KeyCode::ArrowUp, shell, &mut out);
                 return out;
             }
-            KeyCode::Backspace => {
-                value.pop();
+            KeyCode::Numpad2 | KeyCode::Numpad8 if pad => {
+                self.edit_step(code == KeyCode::Numpad2, shell, &mut out);
+                return out;
             }
+            KeyCode::Backspace => field.backspace(&mut pos),
+            KeyCode::Delete => field.delete(pos),
+            KeyCode::NumpadDecimal if pad => field.delete(pos),
+            KeyCode::ArrowLeft => field.left(&mut pos),
+            KeyCode::Numpad4 if pad => field.left(&mut pos),
+            KeyCode::ArrowRight => field.right(&mut pos),
+            KeyCode::Numpad6 if pad => field.right(&mut pos),
+            KeyCode::Home => pos = EditPos::default(),
+            KeyCode::Numpad7 if pad => pos = EditPos::default(),
+            KeyCode::End => field.end(&mut pos),
+            KeyCode::Numpad1 if pad => field.end(&mut pos),
+            KeyCode::Insert => self.options.overstrike = !self.options.overstrike,
+            KeyCode::Numpad0 if pad => self.options.overstrike = !self.options.overstrike,
             _ => {
-                // A quote would end the `set` line's quoted value early.
-                for c in text
-                    .unwrap_or("")
-                    .chars()
-                    .filter(|c| !c.is_control() && *c != '"')
-                    .filter(|c| !numeric || c.is_ascii_digit())
-                    .filter(|&c| !file_name || c.is_ascii_alphanumeric() || c == '_' || c == '-')
-                    .map(|c| if upper { c.to_ascii_uppercase() } else { c })
-                {
-                    if max == 0 || value.chars().count() < max {
-                        value.push(c);
-                        // `maxCharsGotoNext`: the character that fills the
-                        // field steps on as Tab does (0x40012690).
-                        if goto_next && value.chars().count() == max {
-                            self.set_cvar(&cvar, &value, &mut out);
-                            self.edit_step(true, shell, &mut out);
-                            return out;
-                        }
+                for c in text.unwrap_or("").chars() {
+                    if !self.edit_char(c, shell, &mut out) {
+                        break;
                     }
                 }
+                return out;
             }
         }
-        self.set_cvar(&cvar, &value, &mut out);
+        self.state[m][i].edit = pos;
+        if field.changed {
+            self.set_cvar(&cvar, &field.text(), &mut out);
+        }
         out
+    }
+
+    /// One typed character for the edit field (the `K_CHAR_FLAG` arm of
+    /// 0x40012690). False once the edit has ended.
+    fn edit_char(&mut self, c: char, shell: &Shell, out: &mut Vec<UiEffect>) -> bool {
+        let Some((m, i)) = self.options.editing else {
+            return false;
+        };
+        let item = &self.menus[m].items[i];
+        // A quote would end the `set` line's quoted value early.
+        if c.is_control() || c == '"' {
+            return true;
+        }
+        // A file-name field (CoD2) takes `I_isforfilename`'s characters.
+        if item.file_name_only && !(c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+            return true;
+        }
+        // A numeric field's other character ends the edit (0x40012798).
+        if item.kind == ITEM_TYPE_NUMERICFIELD && !c.is_ascii_digit() {
+            self.options.editing = None;
+            return false;
+        }
+        let c = match item.kind {
+            super::ITEM_TYPE_UPREDITFIELD => c.to_ascii_uppercase(),
+            _ => c,
+        };
+        let goto_next = item.max_chars_goto_next;
+        let Some(cvar) = item.cvar.clone() else {
+            return true;
+        };
+        let mut field = Field::read(&self.cvar(&cvar, shell).unwrap_or_default(), item);
+        let mut pos = self.state[m][i].edit;
+        let typed = field.type_char(c, &mut pos, self.options.overstrike);
+        self.state[m][i].edit = pos;
+        if typed == Typed::Written {
+            self.set_cvar(&cvar, &field.text(), out);
+        }
+        // `maxCharsGotoNext`: a write that leaves the cursor at `maxChars`
+        // steps on as Tab does, as does a character refused there in
+        // overstrike (0x40012848, 0x40012958).
+        let at_max = field.max > 0 && pos.cursor >= field.max;
+        if goto_next && (typed == Typed::AtMax || (typed == Typed::Written && at_max)) {
+            self.edit_step(true, shell, out);
+        }
+        true
     }
 
     /// The text an options control draws after its label: a list's entry,
@@ -472,18 +671,14 @@ impl Ui {
                 }
                 bind_text(cvar, loc, shell)
             }
+            // `Item_TextField_Paint` (0x40014600): from the paint offset, at
+            // most `maxPaintChars` (none with 0).
             k if super::is_edit_field(k) => {
-                let v: Vec<char> = self.cvar(cvar, shell).unwrap_or_default().chars().collect();
-                let n = if item.max_paint_chars == 0 {
-                    v.len()
-                } else {
-                    item.max_paint_chars
-                };
-                if self.options.editing == Some((m, i)) {
-                    let tail: String = v[v.len().saturating_sub(n)..].iter().collect();
-                    format!("{tail}|")
-                } else {
-                    v.iter().take(n).collect()
+                let v = self.cvar(cvar, shell).unwrap_or_default();
+                let from = v.chars().skip(self.state[m][i].edit.offset);
+                match item.max_paint_chars {
+                    0 => from.collect(),
+                    n => from.take(n).collect(),
                 }
             }
             _ => return None,
@@ -631,6 +826,162 @@ mod tests {
         ui.option_value(at.0, at.1, loc, shell).unwrap()
     }
 
+    /// One edit field on `field` (type `kind`), with `extra` keywords.
+    fn field_ui(kind: i32, extra: &str) -> (Ui, (usize, usize)) {
+        let ui = crate::frontend::tests::ui_with_menu(&format!(
+            r#"{{ menuDef {{ name "m" rect 0 0 640 480 visible 1
+              itemDef {{ name f rect 100 100 200 20 type {kind} cvar "field" visible 1 {extra} }}
+              itemDef {{ name b rect 100 200 200 20 type 1 text "B" visible 1 }} }} }}"#
+        ));
+        let m = ui.find("m").unwrap();
+        (ui, (m, 0))
+    }
+
+    fn start(ui: &mut Ui, at: (usize, usize), value: &str) -> Shell {
+        let mut shell = Shell::new();
+        shell.force("field", value);
+        ui.open_menu("m", &shell, &mut Vec::new());
+        click_at(ui, at, 2.0, &mut shell);
+        assert!(ui.editing());
+        shell
+    }
+
+    fn keys(ui: &mut Ui, shell: &mut Shell, keys: &[(KeyCode, Option<&str>)]) {
+        for &(code, text) in keys {
+            let e = ui.edit_key(code, text, shell);
+            apply(shell, e);
+        }
+    }
+
+    fn pos(ui: &Ui, at: (usize, usize)) -> (usize, usize) {
+        let p = ui.state[at.0][at.1].edit;
+        (p.cursor, p.offset)
+    }
+
+    /// `Item_HandleKey` (0x40013a27..0x40013a77): an edit starts at the
+    /// front in overstrike; Insert toggles to insert, which pushes the rest
+    /// right.
+    #[test]
+    fn an_edit_starts_at_the_front_in_overstrike_and_insert_toggles_it() {
+        let (mut ui, f) = field_ui(4, "");
+        let mut shell = start(&mut ui, f, "vcod");
+        assert_eq!(ui.edit_cursor(f.0, f.1), Some((0, '_')));
+        keys(&mut ui, &mut shell, &[(KeyCode::KeyX, Some("x"))]);
+        assert_eq!(shell.cvar("field"), Some("xcod"));
+        keys(&mut ui, &mut shell, &[(KeyCode::Insert, None)]);
+        assert_eq!(ui.edit_cursor(f.0, f.1), Some((1, '|')));
+        keys(&mut ui, &mut shell, &[(KeyCode::KeyY, Some("y"))]);
+        assert_eq!(shell.cvar("field"), Some("xycod"));
+        // Overstrike outlives the edit; the next edit turns it on again.
+        keys(&mut ui, &mut shell, &[(KeyCode::Escape, None)]);
+        assert!(ui.edit_cursor(f.0, f.1).is_none());
+        assert!(!ui.options.overstrike);
+        click_at(&mut ui, f, 2.0, &mut shell);
+        assert!(ui.options.overstrike);
+    }
+
+    /// The arrows, Home, End, Del and Backspace (0x4001271a, 0x40012a47..
+    /// 0x40012ac6).
+    #[test]
+    fn the_cursor_moves_and_deletes_at_its_spot() {
+        let (mut ui, f) = field_ui(4, "");
+        let mut shell = start(&mut ui, f, "abcd");
+        keys(
+            &mut ui,
+            &mut shell,
+            &[(KeyCode::End, None), (KeyCode::ArrowRight, None)],
+        );
+        assert_eq!(pos(&ui, f).0, 4, "Right stops at the end");
+        keys(
+            &mut ui,
+            &mut shell,
+            &[(KeyCode::ArrowLeft, None), (KeyCode::Backspace, None)],
+        );
+        assert_eq!(shell.cvar("field"), Some("abd"));
+        assert_eq!(pos(&ui, f).0, 2);
+        keys(&mut ui, &mut shell, &[(KeyCode::Delete, None)]);
+        assert_eq!(shell.cvar("field"), Some("ab"));
+        keys(&mut ui, &mut shell, &[(KeyCode::Delete, None)]);
+        assert_eq!(shell.cvar("field"), Some("ab"), "nothing under the cursor");
+        keys(
+            &mut ui,
+            &mut shell,
+            &[(KeyCode::Home, None), (KeyCode::ArrowLeft, None)],
+        );
+        assert_eq!(pos(&ui, f), (0, 0));
+        // The keypad's keys move only with Num Lock off.
+        keys(&mut ui, &mut shell, &[(KeyCode::Numpad6, None)]);
+        assert_eq!(pos(&ui, f).0, 1);
+        keys(&mut ui, &mut shell, &[(KeyCode::Numpad6, Some("6"))]);
+        assert_eq!(shell.cvar("field"), Some("a6"));
+    }
+
+    /// `maxPaintChars` scrolls the painted text with the cursor; End on a
+    /// field without it moves the paint offset past the text, which then
+    /// paints nothing (0x40012a47, `Item_TextField_Paint` 0x400147b4).
+    #[test]
+    fn the_paint_offset_follows_the_cursor() {
+        let (mut ui, f) = field_ui(4, "maxPaintChars 3");
+        let mut shell = start(&mut ui, f, "abcdef");
+        let loc = Localized::default();
+        assert_eq!(value(&ui, f, &loc, &shell), "abc");
+        keys(&mut ui, &mut shell, &[(KeyCode::End, None)]);
+        assert_eq!(pos(&ui, f), (6, 3));
+        assert_eq!(value(&ui, f, &loc, &shell), "def");
+        assert_eq!(ui.edit_cursor(f.0, f.1), Some((3, '_')));
+        keys(&mut ui, &mut shell, &[(KeyCode::ArrowLeft, None); 4]);
+        assert_eq!(pos(&ui, f), (2, 2));
+        keys(&mut ui, &mut shell, &[(KeyCode::ArrowRight, None); 2]);
+        assert_eq!(pos(&ui, f), (4, 3), "past maxPaintChars the offset steps");
+        // Enter's edit keeps the offset, a click's zeroes it.
+        keys(&mut ui, &mut shell, &[(KeyCode::Enter, None)]);
+        ui.start_edit(f.0, f.1, false);
+        assert_eq!(pos(&ui, f), (0, 3));
+        assert!(
+            ui.edit_cursor(f.0, f.1).is_none(),
+            "the cursor is left of the paint"
+        );
+
+        let (mut ui, f) = field_ui(4, "");
+        let mut shell = start(&mut ui, f, "abc");
+        keys(&mut ui, &mut shell, &[(KeyCode::End, None)]);
+        assert_eq!(value(&ui, f, &loc, &shell), "");
+        keys(&mut ui, &mut shell, &[(KeyCode::Escape, None)]);
+        assert_eq!(value(&ui, f, &loc, &shell), "", "after the edit too");
+    }
+
+    /// Outside overstrike a full field drops a character; in it the cursor
+    /// at `maxChars` does (0x400127ca, 0x40012958).
+    #[test]
+    fn max_chars_stops_both_modes_at_their_own_test() {
+        let (mut ui, f) = field_ui(4, "maxChars 3");
+        let mut shell = start(&mut ui, f, "ab");
+        keys(&mut ui, &mut shell, &[(KeyCode::KeyX, Some("xyz"))]);
+        assert_eq!(shell.cvar("field"), Some("xyz"));
+        assert_eq!(pos(&ui, f).0, 3);
+        keys(&mut ui, &mut shell, &[(KeyCode::KeyQ, Some("q"))]);
+        assert_eq!(shell.cvar("field"), Some("xyz"));
+        keys(
+            &mut ui,
+            &mut shell,
+            &[(KeyCode::Home, None), (KeyCode::Insert, None)],
+        );
+        keys(&mut ui, &mut shell, &[(KeyCode::KeyQ, Some("q"))]);
+        assert_eq!(shell.cvar("field"), Some("xyz"), "insert into a full field");
+    }
+
+    /// A numeric field's letter ends the edit (0x40012798).
+    #[test]
+    fn a_letter_ends_a_numeric_fields_edit() {
+        let (mut ui, f) = field_ui(9, "");
+        let mut shell = start(&mut ui, f, "12");
+        keys(&mut ui, &mut shell, &[(KeyCode::Digit7, Some("7"))]);
+        assert_eq!(shell.cvar("field"), Some("72"));
+        keys(&mut ui, &mut shell, &[(KeyCode::KeyA, Some("a"))]);
+        assert!(!ui.editing());
+        assert_eq!(shell.cvar("field"), Some("72"));
+    }
+
     #[test]
     fn options_open_from_main_and_switch_pages() {
         let Some((mut ui, _)) = ui() else { return };
@@ -742,7 +1093,8 @@ mod tests {
             apply(&mut shell, e);
         }
         assert!(ui.editing(), "a repeated Enter, arrow or Esc ends nothing");
-        assert_eq!(value(&ui, field, &loc, &shell), "vcoxx|");
+        // From the front in overstrike: Backspace at 0 deletes nothing.
+        assert_eq!(value(&ui, field, &loc, &shell), "xxod");
     }
 
     #[test]
@@ -766,8 +1118,8 @@ mod tests {
             let e = ui.edit_key(code, text, &shell);
             apply(&mut shell, e);
         }
-        assert_eq!(shell.cvar("ui_name"), Some("vcox"));
-        assert_eq!(value(&ui, field, &loc, &shell), "vcox|");
+        assert_eq!(shell.cvar("ui_name"), Some("xcod"));
+        assert_eq!(value(&ui, field, &loc, &shell), "xcod");
         let e = ui.edit_key(KeyCode::Enter, None, &shell);
         apply(&mut shell, e);
         assert!(!ui.editing());
@@ -780,7 +1132,7 @@ mod tests {
         let mut out = Vec::new();
         ui.open_main(&Shell::new(), &mut out);
         apply(&mut shell, out);
-        assert_eq!(shell.cvar("name"), Some("vcox"));
+        assert_eq!(shell.cvar("name"), Some("xcod"));
     }
 
     #[test]

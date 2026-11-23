@@ -1353,9 +1353,8 @@ multis, 16 yes/nos, 6 sliders and one edit field. VERIFIED (counted).
   INFERRED from Q3's `Item_Multi_Setting` and `Item_Multi_FindCvarByValue`
   (0 for no match).
 - Edit field: `maxChars` 32, `maxPaintChars` 18 on the name. The cvar is
-  written on every key. INFERRED from Q3. vcod keeps its cursor at the end
-  and inserts. Q3 starts an edit at position 0 in overstrike mode; not
-  checked against CoD.
+  written on every key. An edit starts at position 0 in overstrike mode,
+  as Q3's does (20.5.1). VERIFIED (asm).
 
 ### 14.3 Scripts and cvars
 
@@ -2456,8 +2455,8 @@ Sources: `ui_mp/mods.menu` and `ui_mp/main.menu` in `pak0.pk3`,
   systeminfo, byte for byte, as `vcod-server` with the same mod and
   `sv_pure 1` (2026-10-11). VERIFIED (live). Retail loaded its game module
   from `<fs_homepath>/mymod/` (`Sys_LoadDll` in its log). VERIFIED (live).
-- A numeric field takes digits only. INFERRED from Q3's
-  `Item_TextField_HandleKey`; not checked against `ui_mp_x86.dll`.
+- A numeric field takes digits only; any other character ends its edit
+  (20.5.1). VERIFIED (asm).
 
 ## 19. List boxes
 
@@ -2836,6 +2835,94 @@ it. VERIFIED (asm).
   dropped (`maxChars <= len` returns 1 before the insert). VERIFIED
   (decompile).
 
+#### 20.5.1 The cursor and overstrike
+
+Sources: `ui_mp_x86.dll` 1.1 and `CoDMP.exe` 1.1, read with `objdump`
+(2026-11-23).
+
+- State: the item's `cursorPos` (`+0x24c`, the field list boxes use for
+  their selection) and the edit data's (`+0x250`) `maxChars` `+0x10`,
+  `maxCharsGotoNext` flag `+0x14`, `maxPaintChars` `+0x18` and
+  `paintOffset` `+0x1c`. Overstrike is the engine's `key_overstrikeMode`
+  (`CoDMP.exe` `0x142f628`): UI trap `0x2d` reads it (`0x418700`,
+  through `0x40019480`), `0x2e` sets it (`0x41870a`, `0x40019490`), and
+  the console's `Field_KeyDownEvent` flips it too (`0x40ca38`..`0x40ca45`).
+  VERIFIED (asm).
+- Starting an edit (`Item_HandleKey` cases off the jump table at
+  `0x40013a88`): a click inside the field's rect (case 6, rect test
+  `0x4000fef0` at `0x40013a1b`) zeroes `paintOffset` and `cursorPos`
+  (`0x40013a27`..`0x40013a36`); Enter (case 1, `0x40013a3e`) zeroes
+  `cursorPos` only (`0x40013a5b`). Both then store the edit item
+  (`0x401bf3fc`), set the editing flag (`0x401bf3f4`) and turn overstrike
+  on (`push 1; call [dc+0x7c]`, `0x40013a65`..`0x40013a77`). VERIFIED
+  (asm). So every edit starts at the front over the first character, and
+  a Tab step into another field keeps that field's old cursor.
+- `Item_TextField_HandleKey` (`0x40012690`) reads the cvar into a zeroed
+  1024-byte buffer and takes `len` as its length held to `maxChars`
+  (`0x400126c6`..`0x40012706`). With no cvar it answers 0. VERIFIED
+  (asm). A character (`K_CHAR_FLAG` `0x400` set, `0x4001270b`):
+  - char 8 (Backspace, Ctrl+H): with the cursor past 0, `memmove` the rest
+    one left, the cursor one back and `paintOffset` one back when the
+    cursor went under it; the cvar is set either way
+    (`0x4001271a`..`0x40012771`). VERIFIED (asm).
+  - under `0x20`, or no cvar: nothing (`0x40012776`..`0x40012785`).
+    Type 9 (numeric): anything but `0`..`9` (`0x40005ca0`) answers 0, so
+    the edit ends (`0x40012798`). Type 15: through the CRT's `toupper`
+    (`0x4001a0eb`). VERIFIED (asm). `toupper` INFERRED (the CRT's shape).
+  - insert (trap `0x2d` 0): `len` 255 or `len >= maxChars` drops it
+    (`0x400127ca`..`0x400127df`); else `memmove` from the cursor one right
+    (`0x400127e5`..`0x400127fb`). Overstrike: a cursor at or past
+    `maxChars` drops it, stepping to the next item when the flag is set
+    (`0x40012958`..`0x400129ab`). VERIFIED (asm).
+  - the character goes at the cursor, the cvar is set, and when the
+    cursor is under `len + 1` it steps on, `paintOffset` with it once it
+    passes a non-zero `maxPaintChars` (`0x40012803`..`0x40012845`). Then
+    a cursor at `maxChars` steps on when the flag is set (`0x40012848`).
+    VERIFIED (asm).
+  - the character code then falls into the key compares below, so a
+    Latin-1 `0xbf` (inverted question mark) typed ends the edit like
+    keypad Enter, and `0x9a`, `0x9b`, `0xb7`, `0xbd` step the focus.
+    INFERRED (the fall-through at `0x40012887` with the flag cleared);
+    vcod does not do this.
+- Keys (`0x400129b0`..`0x40012a24`), each answering 1:
+  - Del `0xa2` / keypad `0xc1`: under the cursor, `memmove` the rest one
+    left and set the cvar (`0x40012ac6`..`0x40012af7`).
+  - Right `0x9d` / `0xbb`: with a non-zero `maxPaintChars`, a cursor at
+    or past it and under `len` steps with `paintOffset`; else a cursor
+    under `len` steps (`0x40012a92`..`0x40012abe`).
+  - Left `0x9c` / `0xb9`: the cursor one back down to 0, `paintOffset`
+    one back when the cursor is under it (`0x40012a70`..`0x40012a8d`).
+  - Home `0xa5` / `0xb6`: cursor and `paintOffset` 0 (`0x40012a62`).
+  - End `0xa6` / `0xbc`: cursor `len`, and `paintOffset` `len -
+    maxPaintChars` when `len` passes it (`0x40012a47`..`0x40012a5a`). With
+    `maxPaintChars` 0 that is `len`, and the field paints nothing until
+    Home or a click (below).
+  - Insert `0xa1` / `0xc0`: overstrike flips (`0x40012a29`..`0x40012a3d`).
+  - Enter and keypad Enter run the item's `accept` script (`+0x108`,
+    `ItemParse_accept` `0x40017a10`, keyword `0x4003682c`) through
+    `Item_RunScript` (`0x400111d0`) before answering 0 (`0x40012907`..
+    `0x4001291f`).
+  VERIFIED (asm). The key numbers' names INFERRED (vcod's key table).
+- `Item_TextField_Paint` (`0x40014600`, Item_Paint's jump table
+  `0x40016884` for types 4, 9 and 15) paints the label, then the buffer
+  from `paintOffset`, at most `maxPaintChars` (no limit at 0), at the text
+  rect's right plus 8 when the item has text (`0x40014719`..`0x40014737`).
+  With the item focused (flags `& 2`) and an edit running (`0x401bf3f4`,
+  any field's) it calls `drawTextWithCursor` (`dc+0x78`, `0x40019120`,
+  trap `0x46`) with `cursorPos - paintOffset` and `_` in overstrike, `|`
+  else (`and al,0xe3; add al,0x7c`, `0x40014745`..`0x400147ac`); else plain
+  `drawText` (`0x400147b4`..`0x400147f7`). VERIFIED (asm).
+- Trap `0x46` (`0x4189da`) queues render command 6 (`0x4dfc10`, refexport
+  `+0xe0`) whose backend (`0x4d82b0` into `0x4d7d60`) draws the text and,
+  at the glyph whose index equals the cursor, or after the last one when
+  it equals the count, the cursor glyph at that pen spot over the
+  character, only while `((Sys_Milliseconds() - base) >> 8) & 1`, `base`
+  the time of the first cursor ever drawn (`0x4d8110`..`0x4d81a3`,
+  `0x4d81ea`..`0x4d822d`). VERIFIED (asm). So it blinks 256 ms off, 256
+  on, and a cursor left of `paintOffset` or past the painted text draws
+  nothing. The cursor glyph's x offset (`0x4d8194`..`0x4d819f`) is not
+  ported; vcod puts it at the character's pen x. INFERRED.
+
 ### 20.6 Menu keys
 
 - `Item_HandleKey` (`0x40013040`) starts a capture for `K_MOUSE1..3` and
@@ -3099,8 +3186,16 @@ it. VERIFIED (asm).
   Lock off, since with it on they type digits. Mouse moves change nothing
   during an edit; a click ends it, runs the held-back mouse pass, then
   clicks. With `maxCharsGotoNext` the character that fills the field steps
-  on the same way. vcod has no cursor inside a field and no overstrike
-  mode, so only that case is done.
+  on the same way.
+- The edit cursor and overstrike follow 20.5.1 (`Ui::edit_key`,
+  `Ui::start_edit`, `options::Field`, `Ui::edit_cursor`): the cursor,
+  paint offset and overstrike outlive an edit, the field paints from its
+  offset, and the cursor blinks on the 256 ms steps of a clock started at
+  the first cursor drawn. The overstrike flag is the UI's own: vcod's
+  console has no overstrike mode, so Insert there changes nothing. CoD2's
+  front end takes the same code; its own handler (Mac `0x16ee5e`) was
+  read for `accept` only, so the rest is INFERRED from the shared Q3
+  lineage.
 - The server list takes the arrows, Home, End and the page keys only with
   the cursor over it. Enter joining the selected server anywhere in the
   browser (unless the focused item's handler takes Enter), and an arrow

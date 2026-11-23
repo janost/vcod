@@ -243,14 +243,17 @@ impl Ui {
                 }
                 if let Some(v) = value {
                     let gap = if label.is_empty() { 0.0 } else { 8.0 };
-                    p.text(
-                        &v,
-                        left + label_end + gap,
-                        y,
-                        item.text_scale,
-                        color,
-                        &mut out,
-                    );
+                    let x = left + label_end + gap;
+                    p.text(&v, x, y, item.text_scale, color, &mut out);
+                    if let Some((at, glyph)) = self.edit_cursor(m, i)
+                        && at <= v.chars().count()
+                        && cursor_blink_on(blink_clock())
+                    {
+                        let head: String = v.chars().take(at).collect();
+                        let cx = x + p.width(&head, item.text_scale);
+                        let glyph = glyph.to_string();
+                        p.text(&glyph, cx, y, item.text_scale, color, &mut out);
+                    }
                 }
             }
         }
@@ -477,6 +480,21 @@ pub(super) fn truncate_visible(text: &str, n: usize) -> String {
         count += 1;
     }
     out
+}
+
+/// Milliseconds since the first edit cursor drawn, the base the renderer
+/// takes on its first cursor (CoDMP.exe 0x4d8118..0x4d813c).
+fn blink_clock() -> u128 {
+    static BASE: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    BASE.get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_millis()
+}
+
+/// The edit cursor shows in the odd 256 ms steps of [`blink_clock`]
+/// (`sar 8; test 1`, CoDMP.exe 0x4d8142..0x4d8150).
+fn cursor_blink_on(ms: u128) -> bool {
+    (ms >> 8) & 1 == 1
 }
 
 /// The types `Item_HandleKey` edits (`ui_mp_x86.dll` 1.1 0x400139da,
@@ -827,6 +845,7 @@ mod tests {
             visible: true,
             back: [0.0; 4],
             border_color: [0.0; 4],
+            edit: Default::default(),
         };
         let mut out = Vec::new();
         p.window(&item, &st, None, &mut out);
@@ -860,6 +879,7 @@ mod tests {
             visible: true,
             back: [0.0, 0.0, 0.0, 0.5],
             border_color: [1.0; 4],
+            edit: Default::default(),
         };
         let mut out = Vec::new();
         p.window(&item, &st, None, &mut out);
@@ -1231,5 +1251,12 @@ mod tests {
         assert_eq!(ui.map_preview(), "levelshots/mp_harbor");
         ui.browser.lists[0][0].info.as_mut().unwrap().mapname = "zz_custom".into();
         assert_eq!(ui.map_preview(), "menu/art/unknownmap");
+    }
+
+    /// The edit cursor blinks on the renderer's 256 ms steps, off first.
+    #[test]
+    fn the_edit_cursor_shows_every_other_256_ms() {
+        let on: Vec<bool> = [0, 255, 256, 511, 512, 768].map(cursor_blink_on).to_vec();
+        assert_eq!(on, [false, false, true, true, false, true]);
     }
 }
