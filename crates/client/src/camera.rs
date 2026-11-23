@@ -169,10 +169,14 @@ pub fn view_proj_from(pos: Vec3, yaw: f32, pitch: f32, roll: f32, fov_x: f32, as
         * glam::camera::rh::view::look_to_mat4(pos, forward, up_hint(yaw, pitch, roll))
 }
 
-/// World up turned by `roll` about the view forward: the up the view
-/// matrix is built with.
+/// The up the view matrix is built with, turned by `roll` about forward:
+/// `AnglesToAxis`' up, which keeps turning past +-90 pitch rather than
+/// flipping there (cod11-combat.md 17.6). Short of the pole world up gives
+/// `look_to` the same view, and keeps those frames bit for bit.
 pub fn up_hint(yaw: f32, pitch: f32, roll: f32) -> Vec3 {
-    Quat::from_axis_angle(basis(yaw, pitch).0, roll) * Vec3::Z
+    let (forward, _, up) = basis(yaw, pitch);
+    let up = if pitch.cos() > 0.0 { Vec3::Z } else { up };
+    Quat::from_axis_angle(forward, roll) * up
 }
 
 /// The view's forward, right and up off `(yaw, pitch, roll)` radians, the
@@ -416,6 +420,33 @@ mod tests {
             above.x < 0.0 && above.y > 0.0,
             "a positive roll should swing the point above the centre to the left, got {above}"
         );
+    }
+
+    /// The view's right and up hold through the pole, as `AnglesToAxis`'
+    /// do: no flip at +-90 pitch, nor between just short of and just past
+    /// it.
+    #[test]
+    fn the_view_does_not_flip_at_the_pole() {
+        let yaw = 0.6f32;
+        let rest = basis(yaw, 0.0).1;
+        for pole in [90.0f32, -90.0] {
+            for d in [pole - 0.01, pole, pole + 0.01] {
+                let pitch = d.to_radians();
+                let (forward, right, _) = rolled_basis(yaw, pitch, 0.0);
+                assert!(right.dot(rest) > 0.999, "{d}: right {right} vs {rest}");
+                let m = glam::camera::rh::view::look_to_mat4(
+                    Vec3::ZERO,
+                    forward,
+                    up_hint(yaw, pitch, 0.0),
+                );
+                let view_up = m.row(1).truncate();
+                let axis_up = basis(yaw, pitch).2;
+                assert!(
+                    view_up.dot(axis_up) > 0.999,
+                    "{d}: up {view_up} vs {axis_up}"
+                );
+            }
+        }
     }
 
     #[test]
