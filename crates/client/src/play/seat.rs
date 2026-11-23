@@ -390,8 +390,9 @@ pub fn axis_to_angles(axis: [Vec3; 3]) -> [f32; 3] {
 
 /// 0x30040580: a four-wheel's riders but the gunner and the passenger with
 /// its own weapon have their view turned with the vehicle, frame to frame:
-/// the pitch while the sight is down, the yaw while `eFlags` 0x200000
-/// (the mount's look-along-the-hull flag) is set.
+/// the pitch while `fWeaponPosFrac` is 0, the yaw while `eFlags` 0x200000
+/// (the mount's look-along-the-hull flag) is set. The roll it writes is
+/// [`seat_roll`].
 #[derive(Default)]
 pub struct FourWheelTurn {
     /// The vehicle's axis last frame.
@@ -424,6 +425,18 @@ impl FourWheelTurn {
         let yaw = if hull_yaw { yaw } else { view[1] };
         Some([pitch, yaw])
     }
+}
+
+/// The roll 0x30040580 writes into the predicted `viewangles[2]` for the
+/// riders [`FourWheelTurn`] turns, degrees: the view as it stood before the
+/// turn, taken into the vehicle's frame (`view * vehicleAxis^T`), its
+/// `AxisToAngles` roll negated (0x30040770..0x3004078e). Looking along the
+/// hull it is the hull's roll; looking back, its opposite.
+pub fn seat_roll(view: [f32; 3], vehicle_angles: [f32; 3]) -> f32 {
+    let v = mat(angles_to_axis_msvc(view).map(Vec3::from));
+    let cur = mat(angles_to_axis_msvc(vehicle_angles).map(Vec3::from));
+    let local = v * cur.transpose();
+    -axis_to_angles([local.row(0), local.row(1), local.row(2)])[2]
 }
 
 /// A matrix whose rows are `axis`.
@@ -705,5 +718,27 @@ mod tests {
             .step([0.0, 30.0, 0.0], [0.0, 20.0, 0.0], false, false)
             .unwrap();
         assert_eq!(y, 30.0);
+    }
+
+    /// The rider's view rolls with the hull it looks along: the hull's roll
+    /// straight ahead, its opposite looking back, its pitch looking aside,
+    /// nothing on a level hull.
+    #[test]
+    fn a_four_wheel_rolls_its_riders_with_the_hull() {
+        let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
+        let r = seat_roll([0.0, 30.0, 0.0], [0.0, 30.0, 10.0]);
+        assert!(near(r, 10.0), "{r}");
+        let r = seat_roll([0.0, 210.0, 0.0], [0.0, 30.0, 10.0]);
+        assert!(near(r, -10.0), "{r}");
+        let r = seat_roll([-20.0, 75.0, 0.0], [0.0, 75.0, 0.0]);
+        assert!(near(r, 0.0), "{r}");
+        // A nose-up hull (wire pitch -8) rolls a view to its left by 8 one way
+        // and a view to its right by 8 the other.
+        let left = seat_roll([0.0, 120.0, 0.0], [-8.0, 30.0, 0.0]);
+        let right = seat_roll([0.0, -60.0, 0.0], [-8.0, 30.0, 0.0]);
+        assert!(
+            near(left.abs(), 8.0) && near(left, -right),
+            "{left} {right}"
+        );
     }
 }

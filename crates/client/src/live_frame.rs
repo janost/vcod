@@ -687,6 +687,18 @@ impl LiveCx<'_> {
         predictor.seat_angles = seat_now.map_or([0.0; 3], |(_, num, vang)| {
             drawn_vehicle_angles.get(&num).copied().unwrap_or(vang)
         });
+        predictor.vehicles.clear();
+        if let Some(s) = net.snapshots().newest().filter(|_| p.is_uo()) {
+            predictor.vehicles.extend(
+                s.entities
+                    .iter()
+                    .filter(|(_, e)| e.field_i32(p, "eType") == net::flags::ET_VEHICLE_V22)
+                    .map(|(&n, e)| {
+                        let at = drawn_pos.get(&n).copied();
+                        (n, at.unwrap_or_else(|| Vec3::from(e.origin(p))))
+                    }),
+            );
+        }
         // The cgame's `bg_*` cvars, off the 140/204 mirror.
         // UO's cgame never registers `bg_nofatigue`.
         predictor.bg = pmove::BgCvars {
@@ -964,13 +976,16 @@ impl LiveCx<'_> {
             // 0x30040580: a four-wheel turns its riders by
             // the vehicle's `lerpAngles` (0x3004060f).
             let drawn_angles = vehicle_angles.get(&num).copied().unwrap_or(vang);
-            if !snapshot_view
-                && seat.class == play::seat::CLASS_FOUR_WHEEL
+            let mut seat_roll = 0.0;
+            if seat.class == play::seat::CLASS_FOUR_WHEEL
                 && seat.pos != 2
                 && !seat.own_weapon()
                 && newest_ps.field_i32(p, "weapon") != 0
             {
-                if let Some(v) = seat_turn.step(
+                seat_roll = play::seat::seat_roll(wire_view(input), drawn_angles);
+                if snapshot_view {
+                    seat_turn.reset();
+                } else if let Some(v) = seat_turn.step(
                     wire_view(input),
                     drawn_angles,
                     frac != 0.0,
@@ -1019,7 +1034,13 @@ impl LiveCx<'_> {
                     (cam.yaw, cam.pitch, _) =
                         own_view_at(input.cmd_angles(), delta, SEAT_PITCH_CLAMP);
                 }
-                view_roll = 0.0;
+                // A four-wheel's first person (`fWeaponPosFrac` 0) draws the
+                // predicted roll; its chase camera zeroes it (0x30040dc0).
+                view_roll = if frac == 0.0 {
+                    seat_roll.to_radians()
+                } else {
+                    0.0
+                };
                 if let Some([pitch, roll]) = sc.gun_pitch_roll {
                     cam.pitch = -pitch.to_radians();
                     view_roll = roll.to_radians();
