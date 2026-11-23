@@ -423,7 +423,10 @@ default, set it again (`set r_aaSamples 4`).
 - A bind: click or Enter, then press the new key (Esc cancels, Backspace
   clears); a third key replaces both old ones.
 - A text field: click to type; Enter or Esc finishes, Tab and the up and
-  down arrows move to the next field.
+  down arrows move to the next field. In CoD1 and United Offensive, as in
+  retail, the edit starts at the front in overstrike (`_` cursor): Insert
+  switches to inserting (`|`), and Left, Right, Home, End, Del and
+  Backspace work at the cursor. CoD2's fields append at the end.
 - Start New Server: click Game Type to cycle it (right-click goes back);
   the map list and the Mods list scroll and select as a server list does.
 

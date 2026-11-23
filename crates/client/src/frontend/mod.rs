@@ -187,6 +187,10 @@ struct ItemState {
     visible: bool,
     back: [f32; 4],
     border_color: [f32; 4],
+    /// An edit field's `cursorPos` (item `+0x24c`) and `paintOffset`
+    /// (edit data `+0x1c`), in characters; they outlive the edit and a
+    /// close, until a load (`Item_TextField_HandleKey`, 0x40012690).
+    edit: options::EditPos,
 }
 
 pub struct Ui {

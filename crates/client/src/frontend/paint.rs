@@ -98,7 +98,7 @@ impl Ui {
             fonts: self.fonts.as_ref(),
             exact: self.cod2.is_some(),
         };
-        for &m in &self.open {
+        for &m in self.painted() {
             let menu = &self.menus[m];
             for (i, item) in menu.items.iter().enumerate() {
                 if !self.shown(m, i, shell) {
@@ -245,15 +245,18 @@ impl Ui {
                 }
                 if let Some(v) = value {
                     let gap = if label.is_empty() { 0.0 } else { 8.0 };
-                    p.text(
-                        &v,
-                        left + label_end + gap,
-                        y,
-                        item.text_scale,
-                        color,
-                        item.text_style,
-                        &mut out,
-                    );
+                    let x = left + label_end + gap;
+                    let style = item.text_style;
+                    p.text(&v, x, y, item.text_scale, color, style, &mut out);
+                    if let Some((at, glyph)) = self.edit_cursor(m, i)
+                        && at <= v.chars().count()
+                        && cursor_blink_on(blink_clock())
+                    {
+                        let head: String = v.chars().take(at).collect();
+                        let cx = x + p.width(&head, item.text_scale);
+                        let glyph = glyph.to_string();
+                        p.text(&glyph, cx, y, item.text_scale, color, style, &mut out);
+                    }
                 }
             }
         }
@@ -480,6 +483,21 @@ pub(super) fn truncate_visible(text: &str, n: usize) -> String {
         count += 1;
     }
     out
+}
+
+/// Milliseconds since the first edit cursor drawn, the base the renderer
+/// takes on its first cursor (CoDMP.exe 0x4d8118..0x4d813c).
+fn blink_clock() -> u128 {
+    static BASE: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    BASE.get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_millis()
+}
+
+/// The edit cursor shows in the odd 256 ms steps of [`blink_clock`]
+/// (`sar 8; test 1`, CoDMP.exe 0x4d8142..0x4d8150).
+fn cursor_blink_on(ms: u128) -> bool {
+    (ms >> 8) & 1 == 1
 }
 
 /// The types `Item_HandleKey` edits (`ui_mp_x86.dll` 1.1 0x400139da,
@@ -854,6 +872,7 @@ mod tests {
             visible: true,
             back: [0.0; 4],
             border_color: [0.0; 4],
+            edit: Default::default(),
         };
         let mut out = Vec::new();
         p.window(&item, &st, None, &mut out);
@@ -887,6 +906,7 @@ mod tests {
             visible: true,
             back: [0.0, 0.0, 0.0, 0.5],
             border_color: [1.0; 4],
+            edit: Default::default(),
         };
         let mut out = Vec::new();
         p.window(&item, &st, None, &mut out);
@@ -1185,6 +1205,43 @@ mod tests {
         assert_eq!(cursor.verts[2], [432.0, 232.0]);
     }
 
+    /// `Menu_PaintAll` (0x40018a00..0x40018a46) paints the stack from its
+    /// topmost fullscreen menu up: a page a script left open under `main`
+    /// draws nothing, a popup over `main` draws.
+    #[test]
+    fn menus_under_the_topmost_fullscreen_menu_paint_nothing() {
+        let mut ui = ui_with_menu(
+            r#"{ menuDef { name "page" rect 0 0 640 480
+              itemDef { name "p" rect 10 10 20 20 style 1 backcolor 1 0 0 1 visible 1 decoration } }
+            menuDef { name "main" fullscreen 1 rect 0 0 640 480
+              itemDef { name "m" rect 50 50 20 20 style 1 backcolor 0 1 0 1 visible 1 decoration } }
+            menuDef { name "pop" popup rect 0 0 640 480
+              itemDef { name "q" rect 90 90 20 20 style 1 backcolor 0 0 1 1 visible 1 decoration } } }"#,
+        );
+        let shell = Shell::new();
+        let loc = Localized::default();
+        let colours = |ui: &Ui| -> Vec<[f32; 4]> {
+            ui.build(640.0, 480.0, &loc, &shell)
+                .iter()
+                .map(|q| q.rgba)
+                .collect()
+        };
+        ui.open_menu("page", &shell, &mut Vec::new());
+        assert_eq!(colours(&ui), [[1.0, 0.0, 0.0, 1.0]]);
+        ui.open_menu("main", &shell, &mut Vec::new());
+        assert_eq!(
+            colours(&ui),
+            [[0.0, 1.0, 0.0, 1.0]],
+            "the page is under main"
+        );
+        ui.open_menu("pop", &shell, &mut Vec::new());
+        assert_eq!(
+            colours(&ui),
+            [[0.0, 1.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]],
+            "main, then the popup over it"
+        );
+    }
+
     #[test]
     fn format_and_truncation() {
         assert_eq!(
@@ -1258,5 +1315,12 @@ mod tests {
         assert_eq!(ui.map_preview(), "levelshots/mp_harbor");
         ui.browser.lists[0][0].info.as_mut().unwrap().mapname = "zz_custom".into();
         assert_eq!(ui.map_preview(), "menu/art/unknownmap");
+    }
+
+    /// The edit cursor blinks on the renderer's 256 ms steps, off first.
+    #[test]
+    fn the_edit_cursor_shows_every_other_256_ms() {
+        let on: Vec<bool> = [0, 255, 256, 511, 512, 768].map(cursor_blink_on).to_vec();
+        assert_eq!(on, [false, false, true, true, false, true]);
     }
 }
