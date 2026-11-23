@@ -579,6 +579,8 @@ impl Renderer {
             scripted: bool,
             template: Option<usize>,
             opaque: bool,
+            // an `LT128` cut (`PropSkinDraw::Cut`)
+            flip: bool,
             staged: bool,
         }
         let mut plan_of: HashMap<&str, usize> = HashMap::new();
@@ -589,7 +591,7 @@ impl Renderer {
                 continue;
             }
             let scripted = prop_material(lib, cod2, skin).is_some_and(|sh| !sh.stages.is_empty());
-            let (mut template, mut opaque) = (None, false);
+            let (mut template, mut opaque, mut flip) = (None, false, false);
             if !scripted {
                 match prop_skin_draw(fs, skin) {
                     PropSkinDraw::Stages(sh) => {
@@ -597,7 +599,7 @@ impl Renderer {
                         template = Some(prop_templates.len() - 1);
                     }
                     PropSkinDraw::Opaque => opaque = true,
-                    PropSkinDraw::Cut => {}
+                    PropSkinDraw::Cut { flip: f } => flip = f,
                 }
             }
             let staged = scripted || template.is_some_and(|i| !prop_templates[i].stages.is_empty());
@@ -607,6 +609,7 @@ impl Renderer {
                 scripted,
                 template,
                 opaque,
+                flip,
                 staged,
             });
         }
@@ -655,14 +658,18 @@ impl Renderer {
                 if p.opaque {
                     assets::force_opaque(&mut img);
                 }
-                let cut = assets::has_cutout_alpha(&img);
-                let levels = texture_settings::prepare(
+                let mut cut = assets::has_cutout_alpha(&img);
+                let mut levels = texture_settings::prepare(
                     &mut img,
                     textures.picmip2,
                     gamma,
                     textures.store(),
                     texture_settings::Mips::chain(p.skin, &skin_level),
                 );
+                if p.flip {
+                    flip_alpha(&mut img, &mut levels);
+                    cut = assets::has_cutout_alpha(&img);
+                }
                 let pass = Pass::Prop {
                     culled: cod1 && !p.scripted && !prop_skin_two_sided(fs, p.skin),
                     solid: cod1 && !uploads_cutout(&img, &levels),
@@ -1743,6 +1750,18 @@ impl Renderer {
 /// a few a core, so the decoded copies held at once stay bounded.
 fn par_chunk() -> usize {
     4 * std::thread::available_parallelism().map_or(1, |n| n.get())
+}
+
+/// Inverts an `LT128` prop skin's alpha on every level it uploads, after
+/// its levels were built from the stored alpha as retail builds them.
+pub(super) fn flip_alpha(img: &mut Image, levels: &mut [Vec<u8>]) {
+    assets::invert_mask_alpha(&mut img.data);
+    for a in levels
+        .iter_mut()
+        .flat_map(|l| l.iter_mut().skip(3).step_by(4))
+    {
+        *a = 255 - *a;
+    }
 }
 
 /// Whether an image as uploaded, `img` after `texture_settings::prepare`

@@ -1243,15 +1243,47 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   UO's mp_bocage too), UO's `concrete@o_br_prp_potted-plant-0[1245]`
   (one opaque stage; mp_cassino, mp_italy, mp_sicily), and skins with a
   `skins/` block. No skin without a block or an `@` cuts.
+- VERIFIED (the instructions), `CoDMP.exe` 0x4d5866..0x4d58d3: the GL
+  state setter's alpha test calls `glAlphaFunc(GL_GREATER 0x204, 0)` for
+  state 0x10000000, `(GL_LESS 0x201, 0.5f)` for 0x20000000 (push
+  0x3f000000 at 0x4d58ab) and `(GL_GEQUAL 0x206, 0.5f)` for 0x40000000
+  (0x4d58c9). So `LT128` keeps the texels under 0.5 and `GE128` the rest.
+- VERIFIED, `shadertypes/model/*.stype` (1.1 pak4; 1.5 pak4; UO
+  pakuo01): one stage with `alphaFunc LT128` in `foliage_masked`,
+  `foliage_detail` and UO's `foliage_masked_cullnone`; `GE128` in
+  `foliage`, `metal_masked`, `cloth_masked`, `wood_masked`,
+  `wheel_metal_masked`, `tread_metal_masked`, UO's
+  `foliage_masked_cullnone2`, `wood_masked_cullnone`,
+  `metal_masked_cullnone`. No model template's live stage says `GT0`
+  (UO's airplane types have it commented out).
+- VERIFIED, asset (1.1 paks): the `foliage_masked@` skins store their fill
+  at alpha 255 and their leaves near 0 (`birchft.tga`, `birch1_cross.tga`
+  and the three `treeshdw_oak*.tga` shadow cards: every border texel 255).
+  UO's `foliage_masked_cullnone@` DXT3 cards store the same way (the
+  first block's alpha 204..255 on `Wfirhighcross#0`, `Wtallpinecross#0`,
+  `Wtallpinevert#0`, `bushfront`, `pinebranch`). INFERRED: retail reads
+  the skin as stored and the `LT128` test keeps the leaves; nothing
+  inverts the image.
 - vcod: `fs_prop` drops texels under alpha 0.5, which suits only a
   template with one alpha-testing stage. A prop skin without a `skins/`
   block draws by its template
   (`renderer::prop_skin_draw`): more than one stage or a blend goes
   through the stage path with `$texturename` bound to `skins/<skin>`
-  (`entity_material::bind_texture_name`); one alpha-testing stage keeps
-  the cut; one opaque stage, or the implicit skin, has its image alpha set
-  to 255 at load, as the world types are. Through the cut alone the staff
-  car draws only the chrome and the glass blends draw as cutouts.
+  (`entity_material::bind_texture_name`); one `GE128` stage keeps the cut;
+  one `LT128` stage keeps it on the skin uploaded with its alpha inverted
+  after its mip levels are built (`world_load::flip_alpha`), whatever the
+  image's name; one opaque stage, or the implicit skin, has its image
+  alpha set to 255 at load, as the world types are. Through the cut alone
+  the staff car draws only the chrome and the glass blends draw as
+  cutouts. `assets::load_skin_image` returns the image as stored, so a
+  snapshot entity's `LT128` stage tests the stored alpha as retail does.
+  Before 2026-11-23 the load inverted every `foliage_masked@` and
+  `foliage_detail@` image but `treeshdw_*` by name (those three skin only
+  the never-drawn `shadow_tree_*` models), so UO's
+  `foliage_masked_cullnone@` props drew inside out (`bushfront.dds` on
+  the shrubs of mp_ponyri, mp_kursk and mp_kharkov; the fir cards of
+  mp_peaks' `o_us_nat_lumpobranches`), and so did an entity's `LT128`
+  foliage skin.
 - VERIFIED, 0x505580 (`RB_SurfaceStaticModel( %s )`, string 0x5463e8):
   the uncached static-model surface copies its vertex positions
   (surface `+0x1c`), texture coordinates (`+0x14`) and, when the shader

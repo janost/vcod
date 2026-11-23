@@ -2226,6 +2226,44 @@ fn chateaus_door_draws_opaque() {
     ));
 }
 
+/// `foliage_masked` and `foliage_detail` cut `alphaFunc LT128`: retail
+/// keeps the texels under 0.5 (0x4d58ab), the leaves of a card whose fill
+/// stores 255. The prop path flips such a skin so `fs_prop` keeps them,
+/// whatever the image's name.
+#[test]
+fn an_lt128_prop_skin_keeps_the_texels_under_half() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        return;
+    };
+    for skin in [
+        "foliage_masked@birchft.tga",
+        "foliage_masked@treeshdw_oakfrnt.tga",
+        "foliage_detail@grassblades#0.dds",
+    ] {
+        assert!(
+            matches!(prop_skin_draw(&fs, skin), PropSkinDraw::Cut { flip: true }),
+            "{skin}"
+        );
+    }
+    let img = assets::load_skin_image(&fs, "foliage_masked@treeshdw_oakfrnt.tga");
+    let alpha = |img: &Image, x: usize, y: usize| {
+        let ImageData::Rgba8(px) = &img.data else {
+            panic!("the tga decodes to rgba")
+        };
+        px[(y * img.width as usize + x) * 4 + 3]
+    };
+    // the card's corner is fill, its middle a leaf, as the file stores them
+    assert_eq!((alpha(&img, 0, 0), alpha(&img, 47, 64)), (255, 0));
+    let (mut flipped, mut levels) = (img.clone(), vec![vec![9, 9, 9, 200]]);
+    flip_alpha(&mut flipped, &mut levels);
+    assert_eq!((alpha(&flipped, 0, 0), alpha(&flipped, 47, 64)), (0, 255));
+    assert_eq!(levels, [vec![9, 9, 9, 55]]);
+    assert!(matches!(
+        prop_skin_draw(&fs, "metal_masked@boucher_sign.tga"),
+        PropSkinDraw::Cut { flip: false }
+    ));
+}
+
 /// A prop skin draws one-sided unless its template says `cull none`,
 /// as UO's `*_cullnone` types do.
 #[test]
@@ -2268,7 +2306,7 @@ fn a_prop_skin_draws_as_its_template_says() {
     ));
     assert!(matches!(
         prop_skin_draw(&fs, "metal_masked@fordsteer.dds"),
-        PropSkinDraw::Cut
+        PropSkinDraw::Cut { flip: false }
     ));
     assert!(matches!(
         prop_skin_draw(&fs, "metal@staffcartread.dds"),
