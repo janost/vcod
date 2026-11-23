@@ -2437,16 +2437,16 @@ Sources: `ui_mp/mods.menu` and `ui_mp/main.menu` in `pak0.pk3`,
   after the child died names the exit status and the log in the popup.
 - `cg_thirdPerson` is not set (vcod has none). The map preview
   (`UI_STARTMAPCINEMATIC`, 255) draws the selected map's
-  `levelshots/<map>` as the browser's preview does (section 6); retail's
-  paint for 255 was not read. A left click steps the game type forward, a
+  `levelshots/<map>` as the browser's preview does (section 6), as
+  retail's does (18.4.1). A left click steps the game type forward, a
   right click back, as `0x40009a60` does. The map list has retail's scroll
   bar and keys (section 19); the wheel scrolls it (vcod's own, section 19).
 - A game type page's `onEsc` (`open main; close createserver`) leaves any
   page but `settings_dm` open under `main`, since `createserver`'s
   `onClose` names only that one. vcod draws open menus in open order from
-  the topmost full-screen one, so the page stays hidden until it opens
-  again; its items still take the mouse under `main`, as retail's do
-  (section 20, "Which menu takes the mouse").
+  the topmost full-screen one (`Ui::painted`, 18.4.1), so the page stays
+  hidden until it opens again; its items still take the mouse under
+  `main`, as retail's do (section 20, "Which menu takes the mouse").
 - `vcod-server` takes `--set fs_game=<dir>` as retail takes `+set
   fs_game`: the directory's paks go over the base's, the systeminfo
   carries `fs_game` after `bg_fallDamageMinHeight`, and `getinfo` adds
@@ -2457,6 +2457,41 @@ Sources: `ui_mp/mods.menu` and `ui_mp/main.menu` in `pak0.pk3`,
   from `<fs_homepath>/mymod/` (`Sys_LoadDll` in its log). VERIFIED (live).
 - A numeric field takes digits only; any other character ends its edit
   (20.5.1). VERIFIED (asm).
+
+#### 18.4.1 Paint order and the map preview
+
+Sources: `ui_mp_x86.dll` 1.1, 1.5 and `uo_ui_mp_x86.dll`, read with
+`objdump` (2026-11-23).
+
+- `Menu_PaintAll` (1.1 `0x400189b0`, from `UI_Refresh` `0x40007ba5`) runs
+  the capture function, then paints every loaded menu (array `0x401f0700`,
+  `0x70c` bytes each) that is not on the stack (`0x40010530` walks the
+  stack `0x4020d300`, count `0x401bf404`) in load order, through
+  `Menu_Paint` (`0x40016cf0`), which skips one without the visible flag
+  (`+0x48 & 4`) (`0x400189c8`..`0x400189fe`). Then it walks the stack from
+  the top for the first menu with `fullscreen` (`+0xbc`) set, visible or
+  not, and paints the stack from there up in stack order
+  (`0x40018a00`..`0x40018a46`). VERIFIED (asm). 1.5 is the same code
+  (`0x400197a8`..`0x40019826`, stack `0x40220320`), and UO's has
+  `Menu_Paint` inlined in both loops (`0x4001caf8`..`0x4001cc4a`, stack
+  `0x401f9220`, the same `+0xbc` scan at `0x4001cc60`). VERIFIED (asm).
+- So a menu under the topmost fullscreen one paints nothing, and the
+  stack paints in its own order, not Q3's load order. INFERRED (the
+  combination). The first loop paints a menu only
+  when its file sets it visible and it was never opened or closed: no
+  stock 1.1 UI menu does (`hud.menu`'s are the cgame's). VERIFIED (pak0).
+  vcod has no such menus and paints only the stack (`Ui::painted`).
+- `UI_OwnerDraw` (`0x400094a0`) moves the rect by the text offsets and
+  switches on `ownerDraw - 200` (bytes `0x40009740`, targets
+  `0x40009700`): 255 (`UI_STARTMAPCINEMATIC`) reaches `0x400095e3`, which
+  calls `0x40008aa0` for the net list. That resets a `ui_currentNetMap`
+  (`0x401c28ac`) under 0 or past the map count (`0x401e4610`, `jle`, so
+  the count itself passes) to 0 and sets the cvar `"0"`, then draws the
+  map's levelshot (registered once into `+0x90` of its `0xa4`-byte record
+  from the name at `+0x0c`) over the rect, or `menu/art/unknownmap`
+  without one (`0x400089e0`..`0x40008a9e`). VERIFIED (asm). That the
+  selection is `ui_currentNetMap` is INFERRED (Q3's `UI_FeederSelection`);
+  vcod draws the selected row's map (`Ui::start_map_preview`).
 
 ## 19. List boxes
 

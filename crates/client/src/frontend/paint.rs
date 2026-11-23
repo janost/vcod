@@ -98,7 +98,7 @@ impl Ui {
             fonts: self.fonts.as_ref(),
             exact: self.cod2.is_some(),
         };
-        for &m in &self.open {
+        for &m in self.painted() {
             let menu = &self.menus[m];
             for (i, item) in menu.items.iter().enumerate() {
                 if !self.shown(m, i, shell) {
@@ -1176,6 +1176,43 @@ mod tests {
         assert_eq!(cursor.rgba, [1.0; 4]);
         assert_eq!(cursor.verts[0], [368.0, 168.0]);
         assert_eq!(cursor.verts[2], [432.0, 232.0]);
+    }
+
+    /// `Menu_PaintAll` (0x40018a00..0x40018a46) paints the stack from its
+    /// topmost fullscreen menu up: a page a script left open under `main`
+    /// draws nothing, a popup over `main` draws.
+    #[test]
+    fn menus_under_the_topmost_fullscreen_menu_paint_nothing() {
+        let mut ui = ui_with_menu(
+            r#"{ menuDef { name "page" rect 0 0 640 480
+              itemDef { name "p" rect 10 10 20 20 style 1 backcolor 1 0 0 1 visible 1 decoration } }
+            menuDef { name "main" fullscreen 1 rect 0 0 640 480
+              itemDef { name "m" rect 50 50 20 20 style 1 backcolor 0 1 0 1 visible 1 decoration } }
+            menuDef { name "pop" popup rect 0 0 640 480
+              itemDef { name "q" rect 90 90 20 20 style 1 backcolor 0 0 1 1 visible 1 decoration } } }"#,
+        );
+        let shell = Shell::new();
+        let loc = Localized::default();
+        let colours = |ui: &Ui| -> Vec<[f32; 4]> {
+            ui.build(640.0, 480.0, &loc, &shell)
+                .iter()
+                .map(|q| q.rgba)
+                .collect()
+        };
+        ui.open_menu("page", &shell, &mut Vec::new());
+        assert_eq!(colours(&ui), [[1.0, 0.0, 0.0, 1.0]]);
+        ui.open_menu("main", &shell, &mut Vec::new());
+        assert_eq!(
+            colours(&ui),
+            [[0.0, 1.0, 0.0, 1.0]],
+            "the page is under main"
+        );
+        ui.open_menu("pop", &shell, &mut Vec::new());
+        assert_eq!(
+            colours(&ui),
+            [[0.0, 1.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]],
+            "main, then the popup over it"
+        );
     }
 
     #[test]

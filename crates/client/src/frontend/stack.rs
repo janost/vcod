@@ -28,6 +28,22 @@ impl Ui {
         self.open.iter().any(|&m| self.menus[m].fullscreen)
     }
 
+    /// The open menus `Menu_PaintAll` paints, bottom first: the stack from
+    /// its topmost fullscreen menu up, a hidden one counting (1.1
+    /// 0x40018a00..0x40018a46, cod11-front-end.md 18.4.1).
+    pub(super) fn painted(&self) -> &[usize] {
+        let open = self.open.iter().rposition(|&m| self.menus[m].fullscreen);
+        let hidden = self
+            .hidden
+            .iter()
+            .filter(|&&(m, _)| self.menus[m].fullscreen);
+        let from = open
+            .into_iter()
+            .chain(hidden.map(|&(_, below)| below))
+            .max();
+        &self.open[from.unwrap_or(0)..]
+    }
+
     /// `CL_GetMenuBlurRadius` (CoD2 Mac 0x00172970): with the UI's key
     /// catcher up, the painted menus' `blurWorld`s added in quadrature
     /// (`Menu_Paint` 0x0017077c), 480-high virtual units; 0 otherwise.
