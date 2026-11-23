@@ -488,7 +488,8 @@ for its own client were not looked for; open (section 17).
   front end's filter `ui_browserShowCoD4x`, `cod4-front-end.md` 7). 21.3's
   answers still match those keys. VERIFIED live.
 - `kc` (killcam) is `ki` in CoD4x's `infoResponse`, so vcod's killcam
-  column and filter read 0 on every CoD4x row. VERIFIED live.
+  filter read 0 on every CoD4x row. VERIFIED live. Since 18.4 a CoD4x row
+  reads `ki`.
 - No answer says whether the server needs authentication (section 2).
   VERIFIED live.
 
@@ -544,6 +545,7 @@ for its own client were not looked for; open (section 17).
   | `cap-retail` | (`cod4_lnxded` as `BIN`) | `oob_walk.py $ADDR 21 6` |
   | `cap-join1`, `cap-join2` | `+set sv_noauth 1` | the test `cod4x_live_join_spawns_and_leaves` run inside, `COD4X_OUT` naming the directory (18.3) |
   | `cap-vcod-probe` | `+set sv_noauth 1` | `vcod --game cod4 --game-dir <1.7 install> --net-probe $ADDR --team allies --probe-secs 15` |
+  | `cap-withheld1` | `+set sv_noauth 1` | the test `cod4x_live_withheld_gamestate_times_out` run inside (18.4) |
 
   `oob_walk.py` and `legacy_walk.py` are throwaway scripts beside the
   captures (getchallenge and connect per protocol; a 1.7 join resending
@@ -727,9 +729,67 @@ result VERIFIED live:
 Left for later stages: the browser and the authenticating server's
 refusal (stage 3: a server sending `cmd 8` is not told apart yet, the
 join waits for a gamestate that never comes and ends on the session's
-30 s `no gamestate`), downloads over `cmd 5` (stage 4), a demo recorded
+30 s `no gamestate`; done in 18.4), downloads over `cmd 5` (stage 4), a demo recorded
 on a CoD4x server (the writer is 1.7's), `Client::client_configs` in the
 scoreboard, and a map change on a CoD4x server, which no run made.
+
+### 18.4 Stage 3: the refusal and the browser
+
+- The refusal. `Conn::poll` ends a protocol 21 join at the first side
+  channel `cmd 8` (`reliable::CMD_AUTH`) that comes before the stats
+  request and the gamestate, with `conn::AUTH_REFUSAL`: `This CoD4x
+  server requires CoD4x client authentication, which vcod does not
+  support.` Nothing past the message's `cmd` is read, nothing answers it
+  and no stats go. The client first sends `disconnect` in three netchan
+  messages, as the reach probe did (19.1); `Conn::disconnect` sends it
+  before the gamestate on protocol 21 now.
+- The gate for it, `cod4x_join::an_authenticating_server_is_refused_before_the_stats`,
+  replays `auth-x21.txt`, one of section 19's 35 `cmd 8` servers cut at
+  its stats request, the address replaced: the join ended at the first
+  `cmd 8`, the client's side channel carried only bare acknowledges, and
+  three netchan messages followed. VERIFIED (the replay).
+- The fallback. A gamestate not in `conn::GAMESTATE_WAIT`, 15 s, after
+  the stats went ends the join with `conn::NO_GAMESTATE`, `disconnect`
+  sent first. The largest gamestate the 0x20000-byte buffer holds (9) is
+  110 fragments, 5.5 s at 20 a second (7.4). VERIFIED (the arithmetic on
+  the instructions' numbers). In `cap-join1` the last of 44 gamestate
+  fragments came 2.5 s after each client's first stats fragment.
+  VERIFIED live. That 15 s also covers the laps a lost fragment or the
+  cursor costs on a real link is INFERRED.
+- The server sets no bound of its own on that wait. `SV_CheckTimeouts`
+  (0x11f720) drops a client by the time of its last packet, per state:
+  1 after `sv_zombieTime` (default 2, registered at 0x11e2fb), 2 after
+  16 s (`lea ecx,[eax-0x3e80]` at 0x11f754), 3 after `sv_connectTimeout`
+  (default 90, 0x11e2d9), 4 after `sv_timeout` (default 40, 0x11e2b7),
+  each once five checks in a row found it late (`+0x21158`, `cmp
+  eax,0x5`). VERIFIED (the instructions at 0x11e2a7..0x11e300 and
+  0x11f720..0x11f8de). A joining client keeps sending, so none of them
+  ends its wait. INFERRED.
+- The gate for it, `cod4x_live_withheld_gamestate_times_out` (capture
+  `cap-withheld1`), runs the release with `sv_noauth 1` behind a relay
+  that drops every server side channel fragment past the stats
+  request's. The session's join ended 15.07 s after it began with
+  `NO_GAMESTATE`; the relay dropped 292 fragments, the server's laps over
+  the 44, about 20 a second; the server logged the client connecting and
+  `dropped: EXE_DISCONNECTED`. VERIFIED live. The stage 2 gate passed on
+  the same build. VERIFIED live.
+- An authenticating server whose library sent nothing before the stats
+  request would get the stats and meet the fallback. None of section
+  19's 35 did. VERIFIED live (19.3).
+- The browser lists CoD4x rows in all three sources by default:
+  `ui_browserShowCoD4x` (vcod's cvar) defaults to 1, and 0 hides them as
+  it did. A vcod config stamped before 2 that holds 0 takes 1
+  (`cod11-console.md` 8). The name column reads `[CoD4x] <hostname>`,
+  1.7's own columns kept (`cod4-front-end.md` 7). `ServerInfo::kc` reads
+  `ki` on a CoD4x row (14), so the killcam filter (`ui_browserKillcam`)
+  holds it as a 1.7 row. Nothing in the list says whether a row joins:
+  no answer shows authentication (2, 14); the join's refusal does.
+- The gate for it, `cod4_browser_lists_and_marks_cod4x_servers`: a fake
+  master lists a stock row (`kc\1`) and a CoD4x one with 21.3's
+  `infoResponse` keys in their order and `ki\1`. Both show, `[CoD4x] x
+  host` is drawn, the CoD4x row's killcam is 1, the killcam filter at 1
+  keeps both and at 0 drops both, and `ui_browserShowCoD4x 0` drops the
+  CoD4x row in Internet and in Local. VERIFIED (the test).
 
 ## 19. Public reach, 2026-11-23
 

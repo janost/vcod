@@ -2,6 +2,7 @@
 
 mod anim_census;
 mod clip_census;
+mod cod4x_join;
 mod cull_census;
 mod drawsurf_census;
 mod dynent_census;

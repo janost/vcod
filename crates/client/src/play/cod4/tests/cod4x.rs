@@ -1,15 +1,16 @@
-//! A live join of the CoD4x 21.3 release server (cod4x-protocol.md 18.3):
-//! the test runs `tools/cod4x_capture.sh` on `$COD4X_DEDRUN` and itself
-//! again inside its namespace, where the second run joins.
+//! Live joins of the CoD4x 21.3 release server (cod4x-protocol.md 18.3,
+//! 18.4): each test runs `tools/cod4x_capture.sh` on `$COD4X_DEDRUN` and
+//! itself again inside its namespace, where the second run joins.
 
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use vcod_cod4::net::clmsg::UserCmd;
-use vcod_cod4::net::conn::{Conn, Cp, Join};
+use vcod_cod4::net::conn::{Conn, Cp, GAMESTATE_WAIT, Join, NO_GAMESTATE};
 use vcod_cod4::net::parse::Op;
-use vcod_cod4::net::reliable::{BARE_ACK, Packet};
+use vcod_cod4::net::reliable::{self, BARE_ACK, Packet};
 
 use super::*;
 use crate::play::cod4_menus::Join as MenuJoin;
@@ -234,27 +235,19 @@ fn join_inside(addr: SocketAddr) {
     a.disconnect().unwrap();
 }
 
-/// The CoD4x release (`$COD4X_DEDRUN`, `sv_noauth 1`) on mp_crash under
-/// `tools/cod4x_capture.sh`, the 1.7 data `$COD4_DIR`'s: two clients join
-/// as protocol 21 clients, the first's datagrams in `cap-noauth1`'s
-/// order and its `svc 11` entries stopping once acknowledged, the second
-/// through the session to its spawn; both leave. `$COD4X_OUT` keeps the
-/// capture (`lo.txt`, `server.log`, `client.log`), else a temporary
-/// directory does.
-#[test]
-#[ignore = "live: the CoD4x release under tools/cod4x_capture.sh; set COD4X_DEDRUN and COD4_DIR, ~30 s"]
-fn cod4x_live_join_spawns_and_leaves() {
-    if let Ok(addr) = std::env::var("COD4X_INNER_ADDR") {
-        join_inside(addr.parse().unwrap());
-        return;
-    }
+/// Runs `tools/cod4x_capture.sh` on the CoD4x release (`$COD4X_DEDRUN`,
+/// `sv_noauth 1`, mp_crash, the 1.7 data `$COD4_DIR`'s) with this binary's
+/// test `test` run again inside as the client; returns the server's log
+/// once the inside run passed. `$COD4X_OUT` keeps the capture (`lo.txt`,
+/// `server.log`, `client.log`), else a temporary directory does.
+fn run_in_capture(test: &str) -> String {
     let bin =
         std::env::var("COD4X_DEDRUN").expect("set COD4X_DEDRUN to the release's cod4x18_dedrun");
     assert!(vcod_cod4::testing::cod4_install().is_some(), "set COD4_DIR");
     let tmp = tempfile::tempdir().unwrap();
     let out = std::env::var("COD4X_OUT").map_or_else(|_| tmp.path().to_path_buf(), Into::into);
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tools/cod4x_capture.sh");
-    let name = concat!(module_path!(), "::cod4x_live_join_spawns_and_leaves");
+    let name = format!("{}::{test}", module_path!());
     let name = name.split_once("::").unwrap().1;
     let exe = std::env::current_exe().unwrap();
     let inner = format!(
@@ -273,18 +266,122 @@ fn cod4x_live_join_spawns_and_leaves() {
         client.contains("test result: ok. 1 passed"),
         "the inside run failed"
     );
-    let server = std::fs::read_to_string(out.join("server.log")).unwrap();
+    std::fs::read_to_string(out.join("server.log")).unwrap()
+}
+
+/// Whether the server's log has `who` connecting and leaving with
+/// `disconnect`.
+fn connected_and_left(server: &str, who: &str) -> bool {
+    server.contains(&format!("Going from CS_FREE to CS_CONNECTED for {who}"))
+        && server.lines().any(|l| {
+            l.starts_with(&format!("Player {who}^7, ")) && l.ends_with("dropped: EXE_DISCONNECTED")
+        })
+}
+
+/// The CoD4x release under `tools/cod4x_capture.sh` ([`run_in_capture`]):
+/// two clients join as protocol 21 clients, the first's datagrams in
+/// `cap-noauth1`'s order and its `svc 11` entries stopping once
+/// acknowledged, the second through the session to its spawn; both leave.
+#[test]
+#[ignore = "live: the CoD4x release under tools/cod4x_capture.sh; set COD4X_DEDRUN and COD4_DIR, ~30 s"]
+fn cod4x_live_join_spawns_and_leaves() {
+    if let Ok(addr) = std::env::var("COD4X_INNER_ADDR") {
+        join_inside(addr.parse().unwrap());
+        return;
+    }
+    let server = run_in_capture("cod4x_live_join_spawns_and_leaves");
     for bad in ["reliable acknowledge", "Unknown clientcommand", "kicked"] {
         assert!(!server.contains(bad), "server.log: {bad}");
     }
     for who in ["vcodxa", "vcodxb"] {
         assert!(
-            server.contains(&format!("Going from CS_FREE to CS_CONNECTED for {who}")),
-            "{who} never connected"
+            connected_and_left(&server, who),
+            "{who} never connected and left"
         );
-        let left = server.lines().any(|l| {
-            l.starts_with(&format!("Player {who}^7, ")) && l.ends_with("dropped: EXE_DISCONNECTED")
-        });
-        assert!(left, "{who} never left");
     }
+}
+
+/// A relay on loopback between a client and `server` that drops every
+/// server side channel fragment past the stats request's: on the release
+/// those are the gamestate's (cod4x-protocol.md 7.3). Returns the relay's
+/// address and the count of fragments it dropped.
+fn withholding_relay(server: SocketAddr) -> (SocketAddr, Arc<AtomicUsize>) {
+    let front = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let back = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    front.set_nonblocking(true).unwrap();
+    back.set_nonblocking(true).unwrap();
+    let addr = front.local_addr().unwrap();
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let count = dropped.clone();
+    let stats_request = reliable::frame(&[9, 0, 0, 0, 0]);
+    std::thread::spawn(move || {
+        let mut buf = vec![0u8; 65536];
+        let mut client = None;
+        let mut stats_seq = None;
+        loop {
+            let mut idle = true;
+            if let Ok((n, from)) = front.recv_from(&mut buf) {
+                client = Some(from);
+                let _ = back.send_to(&buf[..n], server);
+                idle = false;
+            }
+            if let Ok((n, _)) = back.recv_from(&mut buf) {
+                idle = false;
+                let d = &buf[..n];
+                let p = Packet::is_side(d).then(|| Packet::read(d).ok()).flatten();
+                if let Some(p) = p.filter(|p| p.sequence != BARE_ACK) {
+                    if p.data == stats_request {
+                        stats_seq = Some(p.sequence);
+                    } else if stats_seq.is_some_and(|s| p.sequence > s) {
+                        count.fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+                }
+                if let Some(c) = client {
+                    let _ = front.send_to(d, c);
+                }
+            }
+            if idle {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+    });
+    (addr, dropped)
+}
+
+/// The inside half of [`cod4x_live_withheld_gamestate_times_out`].
+fn withheld_inside(addr: SocketAddr) {
+    let (relay, dropped) = withholding_relay(addr);
+    let t0 = Instant::now();
+    let e = Cod4Session::connect(relay, "vcodxw", Cp::Bare, MenuJoin::default())
+        .err()
+        .expect("the join went on without a gamestate");
+    let took = t0.elapsed();
+    println!("cod4x: the join ended after {took:?}: {e:#}");
+    assert_eq!(e.to_string(), NO_GAMESTATE);
+    let dropped = dropped.load(Ordering::Relaxed);
+    println!("cod4x: the relay dropped {dropped} gamestate fragments");
+    assert!(dropped > 0, "no gamestate fragment came");
+    assert!(
+        took > GAMESTATE_WAIT && took < Duration::from_secs(25),
+        "{took:?}"
+    );
+    // The relay passes the disconnect on before the run ends.
+    std::thread::sleep(Duration::from_millis(500));
+}
+
+/// The CoD4x release under `tools/cod4x_capture.sh` ([`run_in_capture`])
+/// behind [`withholding_relay`], a server that never sends the gamestate
+/// after the stats, as an authenticating one would (cod4x-protocol.md 5):
+/// the session's join ends with [`NO_GAMESTATE`] once [`GAMESTATE_WAIT`]
+/// passed, and the server logs the client leaving.
+#[test]
+#[ignore = "live: the CoD4x release under tools/cod4x_capture.sh; set COD4X_DEDRUN and COD4_DIR, ~25 s"]
+fn cod4x_live_withheld_gamestate_times_out() {
+    if let Ok(addr) = std::env::var("COD4X_INNER_ADDR") {
+        withheld_inside(addr.parse().unwrap());
+        return;
+    }
+    let server = run_in_capture("cod4x_live_withheld_gamestate_times_out");
+    assert!(connected_and_left(&server, "vcodxw"), "{server}");
 }

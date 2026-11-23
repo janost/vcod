@@ -248,6 +248,9 @@ pub struct Conn {
     userinfo: String,
     /// CoD4x 21: the side channel, `None` on 1.7.
     side: Option<Link>,
+    /// CoD4x 21: when the side channel's stats went, for
+    /// [`GAMESTATE_WAIT`].
+    side_stats: Option<Instant>,
     /// What the side channel's millisecond clock counts from.
     born: Instant,
 }
@@ -296,6 +299,7 @@ impl Conn {
             prints: Vec::new(),
             userinfo: String::new(),
             side: None,
+            side_stats: None,
             born: now(),
         };
         c.note(JoinNote::Challenging);
@@ -526,9 +530,10 @@ impl Conn {
 
     /// `disconnect` as a reliable command, sent in three moves as
     /// `CL_Disconnect` sends it (`iw3mp.exe` 0x469776..0x46978d); the
-    /// server frees the slot at once.
+    /// server frees the slot at once. A CoD4x server takes it before the
+    /// gamestate too (cod4x-protocol.md 19.1).
     pub fn disconnect(&mut self) -> Result<()> {
-        if self.client.gamestate.is_none() {
+        if self.client.gamestate.is_none() && self.client.dialect == Dialect::V17 {
             return Ok(());
         }
         self.command("disconnect");
@@ -619,15 +624,33 @@ impl Conn {
             });
         }
         self.side_frame()?;
+        if self.client.gamestate.is_none()
+            && self
+                .side_stats
+                .is_some_and(|t| now().saturating_duration_since(t) > GAMESTATE_WAIT)
+        {
+            return Err(self.refuse(NO_GAMESTATE));
+        }
         Ok(out)
+    }
+
+    /// Ends a CoD4x join before its gamestate: `disconnect` goes, so the
+    /// server frees the slot, and the error is `why`.
+    fn refuse(&mut self, why: &str) -> anyhow::Error {
+        if let Err(e) = self.disconnect() {
+            log::warn!("cod4x: disconnect: {e:#}");
+        }
+        Refused(why.into()).into()
     }
 
     /// One side channel packet: its acknowledge, and the messages it
     /// completed answered. The stats request gets the profile's block in
     /// mode 2 (cod4x-protocol.md 7.1); the gamestate goes into the client
     /// and comes back as a [`Received`] holding [`Op::Gamestate`] alone,
-    /// with no message for a demo. Other messages (downloads, the
-    /// authentication library's) are logged and left.
+    /// with no message for a demo. The authentication library's message
+    /// ahead of the stats request ends the join with [`AUTH_REFUSAL`]
+    /// (cod4x-protocol.md 19.2). Other messages (downloads) are logged and
+    /// left.
     fn side_packet(&mut self, d: &[u8]) -> Result<Option<Received>> {
         let p = match Packet::read(d) {
             Ok(p) => p,
@@ -643,7 +666,14 @@ impl Conn {
                 .get(..4)
                 .map_or(0, |w| i32::from_le_bytes(w.try_into().unwrap()));
             match cmd {
+                reliable::CMD_AUTH
+                    if self.client.gamestate.is_none() && self.side_stats.is_none() =>
+                {
+                    log::info!("cod4x: the server authenticates clients");
+                    return Err(self.refuse(AUTH_REFUSAL));
+                }
                 reliable::CMD_STATS => {
+                    self.side_stats.get_or_insert_with(now);
                     let m = StatsMsg::mode2(&self.stats.0, self.challenge);
                     self.side.as_mut().context("side channel")?.send(&m.write());
                     log::info!("cod4x: stats requested, sent in mode 2");
@@ -1037,6 +1067,21 @@ pub fn cod4x_proto(reply: &[u8]) -> Option<&str> {
 /// (`SV_GetChallenge`'s format at 0x10e700, cod4x-protocol.md 2).
 pub const XPROTO: &str = "18";
 
+/// Why a CoD4x join ends at the authentication library's first message
+/// (cod4x-protocol.md 19.2).
+pub const AUTH_REFUSAL: &str =
+    "This CoD4x server requires CoD4x client authentication, which vcod does not support.";
+
+/// How long a CoD4x join waits for the gamestate once its stats went: the
+/// largest (0x20000 bytes, 110 fragments) takes 5.5 s at 20 fragments a
+/// second, the release's 44 came 2.5 s after the stats (cod4x-protocol.md
+/// 7.4, 18.4).
+pub const GAMESTATE_WAIT: Duration = Duration::from_secs(15);
+
+/// Why a CoD4x join ends when no gamestate came within [`GAMESTATE_WAIT`].
+pub const NO_GAMESTATE: &str = "This CoD4x server sent no gamestate within 15 s of the stats; \
+     it may require CoD4x client authentication, which vcod does not support.";
+
 /// Why vcod does not go on into a CoD4x server whose `xproto` is not
 /// [`XPROTO`]: its side channel or protocol may not be the one vcod
 /// speaks.
@@ -1188,6 +1233,7 @@ mod tests {
             prints: Vec::new(),
             userinfo: String::new(),
             side: None,
+            side_stats: None,
             born: Instant::now(),
         }
     }

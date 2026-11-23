@@ -531,19 +531,21 @@ editor picked).
   clearError`, close it and open `main`. VERIFIED (the walk).
 - The browser's Join Server (`take_join`) goes through the same join,
   the `password` dvar in the userinfo (`JoinArgs::password`).
-- CoD4x servers are hidden. This is vcod's own filter; retail 1.7 has
-  none and lists them. A row is CoD4x when its `infoResponse` carries
+- CoD4x servers are listed and marked. The filter is vcod's own; retail
+  1.7 has none and lists them unmarked. A row is CoD4x when its `infoResponse` carries
   `shortversion` (CoD4x's `x21`; 1.7's `getinfo` sends none) or its
   `statusResponse` a `protocol` other than 6 or a `version` starting
   `CoD4 X` (cod4-handshake.md 13; `ServerInfo::cod4x`,
-  `Status::is_cod4x`). `UI_BuildServerDisplayList`'s port leaves such
-  rows out of all three sources unless `ui_browserShowCoD4x` (a vcod
-  cvar, archived, default 0) is 1; then the name column reads
-  `[CoD4x] <hostname>`.
+  `Status::is_cod4x`). The name column reads `[CoD4x] <hostname>`, and
+  the killcam filter reads CoD4x's `ki` for 1.7's `kc`
+  (cod4x-protocol.md 14). `UI_BuildServerDisplayList`'s port leaves such
+  rows out of all three sources when `ui_browserShowCoD4x` (a vcod cvar,
+  archived, default 1; it was 0 until cod4x-protocol.md 18.4) is 0.
   The mark is not a `serverInfo_t` field, so `servercache.dat` does not
   keep it: a cached favourite shows until its ping answers. A join of
   such a row plays only on a CoD4x server without client
-  authentication (cod4x-protocol.md 18.3).
+  authentication (cod4x-protocol.md 18.3); an authenticating one refuses
+  it with that reason (18.4).
 - Left: the Create a Class editor's stat commands (section 4).
 - `cdkey_menu` (`ui_mp.ff`): `onOpen` `setfocus firstkey`,
   `setlocalvarint ui_show_cancel 1`, `uiScript getCDKey`; five
