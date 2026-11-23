@@ -86,6 +86,7 @@ fn item_states(menus: &[UiMenu]) -> Vec<Vec<ItemState>> {
                     visible: i.visible,
                     back: i.back,
                     border_color: i.border_color,
+                    edit: Default::default(),
                 })
                 .collect()
         })

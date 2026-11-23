@@ -205,6 +205,7 @@ struct Item {
     fore: [f32; 4],
     background: Option<String>,
     text_scale: f32,
+    text_style: i32,
 }
 
 /// The owner draw items of the visible menus `ui_mp/hud.menu` holds.
@@ -232,6 +233,7 @@ fn load_items(fs: &dyn AssetSource) -> Vec<Item> {
             fore: i.fore,
             background: i.background,
             text_scale: i.text_scale,
+            text_style: i.text_style,
         })
         .collect()
 }
@@ -592,6 +594,7 @@ fn talker(item: &Item, frame: &Frame, client: u32, cx: &Ctx, out: &mut Vec<HudQu
         item.align,
         item.text_scale,
         item.fore,
+        item.text_style,
         out,
     );
 }
@@ -788,7 +791,10 @@ impl<'a> Ctx<'a> {
         f.max_height as f32 * f.glyph_scale * scale
     }
 
-    /// `UI_DrawText`: `s` with its baseline at grid `(x, y)` under `align`.
+    /// `UI_DrawText`: `s` with its baseline at grid `(x, y)` under `align`
+    /// in `style` (an owner draw's is its item's `textstyle`, which
+    /// `Item_OwnerDraw_Paint` hands on, CoD2MP_s.exe 0x5417d4).
+    #[expect(clippy::too_many_arguments)]
     fn text(
         &self,
         s: &str,
@@ -797,6 +803,7 @@ impl<'a> Ctx<'a> {
         align: [i32; 2],
         scale: f32,
         rgba: [f32; 4],
+        style: i32,
         out: &mut Vec<HudQuad>,
     ) {
         if s.is_empty() || rgba[3] <= 0.0 {
@@ -806,7 +813,9 @@ impl<'a> Ctx<'a> {
         let top = y - self.height(scale);
         let px = self.sp.axis(0, x, 0.0, align[0]).0;
         let py = self.sp.axis(1, top, 0.0, align[1]).0;
-        font::layout(f, s, px, py, scale / f.unit_scale() * self.k, rgba, out);
+        let style = font::TextStyle::Cod2 { style, snap: true };
+        let px_scale = scale / f.unit_scale() * self.k;
+        font::layout_styled(f, s, px, py, px_scale, rgba, style, self.k, out);
     }
 }
 
@@ -896,12 +905,12 @@ impl PlayerHud {
         let cx = Ctx::new(fonts, Slot::BigFixed, (w, h), loc, 0);
         let s = loc.get("CGAME_SPECTATOR").unwrap_or("CGAME_SPECTATOR");
         let x = -cx.width(s, 0.5) * 0.5;
-        cx.text(s, x, -27.0, [7, 3], 0.5, [1.0; 4], out);
+        cx.text(s, x, -27.0, [7, 3], 0.5, [1.0; 4], 3, out);
     }
 
     /// `CG_DrawCrosshairNames`' line (Mac 0x1cddb4): `s` in font 0 at
     /// 1/3, aligned (0, 0), at `cg_drawCrosshairNamesPosX` and 16 under
-    /// `cg_drawCrosshairNamesPosY`, without the style 3 shadow.
+    /// `cg_drawCrosshairNamesPosY`, style 3 (CoD2MP_s.exe 0x4c99c8).
     pub fn crosshair_name(
         &self,
         s: &str,
@@ -913,7 +922,16 @@ impl PlayerHud {
         out: &mut Vec<HudQuad>,
     ) {
         let cx = Ctx::new(fonts, Slot::Default, (w, h), loc, 0);
-        cx.text(s, x as f32, (y + 16) as f32, [0, 0], 1.0 / 3.0, rgba, out);
+        cx.text(
+            s,
+            x as f32,
+            (y + 16) as f32,
+            [0, 0],
+            1.0 / 3.0,
+            rgba,
+            3,
+            out,
+        );
     }
 
     /// What `CG_Draw2D` draws once the board is not up:
@@ -956,7 +974,7 @@ impl PlayerHud {
                     key.as_str()
                 };
                 let s = loc.get(text).unwrap_or(text).replacen("&&1", key, 1);
-                cx.text(&s, 240.0, y, [0, 0], SCALE, [1.0; 4], out);
+                cx.text(&s, 240.0, y, [0, 0], SCALE, [1.0; 4], 3, out);
                 y += line;
             }
         }
@@ -971,7 +989,7 @@ impl PlayerHud {
             let following = loc.get("CGAME_FOLLOWING").unwrap_or("CGAME_FOLLOWING");
             for (s, y) in [(following, 40.0), (name.as_str(), 65.0)] {
                 let x = -cx.width(s, SCALE) * 0.5;
-                cx.text(s, x, y, [7, 1], SCALE, [1.0; 4], out);
+                cx.text(s, x, y, [7, 1], SCALE, [1.0; 4], 3, out);
             }
         }
     }
@@ -1350,7 +1368,16 @@ impl PlayerHud {
                     let left = (self.prone_blocked_until - now) as f32;
                     let a = (left / 1500.0 * 540.0).to_radians().sin().abs();
                     let c = rgba(item.fore, a);
-                    cx.text(s, tw * -0.5, PRONE_Y, [7, 3], item.text_scale, c, out);
+                    cx.text(
+                        s,
+                        tw * -0.5,
+                        PRONE_Y,
+                        [7, 3],
+                        item.text_scale,
+                        c,
+                        item.text_style,
+                        out,
+                    );
                 }
                 self.stance_hints(item, a, cx, input, out);
             }
@@ -1367,7 +1394,16 @@ impl PlayerHud {
                 let th = cx.height(item.text_scale);
                 let tx = (tw + w) * -0.5 + x;
                 let c = [1.0; 4];
-                cx.text(&s, tx, th * 0.5 + y, al, item.text_scale, c, out);
+                cx.text(
+                    &s,
+                    tx,
+                    th * 0.5 + y,
+                    al,
+                    item.text_scale,
+                    c,
+                    item.text_style,
+                    out,
+                );
                 cx.pic([tx + tw, h * -0.5 + y, w, h], al, c, "hint_mantle", out);
             }
             od::WEAPON_NAME => {
@@ -1390,7 +1426,16 @@ impl PlayerHud {
                     format!("{} / {}", name("displayName"), name("modeName"))
                 };
                 let tx = x + w - cx.width(&s, item.text_scale) - 28.0;
-                cx.text(&s, tx, y, al, item.text_scale, rgba(item.fore, a), out);
+                cx.text(
+                    &s,
+                    tx,
+                    y,
+                    al,
+                    item.text_scale,
+                    rgba(item.fore, a),
+                    item.text_style,
+                    out,
+                );
             }
             od::WEAPON_MODE_ICON => {
                 let Some(weap) = self.weapons.get(self.shown_weapon(ps, input)) else {
@@ -1503,24 +1548,33 @@ impl PlayerHud {
         );
         match (clip, rsv) {
             (Some(c), Some(r)) => {
-                cx.text(&c, x, y, al, sc, item.fore, out);
+                cx.text(&c, x, y, al, sc, item.fore, item.text_style, out);
                 if lowclip {
-                    cx.text(&c, x, y, al, sc, pulse, out);
+                    cx.text(&c, x, y, al, sc, pulse, item.text_style, out);
                 }
-                cx.text(&r, x + w - cx.width(&r, sc), y, al, sc, rsv_c, out);
+                cx.text(
+                    &r,
+                    x + w - cx.width(&r, sc),
+                    y,
+                    al,
+                    sc,
+                    rsv_c,
+                    item.text_style,
+                    out,
+                );
                 let bar = (w - cx.width("|", sc)) * 0.5 + x - 5.0;
-                cx.text("|", bar, y, al, sc, rsv_c, out);
+                cx.text("|", bar, y, al, sc, rsv_c, item.text_style, out);
             }
             (Some(c), None) => {
                 let tx = (w - cx.width(&c, sc)) * 0.5 + x;
-                cx.text(&c, tx, y, al, sc, item.fore, out);
+                cx.text(&c, tx, y, al, sc, item.fore, item.text_style, out);
                 if lowclip {
-                    cx.text(&c, tx, y, al, sc, pulse, out);
+                    cx.text(&c, tx, y, al, sc, pulse, item.text_style, out);
                 }
             }
             (None, Some(r)) => {
                 let tx = (w - cx.width(&r, sc)) * 0.5 + x;
-                cx.text(&r, tx, y, al, sc, rsv_c, out);
+                cx.text(&r, tx, y, al, sc, rsv_c, item.text_style, out);
             }
             (None, None) => {}
         }
@@ -1574,12 +1628,12 @@ impl PlayerHud {
                 } else {
                     item.fore
                 };
-                cx.text(&n.to_string(), x, y, al, sc, c, out);
+                cx.text(&n.to_string(), x, y, al, sc, c, item.text_style, out);
             }
             Offhand::Name => {
                 let key = ["", "WEAPON_FRAGGRENADE", "WEAPON_SMOKEGRENADE"][class as usize];
                 let s = cx.loc.get(key).unwrap_or(key);
-                cx.text(s, x, y, al, sc, item.fore, out);
+                cx.text(s, x, y, al, sc, item.fore, item.text_style, out);
             }
         }
     }
@@ -1637,7 +1691,16 @@ impl PlayerHud {
             _ => {}
         }
         for line in &lines {
-            cx.text(line, x + w, ty, item.align, item.text_scale, c, out);
+            cx.text(
+                line,
+                x + w,
+                ty,
+                item.align,
+                item.text_scale,
+                c,
+                item.text_style,
+                out,
+            );
             ty += th + 1.5;
         }
     }
@@ -1714,7 +1777,16 @@ impl PlayerHud {
             Some(t) => {
                 let tw = cx.width(&t, sc);
                 let tx = (iw + tw) * -0.5 + x;
-                cx.text(&t, tx, cx.height(sc) * 0.5 + y, al, sc, c, out);
+                cx.text(
+                    &t,
+                    tx,
+                    cx.height(sc) * 0.5 + y,
+                    al,
+                    sc,
+                    c,
+                    item.text_style,
+                    out,
+                );
                 cx.pic([tx + tw, -0.5 * h + y, iw, h], al, c, &icon, out);
             }
             None => {
@@ -2287,6 +2359,7 @@ mod tests {
             fore: [1.0; 4],
             background: None,
             text_scale: 0.5,
+            text_style: 0,
         }
     }
 

@@ -560,7 +560,8 @@ const STALE_DEFAULTS: &[(u32, &str, &str, &[Game])] = &[
 /// for `vid_restart`, `mss_khz` (0x44fe60) for `snd_restart`.
 fn menu_cvar_latch(name: &str) -> u32 {
     match name {
-        "r_picmip" | "r_picmip2" | "r_texturebits" | "mss_khz" => LATCH,
+        // r_ignorehwgamma: flags 0x21 (cod11-gamma.md 1)
+        "r_picmip" | "r_picmip2" | "r_texturebits" | "r_ignorehwgamma" | "mss_khz" => LATCH,
         _ => 0,
     }
 }

@@ -322,7 +322,7 @@ beside the gunner's own `VEH` lines) and the cgame callback of section 9:
 | `origin2[0]`, `origin2[2]` | body pitch and roll, 8 bits of `127 + 127 * deg / 30`, 127 level, 105..146 in the runs. A sway over the entity's own `apos`, which carries the hull's slope (the jeep's `apos` pitch reached -14.8 on a climb) | VERIFIED, capture; scale from the cgame's unpack, 0x30020574 |
 | `leanf` | the front wheels' steer, negative for a right turn; the jeep's ran -55..53 under `rightmove` 127 and -127; a tank's stays 0 | VERIFIED, capture |
 | `time` | a ms clock that grows with forward travel and shrinks in reverse, 16 bits unsigned; the Panzer's rose 0..25367 and fell to 18639 reversing, the jeep's reached 47827. The struct reader takes a negative width as its plain width with no sign extension (`coduo_lnxded` FUN_08081f72, VERIFIED decompile), so the cgame's `time < 0` branch (0x30021346) never fires | VERIFIED, capture |
-| `time2` | constant per vehicle: 24 on the Panzer IV and the Willys jeep, 8 on the Sherman, through every drive. Not suspension travel: the cgame reads `time2 / 1000` units of wheel reach (section 9) | VERIFIED, capture |
+| `time2` | constant per vehicle: 24 on the Panzer IV and the Willys jeep, 8 on the Sherman, through every drive: `1000 * suspensionTravel` cut to the field's 6 bits, which the cgame reads as `time2 / 1000` units of wheel reach (section 9) | VERIFIED, capture |
 | `animMovetype` | the seat mask, bit n for seat n (2 the driver, 6 driver and gunner) | VERIFIED, capture |
 | `otherEntityNum` | the driver or 1023 | VERIFIED, capture |
 | `weapon` | the turret weapon (Panzer 42, Sherman 51) | INFERRED from the vehicle files |
@@ -537,12 +537,27 @@ has the seats, the drive step and vcod-server's vehicles.
     vehicle tag binds unrotated (Panzer IV, Sherman, Willys models,
     VERIFIED), where the two readings agree.
   - Moves each of the six `tag_wheel_*` (names at 0x300851ac) by
-    its contact against its bind, tracing from 40 above the wheel to `time2
-    / 1000` below (mask 0x211) off the bone matrices (trap 0xb0): at most
-    `time2 / 1000` units either way, under 0.03 on the stock vehicles (INFERRED,
-    disassembly). The names are VERIFIED. A
-    front wheel turns `(0, steer, 0)` when the steer is not 0 (INFERRED,
-    disassembly). A second
+    its contact against its bind (VERIFIED (the instructions),
+    0x30020c6e..0x30020f5b). The reach is `time2 * 0.001` (0.001 at
+    0x3007bd94). Each wheel is placed in the world off the bone matrices
+    (trap 0xb0) and the axis of the centity's `lerpAngles` and
+    `lerpOrigin`, then traced (0x30035310, mask 0x211, the vehicle passed)
+    from 40 (0x3007c284) above it along that axis' up to `reach` below.
+    The contact sits `(40 + reach) * fraction` below the start, but no
+    higher than `reach` above the wheel; 0x3004b5c0 takes it back into the
+    model's frame (`axis * (p - origin)`) and the bind's model-space
+    translation is subtracted. A front wheel with a non-zero steer gets
+    that as a control's translation under `(0, steer, 0)` (0x3001fbb0);
+    any other wheel gets it with an identity rotation, written straight
+    into the trap 0xa1 control slot. A wheel trap 0xa2 refuses keeps its
+    bind. So a wheel moves `reach` down over nothing and up to `reach` up
+    into ground, along the hull's up. `time2` is 24 on the Panzer IV and
+    the Willys and 8 on the Sherman (table below): their files'
+    `suspensionTravel` 7 and 5 (`vehicles/panzerIV_mp`, `willyjeep_mp`,
+    `shermantank_mp`, VERIFIED, the paks) make 7000 and 5000, whose low 6
+    bits, the netfield's width, are 24 and 8. So a stock wheel moves at
+    most 0.024 units, and a mod's file at most 0.063 (INFERRED from the
+    width). A second
     trace `time2 / 1000 + 16` down feeds the surface effects: with the gate
     at 0x304582ac set, a wheel that moved over 32 units since its last
     effect (cent+0x23c, reset past 200) plays the effect the table at
@@ -1182,7 +1197,8 @@ The client side: vcod watches and plays on a UO server.
   models' tag binds.
 - **Events, effects, HUD.** Section 19.
 - **Wheel dust** is `coduo-vehicles.md` 15.
-- **Not done.** The wheel suspension (under 0.03 units) of section 9,
+- **Not done.** The wheel suspension of section 9 (0.024 units at most on
+  the stock vehicles, not drawn),
   `lofx/`, soundloadspecs on the client and the
   rest of section 19's "Not done". The own gunner's gun and the drawn steer
   are `coduo-vehicles.md` 9, a shell's sound blend section 16, the server

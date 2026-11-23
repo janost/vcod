@@ -589,7 +589,7 @@ fn over_cap_bone_set_truncates() {
 
 #[test]
 fn stage_params_is_std140_shaped_and_pod_roundtrips() {
-    assert_eq!(std::mem::size_of::<StageParams>(), 288);
+    assert_eq!(std::mem::size_of::<StageParams>(), 336);
     let p = StageParams {
         uv0: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
         uv1: [7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
@@ -610,6 +610,7 @@ fn stage_params_is_std140_shaped_and_pod_roundtrips() {
         deform_kinds: [DEFORM_WAVE, DEFORM_BULGE, DEFORM_MOVE, 0],
         falloff: [[0.0; 4]; 2],
         fx: [0.0; 4],
+        deform_ext: [[2.0, 0.0, 0.0, 0.0], [0.0; 4], [1.0, 2.0, 0.5, 3.0]],
     };
     // slot-shaped write/read, like the UBO dynamic-offset path
     let mut slot = [0u8; std::mem::size_of::<StageParams>()];
@@ -938,6 +939,34 @@ fn parsed(text: &str) -> Material {
     Material::from_shader(&parse_shader(&name, &body, &mut WarnSet::new()))
 }
 
+/// An entity whose material clock runs `dt` past the frame's moves each
+/// deform as the frame's record at `t + dt` would: `deform.wgsl` adds
+/// `deform_ext`'s rate times `dt`, as retail moves shaderTime per entity
+/// (CoDMP.exe 0x4d68df). The bulge reads the refdef's time (0x16d8a08)
+/// and takes no rate.
+#[test]
+fn an_entity_clock_moves_the_deforms_by_their_rates() {
+    let sh = parsed(
+        "t\n{\ndeformVertexes wave 64 sin 0 2 0.1 0.75\ndeformVertexes normal .5 2\ndeformVertexes move 0 0 2 sawtooth 1 2 0.25 0.5\n{\nmap a.tga\n}\n}",
+    );
+    let (t, dt) = (2.0f32, 0.3f32);
+    let now = stage_params(&sh, 0, t).unwrap();
+    let later = stage_params(&sh, 0, t + dt).unwrap();
+    let wave_phase = (now.deform[0][2] + now.deform_ext[0][0] * dt).rem_euclid(1.0);
+    assert!((wave_phase - later.deform[0][2]).abs() < 1e-5);
+    let noise_time = now.deform[1][1] + now.deform_ext[1][0] * dt;
+    assert!((noise_time - later.deform[1][1]).abs() < 1e-5);
+    // move: the shader's table read at the entity's phase is the wave at t + dt
+    let [base, amp, phase, rate] = now.deform_ext[2];
+    let at = ((phase + rate * dt) * 1024.0).round_ties_even() as i64 & 1023;
+    let Deform::Move { wave: w, .. } = &sh.deforms[2] else {
+        panic!("move")
+    };
+    let k = vcod_common::material::wave_value(w, t + dt);
+    assert!((base + amp * at as f32 / 1024.0 - k).abs() < 1e-5, "{k}");
+    assert_eq!(now.deform[2], [0.0, 0.0, 2.0, 0.0]);
+}
+
 /// deform.wgsl's kind codes are the ones `stage_params` writes.
 #[test]
 fn deform_wgsl_codes_are_the_renderer_ones() {
@@ -1072,14 +1101,20 @@ fn stage_params_carry_the_deforms_in_script_order() {
     );
     assert!(stage_animated(&sh, 0));
     let p = stage_params(&sh, 0, 2.0).unwrap();
+    let square = 1 << DEFORM_FORM_SHIFT;
     assert_eq!(
         p.deform_kinds,
-        [DEFORM_BULGE, DEFORM_MOVE, DEFORM_NORMAL, 0]
+        [DEFORM_BULGE, DEFORM_MOVE | square, DEFORM_NORMAL, 0]
     );
     assert_eq!(p.deform[0], [3.0, 4.0, 10.0, 0.0]);
-    // square at phase 0 reads +1: 2 * (1 + 2 * 1) along z
-    assert_eq!(p.deform[1], [0.0, 0.0, 6.0, 0.0]);
+    // move: its vector, and its wave for the shader to read (square at
+    // phase 0 reads +1, so 1 + 2 * 1 along z)
+    assert_eq!(p.deform[1], [0.0, 0.0, 2.0, 0.0]);
+    assert_eq!(p.deform_ext[1], [1.0, 2.0, 0.0, 0.0]);
     assert_eq!(p.deform[2], [0.5, 4.0, 0.0, 0.0]);
+    // the rates an entity's own clock runs further: none for a bulge
+    assert_eq!(p.deform_ext[0], [0.0; 4]);
+    assert_eq!(p.deform_ext[2], [2.0, 0.0, 0.0, 0.0]);
     // reordered, the slots follow
     let sh = parsed(
         "t\n{\ndeformVertexes normal .5 2\ndeformVertexes wave 64 sin 0 2 0 1\n{\nmap a.tga\n}\n}",
@@ -1091,7 +1126,7 @@ fn stage_params_carry_the_deforms_in_script_order() {
         "t\n{\ndeformVertexes autosprite\ndeformVertexes move 0 0 2 square 1 2 0 0\n{\nmap a.tga\n}\n}",
     );
     let p = stage_params(&sh, 0, 2.0).unwrap();
-    assert_eq!(p.deform_kinds, [DEFORM_MOVE, 0, 0, 0]);
+    assert_eq!(p.deform_kinds, [DEFORM_MOVE | square, 0, 0, 0]);
     let plain = parsed("t\n{\n{\nmap a.tga\n}\n}");
     let p = stage_params(&plain, 0, 2.0).unwrap();
     assert_eq!(p.deform_kinds, [0; 4]);
@@ -1258,6 +1293,171 @@ fn weapon_icons_register_mipmapped() {
     assert!(hud_mip_names(&[]).contains("gfx/2d/net"));
 }
 
+/// The entity position is `@invariant`, so a driver computes every
+/// operation it reads unfused (Mesa's `nir_propagate_invariant`); one it
+/// shares with another output rounds that output differently too. The
+/// world normal (`out.normal`) must stay off the position's inputs, or a
+/// sprite branch on CoD1 moves every entity's lighting in CoD2 and CoD4
+/// frames by a byte (GPU kit pack 8).
+#[test]
+fn the_entity_position_reads_no_world_normal_operation() {
+    use std::collections::HashSet;
+    use wgpu::naga::{self, Expression as E, Handle, Statement as S};
+    let module = naga::front::wgsl::parse_str(crate::entity_material::DYNAMIC_WGSL).unwrap();
+    let f = &module
+        .entry_points
+        .iter()
+        .find(|e| e.name == "vs_main")
+        .unwrap()
+        .function;
+    let ex = &f.expressions;
+    // (local, member) a pointer writes or reads
+    let root = |mut h: Handle<E>| {
+        let mut member = None;
+        loop {
+            match ex[h] {
+                E::AccessIndex { base, index } => {
+                    member = Some(index);
+                    h = base;
+                }
+                E::Access { base, .. } => h = base,
+                E::LocalVariable(v) => return Some((v, member)),
+                _ => return None,
+            }
+        }
+    };
+    let mut stores = Vec::new();
+    let mut calls = std::collections::HashMap::new();
+    fn walk(
+        b: &naga::Block,
+        stores: &mut Vec<(Handle<E>, Handle<E>)>,
+        calls: &mut std::collections::HashMap<Handle<E>, Vec<Handle<E>>>,
+    ) {
+        for st in b.iter() {
+            match st {
+                S::Store { pointer, value } => stores.push((*pointer, *value)),
+                S::Call {
+                    arguments,
+                    result: Some(r),
+                    ..
+                } => {
+                    calls.insert(*r, arguments.clone());
+                }
+                S::Block(b) => walk(b, stores, calls),
+                S::If { accept, reject, .. } => {
+                    walk(accept, stores, calls);
+                    walk(reject, stores, calls);
+                }
+                S::Loop {
+                    body, continuing, ..
+                } => {
+                    walk(body, stores, calls);
+                    walk(continuing, stores, calls);
+                }
+                S::Switch { cases, .. } => cases.iter().for_each(|c| walk(&c.body, stores, calls)),
+                _ => {}
+            }
+        }
+    }
+    walk(&f.body, &mut stores, &mut calls);
+    // every expression `from` reads, through locals and call arguments
+    let closure = |from: Vec<Handle<E>>| {
+        let mut seen = HashSet::new();
+        let mut todo = from;
+        while let Some(h) = todo.pop() {
+            if !seen.insert(h) {
+                continue;
+            }
+            match &ex[h] {
+                E::Load { pointer } => {
+                    todo.push(*pointer);
+                    if let Some((v, m)) = root(*pointer) {
+                        for (p, val) in &stores {
+                            if let Some((pv, pm)) = root(*p)
+                                && pv == v
+                                && (m.is_none() || pm.is_none() || pm == m)
+                            {
+                                todo.push(*val);
+                            }
+                        }
+                    }
+                }
+                E::Compose { components, .. } => todo.extend(components),
+                E::Access { base, index } => todo.extend([*base, *index]),
+                E::AccessIndex { base, .. } => todo.push(*base),
+                E::Splat { value, .. } => todo.push(*value),
+                E::Swizzle { vector, .. } => todo.push(*vector),
+                E::Unary { expr, .. } | E::As { expr, .. } | E::Derivative { expr, .. } => {
+                    todo.push(*expr)
+                }
+                E::Binary { left, right, .. } => todo.extend([*left, *right]),
+                E::Select {
+                    condition,
+                    accept,
+                    reject,
+                } => todo.extend([*condition, *accept, *reject]),
+                E::Relational { argument, .. } => todo.push(*argument),
+                E::Math {
+                    arg,
+                    arg1,
+                    arg2,
+                    arg3,
+                    ..
+                } => todo.extend([Some(*arg), *arg1, *arg2, *arg3].into_iter().flatten()),
+                E::CallResult(_) => todo.extend(calls[&h].iter().copied()),
+                E::Literal(_)
+                | E::Constant(_)
+                | E::ZeroValue(_)
+                | E::FunctionArgument(_)
+                | E::GlobalVariable(_)
+                | E::LocalVariable(_) => {}
+                other => panic!("unhandled expression {other:?}"),
+            }
+        }
+        seen
+    };
+    let out = f
+        .local_variables
+        .iter()
+        .find(|(_, v)| v.name.as_deref() == Some("out"))
+        .unwrap();
+    let naga::TypeInner::Struct { members, .. } = &module.types[out.1.ty].inner else {
+        panic!("VsOut")
+    };
+    let member = |name: &str| {
+        members
+            .iter()
+            .position(|m| m.name.as_deref() == Some(name))
+            .unwrap() as u32
+    };
+    let written = |m: u32| -> Vec<Handle<E>> {
+        stores
+            .iter()
+            .filter(|(p, _)| root(*p) == Some((out.0, Some(m))))
+            .map(|(_, v)| *v)
+            .collect()
+    };
+    let clip = closure(written(member("clip")));
+    // the normal's own operations: its closure less what the deformed
+    // vertex already brings, which the position reads by design
+    let deformed: Vec<Handle<E>> = calls
+        .keys()
+        .filter(|r| matches!(ex[**r], E::CallResult(c) if module.functions[c].name.as_deref() == Some("deform_vertex")))
+        .copied()
+        .collect();
+    assert!(!deformed.is_empty());
+    let shared = closure(deformed);
+    let normal_ops: Vec<_> = closure(written(member("normal")))
+        .into_iter()
+        .filter(|h| !shared.contains(h))
+        .filter(|h| matches!(ex[*h], E::Binary { .. } | E::Math { .. } | E::Unary { .. }))
+        .collect();
+    assert!(!normal_ops.is_empty());
+    for h in normal_ops {
+        assert!(!clip.contains(&h), "the position reads {:?}", ex[h]);
+    }
+}
+
 /// Every module the client builds, as its `create_shader_module` site
 /// builds it, parses and validates with no GPU; every `.wgsl` file under
 /// src is part of one of them.
@@ -1290,7 +1490,7 @@ fn wgsl_modules_validate() {
         ("cod2_cookie", cod2_cookie::COOKIE_WGSL),
         ("fx_cloud", fx_cloud::FX_CLOUD_WGSL),
         ("scene_copy", include_str!("../scene_copy.wgsl")),
-        ("shadow_cast", include_str!("../shadow_cast.wgsl")),
+        ("shadow_cast", crate::shadows::SHADOW_CAST_WGSL),
         ("shadow_cut", crate::shadows::SHADOW_CUT_WGSL),
         ("shadow_mask", include_str!("../shadow_mask.wgsl")),
     ];
@@ -1876,6 +2076,7 @@ fn ent_skin(stages: usize) -> Rc<EntSkin> {
         cookie_caster: false,
         sun_caster: false,
         sun_cut: None,
+        sprite: None,
     })
 }
 
@@ -2221,6 +2422,70 @@ fn a_world_type_draws_opaque_without_an_alpha_test_or_a_first_blend() {
     assert!(!stype_draws_opaque(""));
 }
 
+/// A script-less world surface whose type blends draws its template, the
+/// image bound and the lightmap in bundle 1; opaque and alpha-tested types,
+/// decals and scripted names stay where they were.
+#[test]
+fn a_blended_world_type_draws_its_template() {
+    use vcod_common::mapworld::Material as BspMaterial;
+    use vcod_common::material::Cull;
+    let cloth = "{\n\tsurfaceparm cloth\n\tsurfaceparm trans\n\tcull disable\n\t{\n\t\tmap $texturename\n\t\trgbGen exactVertex\n\t\tblendfunc blend\n\tnextbundle\n\t\tmap $lightmap\n\t}\n}\n";
+    let glass = "{\n\tsurfaceparm glass\n\tsurfaceparm trans\n\tsort innerBlend\n\t{\n\t\tmap $texturename\n\t\trgbGen exactVertex\n\t\tblendfunc blend\n\tnextbundle\n\t\tmap $lightmap\n\t}\n}\n";
+    let wood = "{\n\t{\n\t\tmap $texturename\n\t\trgbGen exactVertex\n\t}\n\t{\n\t\tmap $lightmap\n\t\tblendFunc filter\n\t}\n}\n";
+    let decal = "{\n\tpolygonOffset\n\t{\n\t\tmap $texturename\n\t\tblendFunc blend\n\t}\n}\n";
+    let mut fs = Pk3Fs::empty();
+    for (kind, text) in [
+        ("cloth_blend", cloth),
+        ("glass_blend_in", glass),
+        ("wood", wood),
+        ("decal", decal),
+    ] {
+        fs.overlay(
+            &format!("shadertypes/world/{kind}.stype"),
+            text.as_bytes().to_vec(),
+        );
+    }
+    let names = [
+        "textures/austria/transparents/cloth_blend@austriaintwindow",
+        "textures/austria/transparents/cloth_blend@austriaintwindow",
+        "textures/ukraine/windows/glass_blend_in@sm_ind_win2",
+        "textures/austria/doors/wood@chateau_exteriordoor",
+        "textures/decals/decal@stone_cracked1",
+        "textures/scripted/cloth_blend@curtain",
+    ];
+    let bsp = MapWorld {
+        materials: names
+            .iter()
+            .map(|n| BspMaterial {
+                name: n.to_string(),
+                surface_flags: 0,
+                content_flags: 0,
+            })
+            .collect(),
+        ..Default::default()
+    };
+    let lib = MaterialLib::from_materials(
+        [(
+            Material::base("textures/scripted/cloth_blend@curtain"),
+            None,
+        )],
+        0,
+    );
+    let got = blended_world_types(&fs, &bsp, &lib);
+    let got: Vec<&str> = got.iter().map(|m| m.name.as_str()).collect();
+    assert_eq!(got, [names[0], names[2]]);
+    let m = &blended_world_types(&fs, &bsp, &lib)[0];
+    assert_eq!(m.cull, Cull::None);
+    assert!(m.sort > SORT_OPAQUE);
+    let st = &m.stages[0];
+    assert!(st.blend.is_some());
+    assert!(matches!(&st.bundles[0].image, ImageRef::Path(p) if p == names[0]));
+    assert_eq!(st.bundles[1].image, ImageRef::Lightmap);
+    let glass = &blended_world_types(&fs, &bsp, &lib)[1];
+    assert_eq!(glass.sort, 13.0);
+    assert_eq!(glass.cull, Cull::Back);
+}
+
 /// mp_chateau's glazed doors: the image's alpha masks the panes, and the
 /// wood type draws it opaque, so nothing of the door may cut.
 #[test]
@@ -2238,6 +2503,22 @@ fn chateaus_door_draws_opaque() {
         &fs,
         "textures/austria/background/foliage_clamp@truck_single"
     ));
+    // its curtained windows blend, their image found through the template
+    let window = "textures/austria/transparents/cloth_blend@austriaintwindow";
+    let bsp = MapWorld {
+        materials: vec![vcod_common::mapworld::Material {
+            name: window.into(),
+            surface_flags: 0,
+            content_flags: 0,
+        }],
+        ..Default::default()
+    };
+    let lib = ShaderLib::load(&fs).materials();
+    let [m] = &blended_world_types(&fs, &bsp, &lib)[..] else {
+        panic!("one blended window material");
+    };
+    assert!(m.stages[0].blend.is_some());
+    assert!(assets::resolve_bundle_image(&fs, window).is_some());
 }
 
 /// `foliage_masked` and `foliage_detail` cut `alphaFunc LT128`: retail
@@ -2415,6 +2696,7 @@ fn entity_draws_sort_by_material_sort_then_load_order_then_entity() {
         cookie_caster: false,
         sun_caster: false,
         sun_cut: None,
+        sprite: None,
     };
     let (blend, opaque_late, opaque_early) = (skin(15.0, 0), skin(5.0, 2), skin(5.0, 1));
     let surfs = [
@@ -2441,6 +2723,7 @@ fn the_gun_interleaves_with_the_world_and_entities_by_material() {
         cookie_caster: false,
         sun_caster: false,
         sun_cut: None,
+        sprite: None,
     };
     let (flesh, rifle, glass, smoke) = (
         skin(SORT_OPAQUE, 0),
@@ -2512,6 +2795,7 @@ fn kept_entity_sort_matches_a_fresh_sort() {
             cookie_caster: false,
             sun_caster: false,
             sun_cut: None,
+            sprite: None,
         })
     };
     let (a, b, c, d) = (

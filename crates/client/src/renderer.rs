@@ -102,6 +102,7 @@ mod material_keys;
 pub(crate) mod pipeline_check;
 #[cfg(test)]
 mod prop_blends;
+mod prop_relight;
 mod prop_skin;
 #[cfg(test)]
 mod screenshot_live;

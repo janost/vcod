@@ -125,8 +125,8 @@ pub(super) fn lays_own_colour(blend: &Option<(BlendFactor, BlendFactor)>) -> boo
 /// vec4: vec0_s @96, vec0_t @112, vec1_s @128, vec1_t @144,
 /// the sky dome's view-origin offset @160, then the deforms: wave @176,
 /// bulge @192, move @208, normal @224, then the falloff and the CoD4
-/// world fx (`fx`) @272. The entity, viewmodel and shadow
-/// shaders declare only the prefix they read.
+/// world fx (`fx`) @272, then the deforms' clock terms @288. The entity,
+/// viewmodel and shadow shaders declare only the prefix they read.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct StageParams {
@@ -146,8 +146,8 @@ pub struct StageParams {
     pub(crate) eye_off: [f32; 4],
     /// The shader's deform records in script order, which `deform.wgsl`
     /// runs one after another: wave and flap `[base, amp, phase + t *
-    /// rate, spread]`, bulge `[width, height, t * speed, 0]`, move this
-    /// frame's offset, normal `[amp, t * freq, 0, 0]`.
+    /// rate, spread]`, bulge `[width, height, t * speed, 0]`, move its
+    /// vector, normal `[amp, t * freq, 0, 0]`.
     pub(crate) deform: [[f32; 4]; 3],
     /// Each record's `DEFORM_*` code; the fourth is padding.
     pub(crate) deform_kinds: [u32; 4],
@@ -159,9 +159,15 @@ pub struct StageParams {
     /// `zfeather` set's `featherParms.x`, then a distortion set's
     /// `distortionScale`; zero otherwise.
     pub(crate) fx: [f32; 4],
+    /// Each deform record's clock: wave, flap and normal their rate (the
+    /// phase an instance with its own material clock runs further, as
+    /// retail's per-entity shaderTime moves 0x197ff98), move its wave
+    /// `[base, amp, phase + t * rate, rate]`; bulge reads the refdef's
+    /// time (0x16d8a08), which no entity moves.
+    pub(crate) deform_ext: [[f32; 4]; 3],
 }
 
-const _: () = assert!(std::mem::size_of::<StageParams>() == 288);
+const _: () = assert!(std::mem::size_of::<StageParams>() == 336);
 pub(crate) const STAGE_PARAMS_SIZE: u64 = std::mem::size_of::<StageParams>() as u64;
 
 /// `tcGen environment`'s s and t axes, which the reflection is dotted
@@ -290,6 +296,7 @@ pub(crate) fn stage_params(
         eye_off: [0.0; 4],
         deform: [[0.0; 4]; 3],
         deform_kinds: [0; 4],
+        deform_ext: [[0.0; 4]; 3],
         falloff: shader.falloff.map_or([[0.0; 4]; 2], |f| {
             let [b, e] = [f.begin, f.end];
             [[b[0], b[1], b[2], f.scale], [e[0], e[1], e[2], f.bias]]
@@ -333,10 +340,13 @@ pub(crate) fn stage_params(
             (f64::from(w.phase) + f64::from(t.at(w.freq)) * f64::from(w.freq)).rem_euclid(1.0);
         [w.base, w.amp, phase as f32, spread]
     };
+    let rate = |r: f32| [r, 0.0, 0.0, 0.0];
     let records = shader.deforms.iter().filter_map(|d| match d {
-        Deform::Wave { wave: w, spread } => {
-            Some((DEFORM_WAVE | deform_form(&w.form), wave(w, *spread)))
-        }
+        Deform::Wave { wave: w, spread } => Some((
+            DEFORM_WAVE | deform_form(&w.form),
+            wave(w, *spread),
+            rate(w.freq),
+        )),
         Deform::Flap(f) => Some((
             if f.along_t {
                 DEFORM_FLAP_T
@@ -344,6 +354,7 @@ pub(crate) fn stage_params(
                 DEFORM_FLAP_S
             } | deform_form(&f.wave.form),
             wave(&f.wave, f.spread),
+            rate(f.wave.freq),
         )),
         // a bulge's sin cycle is 2 pi of `t * speed`, the normal's noise 256
         Deform::Bulge(b) => Some((
@@ -354,20 +365,27 @@ pub(crate) fn stage_params(
                 t.at_every(b.speed, std::f64::consts::TAU) * b.speed,
                 0.0,
             ],
+            [0.0; 4],
         )),
         Deform::Move { by, wave: w } => {
-            let k = wave_value(w, t);
-            Some((DEFORM_MOVE, [by[0] * k, by[1] * k, by[2] * k, 0.0]))
+            let [base, amp, phase, _] = wave(w, 0.0);
+            Some((
+                DEFORM_MOVE | deform_form(&w.form),
+                [by[0], by[1], by[2], 0.0],
+                [base, amp, phase, w.freq],
+            ))
         }
         Deform::Normal(n) => Some((
             DEFORM_NORMAL,
             [n.amp, t.at_every(n.freq, 256.0) * n.freq, 0.0, 0.0],
+            rate(n.freq),
         )),
         Deform::Other => None,
     });
-    for (i, (kind, rec)) in records.take(3).enumerate() {
+    for (i, (kind, rec, ext)) in records.take(3).enumerate() {
         p.deform_kinds[i] = kind;
         p.deform[i] = rec;
+        p.deform_ext[i] = ext;
     }
     match shader.sprite {
         Some(Sprite::Auto) => flags |= STAGE_FLAG_AUTOSPRITE,

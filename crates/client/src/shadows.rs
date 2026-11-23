@@ -34,6 +34,13 @@ pub(crate) const SHADOW_CUT_WGSL: &str = concat!(
     include_str!("deform.wgsl")
 );
 
+/// shadow_cast.wgsl with the deforms its entity casters run.
+pub(crate) const SHADOW_CAST_WGSL: &str = concat!(
+    include_str!("shadow_cast.wgsl"),
+    include_str!("noise.wgsl"),
+    include_str!("deform.wgsl")
+);
+
 /// Shadow map side in texels.
 const MAP_SIZE: u32 = 2048;
 /// Half the map's side in world units: 1.5 units a texel.
@@ -1022,7 +1029,10 @@ impl ShadowPass {
             ],
         });
 
-        let cast = device.create_shader_module(wgpu::include_wgsl!("shadow_cast.wgsl"));
+        let cast = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("shadow_cast.wgsl"),
+            source: wgpu::ShaderSource::Wgsl(SHADOW_CAST_WGSL.into()),
+        });
         // Casters draw two-sided; the receiver's offsets handle acne.
         let depth = Some(wgpu::DepthStencilState {
             format: MAP_FORMAT,

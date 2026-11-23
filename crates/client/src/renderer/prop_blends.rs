@@ -118,6 +118,7 @@ fn toujane_crate_labels_keep_the_model_colours() {
         verts: props.verts.clone(),
         vert_placement: props.vert_placement.clone(),
         vert_lit: props.vert_lit.clone(),
+        vert_lit_normal: props.vert_lit_normal.clone(),
         vert_colour: vec![[255; 4]; props.verts.len()],
         vert_ambient: props.vert_ambient.clone(),
         vert_smodel: props.vert_smodel.clone(),

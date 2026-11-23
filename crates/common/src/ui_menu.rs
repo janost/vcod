@@ -81,6 +81,9 @@ pub struct UiItem {
     pub text_align: i32,
     pub text_align_x: f32,
     pub text_align_y: f32,
+    /// `textstyle` (`ITEM_TEXTSTYLE_*`, item `+0xe4` in 1.1's
+    /// `ui_mp_x86.dll`): the style every text draw of the item passes.
+    pub text_style: i32,
     pub fore: [f32; 4],
     pub back: [f32; 4],
     pub border: i32,
@@ -150,6 +153,7 @@ impl Default for UiItem {
             text_align: 0,
             text_align_x: 0.0,
             text_align_y: 0.0,
+            text_style: 0,
             fore: [1.0; 4],
             back: [0.0; 4],
             border: 0,
@@ -652,6 +656,7 @@ fn parse_item(tokens: &[String], game: Game, errors: &mut Vec<String>) -> UiItem
             "textalign" => item.text_align = num(tokens.get(i + 1)) as i32,
             "textalignx" => item.text_align_x = num(tokens.get(i + 1)),
             "textaligny" => item.text_align_y = num(tokens.get(i + 1)),
+            "textstyle" => item.text_style = num(tokens.get(i + 1)) as i32,
             "forecolor" | "backcolor" | "bordercolor" | "outlinecolor" => {
                 let c = nums::<4>(tokens, i);
                 match key.as_str() {
@@ -945,12 +950,14 @@ mod cod2 {
 
     /// CoD2's `ITEM_TYPE_*` onto vcod's: 0..12 are CoD1's, its bind (14)
     /// is CoD1's 13, its file name field (16) an edit field
-    /// ([`super::UiItem::file_name_only`]), the rest `100 +` their number.
+    /// ([`super::UiItem::file_name_only`]), its upper-case field (18)
+    /// CoD1's 15, the rest `100 +` their number.
     pub(super) fn item_type(t: i32) -> i32 {
         match t {
             0..=12 => t,
             14 => super::ITEM_TYPE_BIND,
             16 => super::ITEM_TYPE_EDITFIELD,
+            18 => 15,
             _ => t.saturating_add(100),
         }
     }
@@ -1038,6 +1045,7 @@ mod tests {
 
     const MENU: &str = r#"
 #define FOCUS .98 .96 .39 1
+#define ITEM_TEXTSTYLE_SHADOWEDMORE 6
 {
   \\ Server Join \\
   menuDef {
@@ -1054,6 +1062,7 @@ mod tests {
       rect 385 190 250 15
       textscale .4
       textaligny 14
+      textstyle ITEM_TEXTSTYLE_SHADOWEDMORE
       forecolor .9 .9 .9 .9
       visible 1
       action { play "mouse_click"; close main ; open joinserver }
@@ -1099,7 +1108,7 @@ mod tests {
         assert_eq!(play.kind, ITEM_TYPE_BUTTON);
         assert_eq!(play.rect, [395.0, 210.0, 250.0, 15.0]);
         assert_eq!(play.fore, [0.9, 0.9, 0.9, 0.9]);
-        assert_eq!(play.text_align_y, 14.0);
+        assert_eq!((play.text_align_y, play.text_style), (14.0, 6));
         let gate = play.gate.as_ref().unwrap();
         assert_eq!((gate.cvar.as_str(), gate.show), ("cl_ingame", true));
         assert_eq!(

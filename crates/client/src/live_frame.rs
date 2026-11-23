@@ -77,6 +77,7 @@ impl App {
         let Posed {
             mut instances,
             mut muzzles,
+            mut muzzle_poses,
             mut brass,
             shot_fallbacks,
             weapon_flash,
@@ -163,6 +164,7 @@ impl App {
             looped_fx,
             vehicle_trails,
             &mut muzzles,
+            &mut muzzle_poses,
             &mut brass,
             &vehicle_wheels,
             render_time,
@@ -401,6 +403,7 @@ type Seated = (play::seat::Seat, u32, [f32; 3]);
 struct Posed {
     instances: Vec<DynamicModelInstance>,
     muzzles: HashMap<u32, (Vec3, Vec3)>,
+    muzzle_poses: HashMap<u32, fx::sim::TagPose>,
     brass: HashMap<u32, (Vec3, Vec3)>,
     shot_fallbacks: HashMap<u32, Vec3>,
     weapon_flash: HashMap<i32, String>,
@@ -471,6 +474,7 @@ impl LiveCx<'_> {
         let mut instances: Vec<DynamicModelInstance> = Vec::new();
         // Per-shooter muzzle transforms for flashes and tracers.
         let mut muzzles: HashMap<u32, (Vec3, Vec3)> = HashMap::new();
+        let mut muzzle_poses: HashMap<u32, fx::sim::TagPose> = HashMap::new();
         // Per-shooter `tag_brass`, for spent cases.
         let mut brass: HashMap<u32, (Vec3, Vec3)> = HashMap::new();
         // Bodies with no muzzle tag, where their tracers start.
@@ -565,6 +569,7 @@ impl LiveCx<'_> {
             prof.next(frame_prof::Stage::Net);
             instances = built.instances;
             muzzles = built.muzzles;
+            muzzle_poses = built.muzzle_poses;
             shot_fallbacks = built.shot_fallbacks;
             brass = built.brass;
             weapon_flash = built.weapon_flash;
@@ -615,6 +620,7 @@ impl LiveCx<'_> {
         Posed {
             instances,
             muzzles,
+            muzzle_poses,
             brass,
             shot_fallbacks,
             weapon_flash,
@@ -681,6 +687,18 @@ impl LiveCx<'_> {
         predictor.seat_angles = seat_now.map_or([0.0; 3], |(_, num, vang)| {
             drawn_vehicle_angles.get(&num).copied().unwrap_or(vang)
         });
+        predictor.vehicles.clear();
+        if let Some(s) = net.snapshots().newest().filter(|_| p.is_uo()) {
+            predictor.vehicles.extend(
+                s.entities
+                    .iter()
+                    .filter(|(_, e)| e.field_i32(p, "eType") == net::flags::ET_VEHICLE_V22)
+                    .map(|(&n, e)| {
+                        let at = drawn_pos.get(&n).copied();
+                        (n, at.unwrap_or_else(|| Vec3::from(e.origin(p))))
+                    }),
+            );
+        }
         // The cgame's `bg_*` cvars, off the 140/204 mirror.
         // UO's cgame never registers `bg_nofatigue`.
         predictor.bg = pmove::BgCvars {
@@ -958,13 +976,16 @@ impl LiveCx<'_> {
             // 0x30040580: a four-wheel turns its riders by
             // the vehicle's `lerpAngles` (0x3004060f).
             let drawn_angles = vehicle_angles.get(&num).copied().unwrap_or(vang);
-            if !snapshot_view
-                && seat.class == play::seat::CLASS_FOUR_WHEEL
+            let mut seat_roll = 0.0;
+            if seat.class == play::seat::CLASS_FOUR_WHEEL
                 && seat.pos != 2
                 && !seat.own_weapon()
                 && newest_ps.field_i32(p, "weapon") != 0
             {
-                if let Some(v) = seat_turn.step(
+                seat_roll = play::seat::seat_roll(wire_view(input), drawn_angles);
+                if snapshot_view {
+                    seat_turn.reset();
+                } else if let Some(v) = seat_turn.step(
                     wire_view(input),
                     drawn_angles,
                     frac != 0.0,
@@ -1013,7 +1034,13 @@ impl LiveCx<'_> {
                     (cam.yaw, cam.pitch, _) =
                         own_view_at(input.cmd_angles(), delta, SEAT_PITCH_CLAMP);
                 }
-                view_roll = 0.0;
+                // A four-wheel's first person (`fWeaponPosFrac` 0) draws the
+                // predicted roll; its chase camera zeroes it (0x30040dc0).
+                view_roll = if frac == 0.0 {
+                    seat_roll.to_radians()
+                } else {
+                    0.0
+                };
                 if let Some([pitch, roll]) = sc.gun_pitch_roll {
                     cam.pitch = -pitch.to_radians();
                     view_roll = roll.to_radians();
@@ -1154,6 +1181,7 @@ impl LiveCx<'_> {
         looped_fx: &mut fx::looped::LoopedFx,
         vehicle_trails: &mut fx::vehicle_trails::VehicleTrails,
         muzzles: &mut HashMap<u32, (Vec3, Vec3)>,
+        muzzle_poses: &mut HashMap<u32, fx::sim::TagPose>,
         brass: &mut HashMap<u32, (Vec3, Vec3)>,
         vehicle_wheels: &[fx::vehicle_trails::Wheels],
         render_time: Option<i32>,
@@ -1231,13 +1259,27 @@ impl LiveCx<'_> {
             audio::cues::ps_entity(ps_client),
         );
 
+        // The view weapon's tags turn with the whole view, its roll too:
+        // the viewmodel refEntity's axis (cgame 0x3020cbb8) poses them.
+        let gun_basis = {
+            let [f, l, u] = pmove::aim::angles_to_axis_msvc([
+                -cam.pitch.to_degrees(),
+                cam.yaw.to_degrees(),
+                view_roll.to_degrees(),
+            ]);
+            (Vec3::from(f), -Vec3::from(l), Vec3::from(u))
+        };
         let (muzzle_pos, muzzle_dir) = view
-            .muzzle(cam.pos, (cam_forward, cam_right, cam_up))
+            .muzzle(cam.pos, gun_basis)
             .unwrap_or_else(|| view_muzzle(cam.pos, cam_forward, cam_right, cam_up));
+        let muzzle_pose = view
+            .muzzle_pose(cam.pos, gun_basis)
+            .unwrap_or_else(|| fx::sim::TagPose::along(muzzle_pos, muzzle_dir));
         // Under a scope our own shots draw no flash: with
         // no muzzle the fire event resolves to nothing.
         if !view.scoped() {
             muzzles.insert(u32::MAX, (muzzle_pos, muzzle_dir));
+            muzzle_poses.insert(u32::MAX, muzzle_pose);
         }
         // Bullet hits carry the shooter's number in
         // `other_entity_num`, and the body the camera rides
@@ -1246,10 +1288,11 @@ impl LiveCx<'_> {
         // for the whizby; its tracer is `view_body`'s call.
         if let Ok(num) = u32::try_from(skip_num) {
             muzzles.insert(num, (muzzle_pos, muzzle_dir));
+            muzzle_poses.insert(num, muzzle_pose);
         }
         // The ridden body's cases leave the viewmodel's
         // `tag_brass` (`CG_EjectBrass`, cgame 0x30038a30).
-        if let Some(tag) = view.brass(cam.pos, (cam_forward, cam_right, cam_up)) {
+        if let Some(tag) = view.brass(cam.pos, gun_basis) {
             self.fx.set_view_brass(tag.0);
             brass.insert(u32::MAX, tag);
             if let Ok(num) = u32::try_from(skip_num) {
@@ -1263,7 +1306,14 @@ impl LiveCx<'_> {
         let fx_t0 = Instant::now();
         prof.next(frame_prof::Stage::FxStep);
         self.fx.set_view(cam.pos);
-        self.fx.set_bolts(muzzles);
+        let bolts: HashMap<u32, fx::sim::TagPose> = muzzles
+            .iter()
+            .map(|(&k, &(pos, dir))| {
+                let pose = muzzle_poses.get(&k).copied();
+                (k, pose.unwrap_or_else(|| fx::sim::TagPose::along(pos, dir)))
+            })
+            .collect();
+        self.fx.set_bolts(&bolts);
         // The `playFxOnTag` tags a live effect rides,
         // posed as drawn (CoDMP.exe 0x49e8d0, a bolt
         // posed once a frame).

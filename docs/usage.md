@@ -391,6 +391,10 @@ default, set it again (`set r_aaSamples 4`).
 - `vid_restart` applies `r_mode` and `r_fullscreen` and reloads the
   menus closed. On CoD1, 1.5 and UO these and the `r_custom*` cvars latch
   as retail's do: a set waits for `vid_restart`.
+- `r_ignorehwgamma 1` drops the display ramp and bakes `r_gamma` into the
+  textures as they load, as retail does without device gamma. It and
+  `r_intensity` latch; `vid_restart` reloads the map's textures when
+  either moved, or `r_gamma` did under `r_ignorehwgamma 1`.
 - `r_aaSamples` is the scene's MSAA, 1 (none, the default) or 4 (any
   value above 1), latched to `vid_restart`. Blended smoke costs about
   four times the fill at 4.
@@ -423,7 +427,10 @@ default, set it again (`set r_aaSamples 4`).
 - A bind: click or Enter, then press the new key (Esc cancels, Backspace
   clears); a third key replaces both old ones.
 - A text field: click to type; Enter or Esc finishes, Tab and the up and
-  down arrows move to the next field.
+  down arrows move to the next field. In CoD1 and United Offensive, as in
+  retail, the edit starts at the front in overstrike (`_` cursor): Insert
+  switches to inserting (`|`), and Left, Right, Home, End, Del and
+  Backspace work at the cursor. CoD2's fields append at the end.
 - Start New Server: click Game Type to cycle it (right-click goes back);
   the map list and the Mods list scroll and select as a server list does.
 

@@ -284,7 +284,9 @@ fn headless_device_has_the_window_limits() {
 /// body bind-posed and skinned, the kar98k viewmodel, a smoke and an
 /// impact sprite, a bullet hole and the HUD, every cvar pass on. With
 /// `VCOD_C1_SHOTS=<dir>` the frame is written there as a TGA, for the GPU
-/// kit to compare builds byte for byte.
+/// kit to compare builds byte for byte. It draws at the renderer's default
+/// identityLight 0.5 (full screen) under `vc_bicubic`, so it never takes
+/// the windowed lightmap shift; the identity ramp test's frame does.
 #[test]
 fn cod1_renderer_builds_and_draws_without_validation_errors() {
     let Some(fs) = vcod_common::testing::game_fs() else {
@@ -354,21 +356,8 @@ fn cod1_renderer_builds_and_draws_without_validation_errors() {
         },
     );
     assert_clean(&errors, "CoD1 mp_carentan frame");
-    if let Some(dir) = std::env::var_os("VCOD_C1_SHOTS").map(std::path::PathBuf::from) {
-        let (w, h, bgra) = r.read_offscreen().expect("offscreen target");
-        let rgba: Vec<u8> = bgra
-            .chunks(4)
-            .flat_map(|p| [p[2], p[1], p[0], 255])
-            .collect();
-        image::save_buffer(
-            dir.join("mp_carentan.tga"),
-            &rgba,
-            w,
-            h,
-            image::ExtendedColorType::Rgba8,
-        )
-        .unwrap();
-    }
+    let (w, h, bgra) = r.read_offscreen().expect("offscreen target");
+    write_shot("mp_carentan.tga", w, h, &bgra);
     assert!(
         r.fx.textures
             .get(vcod_common::shader::DEFAULT_IMAGE)
@@ -377,10 +366,26 @@ fn cod1_renderer_builds_and_draws_without_validation_errors() {
     );
 }
 
+/// With `VCOD_C1_SHOTS=<dir>`, a frame the app drew writes there as
+/// `name`, a TGA for the GPU kit to compare builds byte for byte.
+fn write_shot(name: &str, w: u32, h: u32, bgra: &[u8]) {
+    let Some(dir) = std::env::var_os("VCOD_C1_SHOTS").map(std::path::PathBuf::from) else {
+        return;
+    };
+    let rgba: Vec<u8> = bgra
+        .chunks(4)
+        .flat_map(|p| [p[2], p[1], p[0], 255])
+        .collect();
+    image::save_buffer(dir.join(name), &rgba, w, h, image::ExtendedColorType::Rgba8).unwrap();
+}
+
 /// A windowed CoD1 frame at `r_gamma` 1 skips the gamma pass and draws the
 /// scene and the 2D into the target (`scene_direct`), and CoD1's default
 /// draws no depth prepass (cod11-client-perf.md 4): the bytes are the
-/// gamma pass's and the prepass's, at one sample and at four.
+/// gamma pass's and the prepass's, at one sample and at four. The
+/// one-sample frame is `VCOD_C1_SHOTS`' `mp_carentan_windowed.tga`: the
+/// windowed lightmap shift (identityLight 1, `vc_bicubic` 0) on a map
+/// where 14% of the lightmap texels clamp when doubled.
 #[test]
 fn cod1_identity_ramp_frame_matches_the_gamma_pass_and_the_prepass() {
     let Some(fs) = vcod_common::testing::game_fs() else {
@@ -418,6 +423,9 @@ fn cod1_identity_ramp_frame_matches_the_gamma_pass_and_the_prepass() {
             r.read_offscreen().expect("offscreen target").2
         };
         let before = shot(false, true);
+        if samples == 1 {
+            write_shot("mp_carentan_windowed.tga", SIZE.0, SIZE.1, &before);
+        }
         for (direct, prepass) in [(true, true), (false, false), (true, false)] {
             let after = shot(direct, prepass);
             let differ = before.iter().zip(&after).filter(|(a, b)| a != b).count();
@@ -427,6 +435,67 @@ fn cod1_identity_ramp_frame_matches_the_gamma_pass_and_the_prepass() {
             );
         }
         assert_clean(&errors, "CoD1 identity ramp frames");
+    }
+}
+
+/// mp_chateau's curtained window (`cloth_blend@austriaintwindow`) through
+/// its template's blend (shader doc 8.3), seen from a few metres in front,
+/// with the frame's fx light on the room's props. With `VCOD_C1_SHOTS=<dir>`
+/// the frame is written there as `mp_chateau_window.tga`.
+#[test]
+fn cod1_chateau_window_draws_through_its_blend() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        return;
+    };
+    let Some(data) = fs.read("maps/mp/mp_chateau.bsp") else {
+        return;
+    };
+    let bsp = vcod_common::mapworld::load(&data).unwrap();
+    let window = "textures/austria/transparents/cloth_blend@austriaintwindow";
+    let soup = bsp
+        .soups
+        .iter()
+        .find(|s| {
+            bsp.materials[s.material as usize]
+                .name
+                .eq_ignore_ascii_case(window)
+        })
+        .expect("mp_chateau's window soup");
+    let corner = |i: usize| {
+        let v = soup.first_vertex as usize + bsp.indices[soup.first_index as usize + i] as usize;
+        Vec3::from(bsp.verts[v].pos)
+    };
+    let (a, b, c) = (corner(0), corner(1), corner(2));
+    let normal = (b - a).cross(c - a).normalize();
+    let eye = (a + b + c) / 3.0 + normal * 120.0;
+    let yaw = (-normal.y).atan2(-normal.x).to_degrees();
+    let Some((mut r, errors)) = Renderer::headless(&fs, false, 4) else {
+        eprintln!("no adapter with BC textures; skipped");
+        return;
+    };
+    r.load_world(&bsp, &fs).unwrap();
+    assert!(
+        r.shader_lib
+            .get(window)
+            .is_some_and(|m| m.stages[0].blend.is_some()),
+        "the window draws its template"
+    );
+    draw_frames(&mut r, &fs, (eye, yaw), &[], || None);
+    assert_clean(&errors, "CoD1 mp_chateau window frame");
+    if let Some(dir) = std::env::var_os("VCOD_C1_SHOTS").map(std::path::PathBuf::from) {
+        let (w, h, bgra) = r.read_offscreen().expect("offscreen target");
+        let rgba: Vec<u8> = bgra
+            .chunks(4)
+            .flat_map(|p| [p[2], p[1], p[0], 255])
+            .collect();
+        image::save_buffer(
+            dir.join("mp_chateau_window.tga"),
+            &rgba,
+            w,
+            h,
+            image::ExtendedColorType::Rgba8,
+        )
+        .unwrap();
     }
 }
 

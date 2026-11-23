@@ -6,7 +6,7 @@
 //! (docs/research/cod2-hud.md 13).
 
 use super::HudQuad;
-use super::font::{Slot, UiFonts};
+use super::font::{Slot, TextStyle, UiFonts};
 use super::hudelem::Virtual;
 use super::player::{menu_text_rgba, text_height, text_width};
 use vcod_common::localize::Localized;
@@ -88,6 +88,9 @@ pub struct Style {
     /// The title's fit measures the game type at 0.41 whatever the map's
     /// scale (1.1); CoD2 measures both at the shrinking scale.
     title_fixed_left: bool,
+    /// Every string's style: 1.1's draws all pass 3 (`0x30029cc0` on),
+    /// CoD2's `UI_DrawText` 3 (CoD2MP_s.exe 0x4d9067..0x4da19f).
+    text_style: TextStyle,
 }
 
 /// 1.1's board (`0x3002b650`); 1.5 and United Offensive draw it too.
@@ -102,6 +105,7 @@ pub const COD1: Style = Style {
     objective_text_y: 9.0,
     shrink_cells: false,
     title_fixed_left: true,
+    text_style: TextStyle::SHADOWED,
 };
 
 /// CoD2 1.3's (cod2-hud.md 13): `cg_scoreboardBannerHeight` 24 draws the
@@ -118,6 +122,7 @@ pub const COD2: Style = Style {
     objective_text_y: 10.08,
     shrink_cells: true,
     title_fixed_left: false,
+    text_style: TextStyle::COD2,
 };
 
 /// One `b` row (doc section 3). `team` is not on the wire: `parse_scores`
@@ -560,8 +565,7 @@ impl Draw<'_> {
 
     /// Text trap 0x36 in font 0 at a baseline.
     fn text(&self, s: &str, x: f32, y: f32, scale: f32, rgb: [f32; 3], out: &mut Vec<HudQuad>) {
-        let rgba = [rgb[0], rgb[1], rgb[2], self.alpha];
-        menu_text_rgba(self.font(scale), s, (x, y), scale, rgba, self.v, out);
+        self.text_in(self.style.text_style, s, (x, y), scale, rgb, out);
     }
 
     /// [`Self::text`] in `UI_DrawText`'s style 0, no shadow: CoD2's row
@@ -575,14 +579,20 @@ impl Draw<'_> {
         rgb: [f32; 3],
         out: &mut Vec<HudQuad>,
     ) {
-        let start = out.len();
-        self.text(s, x, y, scale, rgb, out);
-        // The layout alternates shadow and glyph quads.
-        let mut i = 0;
-        out.retain(|_| {
-            i += 1;
-            i <= start || (i - start).is_multiple_of(2)
-        });
+        self.text_in(self.style.text_style.plain(), s, (x, y), scale, rgb, out);
+    }
+
+    fn text_in(
+        &self,
+        style: TextStyle,
+        s: &str,
+        at: (f32, f32),
+        scale: f32,
+        rgb: [f32; 3],
+        out: &mut Vec<HudQuad>,
+    ) {
+        let rgba = [rgb[0], rgb[1], rgb[2], self.alpha];
+        menu_text_rgba(self.font(scale), s, at, scale, rgba, style, self.v, out);
     }
 
     /// Trap 0x34: whole units.

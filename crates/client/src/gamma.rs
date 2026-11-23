@@ -288,6 +288,40 @@ mod tests {
         assert_eq!(overbright_bits(Game::Cod4, true, true), 0);
     }
 
+    /// `shift_texel` in shader.wgsl, op for op in f32, gives retail's
+    /// windowed lightmap bytes (CoDMP.exe 0x4d9af0, cod11-gamma.md 3: each
+    /// channel doubled; past 255, `c * 255 / max` by `idiv`) for every texel.
+    #[test]
+    fn shift_texel_float_math_is_the_load_shift() {
+        let retail = |c: [u32; 3]| {
+            let v = c.map(|x| x << 1);
+            let m = v[0].max(v[1]).max(v[2]);
+            if v[0] | v[1] | v[2] > 0xff {
+                v.map(|x| x * 255 / m)
+            } else {
+                v
+            }
+        };
+        let shader = |c: [f32; 3]| {
+            let v = c.map(|x| (x * 255.0).round() * 2.0);
+            let m = v[0].max(v[1].max(v[2]));
+            if m > 255.0 {
+                v.map(|x| (x * 255.0 / m).floor() / 255.0)
+            } else {
+                v.map(|x| x / 255.0)
+            }
+        };
+        for i in 0..1u32 << 24 {
+            let c = [i >> 16, (i >> 8) & 0xff, i & 0xff];
+            let got = shader(c.map(|x| x as f32 / 255.0)).map(|x| x * 255.0);
+            let want = retail(c).map(|x| x as f32);
+            assert!(
+                (0..3).all(|k| (got[k] - want[k]).abs() < 1e-3),
+                "{c:?}: {got:?}, retail {want:?}"
+            );
+        }
+    }
+
     /// The bake maps rgb of RGBA images only, never alpha or a DDS chain.
     #[test]
     fn bake_maps_rgba_colour_only() {

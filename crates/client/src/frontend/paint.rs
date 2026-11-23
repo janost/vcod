@@ -22,7 +22,7 @@ use super::{
     UI_STARTMAPCINEMATIC, Ui, UiEffect, cod2, listbox,
 };
 use crate::console::shell::Shell;
-use crate::hud::font::{Slot, UiFonts};
+use crate::hud::font::{Slot, TextStyle, UiFonts};
 use crate::hud::hudelem::{Virtual, full_width};
 use crate::hud::{HudQuad, font};
 
@@ -98,7 +98,7 @@ impl Ui {
             fonts: self.fonts.as_ref(),
             exact: self.cod2.is_some(),
         };
-        for &m in &self.open {
+        for &m in self.painted() {
             let menu = &self.menus[m];
             for (i, item) in menu.items.iter().enumerate() {
                 if !self.shown(m, i, shell) {
@@ -164,7 +164,7 @@ impl Ui {
                 if item.ownerdraw == UI_GLINFO {
                     let [x, y, w, h] = item.rect;
                     let r = [x + item.text_align_x, y + item.text_align_y, w, h];
-                    gl_info(&p, r, item.text_scale, color, &mut out);
+                    gl_info(&p, r, item, color, &mut out);
                     continue;
                 }
                 if item.ownerdraw == UI_STARTMAPCINEMATIC {
@@ -230,12 +230,14 @@ impl Ui {
                 }
                 if item.autowrap {
                     for (line, x, ly) in p.wrap_lines(&label, item) {
-                        p.text(&line, x, ly, item.text_scale, color, &mut out);
+                        let style = item.text_style;
+                        p.text(&line, x, ly, item.text_scale, color, style, &mut out);
                     }
                     continue;
                 }
                 if !label.is_empty() {
-                    p.text(&label, left, y, item.text_scale, color, &mut out);
+                    let style = item.text_style;
+                    p.text(&label, left, y, item.text_scale, color, style, &mut out);
                 }
                 if item.kind == ITEM_TYPE_SLIDER {
                     let end = (!label.is_empty()).then_some(left + label_end);
@@ -243,14 +245,21 @@ impl Ui {
                 }
                 if let Some(v) = value {
                     let gap = if label.is_empty() { 0.0 } else { 8.0 };
-                    p.text(
-                        &v,
-                        left + label_end + gap,
-                        y,
-                        item.text_scale,
-                        color,
-                        &mut out,
-                    );
+                    let x = left + label_end + gap;
+                    let style = item.text_style;
+                    p.text(&v, x, y, item.text_scale, color, style, &mut out);
+                    if let Some((at, glyph)) = self.edit_cursor(m, i)
+                        && at <= v.chars().count()
+                        && cursor_blink_on(blink_clock(), self.cod2.is_some())
+                    {
+                        let head: String = v.chars().take(at).collect();
+                        let cx = x + p.width(&head, item.text_scale);
+                        let glyph = glyph.to_string();
+                        // CoD2 draws the cursor glyph once, unshadowed
+                        // (`gfx_d3d_mp_x86_s.dll` 0x10032877..0x100328e5).
+                        let style = if self.cod2.is_some() { 0 } else { style };
+                        p.text(&glyph, cx, y, item.text_scale, color, style, &mut out);
+                    }
                 }
             }
         }
@@ -415,10 +424,10 @@ fn gl_info_lines(info: &GpuInfo, r: [f32; 4]) -> Vec<(String, f32, f32)> {
     out
 }
 
-fn gl_info(p: &Painter, r: [f32; 4], scale: f32, color: [f32; 4], out: &mut Vec<HudQuad>) {
+fn gl_info(p: &Painter, r: [f32; 4], item: &UiItem, color: [f32; 4], out: &mut Vec<HudQuad>) {
     let info = GPU_INFO.get().cloned().unwrap_or_default();
     for (line, x, y) in gl_info_lines(&info, r) {
-        p.text(&line, x, y, scale, color, out);
+        p.text(&line, x, y, item.text_scale, color, item.text_style, out);
     }
 }
 
@@ -479,12 +488,35 @@ pub(super) fn truncate_visible(text: &str, n: usize) -> String {
     out
 }
 
+/// Milliseconds since the first edit cursor drawn, the base the renderer
+/// takes on its first cursor (CoDMP.exe 0x4d8118..0x4d813c).
+fn blink_clock() -> u128 {
+    static BASE: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    BASE.get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_millis()
+}
+
+/// The edit cursor shows in the odd 256 ms steps of [`blink_clock`]
+/// (`sar 8; test 1`, CoDMP.exe 0x4d8142..0x4d8150); CoD2's in the even
+/// ones, off the engine clock with no base taken (`gfx_d3d_mp_x86_s.dll`
+/// 0x10032861..0x10032875), whose phase vcod's first-cursor clock stands in
+/// for.
+fn cursor_blink_on(ms: u128, cod2: bool) -> bool {
+    ((ms >> 8) & 1 == 1) != cod2
+}
+
 /// The types `Item_HandleKey` edits (`ui_mp_x86.dll` 1.1 0x400139da,
-/// 0x40013a42: 4, 9 and 15); 15 types upper case (0x400127a5).
+/// 0x40013a42: 4, 9 and 15); 15 types upper case (0x400127a5). CoD2's
+/// test (CoD2MP_s.exe 0x53d4d0) adds its decimal field; its 16 and 18
+/// read as vcod's 4 and 15.
 pub(crate) fn is_edit_field(kind: i32) -> bool {
     matches!(
         kind,
-        ITEM_TYPE_EDITFIELD | ITEM_TYPE_NUMERICFIELD | ITEM_TYPE_UPREDITFIELD
+        ITEM_TYPE_EDITFIELD
+            | ITEM_TYPE_NUMERICFIELD
+            | ITEM_TYPE_UPREDITFIELD
+            | ITEM_TYPE_DECIMALFIELD
     )
 }
 
@@ -765,7 +797,9 @@ impl Painter<'_> {
         })
     }
 
-    /// `text` with its baseline at grid `(x, y)`.
+    /// `text` with its baseline at grid `(x, y)`, in an item's `textstyle`
+    /// (every 1.1 `Item_*_Paint` passes item `+0xe4`, CoD2's `+0x290`
+    /// through `UI_DrawText`).
     pub(crate) fn text(
         &self,
         text: &str,
@@ -773,20 +807,18 @@ impl Painter<'_> {
         y: f32,
         scale: f32,
         color: [f32; 4],
+        style: i32,
         out: &mut Vec<HudQuad>,
     ) {
         let Some(f) = self.font(scale) else { return };
         let top = y - f.max_height as f32 * f.glyph_scale * scale;
         let [px, py] = self.v.point(x, top);
-        font::layout(
-            f,
-            text,
-            px,
-            py,
-            scale * self.v.scale / f.unit_scale(),
-            color,
-            out,
-        );
+        let px_scale = scale * self.v.scale / f.unit_scale();
+        let style = match self.exact {
+            true => TextStyle::Cod2 { style, snap: true },
+            false => TextStyle::Retail(style),
+        };
+        font::layout_styled(f, text, px, py, px_scale, color, style, self.v.scale, out);
     }
 }
 
@@ -809,6 +841,30 @@ mod tests {
         }
     }
 
+    /// Menu text takes the item's `textstyle`: CoD1's shadow offset is in
+    /// virtual units, CoD2's in window px (cod2-fonts-menus.md 1.1).
+    #[test]
+    fn menu_text_draws_in_the_items_style() {
+        let fonts = crate::hud::hudelem::tests::test_fonts();
+        let draw = |exact, style| {
+            let p = Painter {
+                v: Virtual::new((1280.0, 960.0)),
+                fonts: Some(&fonts),
+                exact,
+            };
+            let mut out = Vec::new();
+            p.text("a", 0.0, 20.0, 0.3, [1.0; 4], style, &mut out);
+            out
+        };
+        let offset = |q: &[HudQuad]| q[0].verts[0][0] - q[1].verts[0][0];
+        assert_eq!(draw(false, 0).len(), 1);
+        let q = draw(false, 6);
+        assert_eq!((offset(&q), q[0].rgba[3]), (4.0, 1.0));
+        assert_eq!(draw(true, 0).len(), 1);
+        let q = draw(true, 6);
+        assert_eq!((offset(&q), q[0].rgba[3]), (2.0, 1.0));
+    }
+
     /// `Window_Paint` style 3 draws its handle whatever it is: no
     /// background is the default shader, a named one falls back to it.
     #[test]
@@ -827,6 +883,7 @@ mod tests {
             visible: true,
             back: [0.0; 4],
             border_color: [0.0; 4],
+            edit: Default::default(),
         };
         let mut out = Vec::new();
         p.window(&item, &st, None, &mut out);
@@ -860,6 +917,7 @@ mod tests {
             visible: true,
             back: [0.0, 0.0, 0.0, 0.5],
             border_color: [1.0; 4],
+            edit: Default::default(),
         };
         let mut out = Vec::new();
         p.window(&item, &st, None, &mut out);
@@ -1158,6 +1216,43 @@ mod tests {
         assert_eq!(cursor.verts[2], [432.0, 232.0]);
     }
 
+    /// `Menu_PaintAll` (0x40018a00..0x40018a46) paints the stack from its
+    /// topmost fullscreen menu up: a page a script left open under `main`
+    /// draws nothing, a popup over `main` draws.
+    #[test]
+    fn menus_under_the_topmost_fullscreen_menu_paint_nothing() {
+        let mut ui = ui_with_menu(
+            r#"{ menuDef { name "page" rect 0 0 640 480
+              itemDef { name "p" rect 10 10 20 20 style 1 backcolor 1 0 0 1 visible 1 decoration } }
+            menuDef { name "main" fullscreen 1 rect 0 0 640 480
+              itemDef { name "m" rect 50 50 20 20 style 1 backcolor 0 1 0 1 visible 1 decoration } }
+            menuDef { name "pop" popup rect 0 0 640 480
+              itemDef { name "q" rect 90 90 20 20 style 1 backcolor 0 0 1 1 visible 1 decoration } } }"#,
+        );
+        let shell = Shell::new();
+        let loc = Localized::default();
+        let colours = |ui: &Ui| -> Vec<[f32; 4]> {
+            ui.build(640.0, 480.0, &loc, &shell)
+                .iter()
+                .map(|q| q.rgba)
+                .collect()
+        };
+        ui.open_menu("page", &shell, &mut Vec::new());
+        assert_eq!(colours(&ui), [[1.0, 0.0, 0.0, 1.0]]);
+        ui.open_menu("main", &shell, &mut Vec::new());
+        assert_eq!(
+            colours(&ui),
+            [[0.0, 1.0, 0.0, 1.0]],
+            "the page is under main"
+        );
+        ui.open_menu("pop", &shell, &mut Vec::new());
+        assert_eq!(
+            colours(&ui),
+            [[0.0, 1.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]],
+            "main, then the popup over it"
+        );
+    }
+
     #[test]
     fn format_and_truncation() {
         assert_eq!(
@@ -1231,5 +1326,16 @@ mod tests {
         assert_eq!(ui.map_preview(), "levelshots/mp_harbor");
         ui.browser.lists[0][0].info.as_mut().unwrap().mapname = "zz_custom".into();
         assert_eq!(ui.map_preview(), "menu/art/unknownmap");
+    }
+
+    /// The edit cursor blinks on the renderer's 256 ms steps: off first on
+    /// CoD1, on first on CoD2.
+    #[test]
+    fn the_edit_cursor_shows_every_other_256_ms() {
+        let on: Vec<bool> = [0, 255, 256, 511, 512, 768]
+            .map(|ms| cursor_blink_on(ms, false))
+            .to_vec();
+        assert_eq!(on, [false, false, true, true, false, true]);
+        assert!(cursor_blink_on(0, true) && !cursor_blink_on(256, true));
     }
 }

@@ -1105,9 +1105,10 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
 - Deformed props draw two-sided like every prop; a stock autosprite stage
   is additive, so winding does not show.
 - bulge rides its record (`[width, height, t * speed]`, the sin table
-  at the truncated index as `_ftol` takes it), move its record (the frame's offset,
-  evaluated on the CPU through the table), normal
-  its record with the noise in `noise.wgsl` (the tables
+  at the truncated index as `_ftol` takes it), move its vector with its
+  wave in `deform_ext` (`[base, amp, phase + t * rate, rate]`, read
+  through the form's table in the shader, a noise form holding its base),
+  normal its record with the noise in `noise.wgsl` (the tables
   `shader::NOISE_TABLE` / `NOISE_PERM`, held equal by a test). The normal
   feeds `tcGen environment` and the dlight projection.
 - VERIFIED, 0x5149b0 (RB_DeformTessGeometry): a loop over the shader's
@@ -1138,11 +1139,58 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   before the instance transform; the viewmodel's bones are view space,
   so there the wave's `x + y + z` and the normal's noise read view-space
   coordinates (no stock viewmodel skin deforms). The sprites stay
-  load-time encodings (world soups and props only) and hold their slot
-  without a GPU record. Records run in script order on the normal the
+  load-time encodings (world soups, props and entity models, not the
+  viewmodel) and hold their slot without a GPU record. Records run in script order on the normal the
   previous one wrote, never one per kind in a fixed order on the
   undeformed normal.
 - Inert: syncNormal, projectionShadow, text0-7. None has a stock user.
+
+#### 8.1.1 Deforms on an entity
+
+- VERIFIED (the instructions), CoDMP.exe 0x4d68c4..0x4d68ee: when the
+  draw surface list moves to another entity (`ecx`, not the world's
+  0x3fe), `floatTime` (0x16d8a10) becomes the frame's time less the
+  entity record's `+0x78` (records 0x2b8 bytes from 0x16d8b18), and the
+  tess `shaderTime` (0x197ff98) that less the shader's `+0x17c`. The
+  surface begin 0x4ff570 stores the same difference again (0x4ff5f3) and
+  holds it at the shader's `+0x178` when that is set (0x4ff5ff..0x4ff62b).
+  The world's branch (0x4d69ec..0x4d6a2c) takes the frame's time
+  unchanged. INFERRED (Q3's `RB_RenderDrawSurfList` and `RB_BeginSurface`
+  shape): `+0x78` is the refEntity's `shaderTime`, `+0x17c` the shader's
+  `timeOffset`, `+0x178` its `clampTime`.
+- VERIFIED: wave (0x513598), flap (0x513712), move (0x513b7e) and normal
+  (0x5139b4, 0x5139fc, 0x513a46) read 0x197ff98, so an entity's own
+  clock moves them. Bulge (0x513ad1) reads the integer at 0x16d8a08,
+  which only 0x4d6d98 writes, once a frame: no entity moves it.
+- vcod: an instance's `time_offset` (its material clock less the frame's,
+  `DynamicModelInstance::shader_time`; UO's vehicles set one,
+  `coduo-diff.md` 9) reaches `deform_vertex` as `dt`, and each record's
+  rate rides `StageParams::deform_ext`: the wave and flap phase, the
+  normal's noise time and the move's wave run `rate * dt` further; the
+  bulge does not. The world, the viewmodel and the world shadow cutouts
+  pass 0.
+- VERIFIED (the instructions), 0x514080 (autosprite): with the current
+  entity (0x16d8e5c) not the world's (0x16c508c, 0x5140e1), the view's
+  left and up (0x16d8b60, 0x16d8b6c) go through 0x514010, three dot
+  products against the axes at 0x16d8db4, 0x16d8dc0 and 0x16d8dcc, before
+  the quads are stamped; the world copies them (0x514113..0x514148). With
+  the entity's `+0x40` set (0x51425b) both scale by one over the length
+  of its `+0x1c` vector, or by 0 when that is 0 (0x51426b..0x5142df).
+  0x514330 (autosprite2) brings the view forward (0x16d8b54) through
+  0x514010 the same way for an entity (0x51437f..0x514394). INFERRED (Q3's
+  `GlobalVectorToLocal` and `nonNormalizedAxes`): the axes are the
+  entity's orientation, `+0x40` its non-normalized flag, `+0x1c` its
+  first axis; so the quad faces the view in world space whatever the
+  entity's turn, at the entity's scale.
+- vcod: an entity surface whose skin's material carries a sprite deform
+  uploads encoded in model space (`renderer::encode_entity_sprite`,
+  through `vcod_common::deform`'s encoders): autosprite's centre, stamp
+  corner and half-width (`tangent[0]`), its four vertices on the first
+  one's bones; autosprite2's end midpoints, axis (the normal) and signed
+  half end-length. `dynamic_model.wgsl` poses the centre, brings the
+  view's axes into the entity's frame through its axes and makes them
+  unit, steps out there, and the entity's axes carry the step back out,
+  scale included. The viewmodel uploads its surfaces as they are. No stock MP entity skin carries a sprite (8.2, "Entity models").
 
 ### 8.2 Model skin scripts
 
@@ -1379,8 +1427,9 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   viewmodel alike. A stage image a block names samples through a
   clamp-to-edge sampler when its bundle is `clamp`. The entity and
   viewmodel shaders run a block's wave, flap, bulge, move and normal
-  deforms ("Vertex deforms" above); an autosprite there draws undeformed
-  (no stock MP entity carries one).
+  deforms ("Vertex deforms" above); an entity's autosprite and
+  autosprite2 face the view (8.1.1), the viewmodel's draw undeformed (no
+  stock MP entity or viewmodel carries one).
 
 ##### A model registered after the precache
 
@@ -1476,8 +1525,31 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   census of every stock `.bsp`'s script-less, non-overlay materials whose
   image has alpha under 128: on the MP maps this turns
   `wood@chateau_exteriordoor`, `wood@chateau_extdoorborder` and
-  mp_depot's `glass@window2a` opaque. Blended types (`cloth_blend`,
-  `glass_blend_in`) still cut rather than blend.
+  mp_depot's `glass@window2a` opaque.
+- VERIFIED (the instructions), `CoDMP.exe` 0x4fc72e..0x4fc779: the shader
+  lookup calls strchr (0x528700) on the name for `@` (push 0x40 at
+  0x4fc732); with one it builds the shader from its type (0x4fc0c0, called
+  at 0x4fc748) and never reads a script (0x4fbde0 runs only on the no-`@`
+  branch at 0x4fc775).
+- VERIFIED, pak4 `shadertypes/world/` and UO's `pakuo01`: `cloth_blend`,
+  `glass_blend_in`, `glass_blend_out`, `foliage_blend` and UO's
+  `dirt_blend` are one stage, `map $texturename`, `rgbGen exactVertex`,
+  `blendfunc blend`, `nextbundle map $lightmap`; `cloth_blend` adds `cull
+  disable`, the glass types `sort innerBlend` / `outerBlend`, `dirt_blend`
+  `polygonOffset`.
+- VERIFIED, census of every stock MP `.bsp`'s script-less materials whose
+  type blends, decals and `*_masked` left out: 1.1 has only mp_chateau's
+  `cloth_blend@austriaintwindow`; UO adds `glass_blend_in@shopwin2broken`
+  (mp_arnhem, mp_uo_stanjel), `glass_blend_in@snowindow` (mp_cassino),
+  `glass_blend_in@` / `glass_blend_out@sm_ind_win2` (mp_kharkov),
+  `glass_blend_out@window_broken` (mp_peaks), `cloth_blend@curtains2`
+  (mp_sicily), `cloth_blend@clothesline-02` (mp_streets) and
+  `dirt_blend@roadgutter_b2` / `riverbank_foy` (mp_foy, mp_peaks).
+- vcod: such a material takes its template with `$texturename` bound to
+  its image (`blended_world_types`), added to the material library at the
+  map's load, so it draws through the stage path and blends where
+  `fs_main` cut it at 0.5. Decals and `*_masked` overlays keep their own
+  pass, and the other types `fs_main`.
 
 ### 8.4 The sun: disc, flare, blind and glare
 

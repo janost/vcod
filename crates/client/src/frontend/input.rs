@@ -407,7 +407,7 @@ impl Ui {
         if !click && !handled {
             // The Enter case (0x400138b6): no cursor test.
             if is_edit_field(item.kind) {
-                self.options.editing = Some((top, i));
+                self.start_edit(top, i, false);
             } else {
                 self.item_action(top, &item, shell, out);
             }

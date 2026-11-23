@@ -267,6 +267,7 @@ impl Row {
             self.y + self.eh + item.text_align_y,
             item.text_scale,
             item.fore,
+            item.text_style,
             out,
         );
     }

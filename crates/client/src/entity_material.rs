@@ -21,7 +21,7 @@ use crate::texture_settings::{Mips, TextureSettings};
 use vcod_common::assets;
 use vcod_common::material::{
     AlphaGen, BlendFactor, Bundle, Clamp, DEFAULT_IMAGE, DepthFunc, ImageRef, Material,
-    MaterialLib, ModelLight, RgbGen, SORT_OPAQUE, Stage, TcGen, TexEnv, TexSemantic,
+    MaterialLib, ModelLight, RgbGen, SORT_OPAQUE, Sprite, Stage, TcGen, TexEnv, TexSemantic,
 };
 use vcod_common::model::Vertex;
 use vcod_common::pk3::Pk3Fs;
@@ -316,6 +316,9 @@ pub(crate) struct EntSkin {
     /// An alpha-tested caster's colour map: its first alpha-tested
     /// stage's image, which the cast tests at 128.
     pub(crate) sun_cut: Option<StageImage>,
+    /// The material's `autosprite` or `autosprite2`: its surfaces upload
+    /// encoded (`renderer::encode_entity_sprite`).
+    pub(crate) sprite: Option<Sprite>,
 }
 
 impl EntSkin {
@@ -793,6 +796,11 @@ impl EntityMaterials {
         keys
     }
 
+    /// The sprite deform of `skin`'s material, once [`Self::skin`] loaded it.
+    pub(crate) fn sprite(&self, skin: &str) -> Option<Sprite> {
+        self.by_skin.get(skin)?.sprite
+    }
+
     /// The pipeline pairs built so far.
     #[cfg(test)]
     pub(crate) fn pipeline_count(&self) -> usize {
@@ -1063,7 +1071,8 @@ impl EntityMaterials {
                 && st.depth_func == DepthFunc::LessEqual
                 && st.alpha_func.is_none();
             let floatz = i == 0 && sh.floatz.is_some();
-            let rigid = stage_params(&sh, i, 0.0).is_none_or(|p| p.deform_kinds == [0; 4]);
+            let rigid = sh.sprite.is_none()
+                && stage_params(&sh, i, 0.0).is_none_or(|p| p.deform_kinds == [0; 4]);
             stages.push(EntStageDraw {
                 pipeline,
                 image,
@@ -1106,6 +1115,7 @@ impl EntityMaterials {
             cookie_caster: sh.cookie.caster,
             sun_caster: sh.cookie.sun_caster,
             sun_cut,
+            sprite: sh.sprite.filter(|_| !fallback),
         });
         self.by_skin.insert(skin.to_string(), out.clone());
         if let Some(list) = &mut self.shaders {

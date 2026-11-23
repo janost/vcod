@@ -458,7 +458,8 @@ as local time pushes it, and the drawn time stops about 150 ms past the
 snapshot's (INFERRED, simulating the rule at 8 ms frames).
 
 vcod draws the banner (`hud::timeout`) at those sizes and steps, with style
-6's shadow. Other HUD text keeps vcod's usual 1 px shadow at 0.8. It counts a new snapshot by
+6's shadow, through the text styles every CoD1 HUD string takes
+(cod11-hud-protocol.md 6.2). It counts a new snapshot by
 message number, so the drawn time holds through a timeout. A 1.1 install lacks
 `CGAME_PAUSED` and the `PATCH_1_5_*` strings (`localized_english_pak5.pk3`)
 and shows the keys.

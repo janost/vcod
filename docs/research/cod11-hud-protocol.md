@@ -1153,6 +1153,69 @@ vcod: `hud::font::trap_width` and `trap_height`, which the UI's `Painter`
 measures with on CoD1 (`frontend::Painter::width`, `height`); its draw
 still places a line's top the tallest glyph above the baseline.
 
+### 6.2 Text styles
+
+VERIFIED (the instructions), `CoDMP.exe` 1.1: the text renderer
+(`0x4d7d60`, render command 6) takes a style argument. Before each glyph
+(`0x4d803d..0x4d8057`) a style of 3 or 6 draws the glyph first in the
+shadow colour, `(style != 3) + 1` added to its x and y, through the quad
+call the glyph then takes (`0x4d7cb0`, `0x4d80a9` and `0x4d80fd`), so the
+offset is in the call's units, virtual ones for a cgame or UI caller
+(cod15-protocol-diff.md 12 measures it so).
+The shadow colour is black with the alpha byte of the call's colour
+(`0x4d7ddf..0x4d7dea`). Every other style draws no shadow. A `^N` code
+takes its palette RGB and keeps the call's alpha (`0x4d7f55..0x4d7f6a`),
+`^7` the call's colour (`0x4d7f45`). 1.5's renderer has the same test
+(`0x4bacb1..0x4bacc7`, cod15-protocol-diff.md 12). The
+style values are `menudef.h`'s `ITEM_TEXTSTYLE_*` (`pak0.pk3`): 0 normal,
+1 blink, 2 pulse, 3 shadowed, 4 outlined, 5 outline shadowed, 6 shadowed
+more.
+
+Who passes which style, VERIFIED (the pushed operand ahead of each text
+call):
+
+- The cgame (`cgame_mp_x86.dll` 1.1): 46 trap 0x36 calls and 24 calls to
+  its wrapper `0x30030e30`. Every fixed operand of a drawn piece is 3:
+  the chat (`0x300152fb`), the centre print (`0x30015cea`), the
+  connection-interrupted line (`0x30015508`), the vote and complaint lines
+  (`0x30018309..0x300184f6`), the spectator and follow strings
+  (`0x300180db`, `0x30018700`), the loading screen (`0x3001fcb9..0x3001fddd`),
+  a hud element's text (`0x3001f4d6` in `0x3001f490`) and the scoreboard
+  (`0x30029cc0..0x3002b02b`, `0x3002a2d3`). Style 0 goes to the font 5
+  lines of `0x300197f0` (the frame counters `%ifps(%i-%i,%i)` of
+  `0x30014a00`, and `0x30017c50`), the weapon strip's key text
+  (`0x30037620`) and three owner draws stock `hud.menu` does not use
+  (`0x300267b0`, `0x30026810`, `0x30026870`).
+- The owner draws pass a style from their arguments (owner draw 20's call
+  at `0x30026d2a` forwards one into `0x30023f50`). INFERRED (Q3's
+  `Item_OwnerDraw_Paint`): it is the item's `textstyle`, which the cgame's
+  parser stores at item `+0xe4` (`0x300492ea`). Stock `hud.menu` (`pak0.pk3`,
+  1.5 `pak8.pk3`, UO `pakuo03.pk3`) gives `CG_PLAYER_WEAPON_NAME` and
+  `CG_PLAYER_AMMO_VALUE` `ITEM_TEXTSTYLE_SHADOWED`, `CG_CURSORHINT` and
+  `CG_PLAYER_STANCE` `ITEM_TEXTSTYLE_SHADOWEDMORE`. VERIFIED (the files).
+- `CoDMP.exe`'s own HUD text: the game and bold message windows' lines,
+  kill lines included, pass 3 (`0x4098df`, through the console-line draw
+  `0x4dfa60`, which builds the same command 6 through `0x4dfc10`); the chat
+  field's label passes 3 (`0x409e05`) and the field 3 in font 0, 0 in the
+  console's font 5 (`0x40c5a6`, `0x40c5f9`).
+- The UI (`ui_mp_x86.dll` 1.1): `textstyle` is stored at item `+0xe4`
+  (`0x4001773a`), and the display context's `drawText` (`+0x10` of
+  `0x401c3ce0`, the trap wrapper `0x400190c0`, set at `0x4000d3cc`) gets
+  that word at every `Item_*_Paint` call (`0x400141b9..0x400153be`). The
+  UI's owner draws (`0x40008760..0x400091c0`) forward the item's style,
+  except the key-wait line (`0x40009180`), style 0. The download lines
+  pass 3 (`0x4000dea0`) and the connect screen's helper 6 (`0x4000de50`).
+
+vcod: `hud::font::TextStyle` and `layout_styled` (with
+`layout_fixed_styled` for hud elements' fixed fonts) draw every CoD1 HUD
+and menu string: `hudelem::text` under `player::menu_text_rgba`, and the
+front end's `Painter::text` with the item's `text_style`. The draws above
+pass their retail style; owner draws vcod draws natively take the stock
+`hud.menu`'s. vcod's own spectator header (`hud::status`) keeps vcod's 1 px
+shadow at 0.8. CoD2's draws take `TextStyle::Cod2` (cod2-fonts-menus.md
+1.1). The UI's blink and pulse colours (`Item_TextColor`,
+cod11-front-end.md 20.7) are not drawn.
+
 ---
 
 ## 7. The `^N` colour palette
@@ -2644,7 +2707,8 @@ and the same 128/32/64/2000 defaults.
   text or the cvar's value (a `v`, else the 140/204 mirror), placed as the
   front end places text (`cod11-front-end.md` section 12), with `cvartest`
   gates, right after the native items on the views that draw the native
-  HUD. `textstyle`, `textfont`, borders and item scripts are ignored.
+  HUD, each in its `textstyle` (6.2). `textfont`, borders and item
+  scripts are ignored.
 
 ### 9.15 What vcod does not draw
 

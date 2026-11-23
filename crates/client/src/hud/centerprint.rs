@@ -4,7 +4,7 @@
 //! "The centre print".
 
 use super::HudQuad;
-use super::font::{Slot, UiFonts};
+use super::font::{Slot, TextStyle, UiFonts};
 use super::hudelem::Virtual;
 use super::player::{menu_text_rgba, text_height, text_width};
 
@@ -91,7 +91,14 @@ impl CenterPrint {
             } else {
                 (640.0 - w) * 0.5
             };
-            menu_text_rgba(font, &line, (x, y), scale, [1.0, 1.0, 1.0, alpha], v, out);
+            // Style 3 (CoD1 0x30015cea, CoD2MP_s.exe 0x4c8545).
+            let style = if self.cod2 {
+                TextStyle::COD2
+            } else {
+                TextStyle::SHADOWED
+            };
+            let rgba = [1.0, 1.0, 1.0, alpha];
+            menu_text_rgba(font, &line, (x, y), scale, rgba, style, v, out);
             y += h * 1.2;
         }
     }

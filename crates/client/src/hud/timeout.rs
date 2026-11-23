@@ -4,7 +4,7 @@
 //! (docs/research/cod15-protocol-diff.md, "Match timeout").
 
 use super::HudQuad;
-use super::font::{self, Slot, UiFonts};
+use super::font::{self, Slot, TextStyle, UiFonts};
 use super::hudelem::Virtual;
 use super::player::menu_text_rgba;
 use vcod_common::localize::Localized;
@@ -96,26 +96,9 @@ impl MatchTimeout {
         let y = (480.0 - h) * 0.5;
         for (i, line) in text.split('\n').enumerate() {
             let baseline = y + i as f32 * SCALE * font.line_advance;
-            let start = out.len();
-            menu_text_rgba(font, line, (x, baseline), SCALE, [1.0; 4], v, out);
-            style_6_shadow(&mut out[start..], v.scale);
+            let style = TextStyle::SHADOWED_MORE;
+            menu_text_rgba(font, line, (x, baseline), SCALE, [1.0; 4], style, v, out);
         }
-    }
-}
-
-/// Text style 6 (CoDMP.exe 1.1 0x4d803d..0x4d8057, 1.5 0x4bacb1): its
-/// shadow sits 2 virtual units right and down, black at the text's alpha
-/// (0x4d7ddf). `quads` alternate shadow and glyph, the shadow 1 px off.
-fn style_6_shadow(quads: &mut [HudQuad], scale: f32) {
-    let off = 2.0 * scale - 1.0;
-    for i in (0..quads.len()).step_by(2) {
-        let alpha = quads.get(i + 1).map_or(1.0, |g| g.rgba[3]);
-        let q = &mut quads[i];
-        for v in &mut q.verts {
-            v[0] += off;
-            v[1] += off;
-        }
-        q.rgba = [0.0, 0.0, 0.0, alpha];
     }
 }
 

@@ -349,6 +349,21 @@ after any shader or layout change. A render test that passes headless can
 still draw wrong live; a change to a draw path also needs a test through the
 session or replay path.
 
+What the frame checks see:
+
+- `VCOD_FRAME_DIGEST` (`frame_digest.rs`) hashes what the frame hands the
+  renderer (view, view weapon, entities, HUD list, sounds, effects,
+  console), never a pixel. A shader-only change leaves it the same.
+- `VCOD_C1_SHOTS=<dir>` writes CoD1 frames as TGAs for a byte compare
+  across builds. `cod1_renderer_builds_and_draws_without_validation_errors`
+  writes `mp_carentan.tga` at the renderer's default identityLight 0.5
+  (full screen) with every vcod pass on, `vc_bicubic` included.
+  `cod1_identity_ramp_frame_matches_the_gamma_pass_and_the_prepass` writes
+  `mp_carentan_windowed.tga` at identityLight 1 with `vc_bicubic` 0, the
+  only frame through the windowed lightmap shift (`lightmap_lit`,
+  cod11-gamma.md 4). Before it, f1808d2b9 changed every windowed CoD1
+  lightmap and left both the digest and the one shot the same.
+
 ## CoD2 map census
 
 `COD2_DIR=... cargo test -p vcod --bins -- --ignored cod2_map_census` runs
@@ -381,6 +396,10 @@ in process, on `play::cod4`'s `tests::sim` clock.
 - A test's loops count frames its own sleeps move. Under load it runs slower,
   never out of time; only `sim::Clock::sleep`'s 60 s wall assert stops a
   stalled one.
+- The clock does not make loopback UDP reliable: a loaded machine can still
+  lose a packet. An input whose edge rides one cmd (the location selector's
+  confirm, `live_streaks::selector_attack`) is pressed again until its
+  effect shows, or one lost packet hangs the test to its limit.
 - A test takes one of `play::cod4::tests::live_slot`'s slots before it
   builds its server, three unless `VCOD_LIVE_SLOTS` says more, so a run at
   any `--test-threads` holds at most three maps at about 2.5 GB each. The

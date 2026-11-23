@@ -155,7 +155,7 @@ HUD and menus:
 - A running vote shows as retail's cgame shows it (subject, seconds left,
   yes and no counts with the keys) and plays its sound. F1 and F2 vote;
   the call vote menu's restart, next map, map, type-and-map and kick picks
-  call one.
+  (on 1.5 and UO also the temporary ban pick) call one.
 - Retail's drop-down console on `` ` `` with the commands under
   [Console](../usage.md#console), `rcon` among them.
 
@@ -195,7 +195,8 @@ Rendering and sound:
   effects join the same list.
 - `deformVertexes` draws `wave`, `flap`, `bulge`, `move`, `normal`,
   `autosprite` and `autosprite2`, up to three per shader in script order.
-  Entity models take `skins/` blocks and the same deforms but the sprites.
+  Entity models take `skins/` blocks and the same deforms on their own
+  material clock (the viewmodel all but the sprites).
   A `type@` skin with a missing template or image draws the default
   shader. Dynamic lights go through retail's dlight pass
   ([cod11-shader-scripts.md](../research/cod11-shader-scripts.md)).

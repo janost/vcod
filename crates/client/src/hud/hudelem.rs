@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::sync::Mutex;
 
 use super::HudQuad;
-use super::font::{self, Font, Slot, UiFonts};
+use super::font::{self, Font, Slot, TextStyle, UiFonts};
 use vcod_common::localize::Localized;
 use vcod_common::net::msg::{HudElem, hud_field as f};
 
@@ -268,50 +268,36 @@ impl<'a> TextFont<'a> {
         }
     }
 
+    /// `0x3001f490`'s text, style 3 (`0x3001f4d6`).
     fn draw(&self, s: &str, at: (f32, f32), color: [f32; 4], v: &Virtual, out: &mut Vec<HudQuad>) {
-        let start = out.len();
+        let style = TextStyle::SHADOWED;
         match self.cell {
             Some(cell) => {
                 let [px, py] = v.point(at.0, at.1);
-                font::layout_fixed(
-                    self.font,
-                    s,
-                    px,
-                    py,
-                    self.px_scale(v),
-                    cell * v.scale,
-                    color,
-                    out,
+                let (scale, cell) = (self.px_scale(v), cell * v.scale);
+                font::layout_fixed_styled(
+                    self.font, s, px, py, scale, cell, color, style, v.scale, out,
                 );
-                shadow_alpha(&mut out[start..], color[3]);
             }
-            None => text(self.font, s, at, self.px_scale(v), color, v, out),
+            None => text(self.font, s, at, self.px_scale(v), color, style, v, out),
         }
     }
 }
 
-/// [`font::layout`] at a virtual top-left, with the shadow's alpha scaled by
-/// `color`'s and every glyph taking `color`'s alpha, as retail's `^N` does.
+/// [`font::layout_styled`] at a virtual top-left; a `^N` keeps `color`'s
+/// alpha, as retail's does.
 pub fn text(
     fnt: &Font,
     s: &str,
     (x, y): (f32, f32),
     px_scale: f32,
     color: [f32; 4],
+    style: TextStyle,
     v: &Virtual,
     out: &mut Vec<HudQuad>,
 ) {
-    let start = out.len();
     let [px, py] = v.point(x, y);
-    font::layout(fnt, s, px, py, px_scale, color, out);
-    shadow_alpha(&mut out[start..], color[3]);
-}
-
-/// Alternating shadow and glyph quads: the shadow at 0.8 of `alpha`.
-fn shadow_alpha(quads: &mut [HudQuad], alpha: f32) {
-    for (i, q) in quads.iter_mut().enumerate() {
-        q.rgba[3] = if i % 2 == 0 { 0.8 * alpha } else { alpha };
-    }
+    font::layout_styled(fnt, s, px, py, px_scale, color, style, v.scale, out);
 }
 
 /// Draws `elems` in retail's order: sorted by `sort`, stably, so pass the
