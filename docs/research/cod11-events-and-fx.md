@@ -1418,8 +1418,37 @@ The marks' `perlight` stages draw nothing, in retail as in vcod:
   (a search of the disassembly), so that list is empty and a mark's
   `perlight` stage never draws.
 
-Not implemented: the surface-type gate at 0x4e931a, since vcod has no
-field it maps to.
+The surface-type gate at 0x4e931a passes every soup, so vcod needs no
+field for it:
+
+- VERIFIED (the instructions), `CoDMP.exe` 0x4dabee..0x4dabf8: the
+  triangle soup loader (0x4dab70) writes the shader's `+0x188` as the
+  surface's first word, the word 0x4e931a and the world's surface add
+  (0x4e1772) test. VERIFIED, 0x4da980 (called for each soup run at
+  0x4db066): it sets `+0x188` to 0x19 (0x4da9b5), 0x1a (0x4da9ee), 0x1c
+  (0x4daa13), 0x1b (0x4daaed) or 0x18 (0x4dab4c), each at least 0x18.
+  INFERRED: the gate drops only a surface no soup load made.
+
+The order of the mark runs among themselves (`renderer::mark_pass`,
+`run_order`):
+
+- VERIFIED (9.4, 0x4e9369): a mark on a lightmapped surface draws with
+  its shader remade for that lightmap; one on a surface without a
+  lightmap draws with the base shader (0x4e9361..0x4e9373).
+- VERIFIED (`cod11-shader-scripts.md` 5, 0x4fb790): a new shader takes
+  its sorted index after every shader of a lower sort, then of the same
+  sort with a lower bundle 0 image number, then the same bundle 0 and a
+  bundle 1 number no higher; the draw list sorts by that index before
+  the entity, so a mark's draw key carries no recency.
+- INFERRED: a stock mark stage's bundle 1 is `$lightmap` (9.5), the
+  page's image, loaded with the world in page order, and a page-less
+  base shader's reads an image made before them. So runs of one sort
+  order by their decal image's load, then page, the page-less one first.
+  vcod stands each mark shader's registration order in for its decal
+  image's number and orders runs by sort, that rank, then page; within a
+  run the marks keep newest first, where retail's quicksort over equal
+  keys fixes no order. Before 2026-11-23 runs of one sort drew newest
+  run first.
 
 ### 9.7 `markShadow`: `CG_PlayerShadow` (0x30027630)
 
