@@ -20,8 +20,8 @@ past the challenge.
   calls go through `R_386_PC32`, which `tools/re/annotate_func.py`
   resolves. VERIFIED.
 - Evidence rule for this doc: the release binary, its disassembly and
-  loopback captures of clients against it. No CoD4x source code in any form
-  was read. The project's user-facing README (features, setup) was read.
+  loopback captures of clients against it; section 19 adds one live run
+  against public servers. No CoD4x source code in any form was read. The project's user-facing README (features, setup) was read.
 - Captures: `tools/cod4x_capture.sh` (section 16), each line
   `<ms> <c2s|s2c|udp|tcp> <peer> <hex>` (`tools/lo_capture.py`). The
   captures stay under the gitignored `tmp/cod4x/`; section 16 says how to
@@ -420,7 +420,10 @@ for its own client were not looked for; open (section 17).
 - `cargo run -p vcod-cod4 --example cod4x_probe -- HOST:PORT OUTDIR` is
   the protocol 21 client of section 6; `--gamestate FILE` decodes a saved
   side channel gamestate offline, and `--baseline17 CAPTURE N` prints a
-  1.7 capture's baseline `N` beside it.
+  1.7 capture's baseline `N` beside it. `--until-stats` ends the join at
+  the stats request, `--name` sets the player name, `--log FILE` writes
+  every datagram in `lo_capture.py`'s format; every run leaves with
+  `disconnect` (section 19).
 - The captures, each `COD4_DIR=<1.7 install>` and the release binary as
   `BIN`:
 
@@ -448,6 +451,8 @@ for its own client were not looked for; open (section 17).
 - `cod4x_patchv2.ff` and `xbase_00.iwd` on a real install (section 15).
 - A download through 7.2 and a `sv_pure 1` server's `cp` on protocol 21.
 - What the configstrings past 2441 hold on a server that uses them.
+- A public server's gamestate: needs stats sent to one of section 19's
+  two servers without the library.
 
 ## 18. Design proposal
 
@@ -494,13 +499,129 @@ Questions for the owner:
   test is a join attempt: an authenticating server would leave the client
   without a gamestate after its stats (section 5, INFERRED). How many
   public CoD4x servers run without authentication is unknown, possibly
-  none. Is a client that joins only those worth stages 1-4?
+  none. Is a client that joins only those worth stages 1-4? Measured in
+  section 19: 2 of 40 servers.
 - Stats. Stock gametypes kick a client with no stats, so playing needs
   mode 2, an AES-128-CBC block keyed on the connection's challenge (7.1).
   This is the stats transport, not authentication, but it is a cipher
   CoD4x added. In scope?
 - Measuring reach needs one join attempt against public CoD4x servers,
   which the project's rules forbid today. Allow a one-off, listed set?
+  Done once, 40 servers (section 19).
 - `cod4x_patchv2.ff`: if real servers reference it, a vcod client without
   the CoD4x install cannot pass the fastfile check. Find out from a real
   server's systeminfo (`getstatus` does not show it) before stage 2?
+
+## 19. Public reach, 2026-11-23
+
+A one-off, owner-approved measurement of how many public CoD4x servers let
+a protocol 21 client without authentication reach its gamestate. Capture
+directory `tmp/cod4x/reach-2026-11-23/` (gitignored): `serverstatus.json`
+(the master list), per server `sNN/` (`result.json` with the `getstatus`
+fields and the join's end point, `probe.log`, `wire.txt` with every
+datagram), `summary.md`, and `loopback-check/` (the same join against the
+release under `tools/cod4x_capture.sh`). Driver and aggregation:
+`tmp/cod4x/scripts/reach.py`, `reach_summary.py`. No addresses or player
+names here.
+
+### 19.1 Method
+
+- The list: one fetch of the CoD4x HTTP master's `serverstatus.json`,
+  463 entries (422 `alive`, 41 `dead`, 30 passworded, 2 full). Its `build`
+  field: 1154 on 197, 1153 on 117, 1229 on 28, 1231 on 25, the rest spread
+  over 30 other values. VERIFIED live (`serverstatus.json`).
+- The pick: alive, IPv4, not passworded, not full, alternating entries
+  with and without humans from a seeded shuffle. Each got one `getstatus`
+  (skipped on no answer, a password or a full server), then one join:
+  `cod4x_probe HOST:PORT DIR --stats none --until-stats --secs 12 --name
+  player --log DIR/wire.txt`, 3.5 s between servers. 41 servers got a
+  `getstatus`; one did not answer it and was not joined; 40 were joined.
+  VERIFIED live (`run.log`).
+- The join stops at the stats request (`cmd 9`, 7.1) and sends no stats,
+  so no server can send a gamestate (7.1: `SV_SendClientGameState` sends
+  none until they came). Then three netchan messages carrying `disconnect`.
+  On the release that freed the slot before any gamestate (`Player
+  player^7, 0 dropped: EXE_DISCONNECTED`). VERIFIED live (`loopback-check`).
+- The userinfo, the same for every server: `cg_predictItems 1
+  cl_punkbuster 0 cl_anonymous 0 color 4 head default model multi snaps 20
+  rate 25000 name player protocol 21 challenge <c> qport 4660`. VERIFIED
+  live (each `probe.log`'s `userinfo` line).
+- Every join ended within 12.4 s; no server answered with an error, a ban
+  or a `disconnect`. VERIFIED live (`summary.json`).
+
+### 19.2 What the order up to the stats request shows
+
+- `SV_SendClientGameState` calls `SV_ConnectSApi` (0x110923), then
+  `SV_RequestStats` (0x11092d), and only then tests the two results
+  (0x110935, 0x11093d). The stats request goes out whatever the library
+  answers. VERIFIED (the instructions at 0x11091f..0x11093f).
+- The binary's own reliable messages are the gamestate (1), downloads (5)
+  and the stats request (9). Two callbacks also call
+  `SV_SendReliableServerCommand` for a loaded module:
+  `SAPI_SendReliableServerCommand` (0xff6a7, the authentication library's)
+  and `XACHLP_SendReliableServerCommand` (0x12efe0, the anti-cheat
+  module's). VERIFIED (the call sites at 0xff6cf, 0x10ef60,
+  0x11050c..0x110872, 0x110b6e, 0x12f008).
+- `SV_ConnectXAC` runs at 0x110a3d, past the stats test, so the anti-cheat
+  module cannot speak before the stats request. VERIFIED (the
+  instructions).
+- On 35 of the 40 servers the side channel carried two `cmd 8` messages,
+  8 and 24 bytes, then the 5-byte stats request. The release with no
+  library sent the stats request alone (`loopback-check`). VERIFIED live.
+- So the two `cmd 8` messages are the authentication library's answer to
+  `SV_ConnectSApi`, sent before `SV_RequestStats`, and a server that sends
+  them has the library loaded and `sv_noauth` 0 (section 5: `sv_noauth 1`
+  loads nothing). INFERRED. Their contents were not read.
+- That separates the two kinds of server without sending stats: `cmd 8`
+  before the stats request means authentication. A server that sends only
+  `cmd 9` runs without the library, so `SV_ConnectSApi` returns 1 and the
+  stats alone should release the gamestate, as on the release. INFERRED.
+- Whether the library ever admits a client that sends it nothing (section
+  17) is still not measured: no stats went to any server.
+
+### 19.3 Counts
+
+| Outcome | Servers |
+|---|---|
+| challenge (`xproto 18`), `connectResponse`, side channel, two `cmd 8`, stats requested | 35 |
+| challenge (`xproto 18`), `connectResponse`, side channel, stats requested, no `cmd 8` | 2 |
+| `challengeResponse` without `xproto`, `connectResponse`, then out-of-band `requeststats` | 1 |
+| challenge, no `connectResponse` within 3 s | 1 |
+| no `challengeResponse` within 3 s | 1 |
+| gamestate received | 0 (no stats sent) |
+
+Each row VERIFIED live (`summary.json`, the `probe.log`s).
+
+- The 35 `cmd 8` servers: 23 on a mod (`fs_game` set), 12 on `main`; 24
+  with players, 11 empty; builds 1154 (15), 1153 (7), 77 (3), 1222, 1227
+  (2 each), 7, 1165, 1199, 1203, 1207, 1221 (1 each); 28 linux, 7 Windows
+  (`version`), 13 of the linux ones a `custom` build. VERIFIED live.
+- The 2 without `cmd 8`: both linux `custom` builds and both empty; one
+  build 1154 on `main`, one build 0 (`Jan  1 1980` in `version`) on a
+  promod mod. VERIFIED live.
+- The out-of-band `requeststats` server's `version` opens `CoD4 X Mixed`.
+  Before its `connectResponse` it printed `Unknown how to auth client` four
+  times, and then repeated `requeststats` on the 1.7 path (7.1's last
+  bullet) until the probe left at 12 s. VERIFIED live. That it takes 1.7
+  clients beside protocol 21 ones is INFERRED from the name and the
+  1.7-form challenge.
+- All 40 report `protocol 21` in `getstatus`; 39 run `sv_pure 1` (the
+  release defaults to 0, section 1). VERIFIED live.
+- Gametypes: `war` 20, `dm` 7, `sd` 6, `surv` 2, `deathrun` 2, one each of
+  `cj`, `gg`, `tranzit`. VERIFIED live.
+
+### 19.4 What it means for section 18
+
+- A stage 1-4 client without authentication reaches at most 2 of the 40
+  sampled servers (5%), both empty at the time. Over the list's 396 joinable
+  entries (alive, open, not full) that is about 20 servers, with a wide margin on a
+  sample of 2. INFERRED.
+- The `cmd 8` test works before stats, so the client can tell an
+  authenticating server and refuse with a reason at the stats request,
+  without the timeout of stage 3. INFERRED (19.2).
+- `cod4x_patchv2.ff`: not measured. No gamestate arrived, so no
+  `sv_referencedFFNames` was read. The two candidates are the only
+  servers where sending stats would show it; that needs a second approval.
+- 39 of 40 run `sv_pure 1`, so stage 2 meets the pure check on almost
+  every server it reaches. VERIFIED live (the count); its protocol 21 form
+  is open (section 17).
