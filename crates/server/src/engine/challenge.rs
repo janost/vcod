@@ -7,7 +7,7 @@
 //! (0x80889d0), UO 1.51b's at 0x84f7060 (0x80897d4), CoD2 1.3's at
 //! 0x84230dc (0x808d18e). Times are the caller's server clock in ms.
 
-use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, RandomState};
+use std::hash::{BuildHasher, RandomState};
 use std::net::SocketAddr;
 
 /// `MAX_CHALLENGES`: the loop bound 0x400 in all four.
@@ -47,6 +47,7 @@ pub struct Challenges {
 /// bytes run to run pins ([`Challenges::pin_key`]).
 enum Key {
     Process(RandomState),
+    #[cfg(any(test, feature = "testing"))]
     Fixed(u64),
 }
 
@@ -84,8 +85,10 @@ impl Challenges {
             let drawn = draw();
             let mask = match &self.key {
                 Some(Key::Process(k)) => k.hash_one((from, drawn)),
+                #[cfg(any(test, feature = "testing"))]
                 Some(Key::Fixed(seed)) => {
-                    BuildHasherDefault::<DefaultHasher>::default().hash_one((seed, from, drawn))
+                    std::hash::BuildHasherDefault::<std::hash::DefaultHasher>::default()
+                        .hash_one((seed, from, drawn))
                 }
                 None => 0,
             };

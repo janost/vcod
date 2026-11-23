@@ -294,6 +294,9 @@ pub(crate) struct Rider {
     /// Rockets fired on foot at an enemy vehicle, for the gates; and the
     /// last tick's trigger, which a launcher wants released between shots.
     pub(crate) rockets: u32,
+    /// Ticks a tank's driver held the gun on an enemy hull with no
+    /// shell's line on it, for the measurement.
+    pub(crate) shell_held: u32,
     rocket_tap: bool,
     /// This tick's fight is a vehicle: the launcher stays out.
     pub(crate) at_armor: bool,
@@ -344,6 +347,7 @@ impl Bot {
                 rest: RIDDEN_TICKS,
                 boarded: self.rider.boarded,
                 rockets: self.rider.rockets,
+                shell_held: self.rider.shell_held,
                 ..Rider::default()
             };
         }
@@ -355,6 +359,7 @@ impl Bot {
         self.rider = Rider {
             boarded: self.rider.boarded,
             rockets: self.rider.rockets,
+            shell_held: self.rider.shell_held,
             ..Rider::default()
         };
     }
@@ -362,6 +367,12 @@ impl Bot {
     /// Rockets fired on foot at enemy vehicles.
     pub fn rockets_at_armor(&self) -> u32 {
         self.rider.rockets
+    }
+
+    /// Ticks a tank's driver held its fire on an enemy hull for want of a
+    /// shell's line on it.
+    pub fn shell_held_ticks(&self) -> u32 {
+        self.rider.shell_held
     }
 
     /// On foot with a loaded launcher and an enemy-crewed vehicle in its
@@ -567,6 +578,7 @@ impl Bot {
         self.rider.armor_wait = if line_on {
             0
         } else {
+            self.rider.shell_held += 1;
             self.rider.armor_wait + 1
         };
         let held = !(armor.is_some() && self.rider.armor_wait > SHELL_WAIT_TICKS);
@@ -606,18 +618,26 @@ impl Bot {
         let headless = seat.seat > 1 && self.rider.unmade > PROGRESS_TICKS;
         if let Some((at, vel)) = enemy {
             // A seat's gun leads a moving target by its round's flight; a
-            // passenger's own weapon aims as on foot.
-            let at = if seat.gun_yaw.is_some() {
-                let eye = [
-                    view.origin[0],
-                    view.origin[1],
-                    view.origin[2] + view.eye_height,
-                ];
-                lead(eye, at, vel, seat.gun_speed)
-            } else {
-                at
+            // passenger's own weapon aims as on foot. A tank's main gun
+            // aims from the chase camera, as onto a base: its shell bends
+            // toward where that view meets the world (bot-objectives.md
+            // 10.11.1).
+            let sight = seat.sight.filter(|_| seat.seat == 1);
+            let (pitch, yaw) = match sight {
+                Some(g) => {
+                    let [p, y] = angles_from(g.eye, lead(g.eye, at, vel, seat.gun_speed));
+                    (p, y)
+                }
+                None if seat.gun_yaw.is_some() => {
+                    let eye = [
+                        view.origin[0],
+                        view.origin[1],
+                        view.origin[2] + view.eye_height,
+                    ];
+                    aim_angles(view, lead(eye, at, vel, seat.gun_speed))
+                }
+                None => aim_angles(view, at),
             };
-            let (pitch, yaw) = aim_angles(view, at);
             aim = [pitch, yaw];
             // A four-wheel's driver has no gun (0x1 sounds the horn); a
             // passenger fires his own weapon, a tap at a time.

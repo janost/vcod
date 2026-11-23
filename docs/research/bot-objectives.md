@@ -1867,7 +1867,8 @@ stops boarding and gets a seated bot out (`SeatView::off`, 10.4).
   `BotView::armor` the same way (an enemy tank's driver is out of every
   round's reach, coduo-vehicles.md 13, so only the hull is a target).
   The shell goes only while its line meets the hull; 10 s without one
-  and the tank drives on, the gun still on the hull (10.11).
+  and the tank drives on, the gun still on the hull (10.11). A tank's
+  main gun lays the view from the chase camera, not the eye (10.11.1).
 - On foot, a bot with a loaded launcher and `BotView::armor`, and no
   other enemy nearer than the vehicle (an enemy riding in it is the
   vehicle), draws the launcher, stops its feet, turns at its skill's
@@ -2300,6 +2301,43 @@ Retail has no bots; this section is measured on vcod-server only.
   23 → 25, gun kills 10 → 8, gun hits 8 → 9, wrecks 0 → 1; seed 9 kills
   20 → 23, gun kills 5 → 4, gun hits 10 → 5. All seeds: kills 176 →
   181, gun kills 43 → 40, wrecks 4 → 5, stuck drivers 0 both.
+
+### 10.11.1 The tank's gun aims from the chase camera, 2026-11-23
+
+Retail has no bots; this section is measured on vcod-server only.
+
+- The driver's view was laid from the bot's own eye, but the reader
+  stores the aim point along the view from `tag_chasecam`, and the shell
+  bends toward it (coduo-vehicles.md 13.1, "The readers"). From a camera
+  above and behind the hull, a view laid from the eye passes over the
+  target, and the shell bends up toward the wall behind it (10.11). The
+  driver now lays the view from `GunSight::eye`, led by the shell's
+  flight, as `bas` does onto a base (`think_seat`;
+  `a_tank_gun_aims_at_a_hull_from_the_chase_camera`). A gunner's seat and
+  a passenger aim from the eye as before.
+- VERIFIED (measured, release, `examples/bot_vehicles`, `ON_ONLY=1`,
+  seeds 1 to 13 odd, mp_cassino `tdm`, 3 min each, master 10284e659
+  then the change). `held` is bot-ticks a tank's driver held its fire on
+  an enemy hull with no shell's line on it (`BotBody::shell_held`, the
+  example's last column). Master's totals differ from 10.11's: the
+  vehicle pushes of coduo-vehicles.md 17.6 merged between.
+
+  | Seed | Kills | Gun kills | Gun hits | Wrecks | Stuck drivers | Held |
+  |---|---|---|---|---|---|---|
+  | 1 | 25 → 20 | 4 → 11 | 4 → 8 | 1 → 2 | 0 → 0 | 634 → 231 |
+  | 3 | 24 → 27 | 13 → 5 | 24 → 4 | 1 → 0 | 1 → 0 | 41 → 0 |
+  | 5 | 27 → 27 | 10 → 13 | 8 → 14 | 2 → 2 | 0 → 0 | 25 → 94 |
+  | 7 | 24 → 28 | 2 → 14 | 3 → 6 | 0 → 1 | 1 → 0 | 0 → 403 |
+  | 9 | 25 → 25 | 8 → 5 | 9 → 9 | 0 → 1 | 0 → 0 | 34 → 0 |
+  | 11 | 28 → 22 | 6 → 9 | 6 → 13 | 1 → 2 | 0 → 0 | 469 → 18 |
+  | 13 | 22 → 32 | 3 → 5 | 5 → 5 | 1 → 1 | 0 → 0 | 0 → 9 |
+  | All | 175 → 181 | 46 → 62 | 59 → 59 | 6 → 9 | 2 → 0 | 1203 → 755 |
+
+  Boardings 83 → 89, seated bot-ticks 38958 → 38188, distance driven
+  96396 → 93487, crushes of a teammate 15 → 12. The games diverge from
+  the first shot, so a seed's row moves both ways; the totals are the
+  measure. Kills and gun kills rose, stuck drivers and teammate crushes
+  fell, and the seated ticks and distance driven fell 2 % and 3 %.
 
 ## 11. CoD2's `sd`, `ctf` and `hq`
 

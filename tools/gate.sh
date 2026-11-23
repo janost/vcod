@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # gate.sh [area...]: what a branch passes before it merges, assembled from
-# docs/dev/testing.md. fmt and clippy, then the workspace suite once per
+# docs/dev/testing.md. fmt and both clippys, then the workspace suite once per
 # install the environment names, then the ignored gates of each area.
 #
 # Installs (each optional; absolute paths, docs/dev/testing.md):
@@ -105,6 +105,9 @@ base=(VCOD_REQUIRE_INSTALL="$require")
 
 run fmt -- fmt --all --check || fail fmt
 run clippy -- clippy --workspace --all-targets -- -D warnings || fail clippy
+# The crates with a `testing` feature, built without it as a release is.
+run clippy-release -- clippy -p vcod-common -p vcod-cod4 -p vcod-server --lib --bins -- -D warnings ||
+	fail clippy-release
 [[ ${DRY:-} == 1 ]] || echo "fmt, clippy: ok"
 check suite "${base[@]}" -- test --workspace --lib --bins --tests --no-fail-fast
 uo=(COD_DIR="${COD_UO_DIR:-}" COD4_DIR= VCOD_REQUIRE_INSTALL=cod1,uo)
