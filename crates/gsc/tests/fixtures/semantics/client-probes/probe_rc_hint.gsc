@@ -8,7 +8,7 @@
 //	through dm's own spawnPlayer and left holding the m1 carbine
 //	(wideListIcon 1) with the colt (0) as his other weapon, neither with
 //	reserve ammo, so their items still hint as ammo. He is held on
-//	the first deathmatch spawn with floor 48 units along its facing, his
+//	the first deathmatch spawn with floor 80 units along its facing, his
 //	view on a point 8 above that floor spot, every frame:
 //
 //	PROBE site <time> <origin> <view>
@@ -79,8 +79,9 @@ hold()
 	}
 }
 
-//	The first deathmatch spawn with a clear line to floor 48 units along
-//	its yaw; the item goes on that floor.
+//	The first deathmatch spawn with a clear line to floor 80 units along
+//	its yaw; the item goes on that floor. 80, not 48: the touch box is
+//	+-36 on x and y (cod11-items.md 1), which 48 reaches on a diagonal.
 site()
 {
 	if (isdefined(level.rc_site))
@@ -91,7 +92,7 @@ site()
 		at = spots[k].origin;
 		yaw = spots[k].angles[1];
 		ahead = anglesToForward((0, yaw, 0));
-		spot = at + (ahead[0] * 48, ahead[1] * 48, 0);
+		spot = at + (ahead[0] * 80, ahead[1] * 80, 0);
 		floor = bulletTrace(spot + (0, 0, 32), spot + (0, 0, -64), false, undefined);
 		eye = at + (0, 0, 60);
 		if (floor["fraction"] == 1)
@@ -107,7 +108,7 @@ site()
 	}
 	logPrint("PROBE no site\n");
 	level.rc_site = spots[0].origin;
-	level.rc_item = level.rc_site + (48, 0, 8);
+	level.rc_item = level.rc_site + (80, 0, 8);
 	level.rc_view = (45, 0, 0);
 }
 
