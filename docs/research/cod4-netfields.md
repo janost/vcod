@@ -629,7 +629,7 @@ through it. The clock and lerp it draws with are `cod4-client-view.md`'s.
   live.
 - A live join plays (`play::cod4_input`): a cmd a frame stamped
   `cl.serverTime` (section 13), packets every 33 ms with the cmds built
-  since, the weapon byte the client's selection (the spawn's weapon,
+  since and the last packet's again (section 14), the weapon byte the client's selection (the spawn's weapon,
   `weapnext` over the held primaries, the server's `a <n>`), never an
   echo of `ps.weapon`, and the offhand the spawn's or the server's `C
   <n>`. The button bits section 8 did not exercise follow
@@ -729,3 +729,98 @@ playerstate's and its time equals `commandTime` (section 3). VERIFIED
   after a spawn fall under it and the server skips them, a press with
   them. INFERRED (Q3's `ClientSpawn` shape; vcod-server's spawn,
   measured live in `cod4_live_every_server_round_fires_once`).
+
+## 14. The packet's cmds: `cl_packetdup`
+
+Which cmds a 1.7 client packet carries, how often one goes, and how the
+server reads the repeats.
+
+- **The dvars.** `CL_Init` registers `cl_maxpackets` (0x6d14f8) as an
+  int, default 30 (`mov ebx,0x1e` at 0x46df21), range 15 (`lea
+  ebp,[ebx-0xf]`, 0x46df30) to 100 (0x46df3a), described
+  `Maximum number of packets sent per frame` (0x6d14cc), its pointer
+  stored at 0xc5f8e0 (0x46dfa5); then `cl_packetdup` (0x6d1524), default
+  1 (0x46dfaa), range 0 (`xor ebp,ebp`, 0x46dfaf) to 5 (0x46dfb8),
+  `Enable packet duplication` (0x6d1508), pointer at 0xc5f8d8
+  (0x46e02c). VERIFIED (the instructions and the strings). Each passes
+  1 and 5 beside the name (0x46df89, 0x46e006); that 1 is the archive
+  flag is INFERRED.
+- **The count.** `CL_WritePacket` (0x463f50) takes the outgoing
+  sequence (0x934e9c) less `cl_packetdup` (+0xc of 0xc5f8d8) less 1,
+  masks it with 0x1f, and subtracts that packet row's first word (rows
+  of 12 bytes from 0xcc9000) from `cl.cmdNumber` (0xcc5ff8):
+  0x46407f..0x46409b. Over 32 it prints `MAX_PACKET_USERCMDS`
+  (0x6cf6b4) and sends 32 (0x4640a2..0x4640b3); under 1 it writes no
+  move and goes to `clc_EOF` (0x4640bd..0x4640c0, to 0x464298).
+  VERIFIED (the instructions).
+- **The op and the count byte.** Op 0 when the word at 0x934e7c is 0,
+  the bool dvar at 0x956cfc is clear, 0xc5f938 is set and 0x914e1c
+  equals 0xc5f944, else op 1 (0x4640e1..0x464117); then the count as a
+  byte (0x464131). VERIFIED (the instructions). That those are
+  `clc.demowaiting`, `cl_nodelta`, `cl.snap.valid` and
+  `serverMessageSequence == cl.snap.messageNum` is INFERRED (Q3's
+  shape).
+- **The cmds.** The key is `Com_HashKey` (0x564bf0) of the server
+  command slot `0x914e20 & 0x7f` (1024-byte slots from 0x914e28) XOR
+  0x8f4e10 XOR 0x914e1c (0x464145..0x46416c, section 5). The loop
+  writes cmd `(cmdNumber - count + i + 1) & 0x7f` (32-byte rows from
+  0xcc4ff8) for i from 0 through 0x505c60, each off the one it wrote
+  before (0x464180..0x4641b8), the first off the base 0x505b70 builds
+  from the playerstate at 0xc5f954 (0x463fa6..0x463fb9). VERIFIED (the
+  instructions). So the packet carries the newest `count` cmds, oldest
+  first: the repeats lead.
+- **The packet row.** After the compress, row `sequence & 0x1f` takes
+  the realtime (0x956e98) at +8, the last written cmd's `serverTime` at
+  +4 and `cl.cmdNumber` at +0 (0x4642ec..0x46431c), and 0x8f4ce8 the
+  realtime (0x46432e), before `Netchan_Transmit` (0x508100 at
+  0x46439a). VERIFIED (the instructions). So with `cl_packetdup` N a
+  packet carries every cmd made since the packet N + 1 sequences back
+  went out, at most 32, and a packet without a move still takes a row;
+  at the default 1 it repeats the previous packet's cmds. VERIFIED (the
+  instructions above).
+- **A gamestate restarts it.** The gamestate op (0x473ce0, called at
+  0x474816 from the message parse 0x474650) clears 0x1b1bdc bytes from
+  0xc5f930 (`memset` 0x67c4a0 at 0x473d0e..0x473d1a) when its first
+  argument is under 1 (`cmp ebp,1`, `jge` at 0x473cff..0x473d0c), and
+  `CL_PacketEvent` passes 0 (0x46c532). That block holds `cl.cmdNumber`
+  (+0x666c8), the cmds (+0x656c8) and the packet rows (+0x696d0).
+  VERIFIED (the instructions); that 0xc5f930 is `cl` is INFERRED (the
+  archive index `cl` +0x696cc is 0xcc8ffc, section 13).
+- **`cl_maxpackets`.** `CL_ReadyToSendPacket` (0x463e60) sends nothing
+  while 0x934e74 is set or the state (0xc5f900) is 1 or 2; with the byte
+  at 0xc5b088 set, nothing under 50 ms since 0x8f4ce8
+  (0x463e86..0x463ea3); outside states 8 and 9 without it, nothing
+  under 1000 ms (0x463ea9..0x463ec0). Then it sends every frame when
+  the server's address type (0x934eac) is 2 or 0x578180 returns
+  non-zero for that address (0x463ec2..0x463f0a); else once the
+  realtime is at least 1000 / `cl_maxpackets` past the previous
+  sequence's row (+8 at 0xcc9008, `idiv` at 0x463f2d, `setge`).
+  VERIFIED (the instructions). That these are a demo playing, a
+  download, loopback and `Sys_IsLANAddress` is INFERRED. So
+  `cl_maxpackets` paces only a server off the LAN, and the repeats
+  count packets, not time.
+- **The server.** `cod4_lnxded`'s `SV_UserMove` (0x8172560) loop skips
+  a cmd later than the packet's last (`jg` at 0x8172814) or at or
+  before the client's +0x20e68 (`jle` at 0x817281f) and runs
+  0x816deca (`SV_ClientThink`) on the rest. VERIFIED (the
+  instructions). The CoD4x 21.3 release's `SV_UserMove`
+  (`cod4x18_dedrun` 0x112820, named by its symbols) skips the same two
+  at 0x112a42..0x112a50 before `SV_ClientThink` (0x112a5e). VERIFIED
+  (the instructions). So each repeated cmd runs once.
+- vcod: `Conn::send` keeps the ring (`CmdRing`: the newest 128 cmds,
+  the count made, a row per sequence) and writes each move off it on
+  both dialects; a gamestate clears it. `Cod4Session::set_packet_dup`
+  takes the console's `cl_packetdup` (default 1, clamped to 0..5).
+  vcod-server's `user_move` skips as `SV_UserMove` does. Tests:
+  `each_packet_resends_the_cmds_of_the_last_packet_dup_packets` (the
+  count, the order, the cap, both headers) and
+  `cod4_live_airstrike_confirm_survives_a_lost_packet` (the first
+  packet carrying the location confirm dropped at the server, the
+  selection still ends; at `cl_packetdup` 0 the map stays up). VERIFIED
+  (the tests).
+- vcod departs: the first cmd still goes on the long branch with every
+  field (`CmdWire::full`), not off the playerstate base, so its bits
+  differ from 1.7's wherever the base matches a field; the server reads
+  the same cmd. Packets go every 33 ms on a LAN too, and the move op
+  is 0 once a snapshot is in, without the newest-message test. INFERRED
+  (the code).

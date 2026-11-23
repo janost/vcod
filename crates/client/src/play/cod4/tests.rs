@@ -957,6 +957,17 @@ fn live_war_pair_on<T: Send + 'static>(
     teams: [&'static str; 2],
     classes: [&'static str; 2],
     gsc: Option<&'static str>,
+    each: impl FnMut(PairFrame) -> Option<T> + Send + 'static,
+) -> Option<Option<T>> {
+    live_war_pair_with(teams, classes, gsc, |_| {}, each)
+}
+
+/// [`live_war_pair_on`] with `setup` run on the loaded server.
+fn live_war_pair_with<T: Send + 'static>(
+    teams: [&'static str; 2],
+    classes: [&'static str; 2],
+    gsc: Option<&'static str>,
+    setup: impl FnOnce(&mut vcod_server::cod4::Cod4Server),
     mut each: impl FnMut(PairFrame) -> Option<T> + Send + 'static,
 ) -> Option<Option<T>> {
     use vcod_server::cod4::{Cod4Config, Cod4Server};
@@ -978,6 +989,7 @@ fn live_war_pair_on<T: Send + 'static>(
         sv.set_script_overrides(dir.into());
     }
     sv.load(Some(&install)).unwrap();
+    setup(&mut sv);
     let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     sock.set_nonblocking(true).unwrap();
     let addr = sock.local_addr().unwrap();
