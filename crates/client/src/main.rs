@@ -2341,10 +2341,19 @@ fn ignore_hw_gamma(shell: &console::shell::Shell) -> bool {
     shell.cvar_f32("r_ignorehwgamma") != 0.0
 }
 
-/// The texture gamma the next world load bakes in: `r_gamma` of that
-/// moment with `r_ignorehwgamma 1`, none with the device ramp.
-fn image_gamma(shell: &mut console::shell::Shell, ignore_hw: bool) -> Option<f32> {
-    ignore_hw.then(|| gamma_cvar(shell))
+/// The table the next world load bakes into uncompressed images: CoD1's
+/// `r_intensity` (latched), then `r_gamma` of that moment with
+/// `r_ignorehwgamma 1` (`gamma::texture_table`).
+fn image_gamma(
+    shell: &mut console::shell::Shell,
+    ignore_hw: bool,
+    game: vcod_common::game::Game,
+) -> Option<[u8; 256]> {
+    let scale = match game {
+        vcod_common::game::Game::Cod1 => shell.cvar_f32("r_intensity"),
+        _ => 1.0,
+    };
+    gamma::texture_table(scale, ignore_hw.then(|| gamma_cvar(shell)))
 }
 
 /// `Com_Frame`'s shortest frame in ms (CoDMP.exe 0x438040): `1000 /
@@ -4430,7 +4439,11 @@ impl App {
             self.textures,
             samples,
         )?;
-        r.set_image_gamma(image_gamma(&mut self.shell, self.ignore_hw_gamma));
+        r.set_image_gamma(image_gamma(
+            &mut self.shell,
+            self.ignore_hw_gamma,
+            self.fs.game(),
+        ));
         if let Some(w) = &mut self.world {
             if let Some(lib) = &w.materials {
                 r.set_material_lib(lib.clone());

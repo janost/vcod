@@ -78,7 +78,8 @@ Shutdown restores the saved ramp.
   `0x4eaa90` (Q3's `R_LightScaleTexture`) maps each RGBA texel's rgb
   through the intensity table with device gamma on, through
   gamma-of-intensity with it off, and an `only_gamma` image through the
-  gamma table only with it off.
+  gamma table only with it off. UO's 0x504e80 keeps that order and adds
+  the `nolightscale` arm (coduo-diff.md 14.1).
 - Captured frames. VERIFIED: the TGA screenshot writer `0x4b0f90` (18-byte
   header, type 2, 24 bpp), `0x4b10a0` (reads RGBA, then `0x4ea4b0`, a
   byte-wise pass through the gamma table) and the downsampling captures
@@ -199,14 +200,18 @@ write-back, so the slider is live as in retail. The stage tint
 retail writes.
 
 `r_ignorehwgamma` is read at start-up and on `vid_restart` (latched).
-While it is 1 the frame pass runs the gamma 1 table. Each world load reads
-`r_gamma` and maps every uncompressed (TGA, JPG) image's rgb through the
-unshifted ramp before upload (`gamma::bake_image`, from
-`texture_settings::prepare`) when the image is mipmapped or picmip shrank
-it (section 3's rule): material images, shader-stage images, prop and
-model skins, fx sprites, HUD and menu images. DDS images, the dlight blob,
-lightmaps and unmipped images at native size keep their bytes, as in
-retail. HUD images reload when the table changes.
+While it is 1 the frame pass runs the gamma 1 table. Each world load
+builds the texture table (`gamma::texture_table`): the intensity table of
+step 6 from `r_intensity` (latched, registered "1" with flag 0x20 as
+retail's; CoD1, 1.5 and UO only), then, while `r_ignorehwgamma` is 1,
+the unshifted ramp of that moment's `r_gamma`. It maps every
+uncompressed (TGA, JPG) image's rgb through that table before upload
+(`gamma::bake_image`, from `texture_settings::prepare`) when the image is
+mipmapped or picmip shrank it (section 3's rule): material images,
+shader-stage images, prop and model skins, fx sprites, HUD and menu
+images. DDS images, the dlight blob, lightmaps and unmipped images at
+native size keep their bytes, as in retail. HUD images reload when the
+table changes.
 
 Divergences:
 
@@ -223,10 +228,11 @@ Divergences:
   Debug text (F3) draws raw.
 - vcod's `vid_restart` rebuilds the renderer (and reloads the world) only
   when the scene format, the MSAA or an image setting moved, so a baked
-  gamma change otherwise waits for the next map load. Retail's
-  `vid_restart` reloads every image.
+  gamma or `r_intensity` change otherwise waits for the next map load.
+  Retail's `vid_restart` reloads every image.
 - `r_overBrightBits` is not registered; vcod uses its default 1.
-- `r_intensity` is not applied (no stock menu sets it).
+- `r_intensity` below 1 is raised to 1 where it is read, not written
+  back to the cvar as step 3 does.
 
 Bloom (`vc_bloom`, `crate::bloom`) is vcod-only. While `vc_bloom` is above
 0 the map pass resolves the world into the scene target, a bright-pass

@@ -800,6 +800,8 @@ impl Shell {
         s.register("r_weightMipMaps", "0", LATCH);
         // tints each mip level below the first (texture_settings::prepare)
         s.register("r_colorMipLevels", "0", LATCH);
+        // scales uncompressed textures as they load (gamma::texture_table)
+        s.register("r_intensity", "1", LATCH);
         // vcod-only, beyond retail; 0 is the retail look
         s.register("vc_shadows", "0", ARCHIVE);
         // CoD4 1.7's sun shadow map (crate::cod4_sunshadow): on by default

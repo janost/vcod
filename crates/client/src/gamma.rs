@@ -44,11 +44,33 @@ pub fn ramp(gamma: f32, shift: u32) -> [u8; 256] {
     t
 }
 
-/// Retail's texture gamma with `r_ignorehwgamma 1` (CoDMP.exe 0x4eaa90,
-/// Q3's `R_LightScaleTexture`): with no device gamma, every rgb byte of an
-/// uncompressed RGBA upload goes through the unshifted gamma table (the
-/// intensity table first, the identity at `r_intensity 1`). DDS uploads are
-/// compressed and keep their bytes. `None` leaves the image alone.
+/// Retail's intensity table (CoDMP.exe 0x4f0780 step 6):
+/// `min(255, ftol(i * r_intensity))`, `r_intensity` raised to at least 1.
+pub fn intensity(scale: f32) -> [u8; 256] {
+    let scale = f64::from(scale.max(1.0));
+    std::array::from_fn(|i| (i as f64 * scale).min(255.0) as u8)
+}
+
+/// The table an uncompressed image's rgb loads through (CoDMP.exe 0x4eaa90,
+/// Q3's `R_LightScaleTexture`): the intensity table, then with
+/// `r_ignorehwgamma 1` (`gamma` set) the unshifted gamma table. `None`
+/// when that maps every byte to itself.
+pub fn texture_table(scale: f32, gamma: Option<f32>) -> Option<[u8; 256]> {
+    let lit = intensity(scale);
+    let t = match gamma {
+        Some(g) => {
+            let ramp = ramp(g, 0);
+            lit.map(|v| ramp[usize::from(v)])
+        }
+        None => lit,
+    };
+    (t != std::array::from_fn::<u8, 256, _>(|i| i as u8)).then_some(t)
+}
+
+/// Maps every rgb byte of an uncompressed RGBA upload through `table`
+/// ([`texture_table`]). DDS uploads are compressed and keep their bytes, as
+/// 0x4eaa90 returns on any format but `GL_RGBA`. `None` leaves the image
+/// alone.
 pub fn bake_image(img: &mut vcod_common::assets::Image, table: Option<&[u8; 256]>) {
     let (Some(t), vcod_common::assets::ImageData::Rgba8(px)) = (table, &mut img.data) else {
         return;
@@ -291,6 +313,20 @@ mod tests {
         };
         bake_image(&mut dds, Some(&t));
         assert!(matches!(&dds.data, ImageData::Bc { mips, .. } if mips[0] == vec![16; 8]));
+    }
+
+    /// `r_intensity` scales every texture with device gamma and runs
+    /// before the gamma table without it; at 1 or below it is the identity.
+    #[test]
+    fn texture_table_takes_intensity_then_gamma() {
+        let t = texture_table(1.5, None).unwrap();
+        // ftol(100 * 1.5) = 150, ftol(101 * 1.5) = 151, 200 * 1.5 capped
+        assert_eq!((t[100], t[101], t[200]), (150, 151, 255));
+        let g = texture_table(1.5, Some(2.0)).unwrap();
+        assert_eq!(g[100], ramp(2.0, 0)[150]);
+        assert_eq!(texture_table(1.0, None), None);
+        assert_eq!(texture_table(0.5, None), None);
+        assert_eq!(texture_table(0.5, Some(2.0)), Some(ramp(2.0, 0)));
     }
 
     /// Hand-computed rows of retail's formula.

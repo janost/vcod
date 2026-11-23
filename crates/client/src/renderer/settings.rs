@@ -353,11 +353,10 @@ impl Renderer {
         self.dlight_quality = quality;
     }
 
-    /// The `r_gamma` textures bake in from the next `load_world`, or `None`
-    /// with device gamma. HUD images reload under a new one, as retail
-    /// reloads every image at a map load.
-    pub fn set_image_gamma(&mut self, gamma: Option<f32>) {
-        let table = gamma.map(|g| crate::gamma::ramp(g, 0));
+    /// The table uncompressed images bake in from the next `load_world`
+    /// (`gamma::texture_table`), `None` for none. HUD images reload under a
+    /// new one, as retail reloads every image at a map load.
+    pub fn set_image_gamma(&mut self, table: Option<[u8; 256]>) {
         if table != self.image_gamma {
             self.hud_pass.textures.clear();
         }
