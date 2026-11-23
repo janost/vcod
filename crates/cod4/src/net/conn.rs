@@ -29,6 +29,50 @@ use vcod_common::net::netchan::{Netchan, NetchanParams, scramble_client_ops};
 /// the server keys a message off.
 const KEPT_COMMANDS: usize = 128;
 
+/// `cl_packetdup`'s default and range (`iw3mp.exe` 0x46dfa0..0x46e02c):
+/// each packet carries the cmds of this many packets before it again.
+pub const PACKET_DUP: u32 = 1;
+const PACKET_DUP_MAX: u32 = 5;
+/// `PACKET_BACKUP` and `CMD_BACKUP`: the sent packets and the cmds kept.
+const PACKET_BACKUP: usize = 32;
+const CMD_BACKUP: usize = 128;
+
+/// What `CL_WritePacket` (`iw3mp.exe` 0x463f50) reads its cmds from:
+/// `cl.cmds`, `cl.cmdNumber` and each sent packet's `p_cmdNumber`
+/// (cod4-netfields.md 14).
+#[derive(Clone, Debug, Default)]
+struct CmdRing {
+    cmds: std::collections::VecDeque<UserCmd>,
+    made: u32,
+    sent_at: [u32; PACKET_BACKUP],
+}
+
+impl CmdRing {
+    fn push(&mut self, cmds: &[UserCmd]) {
+        for c in cmds {
+            if self.cmds.len() == CMD_BACKUP {
+                self.cmds.pop_front();
+            }
+            self.cmds.push_back(*c);
+            self.made = self.made.wrapping_add(1);
+        }
+    }
+
+    /// The cmds of sequence `seq`: those made since sequence `seq - dup -
+    /// 1` went out, the newest `MAX_PACKET_USERCMDS` of them.
+    fn packet(&self, seq: u32, dup: u32) -> impl Iterator<Item = &UserCmd> {
+        let old = self.sent_at[seq.wrapping_sub(dup).wrapping_sub(1) as usize % PACKET_BACKUP];
+        let n = (self.made.wrapping_sub(old) as i32).clamp(0, clmsg::MAX_PACKET_USERCMDS as i32);
+        let n = (n as usize).min(self.cmds.len());
+        self.cmds.iter().skip(self.cmds.len() - n)
+    }
+
+    /// Sequence `seq` went out.
+    fn sent(&mut self, seq: u32) {
+        self.sent_at[seq as usize % PACKET_BACKUP] = self.made;
+    }
+}
+
 /// md5("vcodprobe"), the cd-key hash `getchallenge` carries without a key.
 pub const KEY_HASH: &str = "97c8407fc937bc7c1eddecf36de89e75";
 
@@ -220,6 +264,11 @@ pub struct Conn {
     /// [`Self::command`] found the ring full: the connection is dropped.
     overflowed: bool,
     last_cmd: UserCmd,
+    /// The cmds the next packets carry; a gamestate clears it, as
+    /// `CL_ClearState` clears `cl` (0x473d1a).
+    cmd_ring: CmdRing,
+    /// `cl_packetdup`.
+    packet_dup: u32,
     /// The checksum feed of the gamestate the last `cp` answered.
     cp_feed: Option<i32>,
     /// The newest server command applied to the gamestate's table.
@@ -286,6 +335,8 @@ impl Conn {
             commands_acked: 0,
             overflowed: false,
             last_cmd: UserCmd::default(),
+            cmd_ring: CmdRing::default(),
+            packet_dup: PACKET_DUP,
             cp_feed: None,
             applied: 0,
             loading: None,
@@ -449,9 +500,16 @@ impl Conn {
         &self.last_cmd
     }
 
-    /// One move message: the unacked commands and `cmds`, the first on the
-    /// long branch with every field, the rest the fewest bits off the one
-    /// before (no move op without cmds). Before the gamestate it is the
+    /// `cl_packetdup` from now on, clamped to its range 0..=5.
+    pub fn set_packet_dup(&mut self, n: i32) {
+        self.packet_dup = n.clamp(0, PACKET_DUP_MAX as i32) as u32;
+    }
+
+    /// One move message: the unacked commands and the cmds made since the
+    /// sequence `cl_packetdup` + 1 back went out, `cmds` the new ones (the
+    /// newest 32 at most), the first on the long branch with every field,
+    /// the rest the fewest bits off the one before (no move op without
+    /// cmds). Before the gamestate it is the
     /// bare header the client sends while it waits. The move carries
     /// `origin`'s predicted origin and time and files it in
     /// `cl.clientArchive` (`CL_WritePacket`, `iw3mp.exe` 0x4641cd..0x46428c);
@@ -467,6 +525,7 @@ impl Conn {
             config_ack: self.client.config_data_ack,
             ..ClientHeader::default()
         };
+        let seq = self.seq;
         self.seq += 1;
         let mut pkt = Vec::new();
         // CoD4x's client sends its commands and `clc_EOF` before the
@@ -494,14 +553,17 @@ impl Conn {
                         text: self.command_text(sequence).to_vec(),
                     })
                     .collect();
+                self.cmd_ring.push(cmds);
+                if let Some(c) = cmds.last() {
+                    self.last_cmd = *c;
+                }
                 let mut wired: Vec<(UserCmd, CmdWire)> = Vec::new();
-                for c in cmds {
+                for c in self.cmd_ring.packet(seq, self.packet_dup) {
                     let wire = match wired.last() {
                         None => CmdWire::full(&UserCmd::default(), c),
                         Some((prev, _)) => CmdWire::natural(prev, c),
                     };
                     wired.push((*c, wire));
-                    self.last_cmd = *c;
                 }
                 if !wired.is_empty() && self.client.gamestate.is_some() {
                     let (at, time) = origin.map_or(([1.0e6; 3], 0), |a| (a.origin, a.server_time));
@@ -525,6 +587,7 @@ impl Conn {
                 pkt.extend_from_slice(&comp);
             }
         }
+        self.cmd_ring.sent(seq);
         self.send_raw(&pkt)
     }
 
@@ -615,6 +678,7 @@ impl Conn {
             self.drop_acked_commands();
             self.apply_configstrings(&parsed);
             if parsed.ops.iter().any(|o| matches!(o, Op::Gamestate)) {
+                self.cmd_ring = CmdRing::default();
                 self.answer_gamestate()?;
             }
             out.push(Received {
@@ -681,6 +745,7 @@ impl Conn {
                 reliable::CMD_GAMESTATE => {
                     self.client.take_side_gamestate(&body)?;
                     self.side_gamestate();
+                    self.cmd_ring = CmdRing::default();
                     self.answer_gamestate()?;
                     got = Some(Received {
                         sequence: self.ack as u32,
@@ -1221,6 +1286,8 @@ mod tests {
             commands_acked: 0,
             overflowed: false,
             last_cmd: UserCmd::default(),
+            cmd_ring: CmdRing::default(),
+            packet_dup: PACKET_DUP,
             cp_feed: None,
             applied: 0,
             loading: None,
@@ -1421,6 +1488,105 @@ mod tests {
         let e = c.send(&[], None).unwrap_err();
         assert_eq!(e.to_string(), "EXE_ERR_CLIENT_CMD_OVERFLOW");
         assert!(c.poll(Instant::now()).is_err());
+    }
+
+    /// `c` with a gamestate in `dialect`, and the move ops of each packet
+    /// it sends to `server` decoded as the server reads them.
+    fn moving(server: &UdpSocket, dialect: Dialect) -> Conn {
+        use super::super::parse::{Gamestate, MAX_CONFIGSTRINGS};
+        use std::collections::BTreeMap;
+        let mut c = joined(server.local_addr().unwrap());
+        c.client = Client::with_dialect(dialect);
+        let mut table = vec![String::new(); MAX_CONFIGSTRINGS as usize];
+        table[1] = "\\sv_serverid\\16".into();
+        let mut gs = Gamestate::from_table(0, &table, &BTreeMap::new(), 0, 0x1234);
+        gs.dialect = dialect;
+        c.client.gamestate = Some(gs);
+        c
+    }
+
+    /// The ops of the packet `c` sent last, read off `server`.
+    fn sent_ops(server: &UdpSocket, c: &Conn) -> Vec<ClOp> {
+        let mut buf = [0u8; 2048];
+        let n = server.recv(&mut buf).unwrap();
+        let (h, block) = ClientHeader::read(&buf[..n], c.client.dialect).unwrap();
+        let last = c.client.server_command(h.reliable_ack).to_vec();
+        let mut block = block.to_vec();
+        scramble_client_ops(h.seed(c.challenge), &last, &mut block);
+        let key = clmsg::usercmd_key(0x1234, h.message_ack, &last);
+        let plain = c.client.huff.decompress(&block);
+        clmsg::read_ops(plain, key, &UserCmd::default()).unwrap()
+    }
+
+    fn move_times(ops: &[ClOp]) -> Vec<i32> {
+        match ops {
+            [ClOp::Move { cmds, .. }, ClOp::Eof] => {
+                cmds.iter().map(|(c, _)| c.server_time).collect()
+            }
+            [ClOp::Eof] => Vec::new(),
+            o => panic!("{o:?}"),
+        }
+    }
+
+    /// `cl_packetdup` N: a packet carries the cmds made since the packet
+    /// N + 1 sequences back went out, the newest 32 at most, the first on
+    /// the long branch (`CL_WritePacket`, cod4-netfields.md 14), on 1.7's
+    /// header and CoD4x 21's.
+    #[test]
+    fn each_packet_resends_the_cmds_of_the_last_packet_dup_packets() {
+        let cmd = |t: i32| UserCmd {
+            server_time: t,
+            buttons: if t == 200 { 0x1_0000 } else { 0 },
+            ..UserCmd::default()
+        };
+        for dialect in [Dialect::V17, Dialect::X21] {
+            let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+            server
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut c = moving(&server, dialect);
+            assert_eq!(c.packet_dup, PACKET_DUP);
+            let send = |c: &mut Conn, times: &[i32], dup: i32| {
+                c.set_packet_dup(dup);
+                let cmds: Vec<UserCmd> = times.iter().map(|&t| cmd(t)).collect();
+                c.send(&cmds, None).unwrap();
+                sent_ops(&server, c)
+            };
+            assert_eq!(move_times(&send(&mut c, &[100], 1)), [100]);
+            assert_eq!(move_times(&send(&mut c, &[133, 150], 1)), [100, 133, 150]);
+            let ops = send(&mut c, &[200], 1);
+            assert_eq!(move_times(&ops), [133, 150, 200]);
+            // The wire is the writer's over those three cmds.
+            let (b, d, e) = (cmd(133), cmd(150), cmd(200));
+            let want = vec![
+                ClOp::Move {
+                    delta: false,
+                    cmds: vec![
+                        (b, CmdWire::full(&UserCmd::default(), &b)),
+                        (d, CmdWire::natural(&b, &d)),
+                        (e, CmdWire::natural(&d, &e)),
+                    ],
+                    origin: [1.0e6f32.to_bits(); 3],
+                    origin_time: 0,
+                },
+                ClOp::Eof,
+            ];
+            assert_eq!(ops, want, "{dialect:?}");
+            // Nothing new: the last packet's cmds again, then none.
+            assert_eq!(move_times(&send(&mut c, &[], 1)), [200]);
+            assert_eq!(move_times(&send(&mut c, &[], 1)), Vec::<i32>::new());
+            assert_eq!(move_times(&send(&mut c, &[250], 0)), [250]);
+            // Six packets back: the second's on.
+            assert_eq!(
+                move_times(&send(&mut c, &[300], 5)),
+                [133, 150, 200, 250, 300]
+            );
+            // Past the range: 5.
+            assert_eq!(move_times(&send(&mut c, &[350], 9)), [200, 250, 300, 350]);
+            let many: Vec<i32> = (0..40).map(|i| 400 + i).collect();
+            assert_eq!(move_times(&send(&mut c, &many, 1)), many[8..]);
+            assert_eq!(c.last_cmd().server_time, 439);
+        }
     }
 
     /// A side channel gamestate's table takes the `d` commands the

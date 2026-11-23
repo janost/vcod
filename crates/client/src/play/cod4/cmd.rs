@@ -22,10 +22,8 @@ use crate::play::cod4_input::Cod4Input;
 use crate::play::cod4_predict;
 
 /// Live cmd packets go out at most this often, carrying every cmd built
-/// since the last (`cl_maxpackets` 30).
+/// since the last and `cl_packetdup`'s again (`cl_maxpackets` 30).
 const SEND_MS: u64 = 33;
-/// The cmds one packet carries at most.
-const MAX_PACKET_CMDS: usize = 32;
 
 /// `cg.selectedLocation` and `locSelInputState`: where the location
 /// selector's cursor is over the full map (0..1 east and south), and a
@@ -201,7 +199,8 @@ impl Cod4Session {
     }
 
     /// `CL_WritePacket` (0x463f50) with what `CL_SetUserCmdOrigin` last
-    /// stored: the cmds built since the last packet, and `origin`, the
+    /// stored: the cmds built since the last packet with those
+    /// `cl_packetdup` resends (`Conn::send`), and `origin`, the
     /// predicted state at `cl.serverTime`, which the move carries and the
     /// archive keeps (cod4-netfields.md 13).
     pub(super) fn send_packet(
@@ -212,8 +211,7 @@ impl Cod4Session {
         let Source::Live { conn, .. } = &mut self.source else {
             return Ok(());
         };
-        let from = self.pending.len().saturating_sub(MAX_PACKET_CMDS);
-        let sent = conn.send(&self.pending[from..], origin);
+        let sent = conn.send(&self.pending, origin);
         self.pending.clear();
         sent
     }
