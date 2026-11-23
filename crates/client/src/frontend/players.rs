@@ -7,21 +7,35 @@ use std::time::{Duration, Instant};
 
 use vcod_common::localize::Localized;
 use vcod_common::text::clean_str;
-use vcod_common::ui_menu::{FEEDER_MUTELIST, FEEDER_PLAYER_LIST, UiItem};
+use vcod_common::ui_menu::{FEEDER_MUTELIST, FEEDER_PLAYER_LIST, ITEM_TYPE_LISTBOX, UiItem};
 use winit::keyboard::KeyCode;
 
 use super::paint::{Painter, truncate_visible};
 use super::{HudQuad, Ui, UiEffect, listbox};
-use crate::console::shell::quotable;
+use crate::console::shell::{Shell, quotable};
 
 /// `UI_FeederCount` rebuilds the list at most this often (ui_mp_x86.dll
 /// 0x4000c66b, `realTime + 3000`).
 const REFRESH: Duration = Duration::from_millis(3000);
 
 impl Ui {
+    /// Whether an open menu shows a player or mute list. Only such a
+    /// listbox asks `UI_FeederCount` (0x4000c65e), so the 3 s clock runs
+    /// while one is shown.
+    pub fn player_list_shown(&self, shell: &Shell) -> bool {
+        self.open.iter().any(|&m| {
+            self.menus[m].items.iter().enumerate().any(|(i, item)| {
+                item.kind == ITEM_TYPE_LISTBOX
+                    && matches!(item.feeder, Some(FEEDER_PLAYER_LIST | FEEDER_MUTELIST))
+                    && self.shown(m, i, shell)
+            })
+        })
+    }
+
     /// `UI_BuildPlayerList` (0x40008ed0) when the last build is 3 s old:
     /// `names` gives the newest snapshot's client names in slot order,
-    /// raw; each is kept cleaned. Call once a frame while connected.
+    /// raw; each is kept cleaned. Call once a frame while connected and
+    /// [`Self::player_list_shown`].
     pub fn offer_players(&mut self, now: Instant, names: impl FnOnce() -> Vec<String>) {
         if self.players_due.is_some_and(|due| now <= due) {
             return;

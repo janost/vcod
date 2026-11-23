@@ -456,6 +456,26 @@ mod tests {
         assert!(out.is_empty(), "row 1 is past the rebuilt list");
     }
 
+    /// The list's clock runs only while a menu shows the list, as retail's
+    /// build runs off that listbox's `feederCount`.
+    #[test]
+    fn the_player_list_counts_only_while_a_menu_shows_it() {
+        let mut ui = super::super::tests::ui_with_menu(
+            r#"{ menuDef { name "callvote" rect 0 0 640 480
+              itemDef { name kicklist rect 0 0 160 120 type 6 feeder 7 visible 1
+                elementheight 15 columns 1 2 190 25 }
+              itemDef { name hidden rect 0 0 160 120 type 6 feeder 7 visible 0 } }
+              menuDef { name "other" rect 0 0 640 480
+              itemDef { name hidden rect 0 0 160 120 type 6 feeder 7 visible 0 } } }"#,
+        );
+        let shell = Shell::new();
+        assert!(!ui.player_list_shown(&shell), "no menu open");
+        ui.open_menu("other", &shell, &mut Vec::new());
+        assert!(!ui.player_list_shown(&shell), "its list is hidden");
+        ui.open_menu("callvote", &shell, &mut Vec::new());
+        assert!(ui.player_list_shown(&shell));
+    }
+
     /// A server-sent name holding a quote and `;` stays one forwarded
     /// `callvote`.
     #[test]

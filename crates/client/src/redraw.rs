@@ -923,9 +923,10 @@ impl App {
             hud_quads.extend(self.console.screen_text(line, 24.0, y, w, h));
         }
         if self.ui.active() {
+            let lists = self.ui.player_list_shown(&self.shell);
             // CoD2's mute list (`muteplayer`): the rows on the
             // player list's clock, the mute bits live.
-            if let Some(c) = self.session.cod2() {
+            if lists && let Some(c) = self.session.cod2() {
                 let rows = c.mute_rows();
                 let muted = rows
                     .iter()
@@ -936,7 +937,7 @@ impl App {
                     rows.into_iter().map(|(n, name, _)| (n, name)).collect()
                 });
             }
-            if let Mode::Online { net, .. } = &self.mode {
+            if lists && let Mode::Online { net, .. } = &self.mode {
                 self.ui.offer_players(now, || {
                     let protocol = net.protocol();
                     net.snapshots()
