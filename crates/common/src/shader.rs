@@ -2626,33 +2626,34 @@ textures/sfx/test_water
 
     #[test]
     fn sun_file_parses_sprite_cvars() {
-        // scripts/mp_harbor.sun: disc disabled, flare only
-        let harbor = SunFile::parse("r_sunsprite_shader \"0\"\nr_sunsprite_size \"16\"\n");
-        assert_eq!(harbor.sprite, None);
-        assert_eq!(harbor.sprite_size, 16.0);
-        // scripts/ship.sun: the moon at size 32, and its flare keys
-        let ship = SunFile::parse(
-            "r_sunsprite_shader \"gfx/sun/moon_full\"\n\nr_sunsprite_size \"32\"\n\
+        // shaped as scripts/chateau.sun: all twenty cvars, a CRLF line and
+        // a key retail does not know
+        let moon = "r_sunsprite_shader \"gfx/sun/moon_full\"\nr_sunsprite_size \"32\"\n\
              r_sunflare_shader \"gfx/sun/moon_flare\"\nr_sunflare_min_size \"0\"\n\
              r_sunflare_min_angle \"45\"\nr_sunflare_max_size \"120\"\n\
              r_sunflare_max_angle \"2\"\nr_sunflare_max_alpha \"1\"\n\
              r_sunflare_fadein \"1\"\nr_sunflare_fadeout \".2\"\n\
-             r_sunblind_min_angle \"1\"\nr_sunblind_max_darken \".01\"\n\
-             r_sunglare_max_lighten \".005\"\r\nr_sunglare_fadein \".1\"\n",
-        );
-        assert_eq!(ship.sprite.as_deref(), Some("gfx/sun/moon_full"));
-        assert_eq!(ship.sprite_size, 32.0);
-        assert_eq!(ship.flare.as_deref(), Some("gfx/sun/moon_flare"));
-        assert_eq!((ship.flare_max_size, ship.flare_fade_out), (120.0, 0.2));
-        assert_eq!((ship.blind.min_angle, ship.blind.max), (1.0, 0.01));
-        // untouched keys keep the registration defaults, CRLF lines parse
-        assert_eq!((ship.blind.max_angle, ship.blind.fade_out), (5.0, 3.0));
-        assert_eq!((ship.glare.max, ship.glare.fade_in), (0.005, 0.1));
-        // partial file keeps the size default; unknown keys are ignored
-        let partial = SunFile::parse("r_sunflare_shader \"gfx/sun/global_flare\"\nr_bogus 3\n");
-        assert_eq!(partial.sprite, None);
-        assert_eq!(partial.sprite_size, SunFile::DEFAULT_SPRITE_SIZE);
-        assert_eq!(partial.flare_max_size, 2500.0);
+             r_sunblind_min_angle \"1\"\nr_sunblind_max_angle \"5\"\n\
+             r_sunblind_max_darken \".01\"\nr_sunblind_fadein \".5\"\n\
+             r_sunblind_fadeout \"3\"\nr_sunglare_min_angle \"30\"\n\
+             r_sunglare_max_angle \"5\"\nr_sunglare_max_lighten \".005\"\r\n\
+             r_sunglare_fadein \".1\"\nr_sunglare_fadeout \"3\"\nr_bogus 3\n";
+        let sf = SunFile::parse(moon).expect("a full file loads");
+        assert_eq!(sf.sprite.as_deref(), Some("gfx/sun/moon_full"));
+        assert_eq!(sf.sprite_size, 32.0);
+        assert_eq!(sf.flare.as_deref(), Some("gfx/sun/moon_flare"));
+        assert_eq!((sf.flare_max_size, sf.flare_fade_out), (120.0, 0.2));
+        assert_eq!((sf.blind.min_angle, sf.blind.max), (1.0, 0.01));
+        assert_eq!((sf.glare.max, sf.glare.fade_in), (0.005, 0.1));
+        // "0" draws no disc (mp_harbor.sun); a value atof reads no number in is 0
+        let harbor = moon
+            .replace("\"gfx/sun/moon_full\"", "\"0\"")
+            .replace("max_size \"120\"", "max_size \"big\"");
+        let sf = SunFile::parse(&harbor).unwrap();
+        assert_eq!((sf.sprite, sf.flare_max_size), (None, 0.0));
+        // 0x438eb0 fails a file that leaves any cvar out, so no sun draws
+        let partial = moon.replace("r_sunglare_fadeout \"3\"\n", "");
+        assert_eq!(SunFile::parse(&partial), None);
     }
 
     #[test]

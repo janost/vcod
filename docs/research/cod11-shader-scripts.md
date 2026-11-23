@@ -1465,19 +1465,35 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   The same function writes 0 to the `sunfile` name at 0x16c4e20
   (0x4dd06b); the shader parser's `sunfile` keyword fills that name
   (`strncpy` at 0x4faeeb).
-- INFERRED, 0x4dd000's branch at 0x4dd417: it calls 0x4e7f30 (0x4dd424)
-  only when that name is non-empty after the load.
-- INFERRED, 0x4e7f30's early return: a file that fails to read prints
-  "couldn't load sun file" and returns before 0x4e7be0, the routine that
-  refills the state. 0x4e7be0's only other caller, 0x4e840d, runs while
-  the cheat cvar `r_suntest` is set.
+- VERIFIED (the instructions), 0x4dd417..0x4dd424: the world load calls
+  0x4e7f30 only when that name's first byte is non-zero after the load.
+- VERIFIED (the instructions), 0x4e7f30..0x4e7f94: it reads
+  `scripts/%s.sun` (0x54c61c); a failed read prints "^3WARNING: couldn't
+  load sun file '%s'" (0x54c5f4) and returns. Otherwise it hands the text
+  to the cvar-file loader (refimport `+0x44`, CoDMP.exe 0x438eb0) with the
+  twenty names at 0x5713c8 and calls 0x4e7be0, the routine that refills
+  the state, only when that returns non-zero. 0x4e7be0's only other
+  caller, 0x4e840d, runs while the cheat cvar `r_suntest` is set.
+  `r_loadsun` (cheat-protected, 0x54c534) loads a file by name through the
+  same 0x4e7f30.
+- VERIFIED (the instructions), 0x438eb0..0x4390da: per line, the first
+  token is matched against the twenty names (0x53549f; INFERRED: a
+  case-blind compare, the MSVC `_stricmp`). A known name sets its cvar
+  from the next token on that line (0x439650) and marks it seen; an
+  unknown one prints "^3WARNING: unknown cvar '%s' in file '%s'"
+  (0x562450). At the end it returns 1 only when all twenty were seen.
+  Otherwise it prints "^1ERROR: the following cvars were not specified in
+  file '%s'" (0x562410) and each missing name, and returns 0. It never
+  resets a cvar to its default.
 - VERIFIED: `r_suntest` registers at 0x4b41b1 with default "0".
-- INFERRED, the null tests at 0x4e80c5 and 0x4e81e6: the disc returns on
-  a null shader at 0x11dbda0 and the flare on a null shader at 0x11dbde8;
-  the washes (0x4e8270) ease toward maxima of 0. So a missing `.sun` file
-  draws no disc, no flare and no wash, on the first map of a session and
-  after any other map alike. The `r_sun*` cvars keep the previous file's
-  values, but nothing reads them until a file loads again.
+- VERIFIED (the instructions), 0x4e80c0..0x4e80c7 and 0x4e81e0..0x4e81e8:
+  the disc returns on a null shader at 0x11dbda0 and the flare on a null
+  shader at 0x11dbde8. INFERRED: the washes (0x4e8270) ease toward maxima
+  of 0. So a missing `.sun` file, or one that leaves any of the twenty
+  cvars out, draws no disc, no flare and no wash, on the first map of a
+  session and after any other map alike. The `r_sun*` cvars keep the
+  previous file's values (a partial file sets the ones it names), but
+  nothing reads them until a full file loads.
 - VERIFIED, census of the 31 `.sun` files in `pak4.pk3`: every one sets
   all twenty keys, so carried-over cvar values could never show anyway.
 
@@ -1533,7 +1549,8 @@ passed samples over `n * n * MSAA_SAMPLES`; the result is read back a frame
 or more late, so the fades start from a stale fraction. The flare draws
 with the stock flare stage hard-coded and the image of the named block's
 first stage. A missing `.sun` file draws no sun at all, as retail does,
-so the seven stock MP skies above draw no disc, flare or wash.
+so the seven stock MP skies above draw no disc, flare or wash; nor does
+a file that leaves a cvar out (`SunFile::parse`).
 
 ### 8.5 Coronas
 
