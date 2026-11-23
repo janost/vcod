@@ -329,14 +329,42 @@ fn lightmap(uv: vec2<f32>) -> vec4<f32> {
             + g1.x * textureSampleLevel(t_lightmap, s_lightmap, t1, 0.0));
 }
 
-// Retail's lightmap bytes (0x4d9af0 at load): raw with an overbright bit;
-// without one, doubled and scaled back by the brightest channel, keeping hue.
-fn lightmap_shift(c: vec3<f32>) -> vec3<f32> {
-    if (camera.time_pad.y < 1.0) {
-        return c;
+// One lightmap texel as retail's load writes it without an overbright bit
+// (0x4d9af0): the bytes doubled, then `255 * v / max` in integers when a
+// channel passes 255, keeping the hue (cod11-gamma.md 3).
+fn shift_texel(c: vec3<f32>) -> vec3<f32> {
+    let v = round(c * 255.0) * 2.0;
+    let m = max(v.r, max(v.g, v.b));
+    if (m > 255.0) {
+        return floor(v * 255.0 / m) / 255.0;
     }
-    let v = c * 2.0;
-    return v / max(1.0, max(v.r, max(v.g, v.b)));
+    return v / 255.0;
+}
+
+// The lightmap at `uv` as retail draws it: raw with an overbright bit
+// (identityLight 0.5); without one, each texel shifted at load and then
+// filtered, so the four bilinear taps shift before they blend.
+fn lightmap_lit(uv: vec2<f32>) -> vec4<f32> {
+    if (camera.time_pad.y < 1.0) {
+        return lightmap(uv);
+    }
+    let dims = textureDimensions(t_lightmap);
+    // vc_bicubic is vcod's own filter; it shifts the filtered sample
+    if (camera.time_pad.z != 0.0 || dims.x == 1u) {
+        let lm = lightmap(uv);
+        return vec4<f32>(shift_texel(lm.rgb), lm.a);
+    }
+    let f = fract(uv * vec2<f32>(dims) - 0.5);
+    let r = textureGather(0, t_lightmap, s_lightmap, uv);
+    let g = textureGather(1, t_lightmap, s_lightmap, uv);
+    let b = textureGather(2, t_lightmap, s_lightmap, uv);
+    let a = textureGather(3, t_lightmap, s_lightmap, uv);
+    // gather order: (u0, v1), (u1, v1), (u1, v0), (u0, v0)
+    let t0 = vec4<f32>(shift_texel(vec3(r.w, g.w, b.w)), a.w);
+    let t1 = vec4<f32>(shift_texel(vec3(r.z, g.z, b.z)), a.z);
+    let t2 = vec4<f32>(shift_texel(vec3(r.x, g.x, b.x)), a.x);
+    let t3 = vec4<f32>(shift_texel(vec3(r.y, g.y, b.y)), a.y);
+    return mix(mix(t0, t1, f.x), mix(t2, t3, f.x), f.y);
 }
 
 // Retail's dynamic lights on a lit model vertex, in framebuffer units:
@@ -418,7 +446,7 @@ fn apply_fog(rgb: vec3<f32>, in: VsOut) -> vec3<f32> {
 fn shade(in: VsOut, albedo: vec4<f32>) -> vec3<f32> {
     // Lightmapped surfaces have white vertex color; vertex-lit surfaces get a
     // white 1x1 lightmap bound instead. Multiplying all three covers both.
-    let light = lightmap_shift(lightmap(in.lm_uv).rgb);
+    let light = lightmap_lit(in.lm_uv).rgb;
     return albedo.rgb * light * in.color.rgb;
 }
 
@@ -505,15 +533,13 @@ fn stage_shade(in: VsOut) -> vec4<f32> {
     let face_n = cross(dpdx(in.world_pos), dpdy(in.world_pos));
     var c0: vec4<f32>;
     if ((stage.flags & F_BUNDLE0_LIGHTMAP) != 0u) {
-        let lm = lightmap(in.uv);
-        c0 = vec4<f32>(lightmap_shift(lm.rgb), lm.a);
+        c0 = lightmap_lit(in.uv);
     } else {
         c0 = sample_image(t_diffuse, in.uv, stage.flags);
     }
     var c1: vec4<f32>;
     if ((stage.flags & F_BUNDLE1_LIGHTMAP) != 0u) {
-        let lm = lightmap(in.uv1);
-        c1 = vec4<f32>(lightmap_shift(lm.rgb), lm.a);
+        c1 = lightmap_lit(in.uv1);
     } else {
         // white (or the lightmap page) is bound when bundle 1 has no image
         c1 = sample_image(t_bundle1, in.uv1, stage.flags >> 2u);
