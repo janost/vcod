@@ -379,6 +379,10 @@ in process, on `play::cod4`'s `tests::sim` clock.
 - A test's loops count frames its own sleeps move. Under load it runs slower,
   never out of time; only `sim::Clock::sleep`'s 60 s wall assert stops a
   stalled one.
+- The clock does not make loopback UDP reliable: a loaded machine can still
+  lose a packet. An input whose edge rides one cmd (the location selector's
+  confirm, `live_streaks::selector_attack`) is pressed again until its
+  effect shows, or one lost packet hangs the test to its limit.
 - A test takes one of `play::cod4::tests::live_slot`'s slots before it
   builds its server, three unless `VCOD_LIVE_SLOTS` says more, so a run at
   any `--test-threads` holds at most three maps at about 2.5 GB each. The
