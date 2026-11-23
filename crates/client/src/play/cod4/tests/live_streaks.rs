@@ -153,7 +153,8 @@ fn cod4_live_airstrike_picks_its_spot_on_the_full_map() {
     struct Seen {
         given: bool,
         pressed: bool,
-        frames: u32,
+        /// Our server time when the selector came up.
+        up_at: Option<i32>,
         drawn: Option<(bool, bool, bool)>,
         moved: Option<[f32; 2]>,
         fired: bool,
@@ -184,7 +185,7 @@ fn cod4_live_airstrike_picks_its_spot_on_the_full_map() {
             }
             return None;
         }
-        seen.frames += 1;
+        let up = f.level - *seen.up_at.get_or_insert(f.level);
         let tex = |m: &str| f.hud.texture_of(m);
         let cs = |i: u16| f.hud.configstring(f.s, i);
         let map = vcod_cod4::hud::tokenize(&cs(vcod_cod4::hud::CS_MINIMAP))
@@ -198,17 +199,13 @@ fn cod4_live_airstrike_picks_its_spot_on_the_full_map() {
         };
         seen.drawn = Some((has(&map), has(&selector), has(&border)));
         seen.texts = f.hud.fullscreen_texts(f.shell);
-        if seen.frames == 5 {
+        if seen.moved.is_none() && up >= 50 {
             f.s.move_selector([10.0, -20.0]);
             seen.moved = Some(f.s.selector.at);
         }
-        if seen.frames == 10 {
-            f.s.input.key(Action::Attack, true);
-            seen.fired = true;
-        }
-        if seen.frames == 14 {
-            f.s.input.key(Action::Attack, false);
-        }
+        let attack = selector_attack(up);
+        seen.fired |= attack;
+        f.s.input.key(Action::Attack, attack);
         None
     }) else {
         return;
@@ -234,6 +231,14 @@ fn cod4_live_airstrike_picks_its_spot_on_the_full_map() {
     );
 }
 
+/// `+attack` on the location selector `up` ms of our snapshots' server
+/// time after it came up: a 100 ms press from 150 ms on, again every
+/// 200 ms while it stays up. The confirm rides one cmd of one packet,
+/// which a loaded machine's loopback can drop; a player clicks again.
+fn selector_attack(up: i32) -> bool {
+    up >= 150 && (up - 150) % 200 < 100
+}
+
 /// What [`streak_run`] saw: the HUD's texts, and when each step came.
 #[derive(Default)]
 struct Streak {
@@ -244,8 +249,8 @@ struct Streak {
     pub(super) icon: bool,
     /// Action slot 4 selected it.
     pub(super) pressed: bool,
-    /// The location selector came up; frames since.
-    selecting: u32,
+    /// Our server time when the location selector came up.
+    selecting: Option<i32>,
     /// The selector came down after the confirm.
     confirmed: bool,
     /// Our compass drew the vehicle as ours.
@@ -409,10 +414,10 @@ fn streak_run(kills: u32, weapon: &'static str, kind: &'static str) -> Option<St
             seen.pressed = true;
         }
         if f.s.selecting_location() != 0 {
-            seen.selecting += 1;
+            let up = f.level - *seen.selecting.get_or_insert(f.level);
             // The confirm: `+attack`'s 0x10000 while the map is up.
-            f.s.input.key(Action::Attack, seen.selecting >= 10);
-        } else if seen.selecting > 0 && !seen.confirmed {
+            f.s.input.key(Action::Attack, selector_attack(up));
+        } else if seen.selecting.is_some() && !seen.confirmed {
             seen.confirmed = true;
             f.s.input.key(Action::Attack, false);
         }
@@ -458,7 +463,8 @@ fn airstrike_twice() -> Option<(Vec<Earn>, std::collections::BTreeSet<String>, V
     enum Phase {
         Kill,
         Earned(Duration),
-        Selecting(u32),
+        /// Our server time when the selector came up.
+        Selecting(i32),
         Strike(Duration),
         Reset(Duration),
     }
@@ -556,7 +562,7 @@ fn airstrike_twice() -> Option<(Vec<Earn>, std::collections::BTreeSet<String>, V
                     f.tx.send((0, "", "srand", SRAND)).ok();
                 }
                 if f.s.selecting_location() != 0 {
-                    phase = Phase::Selecting(0);
+                    phase = Phase::Selecting(f.level);
                 } else if t - at > Duration::from_secs(8) {
                     // Never came: report it.
                     return Some((
@@ -566,10 +572,9 @@ fn airstrike_twice() -> Option<(Vec<Earn>, std::collections::BTreeSet<String>, V
                     ));
                 }
             }
-            Phase::Selecting(n) => {
+            Phase::Selecting(at) => {
                 if f.s.selecting_location() != 0 {
-                    f.s.input.key(Action::Attack, n >= 10);
-                    phase = Phase::Selecting(n + 1);
+                    f.s.input.key(Action::Attack, selector_attack(f.level - at));
                 } else {
                     f.s.input.key(Action::Attack, false);
                     earn.confirmed = true;
@@ -662,7 +667,7 @@ fn cod4_live_five_kills_earn_the_helicopter_and_call_it_in() {
     assert_eq!(out.kills, 5);
     assert!(out.icon, "the dpad never drew the helicopter");
     assert!(out.pressed, "action slot 4 selected nothing");
-    assert_eq!(out.selecting, 0, "a selector for the helicopter");
+    assert_eq!(out.selecting, None, "a selector for the helicopter");
     assert!(out.texts.contains("5 Kill Streak!"), "{:?}", out.texts);
 }
 
@@ -672,7 +677,8 @@ struct OneLife {
     kills: u32,
     pub(super) last: Option<Duration>,
     strike_pressed: bool,
-    selecting: u32,
+    /// Our server time when the location selector came up.
+    selecting: Option<i32>,
     confirmed: bool,
     /// Our level time when slot 4 took the helicopter.
     heli_pressed: Option<i32>,
@@ -729,9 +735,9 @@ fn cod4_live_airstrike_then_helicopter_in_one_life() {
             seen.strike_pressed = true;
         }
         if f.s.selecting_location() != 0 {
-            seen.selecting += 1;
-            f.s.input.key(Action::Attack, seen.selecting >= 10);
-        } else if seen.selecting > 0 && !seen.confirmed {
+            let up = f.level - *seen.selecting.get_or_insert(f.level);
+            f.s.input.key(Action::Attack, selector_attack(up));
+        } else if seen.selecting.is_some() && !seen.confirmed {
             seen.confirmed = true;
             f.s.input.key(Action::Attack, false);
             f.tx.send((0, "maps/mp/mp_crash_fx", "standClear", "")).ok();
