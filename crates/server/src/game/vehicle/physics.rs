@@ -666,7 +666,8 @@ impl Physics {
     }
 
     /// `VEH_PhysicsNotRequired(ent, 0)` but for the velocity: nothing else
-    /// moves, float compares (a -0 is at rest).
+    /// moves, float compares (a -0 is at rest). Retail's two words more
+    /// are always 0 (coduo-vehicles.md 17.7).
     pub fn still(&self) -> bool {
         let s = &self.s;
         s.angular_velocity == Vec3::ZERO

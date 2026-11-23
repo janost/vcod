@@ -3301,3 +3301,40 @@ where retail's lands 11. Two reruns of retail under
   holds mp_cassino's, fixture `mp_cassino-tank-dupe-steps-uo.txt`). The
   wreck's blast lands 11 on the shooter, as in the fixture (VERIFIED,
   `vehicle_blast_ab::a_rocket_strikes_a_jeep_as_on_uo`).
+
+### 17.7 The rest test's fifteen words
+
+`VEH_PhysicsNotRequired` (0x87a13, by its symbol in
+`game.mp.uo.i386.so`) tests the physics state `s` (`rec+0xb8`,
+0x87a28..0x87a39) against `vec3_origin` (GOT + 0xf98, the
+`R_386_GLOB_DAT` at 0xb47b0) one float at a time, `fucompp` with a jump
+out on not equal or unordered (VERIFIED (the instructions)):
+
+| Words | Order | Field | vcod |
+|---|---|---|---|
+| `s+0x48..0x50` | 0x87a45..0x87a9b | angular velocity | `State::angular_velocity` |
+| `s+0x30..0x38` | 0x87aaa..0x87b00 | velocity | `State::velocity` |
+| `s+0x64..0x6c` | 0x87b0f..0x87b65 | the body sway: pitch, a word nothing moves, roll | `sway_pitch`, `sway_roll` |
+| `s+0x58..0x60` | 0x87b74..0x87bbe | the sway's rates, laid out the same | `sway_pitch_vel`, `sway_roll_vel` |
+| `s+0x3c..0x44` | 0x87bc9..0x87c0b | local velocity | `State::local_velocity` |
+
+- The sway's step (0x7d709's tail) writes the pitch rate at `s+0x58`
+  (0x7f668, clamped at 0x7f6d4), adds it to the pitch at `s+0x64`
+  (0x7f6e0..0x7f6f0), writes the roll rate at `s+0x60` (0x7f908) and adds
+  it to the roll at `s+0x6c` (0x7f914..0x7f924) (VERIFIED (the
+  instructions)). The base is `s`: 0x7d72f adds 0xb8 to the record and
+  0x7d734 keeps it at `ebp-0x20`.
+- `s+0x5c` and `s+0x68`, the two vec3s' middle words, are zeroed by
+  `VEH_InitPhysics` (0x7ce38, 0x7ce50) and stored by nothing else in the
+  vehicle code (0x78000..0x92000: every other store at `+0x5c`,
+  `+0x68` or `rec+0x120` there is a temp entity's, a definition's or an
+  entity's `r.contents`; none at `rec+0x114`) (VERIFIED (the
+  instructions)). Every think of the 2026-11 tank, ram and blast reruns
+  under `tools/re/gdb_vehicle.py`, 54114, holds `s+0x5c` at 0,
+  3065 of them with the sway moving; the script's five sway words stop
+  short of `s+0x68` (VERIFIED, gdb).
+- So retail's fifteen words test what vcod's `Physics::still` (ten) and
+  `physics_not_required`'s velocity (three) do: the two words more are
+  always 0. Neither test tells -0 from 0; a NaN is never at rest in
+  either. A vehicle at rest goes on to walk the pool when the second
+  argument is 1 (0x87c1b, 17.5).
