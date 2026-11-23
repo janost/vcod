@@ -280,6 +280,25 @@ impl Server {
         true
     }
 
+    /// Test-facing: from now on, keep each vehicle step's record.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_log_vehicle_thinks(&mut self) {
+        if let Some(rt) = self.game.module.script.as_mut() {
+            rt.host.vehicles.think_log = Some(Vec::new());
+        }
+    }
+
+    /// Test-facing: the steps logged since [`Self::test_log_vehicle_thinks`].
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_vehicle_thinks(&self) -> Vec<crate::game::vehicle::ThinkLog> {
+        self.game
+            .module
+            .script
+            .as_ref()
+            .and_then(|rt| rt.host.vehicles.think_log.clone())
+            .unwrap_or_default()
+    }
+
     /// Test-facing: where the bots read a burning hull, by entity number.
     pub fn test_wrecks(&self) -> Vec<[f32; 3]> {
         self.game.module.bot_parked.wrecks()

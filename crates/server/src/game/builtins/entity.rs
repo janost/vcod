@@ -770,6 +770,7 @@ pub fn set_model(
     host.set_field(cx, id, field, Value::String(name))?;
     super::super::link::model_changed(host, cx, id);
     crate::game::spawn::turret_model_changed(host, cx, id);
+    crate::game::vehicle::model_changed(host, cx, id);
     if id.0 < crate::server::MAX_CLIENTS as u32 {
         if let Some(link) = host.area.last_link(id.0) {
             host.area.link(id.0, &link);

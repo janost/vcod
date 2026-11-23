@@ -254,6 +254,18 @@ pub struct Vehicles {
     pub hulls: HashMap<EntId, seat::HullCollision>,
     /// Stuck kills landed since the level loaded, for the bot gates.
     pub stuck_kills: u32,
+    /// Each step's record as its think's drive left it, while a test
+    /// keeps one (`Server::test_log_vehicle_thinks`).
+    pub think_log: Option<Vec<ThinkLog>>,
+}
+
+/// One think's record, where `tools/re/gdb_vehicle.py` reads retail's.
+#[derive(Clone, Copy, Debug)]
+pub struct ThinkLog {
+    pub entity: u32,
+    pub time: i32,
+    pub state: physics::State,
+    pub jolt: physics::Jolt,
 }
 
 impl Default for Vehicles {
@@ -277,6 +289,7 @@ impl Default for Vehicles {
             rigs: HashMap::new(),
             hulls: HashMap::new(),
             stuck_kills: 0,
+            think_log: None,
         }
     }
 }
@@ -617,6 +630,20 @@ impl Vehicle {
             dead: false,
             takedamage: true,
         }
+    }
+}
+
+/// `setModel` on a vehicle: the suspension reads the wheel tags off the
+/// DObj every step (0x7c488), so a jeep's wreck settles on its death
+/// model's wheels (coduo-vehicles.md 17.6).
+pub(crate) fn model_changed(host: &mut GameHost, cx: &mut Cx, id: EntId) {
+    if !host.vehicles.live.contains_key(&id) {
+        return;
+    }
+    let name = field_string(host, cx, id, "model");
+    let model = vehicle_model(host, &name);
+    if let Some(v) = host.vehicles.live.get_mut(&id) {
+        v.phys.model = model;
     }
 }
 

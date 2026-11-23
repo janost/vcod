@@ -175,6 +175,75 @@ fn the_wrecks_duplicate_takes_the_stuck_kill() {
     assert_eq!(ours, retail);
 }
 
+/// The duplicate's first think and the wreck's steps after it, record for
+/// record against retail's under `tools/re/gdb_vehicle.py`: the first pass
+/// strikes the wreck, restores the BSP pose and pushes the wreck, and the
+/// second pass steps because the walk of the pool now finds the pushed
+/// wreck moving; the duplicate then holds (0, 0, 0.4) and the wreck's kick
+/// decelerates at 700 (coduo-vehicles.md 17.6).
+#[test]
+fn the_wreck_and_its_duplicate_step_as_on_uo() {
+    let Some(fs) = vcod_common::testing::uo_fs() else {
+        return;
+    };
+    let probe = "probe_vehdupe";
+    let fixture = include_str!("fixtures/vehicles/mp_cassino-tank-dupe-steps-uo.txt");
+    let src = format!("../gsc/tests/fixtures/semantics/client-probes/{probe}.gsc");
+    let gsc = std::fs::read_to_string(src).expect("read the probe");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(&PROTOCOL_V22),
+        script: Some(&gsc),
+        ..common::Boot::new(MAP, probe)
+    }
+    .start(fs);
+    sv.test_log_vehicle_thinks();
+    common::run_alone(&mut sv, &mut now, 12_700);
+    let ours = sv.test_vehicle_thinks();
+    let bits = |v: glam::Vec3| v.to_array().map(f32::to_bits);
+    let hex = |w: &[&str]| -> [u32; 3] {
+        std::array::from_fn(|i| u32::from_str_radix(w[i], 16).expect("a hex word"))
+    };
+    let mut compared = 0;
+    for line in fixture.lines().filter(|l| l.starts_with("GDB veh ")) {
+        let w: Vec<&str> = line.split_whitespace().collect();
+        let (entity, time): (u32, i32) = (w[2].parse().unwrap(), w[3].parse().unwrap());
+        let o = ours
+            .iter()
+            .find(|t| t.entity == entity && t.time == time)
+            .unwrap_or_else(|| panic!("no step of {entity} at {time}"));
+        let s = &o.state;
+        assert_eq!(
+            [
+                bits(s.origin),
+                bits(s.angles),
+                bits(s.velocity),
+                bits(s.local_velocity),
+                bits(s.angular_velocity),
+            ],
+            [
+                hex(&w[5..]),
+                hex(&w[9..]),
+                hex(&w[13..]),
+                hex(&w[17..]),
+                hex(&w[21..])
+            ],
+            "{entity} at {time}: origin, angles, velocity, local, angular"
+        );
+        // The wreck's kick and decel, the duplicate's pushes. Ours logs
+        // before the stuck kill's kick on the duplicate, retail after.
+        if entity == 186 {
+            let j = &o.jolt;
+            assert_eq!(
+                [j.pitch.to_bits(), j.roll.to_bits(), j.accel.to_bits()],
+                hex(&[w[31], w[32], w[37]]),
+                "{entity} at {time}: jolt"
+            );
+        }
+        compared += 1;
+    }
+    assert_eq!(compared, 19, "the fixture's steps");
+}
+
 /// A stock vehicle's first think runs the collision probes once (it
 /// settled at init), and a hit there takes the stuck kill. Retail's stock
 /// vehicles start whole, so on ours none may strike anything then: every

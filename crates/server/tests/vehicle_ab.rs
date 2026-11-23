@@ -881,11 +881,7 @@ fn the_tank_drive_under_closespeed_and_harc_replays_on_ours() {
     let Some(ours) = ours("mp_cassino", "panzeriv_mp", &cvars, &lines) else {
         return;
     };
-    tally(&lines, &ours).assert_within(&[Gap {
-        field: "",
-        snaps: 284..=usize::MAX,
-        why: "coduo-vehicles.md 17.5: retail's velocity reaches 0 a frame before ours",
-    }]);
+    tally(&lines, &ours).assert_within(&[]);
 }
 
 const JEEP_DIE: &str = "tests/fixtures/playerstate/mp_peaks-tdm-slope-8ms-jeep-die-uo.txt";

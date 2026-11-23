@@ -656,9 +656,10 @@ fn tank_closespeed_harc_drive_free_run() {
     tally.assert_gaps(
         "tank closespeed free run",
         &[(
-            27200,
-            i32::MAX,
-            "coduo-vehicles.md 17.5: retail's velocity reaches 0 a frame before ours",
+            29850,
+            31250,
+            "the second shot's jolt: `think` aims it off angles2, retail off tag_barrel, \
+             and the roll byte rounds the other way (vehicle_ab matches it)",
         )],
         &EXACT,
     );

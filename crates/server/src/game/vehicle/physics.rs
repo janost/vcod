@@ -113,7 +113,7 @@ pub struct HitEntity {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VehiclePush {
     pub entity: u32,
-    /// The kick's direction and scale, with a 175 decel.
+    /// The kick's direction and scale, with a 700 decel.
     pub jolt: Option<(Vec3, f32)>,
     pub velocity: Vec3,
 }
@@ -127,6 +127,21 @@ pub trait VehicleWorld {
     /// 0x800000, as their `r.contents` say.
     fn trace(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: u32) -> VehTrace;
     fn entity(&self, num: u32) -> HitEntity;
+    /// The other pool records, as `VEH_PhysicsNotRequired`'s walk reads
+    /// them.
+    fn pool(&self) -> &[PoolRecord] {
+        &[]
+    }
+}
+
+/// Another vehicle's pool record as the step's neighbour walk reads it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PoolRecord {
+    pub entity: u32,
+    pub origin: Vec3,
+    pub velocity: Vec3,
+    /// [`Physics::still`].
+    pub still: bool,
 }
 
 /// [`VehicleWorld`] over the collision world alone: no bodies, every hit
@@ -223,10 +238,6 @@ pub struct StepInput {
     pub bounds_maxs: Vec3,
     /// `level.maxclients`: a probe hit below it is a body.
     pub max_clients: u32,
-    /// Another pool vehicle within 1024 that itself needs physics
-    /// (`VEH_PhysicsNotRequired`'s neighbour test). Always false in
-    /// production (coduo-vehicles.md 12, "Ported and unwired").
-    pub neighbour_moving: bool,
     /// `g_vehicleTexScrollScale`; 0 or less takes the file's.
     pub tex_scroll_scale: f32,
     /// `g_vehicleHorns`.
@@ -249,7 +260,6 @@ impl Default for StepInput {
             bmodel: true,
             bounds_maxs: Vec3::ZERO,
             max_clients: 64,
-            neighbour_moving: false,
             tex_scroll_scale: 0.0,
             horns: true,
             alt_overheated: false,
@@ -589,7 +599,7 @@ impl Physics {
             }
         }
 
-        if f != 0 || r != 0 || u != 0 || !self.physics_not_required(input.neighbour_moving) {
+        if f != 0 || r != 0 || u != 0 || !self.physics_not_required(world, &out.pushes) {
             let (accel, aa) = self.targets(info, input, f, r, u);
             let g = self.ground_check(info, world, input.driver.is_some());
             let s = &mut self.s;
@@ -637,17 +647,34 @@ impl Physics {
         self.engine_blend[1] = step_prop(x, self.engine_blend[1], 4.0);
     }
 
-    /// `VEH_PhysicsNotRequired(ent, 1)` (0x87a13).
-    fn physics_not_required(&self, neighbour_moving: bool) -> bool {
+    /// `VEH_PhysicsNotRequired(ent, 1)` (0x87a13): at rest, and so is every
+    /// other record within 1024 (0x87c2d..0x87cc3). The walk runs on each
+    /// pass's drive and reads a velocity this think's push already wrote
+    /// (coduo-vehicles.md 17.6).
+    fn physics_not_required(&self, world: &impl VehicleWorld, pushes: &[VehiclePush]) -> bool {
+        self.still()
+            && self.s.velocity == Vec3::ZERO
+            && world.pool().iter().all(|r| {
+                let v = pushes
+                    .iter()
+                    .rev()
+                    .find(|p| p.entity == r.entity)
+                    .map_or(r.velocity, |p| p.velocity);
+                r.origin.distance_squared(self.s.origin) >= 1_048_576.0
+                    || (r.still && v == Vec3::ZERO)
+            })
+    }
+
+    /// `VEH_PhysicsNotRequired(ent, 0)` but for the velocity: nothing else
+    /// moves, float compares (a -0 is at rest).
+    pub fn still(&self) -> bool {
         let s = &self.s;
         s.angular_velocity == Vec3::ZERO
-            && s.velocity == Vec3::ZERO
             && s.sway_pitch == 0.0
             && s.sway_roll == 0.0
             && s.sway_pitch_vel == 0.0
             && s.sway_roll_vel == 0.0
             && s.local_velocity == Vec3::ZERO
-            && !neighbour_moving
     }
 
     /// 0x7d709: the linear acceleration (local frame) and the angular
@@ -965,7 +992,10 @@ impl Physics {
         let old = self.s.velocity;
         let s0 = len(old);
         let mut v = clip(old, g.normal);
-        if 0.0 < dot(v, old) {
+        // The test reads the sum on the stack (0x8120e..0x8123a): a velocity
+        // whose dot rounds to a float 0 still renormalizes, and one whose
+        // squared length does too stays put and underflows to 0 on the scale.
+        if 0.0 < dot64(v, old) {
             normalize_in_place(&mut v);
             v *= s0;
         }
@@ -2317,6 +2347,48 @@ mod tests {
         assert!(sounds[0][0].z > 2400.0, "{sounds:?}");
         assert!(sounds[1..].iter().all(Vec::is_empty), "{sounds:?}");
         assert!(run(false).iter().all(Vec::is_empty));
+    }
+
+    /// [`FloorInTank`] with the struck tank in the pool, at rest.
+    struct FloorInParkedTank;
+    impl VehicleWorld for FloorInParkedTank {
+        fn trace(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: u32) -> VehTrace {
+            FloorInTank.trace(start, end, mins, maxs, mask)
+        }
+        fn entity(&self, num: u32) -> HitEntity {
+            FloorInTank.entity(num)
+        }
+        fn pool(&self) -> &[PoolRecord] {
+            const PARKED: [PoolRecord; 1] = [PoolRecord {
+                entity: 300,
+                origin: Vec3::new(470.0, 0.0, 0.125),
+                velocity: Vec3::ZERO,
+                still: true,
+            }];
+            &PARKED
+        }
+    }
+
+    /// A duplicate at rest inside a parked tank: the first pass strikes and
+    /// pushes the tank and restores the spawn pose, and the second pass
+    /// steps because the walk reads the velocity the push just wrote
+    /// (0x8811c on each pass; coduo-vehicles.md 17.6).
+    #[test]
+    fn a_vehicle_steps_its_second_pass_after_pushing_a_parked_one() {
+        let info = panzer();
+        let mut p = Physics::spawn(Vec3::new(0.0, 0.0, 8.0), Vec3::ZERO, wheels());
+        p.init(&info, &FloorInParkedTank, false);
+        let settled = p.s.origin;
+        assert_ne!(settled.z, 8.0);
+        let input = StepInput {
+            now: 43400,
+            bounds_maxs: Vec3::new(70.0, 70.0, 120.0),
+            ..StepInput::default()
+        };
+        let out = p.think(&info, &FloorInParkedTank, &input);
+        assert_eq!(out.pushes.len(), 1, "{:?}", out.pushes);
+        assert_eq!(p.s.origin, settled);
+        assert_eq!(p.s.velocity, Vec3::new(0.0, 0.0, -40.0));
     }
 
     /// [`FloorAndTank`] with a struck vehicle twice our top speed.
