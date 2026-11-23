@@ -57,6 +57,8 @@ struct StageParams {
     // a CoD4 world fx draw (renderer::cod4_worldfx): x featherParms.x,
     // yz distortionScale
     fx: vec4<f32>,
+    // the deforms' clock terms (deform.wgsl)
+    deform_ext: array<vec4<f32>, 3>,
 };
 @group(2) @binding(0) var<uniform> stage: StageParams;
 // Bundle 1's image when it is neither lightmap nor absent (white is bound then).
@@ -181,7 +183,7 @@ fn bundle_uv(
 fn vs_stage(in: VsIn) -> VsOut {
     var out: VsOut;
     // sky dome vertices are box-space; the view origin rides in StageParams
-    let deformed = deform_vertex(in.pos, in.normal, in.uv);
+    let deformed = deform_vertex(in.pos, in.normal, in.uv, 0.0);
     var normal = deformed.normal;
     var pos = deformed.pos;
     // autosprite (0x514080): the stamp corner in uv, the half-width in
@@ -659,7 +661,7 @@ struct DlVsOut {
 @vertex
 fn vs_dlight(in: DlVsIn) -> DlVsOut {
     var out: DlVsOut;
-    let deformed = deform_vertex(in.pos, in.normal, in.uv);
+    let deformed = deform_vertex(in.pos, in.normal, in.uv, 0.0);
     let normal = deformed.normal;
     let pos = deformed.pos;
     let world = camera.model * vec4<f32>(pos, 1.0);

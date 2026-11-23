@@ -28,6 +28,10 @@ struct StageParams {
     // the deform records and their kinds (deform.wgsl)
     deform: array<vec4<f32>, 3>,
     deform_kinds: vec4<u32>,
+    // the falloff and the CoD4 world fx, unread here
+    tail: array<vec4<f32>, 3>,
+    // the deforms' clock terms (deform.wgsl)
+    deform_ext: array<vec4<f32>, 3>,
 };
 @group(2) @binding(0) var<uniform> stage: StageParams;
 
@@ -81,7 +85,7 @@ fn vs_cut_stage(
 ) -> CutOut {
     var out: CutOut;
     // the flags (mp_ship's and mp_powcamp's) cast as they wave
-    out.clip = light_vp * vec4<f32>(deform_vertex(pos, normal, uv).pos, 1.0);
+    out.clip = light_vp * vec4<f32>(deform_vertex(pos, normal, uv, 0.0).pos, 1.0);
     out.uv = stage.uv0 * vec3<f32>(uv, 1.0);
     out.alpha = select(1.0, color.a, (stage.flags & F_VERTEX_ALPHA) != 0u);
     return out;

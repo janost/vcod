@@ -499,7 +499,10 @@ it reads are labelled; the design is not a claim about retail.
   other light reach its ground besides the sun (open fields keep less in
   the shade than streets between houses).
 - Casters: snapshot entities through their first depth-writing stage,
-  alpha-tested as drawn; every brush model, drawn off its spawn pose; and
+  alpha-tested and deformed as drawn (`shadow_cast.wgsl`'s `vs_entity`
+  runs the stage's deforms on the entity's own material clock; a sprite
+  surface, collapsed to its centre until the view-facing step the caster
+  skips, casts nothing); every brush model, drawn off its spawn pose; and
   every world or prop surface whose shader deforms its vertices
   (`deformVertexes wave` or `flap`), which casts in the dynamic layer each
   frame through its first depth-writing stage, deformed as the main pass

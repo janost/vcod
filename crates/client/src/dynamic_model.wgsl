@@ -77,6 +77,10 @@ struct StageParams {
     // the deform records and their kinds (deform.wgsl)
     deform: array<vec4<f32>, 3>,
     deform_kinds: vec4<u32>,
+    // the falloff and the CoD4 world fx, unread here
+    tail: array<vec4<f32>, 3>,
+    // the deforms' clock terms (deform.wgsl)
+    deform_ext: array<vec4<f32>, 3>,
 };
 @group(3) @binding(0) var<uniform> stage: StageParams;
 
@@ -99,6 +103,9 @@ const F_VERTEX_HALF: u32 = 1024u;
 const F_FOG_BLACK: u32 = 2048u;
 const F_NOFOG: u32 = 4194304u;
 const ATEST128: f32 = 0.5019607843137255;
+// renderer::STAGE_FLAG_AUTOSPRITE, _AUTOSPRITE2
+const F_AUTOSPRITE: u32 = 1048576u;
+const F_AUTOSPRITE2: u32 = 2097152u;
 // renderer::DEFORM_COD2_FLAG in `deform_kinds.w`, which deform.wgsl never
 // reads: a CoD2 `lprobe_flag*` stage (cod2_model.wgsl's `cod2_flap`)
 const COD2_FLAG: u32 = 1u;
@@ -222,15 +229,36 @@ fn vs_main(
     }
     // the deforms run on the posed model-space vertices, as on retail's
     // tess before the entity's transform
-    let d = deform_vertex(p.xyz, n, uv);
+    let d = deform_vertex(p.xyz, n, uv, time_offset);
     p = vec4<f32>(d.pos, 1.0);
     n = d.normal;
-    let world = model * p;
+    var world = model * p;
+    // rotation + translation, so the upper 3x3 is valid for the normal
+    var world_n = (model * vec4<f32>(n, 0.0)).xyz;
+    // the sprites (renderer::encode_entity_sprite): the posed centre or end
+    // midpoint, out along the view's axes by the size `tangent.x` holds,
+    // which the entity's scale scales as retail's nonNormalizedAxes path
+    // does (0x51425b)
+    if ((stage.flags & F_AUTOSPRITE) != 0u) {
+        let sprite_r = tangent.x * length(m0.xyz);
+        let vp = camera.view_proj;
+        let right = normalize(vec3<f32>(vp[0].x, vp[1].x, vp[2].x));
+        let up = normalize(vec3<f32>(vp[0].y, vp[1].y, vp[2].y));
+        let off = right * ((2.0 * uv.x - 1.0) * sprite_r) + up * ((1.0 - 2.0 * uv.y) * sprite_r);
+        world = world + vec4<f32>(off, 0.0);
+        world_n = -camera.view_fwd.xyz;
+    }
+    if ((stage.flags & F_AUTOSPRITE2) != 0u) {
+        let c = cross(world_n, camera.view_fwd.xyz);
+        if (dot(c, c) > 0.0) {
+            world = world + vec4<f32>(normalize(c) * (tangent.x * length(m0.xyz)), 0.0);
+        }
+        world_n = -camera.view_fwd.xyz;
+    }
     var out: VsOut;
     out.clip = camera.view_proj * world;
     out.screen = screen_coords(out.clip);
-    // rotation + translation, so the upper 3x3 is valid for the normal
-    out.normal = (model * vec4<f32>(n, 0.0)).xyz;
+    out.normal = world_n;
     var base = uv;
     if ((stage.flags & F_BUNDLE0_ENV) != 0u) {
         // world to the entity's frame (its axes are rigid)

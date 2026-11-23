@@ -19,6 +19,10 @@ VERIFIED (registration calls and their default strings):
 | `r_ignorehwgamma` | "0" (`0x56871c`) | 0x21 (archive, latch) | `0x16c3a14` |
 | `r_intensity` | "1" (`0x5685e4`) | 0x20 (latch) | `0x16c36dc` |
 
+CoD4 1.7's `iw3mp.exe` registers `r_ignorehwgamma` with the same flags:
+`push 0x21` at `0x629f27`, its name `0x7046f8` in `eax` for the call to
+`0x56c350`. VERIFIED (the instructions). vcod latches it in every game.
+
 The stock options touch only `r_gamma`. VERIFIED (the file):
 `ui/options_graphics.menu` (`localized_english_pak0.pk3`) has two
 Brightness sliders on `r_gamma`, range 0.5 to 3. One sits in the Options
@@ -246,10 +250,14 @@ Divergences:
   whose later stages use other gens draws with the first one's. The fx
   pass takes each stage's own gens (`cod11-shader-scripts.md` section 3).
   Debug text (F3) draws raw.
-- vcod's `vid_restart` rebuilds the renderer (and reloads the world) only
-  when the scene format, the MSAA or an image setting moved, so a baked
-  gamma or `r_intensity` change otherwise waits for the next map load.
-  Retail's `vid_restart` reloads every image.
+- Retail's `vid_restart` reloads every image. vcod's rebuilds the renderer
+  (and reloads the world, its images and lightmaps, keeping the connection)
+  when the scene format, the MSAA, an image setting or the texture table
+  moved: a latched `r_intensity`, `r_ignorehwgamma` switched either way, or
+  under `r_ignorehwgamma 1` a moved `r_gamma`. Any other `vid_restart`
+  loads the same bytes again, so vcod keeps the loaded ones. Lightmaps
+  shift in the shader and the frame's ramp is read every frame, so neither
+  waits for a reload.
 - `r_overBrightBits` is not registered; vcod uses its default 1.
 - `r_intensity` below 1 is raised to 1 where it is read, not written
   back to the cvar as step 3 does.
