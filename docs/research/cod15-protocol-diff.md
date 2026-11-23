@@ -438,6 +438,17 @@ The cgame:
   width) / 2, (480 - height) / 2) in font 0 at 0.5, white, style 6 (strings
   and constants VERIFIED; which format runs when INFERRED from the branch).
   `CGAME_PAUSED` is "Paused" in 1.5's `cgame.str` (asset, VERIFIED).
+- VERIFIED (the instructions): one trap 0x36 call draws the whole string;
+  style 6 is pushed at 0x300196c5 and the colour is four 1.0s
+  (0x300195ca..0x300195e2). The width and height come off traps 0x34 and
+  0x35, `R_TextWidth` and `R_TextHeight`, both ints. The renderer starts
+  each `\n` line at the call's x, `scale` times the font's `+0x5004`
+  lower, untruncated (1.5 0x4babe4..0x4babfd, 1.1 0x4d7f74). Only styles 3
+  and 6 draw a shadow (1.5 0x4bacb1..0x4bacc7, 1.1 0x4d803d..0x4d8057). It
+  sits `(style != 3) + 1` units right and down, so 2 for style 6, added
+  before the 640x480 scale. It is black at the text's alpha (1.1
+  0x4d7ddf..0x4d7dea, 1.5 0x4baa0b..0x4baa1a). UO's banner pushes style 6
+  too (0x3001bcdb).
 
 The client's clock (`docs/protocol-1.1.md`, "The client's clock") runs
 `CL_AdjustTimeDelta` on each snapshot parsed, frozen or not, as Q3's
@@ -446,8 +457,8 @@ the lineage). Over a frozen serverTime the adjusts pull the delta back as fast
 as local time pushes it, and the drawn time stops about 150 ms past the
 snapshot's (INFERRED, simulating the rule at 8 ms frames).
 
-vcod draws the banner (`hud::timeout`), the line break as a second line under
-the first, its shadow vcod's usual 1 px one. It counts a new snapshot by
+vcod draws the banner (`hud::timeout`) at those sizes and steps, with style
+6's shadow. Other HUD text keeps vcod's usual 1 px shadow at 0.8. It counts a new snapshot by
 message number, so the drawn time holds through a timeout. A 1.1 install lacks
 `CGAME_PAUSED` and the `PATCH_1_5_*` strings (`localized_english_pak5.pk3`)
 and shows the keys.

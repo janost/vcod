@@ -509,6 +509,7 @@ impl Renderer {
                     view_depth: false,
                     distort: false,
                     cloud: Some(start..instances.len() as u32),
+                    depth_always: false,
                 });
             }
         }

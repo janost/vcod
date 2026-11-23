@@ -389,7 +389,8 @@ default, set it again (`set r_aaSamples 4`).
   vid_restart` asks for a 21:9 window or, with `r_fullscreen 2`, that
   mode.
 - `vid_restart` applies `r_mode` and `r_fullscreen` and reloads the
-  menus closed.
+  menus closed. On CoD1, 1.5 and UO these and the `r_custom*` cvars latch
+  as retail's do: a set waits for `vid_restart`.
 - `r_aaSamples` is the scene's MSAA, 1 (none, the default) or 4 (any
   value above 1), latched to `vid_restart`. Blended smoke costs about
   four times the fill at 4.

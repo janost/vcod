@@ -76,6 +76,8 @@ pub(super) struct FxStageDraw<'a> {
     pub(super) uv: [f32; 6],
     /// `None` for a material without a script (`rgbGen vertex`).
     pub(super) stage: Option<&'a Stage>,
+    /// `depthFunc always`: no depth test (`headiconYouInKillCam`).
+    pub(super) depth_always: bool,
 }
 
 /// The stages the fx pass draws for a material, in order. Retail's base loop
@@ -101,6 +103,7 @@ pub(super) fn fx_stage_draws<'a>(
             flags: FX_VERT_CLAMP_S | FX_VERT_CLAMP_T,
             uv: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             stage: None,
+            depth_always: false,
         }];
     };
     sh.stages
@@ -127,6 +130,7 @@ pub(super) fn fx_stage_draws<'a>(
                 flags,
                 uv: bundle_affine(&b0.tcmods, t),
                 stage: Some(st),
+                depth_always: st.depth_func == DepthFunc::Always,
             })
         })
         .collect()
@@ -322,6 +326,9 @@ pub(super) struct FxPass {
     /// The `vc_softParticles` four; group 2 is
     /// `SoftParticles::fx_bind_group`.
     pub(super) soft_pipelines: [wgpu::RenderPipeline; 4],
+    /// The first four without the depth test, for a `depthFunc always`
+    /// stage.
+    pub(super) always_pipelines: [wgpu::RenderPipeline; 4],
     /// `fs_distort`, straight alpha; group 2 is `SceneCopy::bind_group`.
     pub(super) distort_pipeline: wgpu::RenderPipeline,
     pub(super) vertex_buf: wgpu::Buffer,
@@ -353,6 +360,8 @@ pub(super) struct FxRun {
     pub(super) distort: bool,
     /// A run of CoD2 clouds (`fx_cloud`): its instances, and no quads.
     pub(super) cloud: Option<std::ops::Range<u32>>,
+    /// Drawn through `FxPass::always_pipelines`.
+    pub(super) depth_always: bool,
 }
 
 impl Renderer {
@@ -518,6 +527,7 @@ impl Renderer {
                     view_depth: sh.is_some_and(|sh| sh.feather_view_depth),
                     distort: distortion.is_some(),
                     cloud: None,
+                    depth_always: draw.depth_always,
                 });
             }
         }
@@ -595,7 +605,7 @@ pub(super) fn create_fx_pass(
     });
     // The pipelines differ only in blend (with the depth write it implies),
     // layout and fragment entry, so runs can interleave within one pass.
-    let make_in = |label, fs_entry, blend, layout: &wgpu::PipelineLayout| {
+    let make_in = |label, fs_entry, blend, layout: &wgpu::PipelineLayout, always: bool| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label),
             layout: Some(layout),
@@ -638,7 +648,11 @@ pub(super) fn create_fx_pass(
                 // The world must occlude fx quads, but overlapping blended
                 // quads must all draw; an unblended stage writes depth.
                 depth_write_enabled: Some(blend.is_none()),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                depth_compare: Some(if always {
+                    wgpu::CompareFunction::Always
+                } else {
+                    wgpu::CompareFunction::LessEqual
+                }),
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
@@ -657,7 +671,7 @@ pub(super) fn create_fx_pass(
         } else {
             &hard_layout
         };
-        make_in(label, fs_entry, blend, layout)
+        make_in(label, fs_entry, blend, layout, false)
     };
 
     let [alpha, additive, screen, opaque] = [
@@ -685,6 +699,13 @@ pub(super) fn create_fx_pass(
         // nothing to fade into: an opaque stage writes its own depth
         make("fx soft opaque pipeline", "fs_main", opaque, true),
     ];
+    let always_pipelines = [
+        ("fx always pipeline", "fs_main", alpha),
+        ("fx always additive pipeline", "fs_additive", additive),
+        ("fx always screen pipeline", "fs_screen", screen),
+        ("fx always opaque pipeline", "fs_main", opaque),
+    ]
+    .map(|(label, fs_entry, blend)| make_in(label, fs_entry, blend, &hard_layout, true));
 
     // distortion_scale_zfeather's emissive state: (SrcAlpha, InvSrcAlpha)
     let distort_pipeline = make_in(
@@ -692,10 +713,12 @@ pub(super) fn create_fx_pass(
         "fs_distort",
         alpha,
         &distort_layout,
+        false,
     );
     FxPass {
         pipelines,
         soft_pipelines,
+        always_pipelines,
         distort_pipeline,
         vertex_buf,
         index_buf,

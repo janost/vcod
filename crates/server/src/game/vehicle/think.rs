@@ -308,6 +308,7 @@ fn think(host: &mut GameHost, cx: &mut Cx, id: EntId, inputs: &[Option<RiderInpu
     } else {
         (health, driver, gunner)
     };
+    let driver_icon = host.vehicles.live[&id].seats[1].map(|s| host.head_icon(s));
     let v = host.vehicles.live.get_mut(&id).unwrap();
     if let Some(flag) = out.driver_flag_200000 {
         v.hull_view = flag;
@@ -348,6 +349,11 @@ fn think(host: &mut GameHost, cx: &mut Cx, id: EntId, inputs: &[Option<RiderInpu
         && !capturing
     {
         v.wire.weapon = v.weapons[0] as i32;
+        // The driver's `.headicon` pair rides the vehicle, which the
+        // cgame draws over it (coduo-diff.md 9, "Client rendering").
+        if let Some((icon, team)) = driver_icon {
+            v.wire.head_icon = [icon, team];
+        }
         if v.guns.timers[0] < 1 {
             if d.buttons & ATTACK != 0 {
                 notify.push("turret_fire");

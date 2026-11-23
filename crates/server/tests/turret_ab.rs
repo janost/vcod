@@ -2585,8 +2585,8 @@ fn hitgrid_rows<'a>(
 }
 
 /// Every `probe_gungrid` line on a frame retail's gunner was mounted
-/// (`eFlags & 0xc000`), and with `probe_gungrid_tail` every other line it
-/// logged, against ours, cell by cell along its ray: the gunner's own pose,
+/// (`eFlags & 0xc000`), and with `probe_gungrid_tail` every line in that
+/// window past a mounted frame, against ours, cell by cell along its ray: the gunner's own pose,
 /// his fire leaves and the dismount's blend out included
 /// (`cod11-turrets.md` 13.9).
 /// A row reads `[gungrid] <phase> t=<time> ...`; a cell past
@@ -2610,15 +2610,26 @@ fn gungrid_rows<'a>(
             .collect()
     };
     let (theirs, mine) = (lines(&mut { theirs }), lines(&mut { mine }));
-    // A recipe with `probe_gungrid_tail` logs the dismount's blend out too.
-    let tail = cap.cvars.iter().any(|(k, _)| *k == "probe_gungrid_tail");
+    // A recipe with `probe_gungrid_tail` logs the dismount's blend out too:
+    // that long past a mounted frame. The probe also logs any frame its
+    // gunner walks off the spot, which is not his turret pose.
+    let tail: Option<i32> = cap
+        .cvars
+        .iter()
+        .find(|(k, _)| *k == "probe_gungrid_tail")
+        .and_then(|(_, v)| v.parse().ok());
+    let mounted: Vec<i32> = cap
+        .traces
+        .iter()
+        .filter(|(_, s)| s.e_flags & 0xc000 != 0)
+        .map(|(_, s)| s.t)
+        .collect();
+    let gated = |t: i32| {
+        mounted.contains(&t) || tail.is_some_and(|ms| mounted.iter().any(|&m| m < t && t - m <= ms))
+    };
     let mut rows = Vec::new();
     for (t, cells) in &theirs {
-        let Some((phase, _)) = cap
-            .traces
-            .iter()
-            .find(|(_, s)| s.t == *t && (tail || s.e_flags & 0xc000 != 0))
-        else {
+        let Some((phase, _)) = cap.traces.iter().find(|(_, s)| s.t == *t && gated(*t)) else {
             continue;
         };
         let Some(ours) = mine.get(t) else {

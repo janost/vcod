@@ -23,7 +23,7 @@ use super::{
 };
 use crate::console::shell::Shell;
 use crate::hud::font::{Slot, UiFonts};
-use crate::hud::hudelem::Virtual;
+use crate::hud::hudelem::{Virtual, full_width};
 use crate::hud::{HudQuad, font};
 
 impl Ui {
@@ -574,6 +574,16 @@ fn text_extents(item: &UiItem, kept: Option<[f32; 4]>, widths: TextWidths) -> [f
     ]
 }
 
+/// An upright quad over window px `[left, top, right, bottom]`.
+fn quad_px([l, t, r, b]: [f32; 4], rgba: [f32; 4], texture: &str, out: &mut Vec<HudQuad>) {
+    out.push(HudQuad {
+        verts: [[l, t], [r, t], [r, b], [l, b]],
+        uvs: HudQuad::UNIT_UVS,
+        rgba,
+        texture: texture.to_string(),
+    });
+}
+
 /// Paints menu items on the 640 grid, drawn in the window's centred 4:3
 /// box ([`Virtual`]); a rect that spans the whole grid width or height
 /// (a backdrop, a fade) spans the window's.
@@ -611,6 +621,8 @@ impl Painter<'_> {
     /// `Window_Paint`: the fill or shader inside the border, then a full
     /// border of `border_size`. `cvar_shader` is a
     /// `WINDOW_STYLE_CVAR_SHADER` item's shader; an empty one draws nothing.
+    /// A bordered rect spanning the grid stretches with its border: its
+    /// pieces are cut out of the stretched rect in window px.
     fn window(
         &self,
         item: &UiItem,
@@ -618,30 +630,48 @@ impl Painter<'_> {
         cvar_shader: Option<&str>,
         out: &mut Vec<HudQuad>,
     ) {
-        let mut r = item.rect;
-        if item.border != 0 {
-            let b = item.border_size;
-            r = [r[0] + b, r[1] + b, r[2] - (b + 1.0), r[3] - (b + 1.0)];
-        }
-        match (item.style, &item.background) {
-            (WINDOW_STYLE_FILLED, Some(bg)) => self.quad(r, st.back, bg, out),
-            (WINDOW_STYLE_FILLED, None) => self.fill(r, st.back, out),
+        let face = match (item.style, &item.background) {
+            (WINDOW_STYLE_FILLED, Some(bg)) => Some((st.back, bg.clone())),
+            (WINDOW_STYLE_FILLED, None) => (st.back[3] > 0.0).then(|| (st.back, "white".into())),
             // Style 3 draws whatever handle it holds, and a missing image's
             // or no background's is 0, the default shader (0x4000fa79).
             (WINDOW_STYLE_SHADER, Some(bg)) => {
-                self.quad(r, item.fore, &crate::hud::default_if_missing(bg), out)
+                Some((item.fore, crate::hud::default_if_missing(bg)))
             }
-            (WINDOW_STYLE_SHADER, None) => self.quad(r, item.fore, crate::hud::DEFAULT_SHADER, out),
-            (WINDOW_STYLE_CVAR_SHADER, _) => {
-                if let Some(bg) = cvar_shader.filter(|b| !b.is_empty()) {
-                    self.quad(r, item.fore, bg, out);
-                }
+            (WINDOW_STYLE_SHADER, None) => Some((item.fore, crate::hud::DEFAULT_SHADER.into())),
+            (WINDOW_STYLE_CVAR_SHADER, _) => cvar_shader
+                .filter(|b| !b.is_empty())
+                .map(|bg| (item.fore, bg.to_string())),
+            _ => None,
+        };
+        let [x, y, w, h] = item.rect;
+        let b = item.border_size;
+        let spans = full_width(x, w) || (y <= 0.0 && y + h >= 480.0);
+        if item.border != 0 && spans && !self.exact {
+            let q = self.v.quad_fill(x, y, w, h, [0.0; 4], "");
+            let [l, t] = q.verts[0];
+            let [r, bot] = q.verts[2];
+            let (bs, one) = (b * self.v.scale, self.v.scale);
+            if let Some((rgba, tex)) = face {
+                quad_px([l + bs, t + bs, r - one, bot - one], rgba, &tex, out);
             }
-            _ => {}
+            if item.border == 1 && st.border_color[3] > 0.0 {
+                let c = st.border_color;
+                quad_px([l, t, r, t + bs], c, "white", out);
+                quad_px([l, bot - bs, r, bot], c, "white", out);
+                quad_px([l, t + bs, l + bs, bot - bs], c, "white", out);
+                quad_px([r - bs, t + bs, r, bot - bs], c, "white", out);
+            }
+            return;
+        }
+        let mut inner = item.rect;
+        if item.border != 0 {
+            inner = [x + b, y + b, w - (b + 1.0), h - (b + 1.0)];
+        }
+        if let Some((rgba, tex)) = face {
+            self.quad(inner, rgba, &tex, out);
         }
         if item.border == 1 {
-            let [x, y, w, h] = item.rect;
-            let b = item.border_size;
             let c = st.border_color;
             self.fill([x, y, w, b], c, out);
             self.fill([x, y + h - b, w, b], c, out);
@@ -808,6 +838,35 @@ mod tests {
             out[0].texture,
             crate::hud::default_if_missing("ui_mp/assets/nothing_here")
         );
+    }
+
+    /// A bordered full-width window on a wide window stretches with its
+    /// sides at the window's edges and its fill between them.
+    #[test]
+    fn a_bordered_full_width_window_stretches_whole() {
+        let p = Painter {
+            v: Virtual::new((1280.0, 480.0)),
+            fonts: None,
+            exact: false,
+        };
+        let item = UiItem {
+            style: WINDOW_STYLE_FILLED,
+            rect: [0.0, 100.0, 640.0, 50.0],
+            border: 1,
+            border_size: 2.0,
+            ..UiItem::default()
+        };
+        let st = ItemState {
+            visible: true,
+            back: [0.0, 0.0, 0.0, 0.5],
+            border_color: [1.0; 4],
+        };
+        let mut out = Vec::new();
+        p.window(&item, &st, None, &mut out);
+        let span = |q: &HudQuad| (q.verts[0][0], q.verts[2][0]);
+        assert_eq!(span(&out[0]), (2.0, 1279.0), "the fill");
+        assert_eq!(span(&out[3]), (0.0, 2.0), "the left side");
+        assert_eq!(span(&out[4]), (1278.0, 1280.0), "the right side");
     }
 
     /// `Item_SetTextExtents`: int widths, a centred shift rounded toward

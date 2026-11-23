@@ -509,8 +509,8 @@ has the seats, the drive step and vcod-server's vehicles.
   0x30022040 for the same two types (INFERRED, disassembly). The first skips
   the model under `eFlags` 0x80, takes it from the `xmodel` field, sets the
   refEntity's `shaderTime` to `(cg.time - cent+0x1fc) / 1000` and draws a
-  team head icon sprite over the driver (0x300213c0) (INFERRED,
-  disassembly). The callback:
+  team head icon sprite over the vehicle ("The vehicle's head icon",
+  below). The callback:
   - Writes each control through 0x3001fbb0: `yaw ⊗ pitch ⊗ roll` and a
     translation into the bone's 32-byte slot of the DObj's control array
     (trap 0xa1), gated by trap 0xa2 (INFERRED, disassembly).
@@ -567,6 +567,52 @@ has the seats, the drive step and vcod-server's vehicles.
     disassembly).
   - The seat view sits at the seat tag of `viewlocked_entNum` (0x30040810)
     (INFERRED, decompile).
+  - The intermission view takes none of it (VERIFIED (the instructions),
+    `CG_CalcViewValues` 0x30041a30). Under `ps.pm_type` 5 (0x30041a75) the
+    view is `ps.origin` and `ps.viewangles`, the roll included
+    (0x30041a84..0x30041ad5), through `AnglesToAxis` and `CG_CalcFov`, and it
+    returns at 0x30041b1c. That is before the four-wheel turn (0x30040580,
+    called at 0x30041bab), the turret view (0x30041550, at 0x30041ca4) and
+    `CG_VehicleView` (at 0x30041cd0). vcod's live view skips the seat and
+    gun eyes under `pm_type` 5 and draws the snapshots' roll. A seated
+    gunner's eye rolls with the gun's `tag_player`, so a stale seat at
+    intermission could turn the view over (INFERRED). That is the one
+    candidate found for an upside-down intermission frame once seen on
+    mp_peaks; it was never reproduced.
+- **The vehicle's head icon** (0x30021771..0x3002183c, VERIFIED (the
+  instructions)). It runs only past the model's two early outs (`eFlags`
+  0x80, no DObj). It returns when `otherEntityNum` (`+0x74`) is 1023 or
+  `cg.snap->ps.clientNum`, or when the snapshot's playerstate has `eFlags`
+  0x100000 and `viewlocked_entNum` (`ps+0x5c8`) is this vehicle. It then
+  needs `infoValid` (clientinfo `+0x0`, stride 0x4d0 at 0x305e1f34) for
+  the driver, for `cg_entities[driver].currentState.clientNum` (0x3048c774)
+  and for the viewer. The icon is the vehicle's own `iHeadIcon` (`+0x98`)
+  and `iHeadIconTeam` (`+0x9c`), filtered as the player pass filters
+  (`cod11-gametypes-re-bel.md` 7.3): a team other than 0 shows only to that
+  team or to a spectator (team 3). Configstring `0x25 + iHeadIcon`, the
+  player pass's block, registers as a type 5 shader. The sprite helper
+  0x300213c0 gets height 100, no distance scale and alpha 1.0. It centres
+  the sprite at `lerpOrigin` (`+0x208`) plus `100 + 72` in z (72.0 at
+  0x3007be18), radius 20.0 (0x3007be04, the player pass's is 6.66), colour
+  white, `reType` 4. The helper's distance scale (`d / 256 + 0.2`, at
+  least 0.6) is the player pass's, unused here.
+
+  Where the icon comes from (VERIFIED (the instructions), the Windows
+  server module `uo_game_mp_x86.dll`, base 0x20000000): the driven
+  vehicle's think copies `iHeadIcon` and `iHeadIconTeam` of
+  `g_entities[ent+0x154]` (stride 0x34c at 0x20118d40) onto the vehicle
+  (0x20045e84..0x20045ead). It does so
+  only inside the driver's weapon reader: past a non-empty weapon name in
+  the vehicle file, a weapon index other than 0 written to `s.weapon`, and
+  `+0x318` 0. `VEH_LinkPlayer`'s twin writes the driver's number to
+  `+0x154` and `otherEntityNum` (0x20047f18, 0x20047f20), and the unlink
+  puts 0x3ff in both and zeroes `iHeadIcon` (0x200481c7..0x200481da), not
+  the team. VERIFIED live: retail's tank drive and closespeed captures
+  carry `iHeadIcon` 1 and `iHeadIconTeam` 1 on all 418 snapshots, the
+  jeep's (no driver weapon) neither. The tank gun capture keeps the team
+  after its driver leaves. vcod-server copies it in that reader
+  (`vehicle::think`), and `vehicle_ab` compares both fields. The client
+  draws it in `head_icon::vehicle_icon`.
 
 ## 10. Gametypes
 
@@ -1136,8 +1182,8 @@ The client side: vcod watches and plays on a UO server.
   models' tag binds.
 - **Events, effects, HUD.** Section 19.
 - **Wheel dust** is `coduo-vehicles.md` 15.
-- **Not done.** The wheel suspension (under 0.03 units) of section 9, the
-  head icon over a driver, `lofx/`, soundloadspecs on the client and the
+- **Not done.** The wheel suspension (under 0.03 units) of section 9,
+  `lofx/`, soundloadspecs on the client and the
   rest of section 19's "Not done". The own gunner's gun and the drawn steer
   are `coduo-vehicles.md` 9, a shell's sound blend section 16, the server
   sections 20 to 22.
@@ -1483,9 +1529,27 @@ chunks against its own box and reports the burn (section 21,
     step comes `step / 2 + rand * step` on (0x3007bde8) (VERIFIED decompile).
   - The report tests these type 2 flames besides the stream (above), so a
     residue burns for its own life plus 1.4 s (INFERRED).
-  - Under 1300 ticks from its death a residue whose face is gone dies (a
-    4-unit trace behind it, VERIFIED decompile). vcod's world never moves,
-    so vcod skips it.
+  - A residue whose face is gone dies (VERIFIED (the instructions),
+    0x300281af..0x300282b2). In each trail step, after the type 2 flame,
+    the check runs when the residue's speed `+0x94` is at most 1.0
+    (0x3007bce0), its `+0x40` is 0, and more than 1300 ticks (650 ms,
+    0x3007c3d0) are left before its death `+0x50`. It traces a -2..2 box
+    (0x300851c4, 0x300851d0) through 0x30025cd0, mask 0x2810011, passing
+    `+0x34`. The start is the residue's position at `+0x130 + 1300`
+    (0x3007c3c8, through 0x30025990); the end is that less 4 (0x3007be40)
+    times the normal `+0x118`. A trace not stuck inside that meets nothing
+    (fraction exactly 1.0) sets the death to the clock. The flames already
+    shed live out their time. vcod (`RESIDUE_FACE_MS`) traces from the
+    residue's still position, as it has no rise. A residue can rest on a
+    vehicle, mover or script model, and this is what ends it when that
+    moves off.
+  - No type 5 smoke comes off a residue or its flames (VERIFIED (the
+    instructions)). 0x30028bed..0x30028c2c skips a type 2 parent. It also
+    skips a parent outside 0.02..0.8 of its life (0x3007c2b8, 0x3007c358).
+    Past that, the smoke's chance scales with `(speed / 900)^2`
+    (0x3007c0d8), which is 0 for a residue. The smoke itself is set up at
+    0x30028cca..0x30028d36. vcod's residue flames carry `shed` from birth,
+    so they never queue its puff.
   - 0x30027d10 also makes a type 3 off a chunk whose `+0x140` lies between 0
     and the clock (`0x30027ad0(chunk, 3, 40)` at 0x30027e9d, VERIFIED
     disassembly), but nothing sets a time there ("`+0x140`" below).
@@ -1884,8 +1948,8 @@ wire's, as `event_dump` prints them.
   `fx/*.csv`, the `vehicle` column included.
 - The MG loop (`AudioSystem::step_fire_loops`), the flamethrower
   (`fx::flame`, retail's constants; chunks clip bodies and the local player,
-  residue flames drift and rise; no chain merging, one smoke puff per
-  chunk), `CameraShake` and `F` (`fx::sim`), UO's earthquake fields
+  residue flames drift and rise and trail no smoke, a residue dies off a
+  gone face; no chain merging, one smoke puff per stream chunk), `CameraShake` and `F` (`fx::sim`), UO's earthquake fields
   (`play::quake`).
 - The HUD items above (`hud::uo`). Decoded `pm_flags` keep sprinting,
   winded and overheated at 0x1000000, 0x2000000, 0x4000000 (`PMF_*_V22`).

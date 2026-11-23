@@ -192,7 +192,7 @@ VERIFIED (pak0): the stock `ui_mp/scriptmenus/callvote.menu` sends `cmd callvote
 - VERIFIED (asm): `UI_FeederCount` for feeder 7 (0x4000c65e) rebuilds the list when `realTime` is past 0x401e3500 and sets that to `realTime + 3000`, so rows are at most 3 s old and are rebuilt only while the list is asked for. `UI_FeederSelection` (0x4000cdd9) stores the picked row at 0x401e3504. INFERRED from that lone store: before any pick it is the zeroed `uiInfo`'s 0, and OK kicks the first row.
 - VERIFIED (asm): `voteKick` (0x4000afc7) checks that index against the count and sends `callvote kick "<row>"`.
 
-vcod builds the same rows from the newest snapshot's client states (`frontend/players.rs`) on the same 3 s clock, rebuilt each frame a menu is up rather than only while the list draws. It drops `"`, CR and LF from the name, and `;` too from a map or game type, before it builds the line, so a server-sent name runs no console command of its own (`console::shell::quotable`, `bare`); vcod's rule.
+vcod builds the same rows from the newest snapshot's client states (`frontend/players.rs`) on the same 3 s clock, which runs only while an open menu shows a player or mute listbox (`Ui::player_list_shown`), as only that listbox asks `UI_FeederCount`. It drops `"`, CR and LF from the name, and `;` too from a map or game type, before it builds the line, so a server-sent name runs no console command of its own (`console::shell::quotable`, `bare`); vcod's rule.
 
 ## 6. The retail runs
 

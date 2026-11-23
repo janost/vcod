@@ -878,6 +878,7 @@ struct EntityAnim {
     /// `animclock::update_body`.
     stance_window_ms: i32,
     seat: SeatLeaves,
+    turret: TurretLeaves,
     /// The render time of the last frame the entity was in the snapshot;
     /// its clips hold still while it is not (cgame 0x3001bd00).
     present_ms: i32,
@@ -909,6 +910,7 @@ struct HeldPose {
     nodes: vcod_common::animclock::NodeWeights,
     group_pitch: f32,
     turret_leaves: Option<(usize, Vec<vcod_common::turretpose::TurretRow>)>,
+    turret_left: Option<(usize, Vec<vcod_common::turretpose::TurretRow>)>,
     seat_leaves: Vec<(usize, Vec<(usize, f32)>)>,
     controllers: Option<Controllers>,
 }
@@ -934,7 +936,10 @@ impl HeldPose {
                 .turret_leaves
                 .as_ref()
                 .map(|(n, rows)| (*n, rows.as_slice())),
-            turret_left: None,
+            turret_left: self
+                .turret_left
+                .as_ref()
+                .map(|(n, rows)| (*n, rows.as_slice())),
             seat_leaves: self.seat_leaves,
             controllers: self.controllers,
             leaf_times: Vec::new(),
@@ -1079,6 +1084,38 @@ impl SeatLeaves {
     }
 }
 
+/// A gunner's turret group as this frame's placement gave it, and the group
+/// the last node change or the release left, which fades out on the rows it
+/// carried: nothing places it again once `eFlags & 0xc000` clears (cgame
+/// 0x300282bf). The server's `ClientSim::set_gunner_blend` (turrets doc
+/// 13.9, "The dismount").
+#[derive(Clone, Default)]
+struct TurretLeaves {
+    goal: Option<(usize, Vec<vcod_common::turretpose::TurretRow>)>,
+    left: Option<(usize, Vec<vcod_common::turretpose::TurretRow>)>,
+}
+
+impl TurretLeaves {
+    fn next(&mut self, placed: Option<(usize, Vec<vcod_common::turretpose::TurretRow>)>) {
+        match &placed {
+            Some((node, _)) => {
+                if self.goal.as_ref().is_some_and(|(n, _)| n != node) {
+                    self.left = self.goal.take();
+                }
+                if self.left.as_ref().is_some_and(|(n, _)| n == node) {
+                    self.left = None;
+                }
+            }
+            None => {
+                if self.goal.is_some() {
+                    self.left = self.goal.take();
+                }
+            }
+        }
+        self.goal = placed;
+    }
+}
+
 impl EntityAnim {
     fn new(key: Vec<String>, skel: &Rc<Skeleton>, now_ms: i32) -> EntityAnim {
         EntityAnim {
@@ -1092,6 +1129,7 @@ impl EntityAnim {
             controls: None,
             stance_window_ms: 0,
             seat: SeatLeaves::default(),
+            turret: TurretLeaves::default(),
             present_ms: now_ms,
             held: None,
             shot: None,
@@ -2449,6 +2487,7 @@ fn draw_player(
             controls: st.controls,
             stance_window_ms: st.stance_window_ms,
             seat: st.seat.clone(),
+            turret: st.turret.clone(),
             present_ms: st.present_ms,
             held: None,
             shot: st.shot,
@@ -2672,6 +2711,7 @@ fn step_player_pose(
         .and_then(|seat| seat_inputs(anims, legs_wire, seat));
     let (legs_layers, torso_layers) =
         vcod_common::animclock::body_layers(&st.legs, &st.torso, anims, render_time);
+    st.turret.next(placed.map(|g| (g.node, g.rows)));
     let held = HeldPose {
         assembly: assembly.clone(),
         legs: legs_wire,
@@ -2680,7 +2720,8 @@ fn step_player_pose(
         torso_layers,
         nodes: st.torso.node_weights(render_time),
         group_pitch: pitch,
-        turret_leaves: placed.map(|g| (g.node, g.rows)),
+        turret_leaves: st.turret.goal.clone(),
+        turret_left: st.turret.left.clone(),
         seat_leaves: st.seat.next(goal),
         controllers,
     };
@@ -3006,6 +3047,31 @@ mod tests {
         );
     }
 
+    /// The aim group the trigger leaves, then the fire group the dismount
+    /// leaves, fade on their own rows; a return to the left group takes it
+    /// back, and the release keeps it (`ClientSim::set_gunner_blend`).
+    #[test]
+    fn a_left_turret_group_keeps_its_rows() {
+        let mut t = TurretLeaves::default();
+        let aim = (40, vec![(1.0, vec![(41, 1.0)])]);
+        let fire = (50, vec![(0.5, vec![(51, 1.0)])]);
+        t.next(Some(aim.clone()));
+        assert_eq!((t.goal.clone(), t.left.clone()), (Some(aim.clone()), None));
+        t.next(Some(fire.clone()));
+        assert_eq!(t.left, Some(aim.clone()), "aim to fire");
+        t.next(Some(aim.clone()));
+        assert_eq!(t.left, Some(fire.clone()), "back to aim");
+        t.next(None);
+        assert_eq!((t.goal.clone(), t.left.clone()), (None, Some(aim.clone())));
+        t.next(None);
+        assert_eq!(t.left, Some(aim.clone()), "off the gun it stays");
+        t.next(Some(fire.clone()));
+        assert_eq!(t.left, Some(aim.clone()), "a new mount on another group");
+        t.next(None);
+        t.next(Some(fire.clone()));
+        assert_eq!(t.left, None, "remounted on the group it left");
+    }
+
     /// On 1.5 and UO a drawn body's crouch stretches the torso's next
     /// blend to what is left of 400 ms, as the server's does; 1.1's
     /// setter keeps the fire anim's own.
@@ -3290,6 +3356,7 @@ mod tests {
             nodes: torso.node_weights(1500),
             group_pitch: 0.0,
             turret_leaves: None,
+            turret_left: None,
             seat_leaves: Vec::new(),
             controllers: Some(Controllers::default()),
         };

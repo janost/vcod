@@ -134,7 +134,9 @@ HUD and menus:
   chat, announcements, the "You killed" centre print.
 - The gametype script's HUD elements (S&D clock, bomb icons, progress
   bar) in retail's fonts. Head icons over players, the talk balloon on a
-  teammate typing or in a menu, the disconnected icon, the killcam marker.
+  teammate typing or in a menu, the disconnected icon, the killcam marker
+  (through walls, as retail draws it), a mod's quick-chat icon. In UO, a
+  tank driver's head icon over the tank.
 - A spectator following someone sees their HUD, weapon and scope.
 - On 1.5, `^8` and `^9` draw in the server's `g_TeamColor_Allies` and
   `g_TeamColor_Axis`, as 1.5's team chat uses them, and keep the last
