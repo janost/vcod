@@ -91,9 +91,9 @@ impl CenterPrint {
             } else {
                 (640.0 - w) * 0.5
             };
-            // Style 3 on CoD1 (0x30015cea).
+            // Style 3 (CoD1 0x30015cea, CoD2MP_s.exe 0x4c8545).
             let style = if self.cod2 {
-                TextStyle::Vcod
+                TextStyle::COD2
             } else {
                 TextStyle::SHADOWED
             };

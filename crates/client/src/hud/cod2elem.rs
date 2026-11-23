@@ -280,7 +280,13 @@ pub fn build(
                 let h = (48.0 * scale) as i32 as f32;
                 let [x, y] = position(sp, e, (w, h), now);
                 let k = sp.virtual_to_real[1];
-                font::layout(f, &s, x, y, px * k, rgba, &mut out);
+                // Style 3 through `R_AddCmdDrawText`, unsnapped
+                // (CoD2MP_s.exe 0x4dd9b8).
+                let style = font::TextStyle::Cod2 {
+                    style: 3,
+                    snap: false,
+                };
+                font::layout_styled(f, &s, x, y, px * k, rgba, style, k, &mut out);
             }
             6 | 11 | 12 => {
                 let Some(name) = material_of(e.material) else {

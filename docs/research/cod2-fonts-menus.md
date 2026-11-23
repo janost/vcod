@@ -78,6 +78,77 @@ retail's draw has it (`hud::font::load_font`). INFERRED. The console font
 is 16 pixels, so the console's third-of-glyph-scale draw is one texel a
 pixel. INFERRED.
 
+### 1.1 Text styles
+
+Module: `CoD2MP_s.exe` 1.3 and `gfx_d3d_mp_x86_s.dll` 1.3 (md5s in 4.2),
+read with `objdump` (2026-11-23); addresses are theirs.
+
+- The renderer's text draw (`gfx_d3d_mp_x86_s.dll` `0x100329c0`, run for
+  render command 0x15, queued at `0x10021700` and `0x1000c030`, executed
+  at `0x100330b0`) takes the text, a char limit, the font, x, y, an x and
+  a y scale (window px per font texel), the packed colour, the style, the
+  cursor position and the cursor glyph. VERIFIED (asm: the loads from the
+  command at `0x100330b0`..`0x100330e5`, the scales multiplying each
+  glyph's `x0`, `y0`, `pixelWidth` and `pixelHeight` at
+  `0x10032b24`..`0x10032c27`). Which argument is which past the scales is
+  INFERRED from their use below.
+- It first takes half a scale off x and y (`0x100329c3`..`0x10032a0d`,
+  0.5 at `0x1019bd38`): every glyph sits half a texel up and left.
+  VERIFIED (asm).
+- Styles 3 and 6 draw each glyph first in the shadow colour at x and y plus
+  `(style != 3) + 1`, the same scales, then the glyph
+  (`0x10032b3b`..`0x10032bc6`, `setne cl; inc ecx`). The offset is added
+  as an integer to window coordinates, so 1 or 2 px whatever the
+  resolution. The shadow colour is the packed colour masked to its alpha
+  byte (`shr 0x18; shl 0x18`, `0x100329f7`..`0x10032a04`): black at the
+  text's alpha. Every other style draws no shadow. VERIFIED (asm). The
+  packed colour is `b, g, r, a` from the float colour times 255
+  (`0x1002c4e0`). VERIFIED (asm). The Mac build's doubled quarter-pixel
+  draws (cod2-hud.md 13) are not in this renderer.
+- A `^N` code takes no glyph and does not count against the char limit
+  (`0x10032a4c`..`0x10032ae2`); `^7` and a digit past 9 restore the call's
+  colour, others set the palette's with the call's alpha. VERIFIED (asm).
+- `UI_DrawText` (`CoD2MP_s.exe` `0x5322c0`) places x and y through
+  `ScrPlace_ApplyRect` (`0x44be80`), rounds both to whole px (adding 2^-30,
+  `0x5c3f20`, then `fistp`, `0x5322ee`..`0x532329`) and calls
+  `R_AddCmdDrawText` (the import at `0x68a31c`) with its style argument.
+  VERIFIED (asm). The y is the baseline: the renderer adds each glyph's
+  `y0` to it. VERIFIED (`0x10032b28`, `0x10032bbb`).
+- Who passes which style to `UI_DrawText`, VERIFIED (the pushed operand,
+  `tools/re`-style stack walk over every call to `0x5322c0`): 3 from the
+  chat lines (`0x4c79ae`, the function reading `cg_chatHeight`), the
+  connection-interrupted line (`0x4c7c01`), the centre print (`0x4c8545`,
+  reading `cg_centertime`), the crosshair names (`0x4c99c8`), the
+  spectator line (`0x4cb56d`), the vote lines (`0x4cb6fb`..`0x4cb7ce`), the
+  follow keys and `CGAME_FOLLOWING` (`0x4cba44`, `0x4cbb8d`, `0x4cbbfd`),
+  the loading screen (`0x4d3639`), the scoreboard's title, footer,
+  objective, headers and banners (`0x4d9067`..`0x4da19f`); the scoreboard
+  row passes a register (`0x4da64f`, `(scale >= 0.16) * 3` per
+  cod2-hud.md 13). The HUD owner draws (`0x4c3ae0` ammo, `0x4c43b0`
+  stance, `0x4c5c20`, `0x4c5f10`, `0x4c6050` hints) pass one of their
+  arguments, and `Item_OwnerDraw_Paint` pushes the item's `+0x290`
+  (`0x5417d4`, `0x5418bb`), which `textstyle` (`MenuParse` entry
+  `0x5dd4ac`, handler `0x544c30`) sets. VERIFIED (asm). That the pushed
+  `+0x290` reaches those arguments is INFERRED. The menu items' paints
+  (`0x53f6d4`, `0x53f8f5`, `0x53fa1d`, `0x53fb30`, `0x53fdfd`,
+  `0x53ffcf`, `0x54015f`, `0x540b60`, `0x54136f`, `0x541468`) push
+  `+0x290` too. VERIFIED (asm).
+- Text drawn past `UI_DrawText`, unrounded: a hudelem's text
+  (`0x4dd8e0`, `R_AddCmdDrawText` with 3 pushed at `0x4dd9b8`), the say
+  line's label (`0x406d00`, 3 at `0x406dd4`) and field (`Field_Draw`
+  `0x409b00`, 3 stored at `0x409c67`), and the message windows' lines
+  (`0x4066b0`, 3 pushed after the colour pointer at `0x406836` into the
+  console text draw `0x68a328`). VERIFIED (asm). That those 3s are the
+  style argument is INFERRED (their place after the colour, as in
+  `UI_DrawText`'s own call).
+
+vcod: `hud::font::TextStyle::Cod2 { style, snap }` draws all of it;
+`snap` is `UI_DrawText`'s rounding. The menus pass the item's `textstyle`
+(`Painter::text`), the HUD owner draws theirs (`cod2_player_hud::Ctx::text`),
+the fixed draws 3 (`TextStyle::COD2`), the hudelems, the say line and the
+message windows 3 unrounded. The cursor glyph draws once without a shadow
+(4.2.1).
+
 ## 2. Menus
 
 ### Keywords

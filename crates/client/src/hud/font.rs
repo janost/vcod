@@ -457,9 +457,16 @@ fn push_quad(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TextStyle {
     Retail(i32),
-    /// vcod's own shadow, 1 px at 0.8 of the text's alpha: the CoD2 draws
-    /// not read against retail yet.
-    Vcod,
+    /// CoD2 1.3's renderer (`gfx_d3d_mp_x86_s.dll` 0x100329c0,
+    /// cod2-fonts-menus.md 1.1): 3 and 6 shadow 1 and 2 window px right and
+    /// down, black at the text's alpha, and every glyph sits half a texel
+    /// up and left. `snap`: `UI_DrawText` (CoD2MP_s.exe 0x5322c0) rounds
+    /// the x and the baseline to whole px first; the hudelems' and message
+    /// windows' direct draws do not.
+    Cod2 {
+        style: i32,
+        snap: bool,
+    },
 }
 
 /// Style 3, which nearly every fixed-style CoD1 HUD draw passes.
@@ -473,6 +480,20 @@ impl TextStyle {
     pub const NORMAL: TextStyle = TextStyle::Retail(0);
     pub const SHADOWED: TextStyle = TextStyle::Retail(3);
     pub const SHADOWED_MORE: TextStyle = TextStyle::Retail(6);
+    /// `UI_DrawText` in style 3, which every fixed-style CoD2 HUD draw
+    /// passes.
+    pub const COD2: TextStyle = TextStyle::Cod2 {
+        style: 3,
+        snap: true,
+    };
+
+    /// The same draw in style 0, no shadow.
+    pub fn plain(self) -> TextStyle {
+        match self {
+            TextStyle::Retail(_) => TextStyle::NORMAL,
+            TextStyle::Cod2 { snap, .. } => TextStyle::Cod2 { style: 0, snap },
+        }
+    }
 
     /// The shadow's offset in window px and its alpha for text at `alpha`,
     /// `unit` px to a virtual unit.
@@ -481,9 +502,34 @@ impl TextStyle {
             TextStyle::Retail(3) => Some((unit, alpha)),
             TextStyle::Retail(6) => Some((2.0 * unit, alpha)),
             TextStyle::Retail(_) => None,
-            TextStyle::Vcod => Some((1.0, 0.8 * alpha)),
+            TextStyle::Cod2 { style: 3, .. } => Some((1.0, alpha)),
+            TextStyle::Cod2 { style: 6, .. } => Some((2.0, alpha)),
+            TextStyle::Cod2 { .. } => None,
         }
     }
+
+    /// Where CoD2's renderer puts text whose top-left `(x, y)` vcod's
+    /// callers pass: the snap of `UI_DrawText` (0x5322ee..0x532329, round
+    /// to nearest) on x and the baseline, then half a glyph texel up and
+    /// left (0x100329c3..0x10032a0d). Other styles keep `(x, y)`.
+    fn origin(self, font: &Font, x: f32, y: f32, scale: f32) -> (f32, f32) {
+        let TextStyle::Cod2 { snap, .. } = self else {
+            return (x, y);
+        };
+        let s = font.glyph_scale * font.unit_scale() * scale;
+        let ascent = font.max_height as f32 * s;
+        let (x, y) = match snap {
+            true => (snap_px(x), snap_px(y + ascent) - ascent),
+            false => (x, y),
+        };
+        (x - 0.5 * s, y - 0.5 * s)
+    }
+}
+
+/// `UI_DrawText`'s round: the float plus 2^-30 (CoD2MP_s.exe 0x5c3f20)
+/// through `fistp` at the default round-to-nearest.
+fn snap_px(v: f32) -> f32 {
+    (f64::from(v) + 9.313225746154785e-10).round_ties_even() as f32
 }
 
 /// Lays out `text` with its top-left at (x, y) in `style`, `unit` window px
@@ -503,6 +549,7 @@ pub fn layout_styled(
     out: &mut Vec<HudQuad>,
 ) -> f32 {
     let shadow = style.shadow(unit, color[3]);
+    let (x, y) = style.origin(font, x, y, scale);
     lay(font, text, x, y, scale, None, color, shadow, out)
 }
 
@@ -521,6 +568,7 @@ pub fn layout_fixed_styled(
     out: &mut Vec<HudQuad>,
 ) -> f32 {
     let shadow = style.shadow(unit, color[3]);
+    let (x, y) = style.origin(font, x, y, scale);
     lay(font, text, x, y, scale, Some(cell), color, shadow, out)
 }
 
@@ -624,6 +672,47 @@ fn lay(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// CoD2's text (cod2-fonts-menus.md 1.1): `UI_DrawText` rounds x and the
+    /// baseline, the renderer takes half a texel off both, and style 3's
+    /// shadow sits one window px right and down at the text's alpha.
+    #[test]
+    fn cod2_text_snaps_and_shifts_half_a_texel() {
+        let f = crate::hud::hudelem::tests::test_font();
+        // A texel is 2 px at this scale; the ascent 20.
+        let draw = |snap| {
+            let mut out = Vec::new();
+            let style = TextStyle::Cod2 { style: 3, snap };
+            layout_styled(
+                &f,
+                "a",
+                10.3,
+                5.6,
+                1.25,
+                [1.0, 1.0, 1.0, 0.5],
+                style,
+                2.0,
+                &mut out,
+            );
+            out
+        };
+        let near =
+            |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 1e-4 && (a[1] - b[1]).abs() < 1e-4;
+        let q = draw(true);
+        assert_eq!(q.len(), 2);
+        assert!(near(q[1].verts[0], [9.0, 5.0]), "{:?}", q[1].verts[0]);
+        assert!(near(q[0].verts[0], [10.0, 6.0]), "{:?}", q[0].verts[0]);
+        assert_eq!(q[0].rgba, [0.0, 0.0, 0.0, 0.5]);
+        let q = draw(false);
+        assert!(near(q[1].verts[0], [9.3, 4.6]), "{:?}", q[1].verts[0]);
+        assert_eq!(
+            TextStyle::COD2.plain(),
+            TextStyle::Cod2 {
+                style: 0,
+                snap: true
+            }
+        );
+    }
 
     #[test]
     fn splits_color_codes() {

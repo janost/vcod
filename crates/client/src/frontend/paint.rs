@@ -798,8 +798,8 @@ impl Painter<'_> {
     }
 
     /// `text` with its baseline at grid `(x, y)`, in an item's `textstyle`
-    /// on CoD1 (every `Item_*_Paint` passes item `+0xe4`); CoD2 keeps
-    /// vcod's shadow.
+    /// (every 1.1 `Item_*_Paint` passes item `+0xe4`, CoD2's `+0x290`
+    /// through `UI_DrawText`).
     pub(crate) fn text(
         &self,
         text: &str,
@@ -814,12 +814,11 @@ impl Painter<'_> {
         let top = y - f.max_height as f32 * f.glyph_scale * scale;
         let [px, py] = self.v.point(x, top);
         let px_scale = scale * self.v.scale / f.unit_scale();
-        if self.exact {
-            font::layout(f, text, px, py, px_scale, color, out);
-        } else {
-            let style = TextStyle::Retail(style);
-            font::layout_styled(f, text, px, py, px_scale, color, style, self.v.scale, out);
-        }
+        let style = match self.exact {
+            true => TextStyle::Cod2 { style, snap: true },
+            false => TextStyle::Retail(style),
+        };
+        font::layout_styled(f, text, px, py, px_scale, color, style, self.v.scale, out);
     }
 }
 
@@ -842,10 +841,10 @@ mod tests {
         }
     }
 
-    /// CoD1 menu text takes the item's `textstyle`; CoD2's keeps vcod's
-    /// 1 px shadow at 0.8.
+    /// Menu text takes the item's `textstyle`: CoD1's shadow offset is in
+    /// virtual units, CoD2's in window px (cod2-fonts-menus.md 1.1).
     #[test]
-    fn menu_text_draws_in_the_items_style_on_cod1() {
+    fn menu_text_draws_in_the_items_style() {
         let fonts = crate::hud::hudelem::tests::test_fonts();
         let draw = |exact, style| {
             let p = Painter {
@@ -861,8 +860,9 @@ mod tests {
         assert_eq!(draw(false, 0).len(), 1);
         let q = draw(false, 6);
         assert_eq!((offset(&q), q[0].rgba[3]), (4.0, 1.0));
-        let q = draw(true, 0);
-        assert_eq!((offset(&q), q[0].rgba[3]), (1.0, 0.8));
+        assert_eq!(draw(true, 0).len(), 1);
+        let q = draw(true, 6);
+        assert_eq!((offset(&q), q[0].rgba[3]), (2.0, 1.0));
     }
 
     /// `Window_Paint` style 3 draws its handle whatever it is: no

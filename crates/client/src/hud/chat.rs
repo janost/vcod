@@ -264,7 +264,10 @@ impl Chat {
             let (tx, _) = sp.axis(0, x0, 0.0, 1);
             let (ty, _) = sp.axis(1, top + 9.0 - 48.0 * SCALE, 0.0, 1);
             let px = SCALE / font.unit_scale() * k;
-            super::font::layout(font, line, tx, ty, px, [1.0, 1.0, 1.0, alpha], out);
+            let rgba = [1.0, 1.0, 1.0, alpha];
+            // `UI_DrawText` style 3 (CoD2MP_s.exe 0x4c79ae).
+            let style = TextStyle::COD2;
+            super::font::layout_styled(font, line, tx, ty, px, rgba, style, k, out);
         }
     }
 }
@@ -289,10 +292,17 @@ pub fn field_cod2(
     let (y, _) = sp.axis(1, pos[1] + 24.0, 0.0, 1);
     let white = [1.0; 4];
     let (x, _) = sp.axis(0, pos[0], 0.0, 1);
-    super::font::layout(font, &label, x, y, px, white, out);
+    // Style 3 through `R_AddCmdDrawText`, unsnapped (CoD2MP_s.exe 0x406dd4).
+    let style = TextStyle::Cod2 {
+        style: 3,
+        snap: false,
+    };
+    super::font::layout_styled(font, &label, x, y, px, white, style, k, out);
     let lw = text_width(font, &label, SCALE).trunc();
     let (x, _) = sp.axis(0, pos[0] + lw, 0.0, 1);
-    super::font::layout(font, &format!("{}_", field.text), x, y, px, white, out);
+    // `Field_Draw` (0x409b00) passes style 3 too (0x409c67).
+    let text = format!("{}_", field.text);
+    super::font::layout_styled(font, &text, x, y, px, white, style, k, out);
 }
 
 /// The chat field while `messagemode` is open (CoDMP.exe 0x409d80, from
