@@ -284,7 +284,9 @@ fn headless_device_has_the_window_limits() {
 /// body bind-posed and skinned, the kar98k viewmodel, a smoke and an
 /// impact sprite, a bullet hole and the HUD, every cvar pass on. With
 /// `VCOD_C1_SHOTS=<dir>` the frame is written there as a TGA, for the GPU
-/// kit to compare builds byte for byte.
+/// kit to compare builds byte for byte. It draws at the renderer's default
+/// identityLight 0.5 (full screen) under `vc_bicubic`, so it never takes
+/// the windowed lightmap shift; the identity ramp test's frame does.
 #[test]
 fn cod1_renderer_builds_and_draws_without_validation_errors() {
     let Some(fs) = vcod_common::testing::game_fs() else {
@@ -354,21 +356,8 @@ fn cod1_renderer_builds_and_draws_without_validation_errors() {
         },
     );
     assert_clean(&errors, "CoD1 mp_carentan frame");
-    if let Some(dir) = std::env::var_os("VCOD_C1_SHOTS").map(std::path::PathBuf::from) {
-        let (w, h, bgra) = r.read_offscreen().expect("offscreen target");
-        let rgba: Vec<u8> = bgra
-            .chunks(4)
-            .flat_map(|p| [p[2], p[1], p[0], 255])
-            .collect();
-        image::save_buffer(
-            dir.join("mp_carentan.tga"),
-            &rgba,
-            w,
-            h,
-            image::ExtendedColorType::Rgba8,
-        )
-        .unwrap();
-    }
+    let (w, h, bgra) = r.read_offscreen().expect("offscreen target");
+    write_shot("mp_carentan.tga", w, h, &bgra);
     assert!(
         r.fx.textures
             .get(vcod_common::shader::DEFAULT_IMAGE)
@@ -377,10 +366,26 @@ fn cod1_renderer_builds_and_draws_without_validation_errors() {
     );
 }
 
+/// With `VCOD_C1_SHOTS=<dir>`, a frame the app drew writes there as
+/// `name`, a TGA for the GPU kit to compare builds byte for byte.
+fn write_shot(name: &str, w: u32, h: u32, bgra: &[u8]) {
+    let Some(dir) = std::env::var_os("VCOD_C1_SHOTS").map(std::path::PathBuf::from) else {
+        return;
+    };
+    let rgba: Vec<u8> = bgra
+        .chunks(4)
+        .flat_map(|p| [p[2], p[1], p[0], 255])
+        .collect();
+    image::save_buffer(dir.join(name), &rgba, w, h, image::ExtendedColorType::Rgba8).unwrap();
+}
+
 /// A windowed CoD1 frame at `r_gamma` 1 skips the gamma pass and draws the
 /// scene and the 2D into the target (`scene_direct`), and CoD1's default
 /// draws no depth prepass (cod11-client-perf.md 4): the bytes are the
-/// gamma pass's and the prepass's, at one sample and at four.
+/// gamma pass's and the prepass's, at one sample and at four. The
+/// one-sample frame is `VCOD_C1_SHOTS`' `mp_carentan_windowed.tga`: the
+/// windowed lightmap shift (identityLight 1, `vc_bicubic` 0) on a map
+/// where 14% of the lightmap texels clamp when doubled.
 #[test]
 fn cod1_identity_ramp_frame_matches_the_gamma_pass_and_the_prepass() {
     let Some(fs) = vcod_common::testing::game_fs() else {
@@ -418,6 +423,9 @@ fn cod1_identity_ramp_frame_matches_the_gamma_pass_and_the_prepass() {
             r.read_offscreen().expect("offscreen target").2
         };
         let before = shot(false, true);
+        if samples == 1 {
+            write_shot("mp_carentan_windowed.tga", SIZE.0, SIZE.1, &before);
+        }
         for (direct, prepass) in [(true, true), (false, false), (true, false)] {
             let after = shot(direct, prepass);
             let differ = before.iter().zip(&after).filter(|(a, b)| a != b).count();
