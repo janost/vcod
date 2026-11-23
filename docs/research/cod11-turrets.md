@@ -2228,8 +2228,13 @@ keeps the group last left with its leaves (`gunner_left`).
 `playerpose::pose_player` poses each legs layer: the current one by the
 placement's rows and leaves, a fading turret group by the rows it was left
 with (`PoseInputs::turret_left`), any other clip as itself; under `node_time`
-(1.5 and UO) every leaf samples its group's node time. The client draws with
-the current group's rows only, without the rows the search walks past.
+(1.5 and UO) every leaf samples its group's node time. The client keeps the
+same two groups per body (`entities::TurretLeaves`, the server's bookkeeping)
+and poses a fading one on its rows. VERIFIED (the instructions): its
+placement 0x300279b0 runs only while `eFlags & 0xc000` (0x300282bf..
+0x300282c5), so nothing places a group again once the gunner is off it.
+INFERRED: the cgame's tree keeps that group's weights as the server's does.
+It draws without the rows the search walks past.
 
 #### The captures
 
@@ -2398,7 +2403,11 @@ VERIFIED live, `mp_carentan-dm-turret-gungrid.txt` (1.1d, 2026-11-15,
 `probe_gungrid_tail 1000`, which logs the grid for a second past each
 return to the spot, and the gunner's attachments logged at his placement
 (`PROBE models 1`, `probe_turret.gsc` `pin_models`).
-`the_gunner_grid_capture_matches_retail_on_mp_carentan` replays it.
+`the_gunner_grid_capture_matches_retail_on_mp_carentan` replays it. The
+probe logs every frame the gunner stands off the spot, his strafes and the
+refused mount included, and 1.1 gives a script no mount test. The gate
+therefore takes a line on a mounted snapshot or within the tail's 1000 ms
+after one: 300 of the capture's 325 lines (VERIFIED, the gate).
 
 - **The gear.** The 2026-11-14 capture's 2622 cells off were the gunner's
   gear. His character is a random draw of nine
