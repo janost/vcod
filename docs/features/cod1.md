@@ -155,7 +155,7 @@ HUD and menus:
 - A running vote shows as retail's cgame shows it (subject, seconds left,
   yes and no counts with the keys) and plays its sound. F1 and F2 vote;
   the call vote menu's restart, next map, map, type-and-map and kick picks
-  call one.
+  (on 1.5 and UO also the temporary ban pick) call one.
 - Retail's drop-down console on `` ` `` with the commands under
   [Console](../usage.md#console), `rcon` among them.
 
