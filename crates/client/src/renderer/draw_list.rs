@@ -476,8 +476,15 @@ pub(super) enum Emit {
     None,
     World(WorldRunState),
     Ent(EntRunState),
-    Gun { part: u32, bound: EntBound },
-    Fx { blend: FxBlend, soft: bool },
+    Gun {
+        part: u32,
+        bound: EntBound,
+    },
+    Fx {
+        blend: FxBlend,
+        soft: bool,
+        always: bool,
+    },
 }
 
 /// Copies the visible `ranges` out of `src` batch by batch into `out`, one

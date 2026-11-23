@@ -44,30 +44,37 @@ pub fn visible(icon: i32, icon_team: i32, viewer_team: i32) -> bool {
 
 /// The second sprite after a head icon, if any (0x3002756d..0x30027629).
 #[derive(Debug, PartialEq)]
-enum Second {
+enum Second<'a> {
     /// Our own body while the view is someone else's.
     Killcam,
     Disconnected,
+    /// A quick-chat line's icon (`cent+0x220` until `cent+0x224`).
+    Voice(&'a str),
     Talk,
 }
 
 /// Which second sprite `num` carries. `own` is our client number, `viewer`
-/// the viewed one (`ps.clientNum`); the talk balloon shows only to a
-/// teammate or a spectator. Retail's voice chat icon would take the talk
-/// balloon's place; vcod draws none.
-fn second(
+/// the viewed one (`ps.clientNum`), `voice` its live quick-chat icon; the
+/// voice icon, else the talk balloon, shows only to a teammate or a
+/// spectator.
+fn second<'a>(
     num: u32,
     eflags: i32,
     team: i32,
     own: i32,
     viewer: i32,
     viewer_team: i32,
-) -> Option<Second> {
+    voice: Option<&'a str>,
+) -> Option<Second<'a>> {
     if num as i32 == own && viewer != own {
         Some(Second::Killcam)
     } else if eflags & EF_DISCONNECTED != 0 {
         Some(Second::Disconnected)
-    } else if (team == viewer_team || viewer_team == TEAM_SPECTATOR) && eflags & EF_TALK != 0 {
+    } else if team != viewer_team && viewer_team != TEAM_SPECTATOR {
+        None
+    } else if let Some(shader) = voice {
+        Some(Second::Voice(shader))
+    } else if eflags & EF_TALK != 0 {
         Some(Second::Talk)
     } else {
         None
@@ -128,6 +135,8 @@ pub struct Scene<'a> {
     pub entity_pos: &'a HashMap<u32, Vec3>,
     /// The vehicle `ps.clientNum` sits in (UO).
     pub riding: Option<u32>,
+    /// A player's live quick-chat icon (`QuickChat::sprite`).
+    pub voice: &'a dyn Fn(u32) -> Option<&'a str>,
 }
 
 /// Up to two sprites per drawn player: the head icon the viewer may see,
@@ -178,7 +187,16 @@ pub fn quads(s: &Scene, right: Vec3, up: Vec3) -> Vec<FxQuad> {
             height = STACK;
         }
         let team = client.field_i32(p, "team");
-        match second(num, int("eFlags"), team, s.own, s.viewer, viewer_team) {
+        let voice = (s.voice)(num);
+        match second(
+            num,
+            int("eFlags"),
+            team,
+            s.own,
+            s.viewer,
+            viewer_team,
+            voice,
+        ) {
             Some(Second::Killcam) => {
                 let (centre, radius) = distance_scaled(anchor(head, origin, height), s.eye);
                 out.push(sized_sprite(centre, radius, right, up, KILLCAM_SHADER));
@@ -190,6 +208,9 @@ pub fn quads(s: &Scene, right: Vec3, up: Vec3) -> Vec<FxQuad> {
                     up,
                     DISCONNECTED_SHADER,
                 ));
+            }
+            Some(Second::Voice(shader)) => {
+                out.push(sprite(anchor(head, origin, height), right, up, shader));
             }
             Some(Second::Talk) => {
                 let centre = anchor(head, origin, height - TALK_DROP);
@@ -313,6 +334,7 @@ mod tests {
             heads: &heads,
             entity_pos: &entity_pos,
             riding: None,
+            voice: &|_| None,
         };
         let q = quads(&scene, Vec3::Y, Vec3::Z);
         assert_eq!(q.len(), 1);
@@ -326,25 +348,43 @@ mod tests {
         // Own body seen while following someone else: the killcam marker
         // wins over everything after it.
         assert_eq!(
-            second(3, talk | EF_DISCONNECTED, 1, 3, 5, 1),
+            second(3, talk | EF_DISCONNECTED, 1, 3, 5, 1, None),
             Some(Second::Killcam)
         );
-        assert_eq!(second(3, talk, 1, 3, 3, 1), Some(Second::Talk), "own view");
+        assert_eq!(
+            second(3, talk, 1, 3, 3, 1, None),
+            Some(Second::Talk),
+            "own view"
+        );
         // Disconnected shows to anyone and beats the balloon.
         assert_eq!(
-            second(4, talk | EF_DISCONNECTED, 1, 0, 0, 2),
+            second(4, talk | EF_DISCONNECTED, 1, 0, 0, 2, None),
             Some(Second::Disconnected)
         );
         // The balloon: teammates and spectators only.
-        assert_eq!(second(4, talk, 1, 0, 0, 1), Some(Second::Talk));
-        assert_eq!(second(4, talk, 1, 0, 0, 2), None);
-        assert_eq!(second(4, talk, 1, 0, 0, TEAM_SPECTATOR), Some(Second::Talk));
+        assert_eq!(second(4, talk, 1, 0, 0, 1, None), Some(Second::Talk));
+        assert_eq!(second(4, talk, 1, 0, 0, 2, None), None);
         assert_eq!(
-            second(4, talk, 0, 0, 0, 0),
+            second(4, talk, 1, 0, 0, TEAM_SPECTATOR, None),
+            Some(Second::Talk)
+        );
+        assert_eq!(
+            second(4, talk, 0, 0, 0, 0, None),
             Some(Second::Talk),
             "free for all"
         );
-        assert_eq!(second(4, 0, 1, 0, 0, 1), None);
+        assert_eq!(second(4, 0, 1, 0, 0, 1, None), None);
+        // A quick-chat icon takes the balloon's place, for the same viewers.
+        let v = Some("headiconVoiceChat");
+        assert_eq!(
+            second(4, talk, 1, 0, 0, 1, v),
+            Some(Second::Voice("headiconVoiceChat"))
+        );
+        assert_eq!(second(4, 0, 1, 0, 0, 2, v), None);
+        assert_eq!(
+            second(4, EF_DISCONNECTED, 1, 0, 0, 1, v),
+            Some(Second::Disconnected)
+        );
     }
 
     #[test]
@@ -390,6 +430,7 @@ mod tests {
             heads: &heads,
             entity_pos: &entity_pos,
             riding: None,
+            voice: &|_| None,
         };
         let q = quads(&scene, Vec3::Y, Vec3::Z);
         let centre = |q: &FxQuad| q.verts[0][2] - RADIUS;
@@ -442,6 +483,7 @@ mod tests {
             heads: &heads,
             entity_pos: &entity_pos,
             riding: None,
+            voice: &|_| None,
         };
         let q = quads(&scene, Vec3::Y, Vec3::Z);
         assert_eq!(q.len(), 1);

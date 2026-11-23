@@ -72,6 +72,7 @@ impl App {
             ev_seen: &mut self.ev_seen,
             ev_unknown: &mut self.ev_unknown,
             fx_ms: &mut self.fx_ms,
+            quick_chat: &self.quick_chat,
         };
         let Posed {
             mut instances,
@@ -432,6 +433,7 @@ struct LiveCx<'a> {
     ev_seen: &'a mut u64,
     ev_unknown: &'a mut u64,
     fx_ms: &'a mut f32,
+    quick_chat: &'a crate::quick_chat::QuickChat,
 }
 
 impl LiveCx<'_> {
@@ -1840,6 +1842,7 @@ impl LiveCx<'_> {
                     riding: (newest.ps.field_i32(p, "eFlags") & net::flags::EF_IN_VEHICLE_V22 != 0)
                         .then(|| u32::try_from(newest.ps.field_i32(p, "viewlocked_entNum")).ok())
                         .flatten(),
+                    voice: &|num| self.quick_chat.sprite(num, time),
                 },
                 cam_right,
                 cam_up,

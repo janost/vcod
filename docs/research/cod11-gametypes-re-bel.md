@@ -399,10 +399,26 @@ configstring `0x14 + n`.
 - VERIFIED: the materials register at map load: `headiconDisconnected` and
   `headiconYouInKillCam` type 5 (0x301d5aac, 0x301d5ab0),
   `headiconVoiceChat` and `headiconTalkBalloon` type 2 (0x301d5aa4,
-  0x301d5aa8). pak0's shader file maps them to `gfx/hud/disconnected.tga`,
-  `gfx/hud/talkballoon.tga` and `gfx/hud/killcamindicator.tga` (the last
-  `sort nearest`, `nofog`), each `blendFunc blend` with vertex colour and
-  alpha.
+  0x301d5aa8). pak4's `scripts/hud.shader` maps them to
+  `gfx/hud/disconnected.tga`, `gfx/hud/voicechat.tga`,
+  `gfx/hud/talkballoon.tga` and `gfx/hud/killcamindicator.tga`, each
+  `blendFunc blend` with vertex colour and alpha. The killcam marker's is
+  also `sort nearest`, `nofog` and `depthFunc always`, so it shows through
+  walls. It is the only stock fx-drawn material with `depthFunc always`
+  (VERIFIED, a scan of every 1.1 and UO pak's `.shader` files; two yacht
+  model skins are the others). vcod's fx pass draws such a stage through
+  its depth-always pipelines (`FxRun::depth_always`).
+- VERIFIED, cgame 0x3002d470..0x3002d574: arm 3's material and time come
+  from a quick-chat line as the drain presents it (cod11-quick-chat.md 2).
+  With `cg_noVoiceChats` (row 0x30074fa0, "0", archived) 0, a speaker
+  other than `snap->ps.clientNum` gets the variant's head icon in
+  `cent+0x220` and `cg.time + cg_voiceSpriteTime` in `cent+0x224`
+  (row 0x30074f80, "6000", archived), twice the time when the icon is not
+  `headiconVoiceChat`. The view's own line goes to 0x3020944c and
+  0x30209450, which nothing else in the module reads. The handler also
+  writes the line's origin into the speaker's `lerpOrigin` (`cent+0x1f8`),
+  which the next frame's interpolation overwrites (INFERRED). vcod:
+  `QuickChat::show_sprite` and `head_icon`'s `Second::Voice`.
 - VERIFIED: the sprite's `renderfx` is 2 when `snap->ps` `pm_flags` has
   0x50000 (own view or follow), the entity is `snap->ps.clientNum` and
   `0x30207158` is 0 (0x30027331..0x3002734e). INFERRED: that hides every
@@ -428,9 +444,9 @@ configstring `0x14 + n`.
   `eflags_v22_to_v1` maps to 1.1's 0x1000 and 0x40000; 1.5 tests 1.1's
   bits.
 
-vcod (`crates/client/src/head_icon.rs`) draws the head icon and arms 1, 2
-and 4. It has no voice-chat icon (stock paks ship no `.voice` file), so the
-balloon never yields to one.
+vcod (`crates/client/src/head_icon.rs`) draws the head icon and all four
+arms. Arm 3 needs a mod's `.voice` files: stock paks ship none
+(cod11-quick-chat.md 4).
 
 ### 7.4 `objective_position` detaches
 

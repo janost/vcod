@@ -245,6 +245,20 @@ fn fx_stage_draws_every_base_stage() {
     assert_eq!(image(0.8), "a.tga");
 }
 
+/// `headiconYouInKillCam` (pak4 `scripts/hud.shader`) skips the depth test,
+/// as its stage state says; a plain stage keeps it.
+#[test]
+fn a_depth_always_stage_draws_without_the_depth_test() {
+    let killcam = parse_fx(
+        "nopicmip sort nearest nofog { map clamp gfx/hud/killcamindicator.tga \
+         blendFunc blend alphaGen vertex rgbGen vertex depthFunc always }",
+    );
+    let draws = fx_stage_draws(Some(&killcam), "t", 0.0);
+    assert!(draws[0].depth_always);
+    assert_eq!(draws[0].flags & FX_VERT_NOFOG, FX_VERT_NOFOG);
+    assert!(!fx_stage_draws(None, "gfx/x", 0.0)[0].depth_always);
+}
+
 /// A stage's colour follows its gens, not the sprite's colour alone
 /// (CoDMP.exe 0x4ffa60): identity is opaque white, vertex the sprite's
 /// colour times identityLight with its alpha, a wave ignores the sprite.

@@ -685,6 +685,11 @@ impl Shell {
         s.register("cg_teamChatsOnly", "0", ARCHIVE);
         s.register("cg_chatHeight", "8", ARCHIVE);
         s.register("cg_chatTime", "12000", ARCHIVE);
+        // cgame's rows at 0x30074fa0 and 0x30074f80: "0" and "6000",
+        // archived. The quick-chat voice and its head icon, and how long
+        // that shows (docs/research/cod11-quick-chat.md 2).
+        s.register("cg_noVoiceChats", "0", ARCHIVE);
+        s.register("cg_voiceSpriteTime", "6000", ARCHIVE);
         // cgame's row at 0x30074a20: default "0", archived and CVAR_CHEAT.
         // 1 drops a blob under each player (crate::blob_shadow).
         s.register("cg_shadows", "0", ARCHIVE | CHEAT);

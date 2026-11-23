@@ -1048,14 +1048,19 @@ impl Renderer {
                             continue;
                         }
                         // a distortion or cloud run went on above
-                        let soft = fx_soft(&fx.runs[fi], k);
+                        let always = fx.runs[fi].depth_always;
+                        let soft = fx_soft(&fx.runs[fi], k) && !always;
                         let bound = match emit {
-                            Emit::Fx { blend, soft: s } => {
+                            Emit::Fx {
+                                blend,
+                                soft: s,
+                                always: a,
+                            } => {
                                 if soft && !s {
                                     pass.set_bind_group(2, self.soft.fx_bind_group(), &[]);
                                     tally(&self.census, |c| c.bind_groups += 1);
                                 }
-                                Some((blend, s))
+                                Some((blend, s, a))
                             }
                             other => {
                                 if matches!(other, Emit::Gun { .. }) {
@@ -1075,8 +1080,10 @@ impl Renderer {
                                 None
                             }
                         };
-                        if bound != Some((*blend, soft)) {
-                            let set = if soft {
+                        if bound != Some((*blend, soft, always)) {
+                            let set = if always {
+                                &fx.always_pipelines
+                            } else if soft {
                                 &fx.soft_pipelines
                             } else {
                                 &fx.pipelines
@@ -1095,6 +1102,7 @@ impl Renderer {
                         emit = Emit::Fx {
                             blend: *blend,
                             soft,
+                            always,
                         };
                     }
                 }
