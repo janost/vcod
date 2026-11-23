@@ -393,3 +393,42 @@ the load from the main menu only (`player_profile_ingame_warning` in a
 game). Create, delete and load refuse a name that is not one plain
 directory name (a separator, `.`, `..`, a `:`, a control character); the
 type-16 field types none.
+
+### 4.2 Edit fields and the paint order
+
+Module: `CoD2MP_s.exe` 1.3 (md5 `6183be2d1ab494a480423eb9af3d358b`) and
+`gfx_d3d_mp_x86_s.dll` (md5 `2402bf2072f9255b85e3d23297d1d0ed`), read with
+`objdump` (2026-11-23); addresses are theirs. 1.1's side is
+cod11-front-end.md 20.5.1 and 18.4.1.
+
+- An edit starts as 1.1's does: one path zeroes the edit data's
+  `paintOffset` (`+0x1c`) and the item's `cursorPos` (`+0x2dc`), the other
+  `cursorPos` only, and both set the editing flag (`0x19a1c94`), the edit
+  item (`0x19a1c9c`) and overstrike, the int behind the pointer at
+  `0x5cdd28`, to 1 (`0x53d510`..`0x53d541`, `0x53ed92`..`0x53edb5`).
+  Insert (`0xa1`, keypad `0xc0`) flips it (`0x53d950`..`0x53d96e`).
+  `Item_TextField_Paint` picks `_` in overstrike, `|` else (`and
+  dl,0xe3; add dl,0x7c`, `0x53fd88`..`0x53fd9f`), and paints from
+  `paintOffset`, at most `maxPaintChars` (`+0x18`, 0 for no limit,
+  `0x53fd41`..`0x53fd61`). VERIFIED (asm).
+- The cursor blinks on the other phase: the renderer's cursor draw
+  (`gfx_d3d_mp_x86_s.dll` `0x10032860`, called from the text loop at
+  `0x10032c61` and after it at `0x10032cdb`) skips the glyph when
+  `(time / 256) & 1` (`sar eax,0x8; test al,0x1; jne`,
+  `0x10032861`..`0x10032875`), with no base taken off. VERIFIED (asm).
+  That the time is the engine's millisecond clock (the pointer at
+  `0x101d49e0`) is INFERRED.
+- The key handler moves the cursor unlike 1.1's: Left steps back over a
+  `^` colour code in one go (`0x53da72`..`0x53dabb`), End calls a
+  paint-offset fixup (`0x53d550`, from `0x53da4c`), and types 16, 17 and
+  18 have character tests of their own (`0x53d6e9`..`0x53d764`). VERIFIED
+  (asm). vcod keeps its own CoD2 edit (`Ui::edit_key_cod2`): typed text
+  appends at the end, the field paints its tail and a `|`, and no cursor
+  blinks. Porting CoD2's handler is open.
+- `Menu_PaintAll` (`0x542740`, from `UI_Refresh` `0x532553`) paints the
+  menus off the stack (stack at the UI context's `+0x230`, count `+0x270`)
+  that carry the visible flag (`+0xe8 & 4`), in load order
+  (`0x54277b`..`0x542973`), then the stack from its topmost menu with
+  `fullscreen` (`+0x214`, `MenuParse_fullscreen` `0x543b00`, keyword
+  entry `0x5dd1cc`) up (`0x542979`..`0x5429da`), as 1.1 does. VERIFIED
+  (asm). vcod paints CoD2's stack the same way (`Ui::painted`).

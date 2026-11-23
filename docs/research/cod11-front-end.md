@@ -2480,7 +2480,8 @@ Sources: `ui_mp_x86.dll` 1.1, 1.5 and `uo_ui_mp_x86.dll`, read with
   combination). The first loop paints a menu only
   when its file sets it visible and it was never opened or closed: no
   stock 1.1 UI menu does (`hud.menu`'s are the cgame's). VERIFIED (pak0).
-  vcod has no such menus and paints only the stack (`Ui::painted`).
+  vcod has no such menus and paints only the stack (`Ui::painted`), for
+  CoD2 too, whose `Menu_PaintAll` is the same (cod2-fonts-menus.md 4.2).
 - `UI_OwnerDraw` (`0x400094a0`) moves the rect by the text offsets and
   switches on `ownerDraw - 200` (bytes `0x40009740`, targets
   `0x40009700`): 255 (`UI_STARTMAPCINEMATIC`) reaches `0x400095e3`, which
@@ -3227,10 +3228,9 @@ Sources: `ui_mp_x86.dll` 1.1 and `CoDMP.exe` 1.1, read with `objdump`
   paint offset and overstrike outlive an edit, the field paints from its
   offset, and the cursor blinks on the 256 ms steps of a clock started at
   the first cursor drawn. The overstrike flag is the UI's own: vcod's
-  console has no overstrike mode, so Insert there changes nothing. CoD2's
-  front end takes the same code; its own handler (Mac `0x16ee5e`) was
-  read for `accept` only, so the rest is INFERRED from the shared Q3
-  lineage.
+  console has no overstrike mode, so Insert there changes nothing. CoD2
+  keeps vcod's own edit, since its handler moves the cursor otherwise
+  (cod2-fonts-menus.md 4.2).
 - The server list takes the arrows, Home, End and the page keys only with
   the cursor over it. Enter joining the selected server anywhere in the
   browser (unless the focused item's handler takes Enter), and an arrow
