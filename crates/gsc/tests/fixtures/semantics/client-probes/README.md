@@ -3027,3 +3027,14 @@ known, under stock tdm on mp_brecourt (`docs/research/cod11-server-handshake.md`
 reply 4 s after the load, `crates/server/tests/fixtures/usage/mp_brecourt-probe_usage.txt`
 (recipe in its header). `crates/server/src/server/console_cmds.rs`'s
 `script_usage_counts_as_retail` replays it on ours.
+
+## probe_rc_*
+
+`probe_rc_kick`, `probe_rc_intermission`, `probe_rc_hint` and
+`probe_rc_flame` are the server halves of the retail-client captures: they
+run on vcod-server under `--client-log`, driven by
+`tools/capture/retail-client/wizard.sh`, with a retail Windows client
+joined (docs/dev/retail.md, "Retail client captures"). Each header says
+what it logs. They answer the team and weapon menus for the client and
+take their phases from the `rc_phase` cvar the wizard sets on the server
+console.
