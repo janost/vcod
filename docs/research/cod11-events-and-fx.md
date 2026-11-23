@@ -1378,9 +1378,24 @@ with the surface's lightmap page, one material per (shader, lightmap), in
 the frame's sorted list at the shader's sort, after the world's draws of
 that sort and before the models and effects (vcod's guess). Each mark
 stage's pipeline carries the stage's exact blend pair and the shader's
-own polygon offset (9.5), so the stock decals draw at (-2, -4). The
-world's stage pipelines still draw any of the three offsets at (-1, -2);
-no stock world shader uses the other two. `cg_marks`,
+own polygon offset (9.5), so the stock decals draw at (-2, -4). A world
+or scripted prop stage draws at its shader's form too: the single pair
+from the startup table, `polygonOffset2` and `polygonOffsetConst` from
+pipelines `load_world` builds for the forms its batches take
+(`renderer::OffsetStages`). The fx quad pass draws no offset at all. No
+stock content reaches either case:
+
+- VERIFIED, census of `scripts/*.shader` and `fxshaders/*.shader` (1.1
+  paks; 1.5 `main/`; UO `uo/`): `polygonOffset2` sits only on
+  `gfx/impact/*` (1.1 `pj_impact`, `pj_fx`; UO `impact`), UO's
+  `misc/lamp_oil` (`misc.shader`) and `skins/parachute_outside`
+  (`brad.shader`, skinned by the single-player `parachute_animrig*`
+  xmodels only); no shader says `polygonOffsetConst`.
+- VERIFIED, census of every `fx/**/*.efx` element naming a
+  polygon-offset shader (any form): 38 in 1.1, 328 over 1.5 and UO, each
+  a `Decal`, so each draws as a mark.
+
+`cg_marks`,
 `EV_ROCKET_EXPLODE_NOMARKS`, `cg_shadows 1` (9.7) and the `map_restart`
 clear (9.8) are honoured. A surface's triangles carry a box per run of
 16 (`MarkWorld::chunks`, built with the map); the clip skips a run wholly

@@ -1006,6 +1006,7 @@ impl Renderer {
                     variant,
                     two_sided,
                     bias,
+                    form: sh.depth_bias.unwrap_or(PolygonOffset::Single),
                     mat,
                     stage,
                     cod2: lit_bind,
@@ -1061,6 +1062,7 @@ impl Renderer {
                     variant,
                     two_sided: true,
                     bias,
+                    form: sh.depth_bias.unwrap_or(PolygonOffset::Single),
                     mat,
                     stage,
                     cod2: smodel,
@@ -1531,6 +1533,12 @@ impl Renderer {
             self.cod2_lit = shared;
             world
         });
+        for sb in &stage_batches {
+            if let Some(form @ (PolygonOffset::Double | PolygonOffset::Const)) = sb.offset() {
+                self.offset_stages
+                    .ensure(device, (sb.variant, sb.two_sided, form));
+            }
+        }
         // the feathered and distortion stages' pipelines, when the map has any
         let fx_keys: Vec<_> = stage_batches
             .iter()

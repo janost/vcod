@@ -469,6 +469,8 @@ pub(super) struct StageBatch {
     pub(super) variant: StageVariant,
     pub(super) two_sided: bool,
     pub(super) bias: bool,
+    /// The shader's offset form, which `bias` draws at.
+    pub(super) form: PolygonOffset,
     /// group(1): bundle-0 image + lightmap page + lightmap sampler.
     pub(super) mat: AnimFrames,
     /// group(2): params UBO slot + bundle-1 image.
@@ -648,6 +650,66 @@ pub(crate) fn depth_bias(form: PolygonOffset) -> wgpu::DepthBiasState {
         constant,
         slope_scale,
         clamp: 0.0,
+    }
+}
+
+/// The stage pipelines at `polygonOffset2` and `polygonOffsetConst`, which
+/// no stock CoD1 map surface takes: built when a map's stage batches need
+/// one ([`Renderer::stage_pipeline`] has the rest), kept across maps.
+pub(super) struct OffsetStages {
+    module: wgpu::ShaderModule,
+    layout: wgpu::PipelineLayout,
+    target: (wgpu::TextureFormat, u32),
+    pipes: Vec<((StageVariant, bool, PolygonOffset), wgpu::RenderPipeline)>,
+}
+
+impl OffsetStages {
+    /// `module` is shader.wgsl and `layout` the stage pipeline layout.
+    pub(super) fn new(
+        module: wgpu::ShaderModule,
+        layout: wgpu::PipelineLayout,
+        target: (wgpu::TextureFormat, u32),
+    ) -> Self {
+        OffsetStages {
+            module,
+            layout,
+            target,
+            pipes: Vec::new(),
+        }
+    }
+
+    /// Builds `key`'s pipeline unless it is built.
+    pub(super) fn ensure(
+        &mut self,
+        device: &wgpu::Device,
+        key: (StageVariant, bool, PolygonOffset),
+    ) {
+        if self.get(key).is_some() {
+            return;
+        }
+        let (variant, two_sided, form) = key;
+        let (fs_entry, blend, depth_write) = stage_variant_state(variant);
+        let pipe = scene_pipeline(
+            device,
+            &self.module,
+            self.target,
+            &format!("stage {variant:?} twosided={two_sided} {form:?}"),
+            &self.layout,
+            ("vs_stage", fs_entry),
+            depth_bias(form),
+            false,
+            blend,
+            depth_write,
+            (!two_sided).then_some(wgpu::Face::Back),
+        );
+        self.pipes.push((key, pipe));
+    }
+
+    pub(super) fn get(
+        &self,
+        key: (StageVariant, bool, PolygonOffset),
+    ) -> Option<&wgpu::RenderPipeline> {
+        self.pipes.iter().find(|(k, _)| *k == key).map(|(_, p)| p)
     }
 }
 
@@ -938,12 +1000,29 @@ pub(super) fn stage_bind_groups(
 }
 
 impl Renderer {
+    /// A stage's pipeline at its shader's polygon offset, if any.
     pub(super) fn stage_pipeline(
         &self,
         variant: StageVariant,
         two_sided: bool,
-        bias: bool,
+        offset: Option<PolygonOffset>,
     ) -> &wgpu::RenderPipeline {
-        &self.stage_pipelines[variant as usize][usize::from(two_sided)][usize::from(bias)]
+        match offset {
+            None | Some(PolygonOffset::Single) => {
+                &self.stage_pipelines[variant as usize][usize::from(two_sided)]
+                    [usize::from(offset.is_some())]
+            }
+            Some(form) => self
+                .offset_stages
+                .get((variant, two_sided, form))
+                .expect("load_world builds every offset stage pipeline its batches take"),
+        }
+    }
+}
+
+impl StageBatch {
+    /// The polygon offset the stage draws at.
+    pub(super) fn offset(&self) -> Option<PolygonOffset> {
+        self.bias.then_some(self.form)
     }
 }

@@ -2596,3 +2596,33 @@ fn a_model_handle_from_an_unloaded_map_indexes_nothing() {
     assert_eq!(h.live(1, 5), None);
     assert_eq!(h.live(0, 2), None);
 }
+
+/// `glPolygonOffset` per form (CoDMP.exe 0x4d5991..0x4d5a05 at
+/// `r_offsetfactor` -1, `r_offsetunits` -2; events doc 9.5): a world stage
+/// of a `polygonOffset2` shader draws at the doubled pair, not the single.
+#[test]
+fn each_polygon_offset_form_biases_as_retail() {
+    let pair = |f| {
+        let b = depth_bias(f);
+        (b.slope_scale, b.constant)
+    };
+    assert_eq!(pair(PolygonOffset::Single), (-1.0, -2));
+    assert_eq!(pair(PolygonOffset::Double), (-2.0, -4));
+    assert_eq!(pair(PolygonOffset::Const), (0.0, -2));
+    let sh = Material::from_shader(&vcod_common::shader::parse_shader(
+        "decal2",
+        &[
+            "polygonOffset2",
+            "{",
+            "map",
+            "a.tga",
+            "blendFunc",
+            "blend",
+            "}",
+        ],
+        &mut vcod_common::shader::WarnSet::new(),
+    ));
+    let (_, _, bias) = stage_draw_facts(&sh, 0).unwrap();
+    assert!(bias);
+    assert_eq!(sh.depth_bias, Some(PolygonOffset::Double));
+}

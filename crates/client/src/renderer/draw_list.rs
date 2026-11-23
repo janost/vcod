@@ -73,7 +73,7 @@ pub(super) struct WorldItem {
 #[derive(Copy, Clone, PartialEq)]
 pub(super) enum Bound {
     Legacy(Pass),
-    Stage(StageVariant, bool, bool),
+    Stage(StageVariant, bool, Option<PolygonOffset>),
     /// CoD2's lit pipeline (`cod2::Cod2World`), then a static prop's and
     /// a water's, and which of the depth prepass's pipelines.
     Lit(

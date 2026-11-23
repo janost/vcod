@@ -366,6 +366,7 @@ pub struct Renderer {
     /// `[variant][two_sided][bias]`; built at startup so shader.wgsl validates
     /// even mapless.
     stage_pipelines: [[[wgpu::RenderPipeline; 2]; 2]; STAGE_VARIANTS],
+    offset_stages: stage::OffsetStages,
     dlight: dlight::DlightPass,
     camera_layout: wgpu::BindGroupLayout,
     camera_buf: wgpu::Buffer,
@@ -1073,6 +1074,11 @@ impl Renderer {
             stage_pipeline_layout.clone(),
             (world_format, samples),
         );
+        let offset_stages = stage::OffsetStages::new(
+            shader.clone(),
+            stage_pipeline_layout.clone(),
+            (world_format, samples),
+        );
         let prof_gpu = crate::frame_prof::GpuStamps::new(&device, &queue);
         let frag_stats = crate::frame_prof::FragStats::new(&device);
         let gpu_groups = crate::frame_prof::GpuGroups::new(&device, &queue);
@@ -1089,6 +1095,7 @@ impl Renderer {
             layer_pipeline,
             overlay_pipeline,
             stage_pipelines,
+            offset_stages,
             dlight,
             camera_layout,
             camera_buf,
