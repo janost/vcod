@@ -252,6 +252,20 @@ The s2c 1 and 9 rows are VERIFIED live.
 - No download ran in the captures. 1.7's netchan download commands
   (`cod4-handshake.md` 11) do not appear in this path. INFERRED.
 
+### 7.3 The packets in the captures
+
+- None of the 487 side channel packets of `cap-noauth1` and `cap-two`
+  carries a selective acknowledge, and the byte after the acknowledge is 0
+  in each. VERIFIED live. vcod's reader (`net::reliable::Packet`) still
+  takes up to 3 pairs, as section 7 reads the writer.
+- Each direction numbers its fragments from 0: the stats request is the
+  server's fragment 0 and the gamestate its 1..44; the client's mode 2
+  stats are its 0..6, of which it resent 4..6 after the server
+  acknowledged 4. VERIFIED live (`handshake-x21.txt`).
+- Every packet re-encodes to its datagram from its fields, and the
+  stream's messages (`long` length, body) reassemble from the fragments in
+  sequence order. VERIFIED live (`x21_join_decodes_and_reencodes`).
+
 ## 8. Netchan, scramble, Huffman, the client header
 
 - Server to client: 1.7's netchan, scramble and static Huffman code
@@ -305,6 +319,17 @@ The s2c 1 and 9 rows are VERIFIED live.
   VERIFIED live. It goes through a 0x20000-byte buffer (`MSG_Init` at
   0x110aaf). VERIFIED (the instructions).
 
+### 9.1 The strings and the trailer
+
+- A slot's string goes out whole: slot 2258, the weapon list, is 1486
+  bytes on mp_crash. A reader that keeps 1024 bytes of a string (the
+  research probe's first `MSG_ReadString`) drops its tail; read to its NUL,
+  the gamestate re-encodes byte for byte. VERIFIED live (`cap-noauth1`'s
+  `rel-2-1.bin`, `handshake-x21.txt`).
+- The `long` after `checksumFeed` was 0 for both clients of `cap-two`, and
+  the second client's gamestate held `byte 11` entries for clients 0 and 1
+  and `configDataSequence` 2, the first's 1. VERIFIED live (`cap-two`).
+
 ## 10. The delta codec
 
 - The netfield tables are 1.7's: every row of the entity (all 18 eType
@@ -329,11 +354,25 @@ The s2c 1 and 9 rows are VERIFIED live.
   byte. VERIFIED live. The change used for that measurement, in
   `delta.rs`'s `Code::read`, was one arm reading the long:
   `Code::Origin(_) if origin_floats() => r.read_long() as u32,` with
-  `origin_floats()` an env switch; it is not on the branch.
+  `origin_floats()` an env switch. The codec now reads and writes the long
+  by dialect (18.1).
 - `MSG_WriteAngle16` (0xd1c89) truncates `f * 65536 / 360`
   (`cvttss2si`), where 1.7's server adds 0.5 first; the reader is the
   same. VERIFIED (the instructions); baseline 77's yaw 101.7609 against
   1.7's 101.7664 shows it live.
+
+### 10.1 The origin's equality test
+
+- `MSG_ValuesAreEqual` (0xd25b4) takes the codes -92..-90 (`bits + 100`
+  in 8..10, `cmp edx,0x7` / `jg` at 0xd25dc) to `cvtss2si` of both floats
+  (0xd2669..0xd267b): rounded under the MXCSR mode, half to even by
+  default, where 1.7 compares `floor(f + 0.5)` (`cod4-netfields.md` 2).
+  VERIFIED (the instructions). So the server skips an origin whose two
+  values round alike and otherwise sends the whole new float. INFERRED
+  (with section 10's writer).
+- vcod's writer in the 21 dialect sends the float but picks the fields
+  with 1.7's test, so a snapshot it writes need not match this server's
+  choice of fields. vcod-server speaks only 1.7 (18).
 
 ## 11. Client config data (svc 11)
 
@@ -358,6 +397,17 @@ The s2c 1 and 9 rows are VERIFIED live.
   opened `0b 02000000 01 "vcodx1002" "" 06 ...` and kept doing so while it
   sent `configDataAcknowledge` 1. vcod's 1.7 parser stops at op 11
   (illegible). VERIFIED live.
+
+### 11.1 The client's acknowledge
+
+- In `cap-two` every message to the first client from message 135 on
+  carries that entry, 327 of them, after its server commands and ahead of
+  `svc_snapshot`. VERIFIED live (`a.log`; the 13 of `two-x21-first.txt`).
+- vcod's client keeps the newest `configDataSequence` it read, the
+  gamestate's or an `svc 11`'s (`parse::Client::config_data_ack`), and its
+  header sends that. That the server then stops repeating the entry
+  follows from the compare in section 11. INFERRED; stage 2's live join
+  measures it.
 
 ## 12. Configstrings
 
@@ -418,9 +468,12 @@ for its own client were not looked for; open (section 17).
   waits for `getinfo` to answer, runs `CLIENT_CMD` with `$ADDR`, then
   stops everything. `PORT` (28990), `MAP`, `CAP_SECS`, `SERVER_SETS`.
 - `cargo run -p vcod-cod4 --example cod4x_probe -- HOST:PORT OUTDIR` is
-  the protocol 21 client of section 6; `--gamestate FILE` decodes a saved
-  side channel gamestate offline, and `--baseline17 CAPTURE N` prints a
-  1.7 capture's baseline `N` beside it.
+  the protocol 21 client of section 6, on the codec's 21 dialect since
+  18.1; `--gamestate FILE` decodes a saved side channel gamestate offline,
+  and `--baseline17 CAPTURE N` prints a 1.7 capture's baseline `N` beside
+  it. `python3 -I tools/cod4x_fixture.py LOG OUT --peer ADDR --until MS
+  --note TEXT...` cuts a fixture out of a capture: one client's lines up to
+  a time, rebased, under `#` notes.
 - The captures, each `COD4_DIR=<1.7 install>` and the release binary as
   `BIN`:
 
@@ -504,3 +557,47 @@ Questions for the owner:
 - `cod4x_patchv2.ff`: if real servers reference it, a vcod client without
   the CoD4x install cannot pass the fastfile check. Find out from a real
   server's systeminfo (`getstatus` does not show it) before stage 2?
+
+### 18.1 Stage 1: the codec
+
+- `vcod_cod4::net::wire::Dialect` (`V17`, `X21`) names the wire the codec
+  reads: `PROTOCOL_17` (CoD4, protocol 6) or `PROTOCOL_X21` (CoD4,
+  protocol 21, `shortversion` `x21`, 4883 slots). `Dialect::of` maps a
+  `WireId` back, so CoD4 1.7, CoD4x 21 and CoD1 1.5 stay apart.
+- The dialect rides `delta::Ctx` (origins, section 10), `parse::Gamestate`
+  (the table's size and defaults, the gamestate's form, section 9, 12),
+  `parse::Client` (`svc 11` and `config_data_ack`, section 11,
+  `take_side_gamestate` / `write_side_gamestate`), `clmsg::ClientHeader`
+  (the 9- or 16-byte head, section 8) and `capture::Session` (the side
+  channel through `net::reliable`, section 7). `Client::new` and
+  `Session::new` stay 1.7, whose bytes are unchanged.
+- Gate: `handshake-x21.txt` (`cap-noauth1`, 11.2 s from the challenge)
+  and `two-x21-first.txt` (`cap-two`'s first client, 7.3 s) walk in the 21
+  dialect: every side channel packet and message (stats request, mode 2
+  stats, gamestate), every server message (224 and 209) to its last byte
+  and every client message with its header re-encode byte for byte.
+  VERIFIED live (`net_decode::x21_join_decodes_and_reencodes`,
+  `x21_client_config_rides_the_snapshots`). The 1.7 fixtures walk as
+  before, their client headers now re-encoded too. VERIFIED live.
+- The stats cipher is not in the codec: `reliable::StatsMsg` carries the
+  mode 2 block as bytes. `handshake-x21.txt`'s client stats are a fresh
+  profile (`net::stats::Stats::fresh`) under the challenge in its
+  `challengeResponse`, a test vector for stage 2's AES-128-CBC. VERIFIED
+  live (the probe's recipe).
+
+### 18.2 What stage 2 takes from stage 1
+
+- `Conn` builds `Client::with_dialect(Dialect::X21)` on an `xproto`
+  challenge and connects with `PROTOCOL_X21`'s version; `send` already
+  writes the 16-byte header from `Client::config_data_ack` by the client's
+  dialect.
+- A side channel driver over `reliable::{Packet, Inbound, frame}`: the
+  resend (350 ms), the window (20), the acknowledge (`Inbound::next`) and
+  fragmenting at `MAX_FRAGMENT`, none of which the codec times.
+- The stats answer: `StatsMsg { mode: 2, block }` with the block
+  encrypted as 7.1 says; the cipher is stage 2's.
+- `conn::apply_configstrings` resets its applied sequence on an
+  `Op::Gamestate`, which the 21 dialect never parses from the netchan: the
+  side channel gamestate needs the same reset.
+- What the client does with `Client::client_configs` (names beside the
+  scoreboard's) is open.

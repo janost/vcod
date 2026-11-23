@@ -7,6 +7,7 @@
 //! a field is one 32-bit word, an int or a float's bits.
 
 use super::fields;
+use super::wire::Dialect;
 use anyhow::{Result, bail, ensure};
 use vcod_common::net::Msec;
 use vcod_common::net::codec::{MsgReader, MsgWriter};
@@ -79,11 +80,13 @@ pub const fn word_at(table: &[Field], base: &str, k: usize) -> usize {
 }
 
 /// What a field read needs besides the bits: the snapshot's time (the
-/// `-97` delta times) and `CS_MAPCENTER` (the `-92..-90` origins).
+/// `-97` delta times), `CS_MAPCENTER` (the `-92..-90` origins on 1.7) and
+/// the wire's dialect (whole-float origins on CoD4x 21).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Ctx {
     pub time: Msec,
     pub map_center: [f32; 3],
+    pub dialect: Dialect,
 }
 
 /// `ENTITYNUM_NONE`: ends the snapshot's entity list.
@@ -260,7 +263,8 @@ enum Code {
     Tenths,
     /// -94, -93: an event or its parm.
     Byte,
-    /// -92, -91, -90: an origin axis against `CS_MAPCENTER`'s.
+    /// -92, -91, -90: an origin axis against `CS_MAPCENTER`'s (1.7), a
+    /// whole float (CoD4x 21).
     Origin(usize),
     /// -100 (`zero_bit`) and -87: an angle in 65536ths of a turn.
     Angle { zero_bit: bool },
@@ -322,6 +326,9 @@ impl Code {
             }
             Code::Tenths => bits(r, 7) * 100,
             Code::Byte => u32::from(r.read_byte()),
+            // `MSG_WriteOriginFloat` (0xd26d8) is `MSG_WriteFloat` on
+            // CoD4x (cod4x-protocol.md 10).
+            Code::Origin(_) if ctx.dialect == Dialect::X21 => r.read_long() as u32,
             Code::Origin(axis) => Origin::on(ctx, axis).read(r, from),
             Code::Angle { zero_bit } => {
                 if zero_bit && !bit(r) {
@@ -404,6 +411,7 @@ impl Code {
             },
             Code::Tenths => put_bits(w, (to as i32 / 100) as u32, 7),
             Code::Byte => w.write_byte(to as u8),
+            Code::Origin(_) if ctx.dialect == Dialect::X21 => w.write_long(to as i32),
             Code::Origin(axis) => Origin::on(ctx, axis).write(w, from, to),
             Code::Angle { zero_bit } => {
                 if zero_bit {
@@ -1437,6 +1445,7 @@ mod tests {
         let ctx = Ctx {
             time: Msec::ZERO,
             map_center: [0.0; 3],
+            ..Ctx::default()
         };
         let mut w = MsgWriter::new(&crate::net::parse::UNUSED_HUFF);
         write_delta_entity(
@@ -1487,6 +1496,7 @@ mod tests {
             let ctx = Ctx {
                 time: now,
                 map_center: [0.0; 3],
+                ..Ctx::default()
             };
             let mut w = MsgWriter::new(&crate::net::parse::UNUSED_HUFF);
             write_field(&mut w, &ctx, 0, to, &field, Change::Sent);
@@ -1506,6 +1516,7 @@ mod tests {
         let ctx = Ctx {
             time: Msec::from_raw(50_000),
             map_center: [429.0, 126.5, 137.0],
+            ..Ctx::default()
         };
         let toggle_from = u32::from_le_bytes([10, 20, 30, 0xff]);
         let toggle_to = u32::from_le_bytes([10, 20, 30, 0]);

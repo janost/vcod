@@ -19,7 +19,7 @@ use super::parse::{
     CS_MAPCENTER, Gamestate, MAX_CONFIGSTRINGS, SVC_BASELINE, SVC_CONFIGSTRING, SVC_EOF,
     SVC_GAMESTATE, UNUSED_HUFF,
 };
-use super::wire::{entity_wire, map_center};
+use super::wire::{Dialect, entity_wire, map_center};
 
 /// The number after `.dm_`: `CL_Record_f` and `CL_PlayDemo_f` push a
 /// literal 1 (`iw3mp.exe` 0x4689f5, 0x46919d).
@@ -200,6 +200,7 @@ pub fn gamestate_message(
     let ctx = Ctx {
         time: BASELINE_TIME,
         map_center: map_center(gs.configstring(CS_MAPCENTER)),
+        dialect: Dialect::V17,
     };
     let mut last = -1;
     for (&n, e) in gs.baselines.iter().filter(|&(&n, _)| n != 0) {

@@ -1,6 +1,7 @@
-//! CoD4 1.7's wire on top of vcod-common's netchan: the Huffman code, the
+//! CoD4's wire on top of vcod-common's netchan: the Huffman code, the
 //! netfield tables, the delta codec and the server message parse
-//! (docs/research/cod4-netfields.md, cod4-handshake.md).
+//! (docs/research/cod4-netfields.md, cod4-handshake.md), for 1.7 and for
+//! CoD4x 21 ([`wire::Dialect`], cod4x-protocol.md).
 
 pub mod browser;
 pub mod capture;
@@ -16,6 +17,7 @@ pub mod flags;
 pub mod huffman;
 pub mod parse;
 pub mod pure;
+pub mod reliable;
 pub mod stats;
 pub mod voice;
 pub mod wire;

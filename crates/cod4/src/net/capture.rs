@@ -1,13 +1,17 @@
-//! The datagram logs `tools/cod4_handshake_probe.py` and
-//! `examples/cod4_probe.rs` write: one `<ms> <c2s|s2c|auth> <peer> <hex>` line
-//! per datagram, raw; `#` lines are the recipe. [`Session`] walks one in both directions, each
-//! message unscrambled with the key the other direction set up.
+//! The datagram logs `tools/cod4_handshake_probe.py`,
+//! `examples/cod4_probe.rs` and `tools/lo_capture.py` write: one `<ms>
+//! <c2s|s2c|auth> <peer> <hex>` line per datagram, raw; `#` lines are the
+//! recipe. [`Session`] walks one connection in both directions, each
+//! message unscrambled with the key the other direction set up; on CoD4x
+//! 21 the side channel's packets too.
 
-use super::clmsg::{self, ClOp, ClientMessage, UserCmd};
+use super::clmsg::{self, ClOp, ClientHeader, ClientMessage, UserCmd};
 use super::parse::{Client, Parsed};
+use super::reliable::{self, Inbound, Packet};
+use super::wire::Dialect;
 use anyhow::{Context, Result, bail};
 use std::collections::BTreeMap;
-use vcod_common::net::netchan::{Netchan, NetchanParams, read_client_message};
+use vcod_common::net::netchan::{Netchan, NetchanParams, scramble_client_ops};
 
 pub struct Line {
     pub ms: u64,
@@ -61,6 +65,13 @@ pub enum Item {
         /// The usercmd key the moves were read with.
         key: i32,
     },
+    /// A CoD4x side channel packet and the message bodies it completed.
+    /// A server gamestate among them is already the client's.
+    Side {
+        from_server: bool,
+        packet: Packet,
+        messages: Vec<Vec<u8>>,
+    },
 }
 
 /// Both directions of one connection: the server's messages through
@@ -72,11 +83,46 @@ pub struct Session {
     chan: Option<Netchan>,
     /// The client's commands by sequence: what keys the server's messages.
     pub client_commands: BTreeMap<i32, Vec<u8>>,
+    /// CoD4x: the side channel's streams from the server and to it.
+    side_in: Inbound,
+    side_out: Inbound,
 }
 
 impl Session {
+    /// A 1.7 connection's.
     pub fn new() -> Session {
         Session::default()
+    }
+
+    pub fn with_dialect(dialect: Dialect) -> Session {
+        Session {
+            client: Client::with_dialect(dialect),
+            ..Session::default()
+        }
+    }
+
+    /// A side channel packet: its fragment into its direction's stream, a
+    /// server gamestate into the client.
+    fn side(&mut self, from_server: bool, d: &[u8]) -> Result<Item> {
+        let packet = Packet::read(d)?;
+        let stream = if from_server {
+            &mut self.side_in
+        } else {
+            &mut self.side_out
+        };
+        let messages = stream.take(&packet)?;
+        if from_server {
+            for m in &messages {
+                if m.get(..4) == Some(&reliable::CMD_GAMESTATE.to_le_bytes()[..]) {
+                    self.client.take_side_gamestate(m)?;
+                }
+            }
+        }
+        Ok(Item::Side {
+            from_server,
+            packet,
+            messages,
+        })
     }
 
     /// Decodes one datagram; `None` for out-of-band traffic, a fragment
@@ -91,6 +137,11 @@ impl Session {
                 self.challenge = Some(s.split_whitespace().next().context("challenge")?.parse()?);
             }
             return Ok(None);
+        }
+        let dialect = self.client.dialect;
+        if dialect == Dialect::X21 && Packet::is_side(d) && matches!(l.dir.as_str(), "s2c" | "c2s")
+        {
+            return self.side(l.dir == "s2c", d).map(Some);
         }
         let challenge = || -> Result<i32> {
             self.challenge
@@ -128,24 +179,24 @@ impl Session {
             }
             "c2s" => {
                 let ch = challenge()?;
-                if d.len() < 15 {
+                let Some((h, block)) = ClientHeader::read(d, dialect) else {
                     bail!("client packet of {} bytes", d.len());
-                }
-                if d.len() == 15 {
+                };
+                if block.is_empty() {
                     return Ok(None);
                 }
-                let key = |ack| self.client.server_command(ack).to_vec();
-                let m = read_client_message(d, ch, key).context("client header")?;
+                let server_cmd = self.client.server_command(h.reliable_ack).to_vec();
+                let mut block = block.to_vec();
+                scramble_client_ops(h.seed(ch), &server_cmd, &mut block);
                 let msg_head = ClientMessage {
-                    sequence: m.sequence,
-                    qport: u16::from_le_bytes(d[4..6].try_into().unwrap()),
-                    server_id: m.server_id,
-                    message_ack: m.message_ack,
-                    reliable_ack: m.reliable_ack,
+                    sequence: h.sequence,
+                    qport: h.qport,
+                    server_id: h.server_id,
+                    message_ack: h.message_ack,
+                    reliable_ack: h.reliable_ack,
+                    config_ack: h.config_ack,
                     ops: Vec::new(),
                 };
-                let server_cmd = self.client.server_command(m.reliable_ack).to_vec();
-                let block = m.ops;
                 let feed = self
                     .client
                     .gamestate

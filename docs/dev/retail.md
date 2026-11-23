@@ -35,7 +35,9 @@ them on vcod.
   its own rootless namespace, the install read-only, every master and
   update name on 127.0.0.2, and logs every packet on `lo` through
   `tools/lo_capture.py` while the client command runs
-  (`cod4x-protocol.md` 16).
+  (`cod4x-protocol.md` 16). `python3 -I tools/cod4x_fixture.py` cuts a
+  committed `crates/cod4/tests/fixtures/net/*-x21*.txt` fixture out of
+  such a log: one client's lines up to a time, rebased, under a `#` recipe.
 - `tools/run_probe.sh <probe> [map] [+set ...]` boots retail with a
   `crates/gsc/tests/fixtures/semantics/probe_*.gsc` (or
   `client-probes/probe_*`) installed as the gametype and prints its `PROBE`

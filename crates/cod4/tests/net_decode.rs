@@ -3,22 +3,33 @@
 //! message's last bits (docs/research/cod4-netfields.md).
 
 use vcod_cod4::net::capture::{self, Item, Session};
-use vcod_cod4::net::clmsg::{self, ClientMessage, UserCmd};
+use vcod_cod4::net::clmsg::{self, ClientHeader, ClientMessage, UserCmd};
 use vcod_cod4::net::parse::{Client, Op, Parsed};
+use vcod_cod4::net::reliable::{self, StatsMsg};
+use vcod_cod4::net::wire::Dialect;
 use vcod_common::net::Msec;
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/net");
 
 /// A capture walked both ways. Each server message must end exactly at its
 /// block's last byte and re-encode to its block byte for byte, each client
-/// message too.
+/// message too, its plain header included. On CoD4x 21 each side channel
+/// packet re-encodes to its datagram and each message it completes to its
+/// bytes (the gamestate, the stats).
 pub struct Walk {
     pub client: Client,
     pub parsed: Vec<Parsed>,
     pub sent: Vec<ClientMessage>,
+    /// CoD4x: the side channel's message bodies, `true` for the server's.
+    pub side: Vec<(bool, Vec<u8>)>,
 }
 
 pub fn walk(name: &str) -> Walk {
+    walk_as(name, Dialect::V17, None)
+}
+
+/// [`walk`] in `dialect`, keeping only the lines of `peer` when named.
+pub fn walk_as(name: &str, dialect: Dialect, peer: Option<&str>) -> Walk {
     // A bare name is a fixture's; a path reads as it is.
     let path = if name.contains('/') {
         name.to_string()
@@ -26,10 +37,16 @@ pub fn walk(name: &str) -> Walk {
         format!("{FIXTURES}/{name}")
     };
     let text = std::fs::read_to_string(path).unwrap();
+    let text: String = text
+        .lines()
+        .filter(|l| peer.is_none_or(|p| l.starts_with('#') || l.split(' ').nth(2) == Some(p)))
+        .map(|l| format!("{l}\n"))
+        .collect();
     let lines = capture::parse(&text).unwrap();
-    let mut session = Session::new();
+    let mut session = Session::with_dialect(dialect);
     let mut parsed = Vec::new();
     let mut sent = Vec::new();
+    let mut side = Vec::new();
     for l in &lines {
         match session
             .feed(l)
@@ -62,7 +79,42 @@ pub fn walk(name: &str) -> Walk {
                 let again =
                     clmsg::compress_ops(&session.client.huff, &msg.ops, key, &UserCmd::default());
                 assert_eq!(again, block, "{name} client message {}", msg.sequence);
+                let head = ClientHeader {
+                    sequence: msg.sequence,
+                    qport: msg.qport,
+                    server_id: msg.server_id,
+                    message_ack: msg.message_ack,
+                    reliable_ack: msg.reliable_ack,
+                    config_ack: msg.config_ack,
+                };
+                let mut out = Vec::new();
+                head.write(dialect, &mut out);
+                assert_eq!(
+                    out,
+                    l.data[..ClientHeader::len(dialect)],
+                    "{name} client header {}",
+                    msg.sequence
+                );
                 sent.push(msg);
+            }
+            Some(Item::Side {
+                from_server,
+                packet,
+                messages,
+            }) => {
+                assert_eq!(packet.write(), l.data, "{name} side packet at {} ms", l.ms);
+                for m in messages {
+                    let cmd = i32::from_le_bytes(m[..4].try_into().unwrap());
+                    let again = match cmd {
+                        reliable::CMD_GAMESTATE if from_server => {
+                            session.client.write_side_gamestate().unwrap()
+                        }
+                        reliable::CMD_STATS => StatsMsg::read(&m).unwrap().write(),
+                        c => panic!("{name}: side channel message {c} at {} ms", l.ms),
+                    };
+                    assert_eq!(again, m, "{name} side message {cmd} at {} ms", l.ms);
+                    side.push((from_server, m));
+                }
             }
             None => {}
         }
@@ -71,6 +123,7 @@ pub fn walk(name: &str) -> Walk {
         client: session.client,
         parsed,
         sent,
+        side,
     }
 }
 
@@ -641,4 +694,93 @@ fn server_side_bullets_send_every_contact() {
     assert_eq!(gs.systeminfo("sv_clientSideBullets").as_deref(), Some("1"));
     let hits = bullet_hits(&w);
     assert!(!hits.is_empty() && hits.iter().all(|h| h.0 == 7 && h.2 == [0; 3]));
+}
+
+/// CoD4x 21's join (cod4x-protocol.md 6, 9): the side channel's stats
+/// request, the client's mode 2 stats and the gamestate, every slot sent
+/// and origins as whole floats, then the snapshots and the client's
+/// 16-byte headers, each to its last byte and back.
+#[test]
+fn x21_join_decodes_and_reencodes() {
+    let w = walk_as("handshake-x21.txt", Dialect::X21, None);
+    let cmds: Vec<(bool, i32)> = w
+        .side
+        .iter()
+        .map(|(s, m)| (*s, i32::from_le_bytes(m[..4].try_into().unwrap())))
+        .collect();
+    assert_eq!(cmds, [(true, 9), (false, 9), (true, 1)]);
+    let stats: Vec<StatsMsg> = w.side[..2]
+        .iter()
+        .map(|(_, m)| StatsMsg::read(m).unwrap())
+        .collect();
+    assert_eq!((stats[0].mode, stats[0].block.len()), (0, 0));
+    assert_eq!((stats[1].mode, stats[1].block.len()), (2, 0x2000));
+
+    let gs = w.client.gamestate.as_ref().unwrap();
+    assert_eq!(gs.configstrings.len(), 4883);
+    assert_eq!(gs.all_configstrings().len(), 4883);
+    assert_eq!(gs.configstring(2), b"cod21 ");
+    assert!((2442..4883).all(|i| gs.configstring(i).is_empty()));
+    assert_eq!(gs.systeminfo("sv_serverid").as_deref(), Some("257"));
+    assert_eq!(gs.baselines.len(), 62);
+    assert_eq!((gs.config_data_sequence, gs.client_num, gs.tail), (1, 0, 0));
+    assert_eq!(gs.checksum_feed as u32, 0x81110538);
+    // 1.7 rounds this mover to -235, 1395, 230.
+    let o = gs.baselines[&77].origin();
+    assert!(o.iter().any(|v| v.fract() != 0.0), "{o:?}");
+    assert!(
+        (o[0] + 235.1).abs() < 0.01 && (o[1] - 1394.7).abs() < 0.01 && (o[2] - 230.2).abs() < 0.01
+    );
+    assert_eq!(w.client.client_configs[&0].name, b"vcodx");
+    assert_eq!(w.client.config_data_ack, 1);
+
+    assert_eq!(w.parsed.len(), 224);
+    assert_eq!(w.client.snapshots.len(), 162);
+    let said = w.parsed.iter().flat_map(|p| &p.ops).any(
+        |o| matches!(o, Op::ServerCommand { text, .. } if text.ends_with(b"^8vcodx^7: ^7hello\"")),
+    );
+    assert!(said, "the say came back");
+    let moved = w.sent.iter().filter(|m| m.server_id == 257).count();
+    assert_eq!(moved, 147);
+    assert!(
+        w.sent
+            .iter()
+            .filter(|m| m.server_id == 257)
+            .all(|m| m.config_ack == 1)
+    );
+}
+
+/// With a second client on, the first's snapshot messages carry `svc 11`,
+/// its config entry under `configDataSequence` 2, until the client
+/// acknowledges it; this capture's probe kept sending 1
+/// (cod4x-protocol.md 11.1).
+#[test]
+fn x21_client_config_rides_the_snapshots() {
+    let w = walk_as("two-x21-first.txt", Dialect::X21, None);
+    let config = |p: &Parsed| {
+        p.ops.iter().find_map(|o| match o {
+            Op::ClientConfig { sequence, config } => Some((*sequence, config.clone())),
+            _ => None,
+        })
+    };
+    // From its first, every message carries the entry after its server
+    // commands, before the snapshot.
+    let from = w.parsed.iter().position(|p| config(p).is_some()).unwrap();
+    assert_eq!(w.parsed.len() - from, 13);
+    for p in &w.parsed[from..] {
+        let (sequence, c) = config(p).unwrap();
+        let at = |f: fn(&Op) -> bool| p.ops.iter().position(f).unwrap();
+        let cfg = at(|o| matches!(o, Op::ClientConfig { .. }));
+        assert!(cfg < at(|o| matches!(o, Op::Snapshot(_))));
+        assert!(
+            p.ops[..cfg]
+                .iter()
+                .all(|o| matches!(o, Op::ServerCommand { .. }))
+        );
+        assert_eq!((sequence, c.client_num), (2, 1));
+        assert_eq!((&c.name[..], &c.clan[..]), (&b"vcodx1002"[..], &b""[..]));
+    }
+    assert_eq!(w.client.config_data_ack, 2);
+    assert_eq!(w.client.client_configs[&1].name, b"vcodx1002");
+    assert!(w.sent.iter().all(|m| m.config_ack <= 1));
 }
