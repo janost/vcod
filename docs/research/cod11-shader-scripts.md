@@ -1476,8 +1476,31 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   census of every stock `.bsp`'s script-less, non-overlay materials whose
   image has alpha under 128: on the MP maps this turns
   `wood@chateau_exteriordoor`, `wood@chateau_extdoorborder` and
-  mp_depot's `glass@window2a` opaque. Blended types (`cloth_blend`,
-  `glass_blend_in`) still cut rather than blend.
+  mp_depot's `glass@window2a` opaque.
+- VERIFIED (the instructions), `CoDMP.exe` 0x4fc72e..0x4fc779: the shader
+  lookup calls strchr (0x528700) on the name for `@` (push 0x40 at
+  0x4fc732); with one it builds the shader from its type (0x4fc0c0, called
+  at 0x4fc748) and never reads a script (0x4fbde0 runs only on the no-`@`
+  branch at 0x4fc775).
+- VERIFIED, pak4 `shadertypes/world/` and UO's `pakuo01`: `cloth_blend`,
+  `glass_blend_in`, `glass_blend_out`, `foliage_blend` and UO's
+  `dirt_blend` are one stage, `map $texturename`, `rgbGen exactVertex`,
+  `blendfunc blend`, `nextbundle map $lightmap`; `cloth_blend` adds `cull
+  disable`, the glass types `sort innerBlend` / `outerBlend`, `dirt_blend`
+  `polygonOffset`.
+- VERIFIED, census of every stock MP `.bsp`'s script-less materials whose
+  type blends, decals and `*_masked` left out: 1.1 has only mp_chateau's
+  `cloth_blend@austriaintwindow`; UO adds `glass_blend_in@shopwin2broken`
+  (mp_arnhem, mp_uo_stanjel), `glass_blend_in@snowindow` (mp_cassino),
+  `glass_blend_in@` / `glass_blend_out@sm_ind_win2` (mp_kharkov),
+  `glass_blend_out@window_broken` (mp_peaks), `cloth_blend@curtains2`
+  (mp_sicily), `cloth_blend@clothesline-02` (mp_streets) and
+  `dirt_blend@roadgutter_b2` / `riverbank_foy` (mp_foy, mp_peaks).
+- vcod: such a material takes its template with `$texturename` bound to
+  its image (`blended_world_types`), added to the material library at the
+  map's load, so it draws through the stage path and blends where
+  `fs_main` cut it at 0.5. Decals and `*_masked` overlays keep their own
+  pass, and the other types `fs_main`.
 
 ### 8.4 The sun: disc, flare, blind and glare
 

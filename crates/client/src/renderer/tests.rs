@@ -2221,6 +2221,70 @@ fn a_world_type_draws_opaque_without_an_alpha_test_or_a_first_blend() {
     assert!(!stype_draws_opaque(""));
 }
 
+/// A script-less world surface whose type blends draws its template, the
+/// image bound and the lightmap in bundle 1; opaque and alpha-tested types,
+/// decals and scripted names stay where they were.
+#[test]
+fn a_blended_world_type_draws_its_template() {
+    use vcod_common::mapworld::Material as BspMaterial;
+    use vcod_common::material::Cull;
+    let cloth = "{\n\tsurfaceparm cloth\n\tsurfaceparm trans\n\tcull disable\n\t{\n\t\tmap $texturename\n\t\trgbGen exactVertex\n\t\tblendfunc blend\n\tnextbundle\n\t\tmap $lightmap\n\t}\n}\n";
+    let glass = "{\n\tsurfaceparm glass\n\tsurfaceparm trans\n\tsort innerBlend\n\t{\n\t\tmap $texturename\n\t\trgbGen exactVertex\n\t\tblendfunc blend\n\tnextbundle\n\t\tmap $lightmap\n\t}\n}\n";
+    let wood = "{\n\t{\n\t\tmap $texturename\n\t\trgbGen exactVertex\n\t}\n\t{\n\t\tmap $lightmap\n\t\tblendFunc filter\n\t}\n}\n";
+    let decal = "{\n\tpolygonOffset\n\t{\n\t\tmap $texturename\n\t\tblendFunc blend\n\t}\n}\n";
+    let mut fs = Pk3Fs::empty();
+    for (kind, text) in [
+        ("cloth_blend", cloth),
+        ("glass_blend_in", glass),
+        ("wood", wood),
+        ("decal", decal),
+    ] {
+        fs.overlay(
+            &format!("shadertypes/world/{kind}.stype"),
+            text.as_bytes().to_vec(),
+        );
+    }
+    let names = [
+        "textures/austria/transparents/cloth_blend@austriaintwindow",
+        "textures/austria/transparents/cloth_blend@austriaintwindow",
+        "textures/ukraine/windows/glass_blend_in@sm_ind_win2",
+        "textures/austria/doors/wood@chateau_exteriordoor",
+        "textures/decals/decal@stone_cracked1",
+        "textures/scripted/cloth_blend@curtain",
+    ];
+    let bsp = MapWorld {
+        materials: names
+            .iter()
+            .map(|n| BspMaterial {
+                name: n.to_string(),
+                surface_flags: 0,
+                content_flags: 0,
+            })
+            .collect(),
+        ..Default::default()
+    };
+    let lib = MaterialLib::from_materials(
+        [(
+            Material::base("textures/scripted/cloth_blend@curtain"),
+            None,
+        )],
+        0,
+    );
+    let got = blended_world_types(&fs, &bsp, &lib);
+    let got: Vec<&str> = got.iter().map(|m| m.name.as_str()).collect();
+    assert_eq!(got, [names[0], names[2]]);
+    let m = &blended_world_types(&fs, &bsp, &lib)[0];
+    assert_eq!(m.cull, Cull::None);
+    assert!(m.sort > SORT_OPAQUE);
+    let st = &m.stages[0];
+    assert!(st.blend.is_some());
+    assert!(matches!(&st.bundles[0].image, ImageRef::Path(p) if p == names[0]));
+    assert_eq!(st.bundles[1].image, ImageRef::Lightmap);
+    let glass = &blended_world_types(&fs, &bsp, &lib)[1];
+    assert_eq!(glass.sort, 13.0);
+    assert_eq!(glass.cull, Cull::Back);
+}
+
 /// mp_chateau's glazed doors: the image's alpha masks the panes, and the
 /// wood type draws it opaque, so nothing of the door may cut.
 #[test]
@@ -2238,6 +2302,22 @@ fn chateaus_door_draws_opaque() {
         &fs,
         "textures/austria/background/foliage_clamp@truck_single"
     ));
+    // its curtained windows blend, their image found through the template
+    let window = "textures/austria/transparents/cloth_blend@austriaintwindow";
+    let bsp = MapWorld {
+        materials: vec![vcod_common::mapworld::Material {
+            name: window.into(),
+            surface_flags: 0,
+            content_flags: 0,
+        }],
+        ..Default::default()
+    };
+    let lib = ShaderLib::load(&fs).materials();
+    let [m] = &blended_world_types(&fs, &bsp, &lib)[..] else {
+        panic!("one blended window material");
+    };
+    assert!(m.stages[0].blend.is_some());
+    assert!(assets::resolve_bundle_image(&fs, window).is_some());
 }
 
 /// `foliage_masked` and `foliage_detail` cut `alphaFunc LT128`: retail

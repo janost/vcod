@@ -430,6 +430,67 @@ fn cod1_identity_ramp_frame_matches_the_gamma_pass_and_the_prepass() {
     }
 }
 
+/// mp_chateau's curtained window (`cloth_blend@austriaintwindow`) through
+/// its template's blend (shader doc 8.3), seen from a few metres in front,
+/// with the frame's fx light on the room's props. With `VCOD_C1_SHOTS=<dir>`
+/// the frame is written there as `mp_chateau_window.tga`.
+#[test]
+fn cod1_chateau_window_draws_through_its_blend() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        return;
+    };
+    let Some(data) = fs.read("maps/mp/mp_chateau.bsp") else {
+        return;
+    };
+    let bsp = vcod_common::mapworld::load(&data).unwrap();
+    let window = "textures/austria/transparents/cloth_blend@austriaintwindow";
+    let soup = bsp
+        .soups
+        .iter()
+        .find(|s| {
+            bsp.materials[s.material as usize]
+                .name
+                .eq_ignore_ascii_case(window)
+        })
+        .expect("mp_chateau's window soup");
+    let corner = |i: usize| {
+        let v = soup.first_vertex as usize + bsp.indices[soup.first_index as usize + i] as usize;
+        Vec3::from(bsp.verts[v].pos)
+    };
+    let (a, b, c) = (corner(0), corner(1), corner(2));
+    let normal = (b - a).cross(c - a).normalize();
+    let eye = (a + b + c) / 3.0 + normal * 120.0;
+    let yaw = (-normal.y).atan2(-normal.x).to_degrees();
+    let Some((mut r, errors)) = Renderer::headless(&fs, false, 4) else {
+        eprintln!("no adapter with BC textures; skipped");
+        return;
+    };
+    r.load_world(&bsp, &fs).unwrap();
+    assert!(
+        r.shader_lib
+            .get(window)
+            .is_some_and(|m| m.stages[0].blend.is_some()),
+        "the window draws its template"
+    );
+    draw_frames(&mut r, &fs, (eye, yaw), &[], || None);
+    assert_clean(&errors, "CoD1 mp_chateau window frame");
+    if let Some(dir) = std::env::var_os("VCOD_C1_SHOTS").map(std::path::PathBuf::from) {
+        let (w, h, bgra) = r.read_offscreen().expect("offscreen target");
+        let rgba: Vec<u8> = bgra
+            .chunks(4)
+            .flat_map(|p| [p[2], p[1], p[0], 255])
+            .collect();
+        image::save_buffer(
+            dir.join("mp_chateau_window.tga"),
+            &rgba,
+            w,
+            h,
+            image::ExtendedColorType::Rgba8,
+        )
+        .unwrap();
+    }
+}
+
 /// CoD4's mp_crash through fly mode's path (`cod4_fly`): the zone's world,
 /// lightmaps, static models and sky under its own materials and an AK-47
 /// world model, viewed from the first `mp_tdm_spawn` and from above the

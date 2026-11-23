@@ -533,8 +533,9 @@ it reads are labelled; the design is not a claim about retail.
   stage's `alphaFunc`, bundle 0 on its `uv0` transform. These do not cast:
   decals, layers, surfaces sorted past opaque, scripted surfaces with no
   depth-writing stage, a prop whose `type@` template sorts past opaque
-  (`glass_blend_*`, `cloth_blend`, `foliage_blend`: vcod's prop pass draws
-  them opaque with a cutout, the template blends), and a world surface
+  (`glass_blend_*`, `cloth_blend`, `foliage_blend`: the stage path draws
+  their template), a world surface of a blended type (shader doc 8.3),
+  and a world surface
   with `surfaceparm water` (mp_ship's ocean, sort 3, which also waves off
   the pose a cached layer holds). Without the test, foliage cards, fences
   and grilles cast solid blocks, the static layer reads the ground under

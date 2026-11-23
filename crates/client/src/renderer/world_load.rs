@@ -217,6 +217,11 @@ impl Renderer {
     ) -> Result<()> {
         let mut laps = vcod_common::laps::Laps::new("world GPU state");
         self.unload_world();
+        if fs.game() == vcod_common::game::Game::Cod1 {
+            for m in blended_world_types(fs, bsp, &self.shader_lib) {
+                self.shader_lib.insert_missing(m);
+            }
+        }
         let device = &self.device;
         let queue = &self.queue;
         let material_layout = &self.material_layout;
@@ -1794,6 +1799,39 @@ pub(super) fn world_type_draws_opaque(fs: &dyn AssetSource, name: &str) -> bool 
                 .ok()
         })
         .is_some_and(|file| stype_draws_opaque(&file.text()))
+}
+
+/// The materials a CoD1 map's script-less `<type>@<image>` world surfaces
+/// take when their `shadertypes/world/<type>.stype` blends its first stage
+/// (`cloth_blend`, `glass_blend_*`, `foliage_blend`, UO's `dirt_blend`):
+/// the template with `$texturename` bound to the surface's image, drawn by
+/// the stage path as retail builds it (0x4fc748). Decals and `*_masked`
+/// overlays keep their pass (shader doc 8.3).
+pub(super) fn blended_world_types(
+    fs: &dyn AssetSource,
+    bsp: &MapWorld,
+    lib: &MaterialLib,
+) -> Vec<Material> {
+    let mut seen = HashSet::new();
+    bsp.materials
+        .iter()
+        .filter(|m| seen.insert(m.name.to_ascii_lowercase()))
+        .filter(|m| lib.get(&m.name).is_none() && !mesh::is_overlay(m))
+        .filter_map(|m| {
+            let kind = crate::entity_material::skin_type(&m.name)?;
+            let file = fs
+                .load::<RawFile>(&format!("shadertypes/world/{kind}.stype"))
+                .ok()?;
+            let sh = crate::entity_material::from_stype(
+                &m.name,
+                &file.text(),
+                &mut vcod_common::shader::WarnSet::new(),
+            )?;
+            sh.stages[0].blend.is_some().then(|| {
+                Material::from_shader(&crate::entity_material::bind_texture_name(sh, &m.name))
+            })
+        })
+        .collect()
 }
 
 pub(super) fn stype_draws_opaque(text: &str) -> bool {
