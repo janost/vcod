@@ -2183,6 +2183,7 @@ fn run() -> Result<()> {
         menu_mouse: false,
         os_cursor: true,
         captured: false,
+        focused: true,
         server_process: None,
         cod4_parked: None,
         rcon: Default::default(),
@@ -3432,6 +3433,9 @@ struct App {
     /// The OS pointer is locked to the window and its motion arrives as raw
     /// deltas, for the view or the UI cursor ([`Self::sync_capture`]).
     captured: bool,
+    /// The window has the focus (retail's `activeApp`, CoDMP.exe
+    /// 0x16bdd98): without it the mouse is let go whatever wants it.
+    focused: bool,
     /// The `vcod-server` Start New Server launched; dropping it kills it,
     /// so it goes with the client.
     server_process: Option<frontend::create::ServerProcess>,
@@ -3532,16 +3536,17 @@ impl App {
         }
         self.grabbed = grabbed;
         self.sync_capture();
-        if grabbed && !self.captured {
+        // a platform that cannot grab; an unfocused window grabs on refocus
+        if grabbed && self.focused && !self.captured {
             self.grabbed = false;
         }
     }
 
     /// Captures the OS pointer while the view or the menus take the mouse,
     /// as retail's `IN_Frame` (CoDMP.exe 0x461a80) keeps it captured unless
-    /// the console is down in a window; a menu's cursor then moves by the
-    /// raw deltas, never by the OS pointer (docs/research/cod11-front-end.md
-    /// section 13).
+    /// the console is down in a window or the window lost the focus; a
+    /// menu's cursor then moves by the raw deltas, never by the OS pointer
+    /// (docs/research/cod11-front-end.md section 13).
     fn sync_capture(&mut self) {
         let fullscreen = self
             .window
@@ -3550,7 +3555,7 @@ impl App {
         let menus = (self.ui.active() || self.session.cod4_front_active())
             && !self.bypass_mouse()
             && (!self.console.open || fullscreen);
-        let want = self.grabbed || menus;
+        let want = self.focused && (self.grabbed || menus);
         if want != self.captured
             && let Some(window) = &self.window
         {
@@ -5602,7 +5607,15 @@ impl ApplicationHandler for App {
             }
             WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
             WindowEvent::KeyboardInput { event, .. } => self.on_key(event_loop, event),
-            WindowEvent::Focused(false) => self.clear_held_keys(),
+            // `VID_AppActivate` (0x466b20): `Key_ClearStates`, then the
+            // mouse goes on losing the focus and comes back with it
+            WindowEvent::Focused(focused) => {
+                if !focused {
+                    self.clear_held_keys();
+                }
+                self.focused = focused;
+                self.sync_capture();
+            }
             WindowEvent::CursorMoved { position, .. } => self.on_cursor_moved(event_loop, position),
             WindowEvent::MouseInput { state, button, .. } => {
                 self.on_mouse_input(event_loop, state, button)

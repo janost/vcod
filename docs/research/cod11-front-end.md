@@ -1039,6 +1039,15 @@ or unknown `g_scriptMainMenu` opens nothing: `0x400134b0` looks the name up
   pointer would have moved, whatever `sensitivity`, `m_yaw` or `m_pitch`
   say (they scale only the view, `0x40b130`). With the console down in a
   window it does not move at all.
+- The focus, CoDMP.exe. VERIFIED (the instructions, `0x466b20`..`0x466b6b`):
+  the window's activation handler calls `Key_ClearStates` (`0x40e260`)
+  and stores 1 in `0x16bdd98` only when it is activated and not minimized
+  (`0x16c35f4`). Otherwise it stores 0, clears the mouse's active flag
+  (`0x8e2520`) and deactivates it (`0x4616b0`) at once rather than on the
+  next `IN_Frame`. INFERRED (Q3's `VID_AppActivate` and `WM_ACTIVATE` shape): the
+  next `IN_Frame` after the focus comes back captures the mouse again.
+  vcod (`App::sync_capture`): a window without the focus lets the pointer
+  go, keeps the view's grab and captures again on the focus's return.
 
 ### 13.4 The menus it reaches
 
