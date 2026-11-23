@@ -1178,6 +1178,23 @@ impl Shell {
         self.register("r_vc_depthprepass", if on { "1" } else { "0" }, 0);
     }
 
+    /// CoD1's video mode cvars latch as `R_Register` registers them
+    /// (`0x21`, CoDMP.exe 0x4b3716..0x4b3786): a set waits for
+    /// `vid_restart` (cod11-front-end.md 21). CoD2's and CoD4's stay live.
+    pub fn latch_video_mode(&mut self) {
+        for name in [
+            "r_mode",
+            "r_fullscreen",
+            "r_customwidth",
+            "r_customheight",
+            "r_customaspect",
+        ] {
+            if let Some(c) = self.cvars.edit().get_mut(name) {
+                c.latch = true;
+            }
+        }
+    }
+
     /// Registers `name` at `value`, keeping the value a config already set.
     fn register_kept(&mut self, name: &str, value: &str, flags: u32) {
         let kept = self.cvar(name).map(str::to_string);
@@ -2671,6 +2688,22 @@ mod tests {
         assert!(!s.apply_latched());
         // Back to the live value with nothing pending is no change at all.
         assert!(s.execute("set cl_language 2").is_empty());
+    }
+
+    #[test]
+    fn cod1_video_modes_wait_for_vid_restart() {
+        let mut s = Shell::new();
+        s.execute("r_mode 3");
+        assert_eq!(s.cvar("r_mode"), Some("3"), "live until latched");
+        s.latch_video_mode();
+        s.execute("r_mode 5; r_fullscreen 1; r_customwidth 1280");
+        assert_eq!(s.cvar("r_mode"), Some("3"));
+        assert_eq!(s.cvar("r_fullscreen"), Some("0"));
+        assert!(s.config_text().contains("seta r_mode \"5\"\n"));
+        assert!(s.apply_latched_video());
+        assert_eq!(s.cvar("r_mode"), Some("5"));
+        assert_eq!(s.cvar("r_fullscreen"), Some("1"));
+        assert_eq!(s.cvar("r_customwidth"), Some("1280"));
     }
 
     #[test]

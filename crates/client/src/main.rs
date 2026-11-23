@@ -1799,6 +1799,9 @@ fn run() -> Result<()> {
     }
     shell.register_aa_samples();
     shell.register_depth_prepass(game != Game::Cod1);
+    if game == Game::Cod1 {
+        shell.latch_video_mode();
+    }
     // CoD4's stock keys are CoD2's where vcod has them (frag, smoke,
     // `toggleads`, `+melee_breath`).
     if game == Game::Cod4 {
