@@ -59,6 +59,25 @@ struct MarkShader {
     shader: Material,
     sort: f32,
     slots: Vec<u32>,
+    /// Registration order, which stands for its decal image's load order.
+    rank: u32,
+}
+
+/// Where a (shader, lightmap) run of marks draws among runs: retail keys a
+/// mark by its lightmap copy's sorted index, which R_SortNewShader
+/// (0x4fb790) orders by sort, then the decal image's number, then the
+/// lightmap page's, a page-less mark's base shader first (events doc 9.6).
+fn run_order(sort: f32, rank: u32, lightmap: u16) -> (f32, u32, i32) {
+    let page = if lightmap == bsp::NO_LIGHTMAP {
+        -1
+    } else {
+        i32::from(lightmap)
+    };
+    (sort, rank, page)
+}
+
+fn cmp_runs(a: &(f32, u32, i32), b: &(f32, u32, i32)) -> std::cmp::Ordering {
+    a.0.total_cmp(&b.0).then((a.1, a.2).cmp(&(b.1, b.2)))
 }
 
 /// One run of marks sharing a shader and a lightmap page, in draw order.
@@ -207,7 +226,7 @@ impl MarkPass {
     /// One frame of `CG_ImpactMark` and `CG_AddMarks`: place `requests`,
     /// drop the expired, fade the rest and upload them newest first after
     /// this frame's `temporary` marks, one run per (shader, lightmap)
-    /// ordered by sort. With `cg_marks 0` the cgame neither places nor
+    /// ordered by [`run_order`]. With `cg_marks 0` the cgame neither places nor
     /// draws nor expires marks, temporary ones included.
     pub(super) fn update(
         &mut self,
@@ -250,7 +269,10 @@ impl MarkPass {
         let mut indices: Vec<u32> = Vec::new();
         let mut runs = Vec::new();
         for (key, members) in groups {
-            let Some(sort) = self.shaders[&key.0].as_ref().map(|s| s.sort) else {
+            let Some(order) = self.shaders[&key.0]
+                .as_ref()
+                .map(|s| run_order(s.sort, s.rank, key.1))
+            else {
                 continue;
             };
             let first = indices.len() as u32;
@@ -269,15 +291,18 @@ impl MarkPass {
                     indices.extend_from_slice(&[base, base + k, base + k + 1]);
                 }
             }
-            runs.push(MarkRun {
-                key,
-                first,
-                count: indices.len() as u32 - first,
-                sort,
-            });
+            runs.push((
+                order,
+                MarkRun {
+                    key,
+                    first,
+                    count: indices.len() as u32 - first,
+                    sort: order.0,
+                },
+            ));
         }
-        // stable: newest first within a sort
-        runs.sort_by(|a, b| a.sort.total_cmp(&b.sort));
+        runs.sort_by(|(a, _), (b, _)| cmp_runs(a, b));
+        let runs: Vec<MarkRun> = runs.into_iter().map(|(_, r)| r).collect();
         ctx.queue
             .write_buffer(&self.vertex_buf, 0, bytemuck::cast_slice(&verts));
         ctx.queue
@@ -521,6 +546,7 @@ impl MarkPass {
             sort: shader.sort,
             shader,
             slots,
+            rank: self.shaders.len() as u32,
         })
     }
 
@@ -687,5 +713,34 @@ impl Renderer {
     /// Live marks in the pool, for the F3 `fx` line.
     pub fn mark_count(&self) -> usize {
         self.marks.live()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Runs order by sort, then the shader's registration, then the page,
+    /// a page-less run first; recency plays no part.
+    #[test]
+    fn mark_runs_order_by_sort_then_image_then_page() {
+        let mut keys = [
+            run_order(6.0, 1, 0),
+            run_order(6.0, 0, 3),
+            run_order(6.0, 0, bsp::NO_LIGHTMAP),
+            run_order(5.0, 9, 9),
+            run_order(6.0, 0, 1),
+        ];
+        keys.sort_by(cmp_runs);
+        assert_eq!(
+            keys,
+            [
+                (5.0, 9, 9),
+                (6.0, 0, -1),
+                (6.0, 0, 1),
+                (6.0, 0, 3),
+                (6.0, 1, 0)
+            ]
+        );
     }
 }

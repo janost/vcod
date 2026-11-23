@@ -72,6 +72,7 @@ impl App {
             ev_seen: &mut self.ev_seen,
             ev_unknown: &mut self.ev_unknown,
             fx_ms: &mut self.fx_ms,
+            quick_chat: &self.quick_chat,
         };
         let Posed {
             mut instances,
@@ -89,6 +90,7 @@ impl App {
             mut view_lean,
             mut feet_z,
             render_time,
+            intermission_roll,
         } = cx.pose(
             prof, r, net, cam, input, world, scene, clock, drawn_pos, seat_frac, viewer,
         );
@@ -141,6 +143,7 @@ impl App {
             view_lean,
             feet_z,
             render_time,
+            intermission_roll,
             seat_now,
             &predicted,
             &view_ps,
@@ -411,6 +414,9 @@ struct Posed {
     view_lean: f32,
     feet_z: Option<f32>,
     render_time: Option<i32>,
+    /// The intermission view's roll, the snapshots' `viewangles[2]`
+    /// (radians).
+    intermission_roll: f32,
 }
 
 /// The App fields the live frame's steps use, borrowed apart from the
@@ -432,6 +438,7 @@ struct LiveCx<'a> {
     ev_seen: &'a mut u64,
     ev_unknown: &'a mut u64,
     fx_ms: &'a mut f32,
+    quick_chat: &'a crate::quick_chat::QuickChat,
 }
 
 impl LiveCx<'_> {
@@ -479,6 +486,7 @@ impl LiveCx<'_> {
         // The drawn `leanf`; the intermission view
         // takes none (cgame 0x30033413).
         let mut view_lean = 0.0;
+        let mut intermission_roll = 0.0;
         // The drawn origin's height, under which
         // the eye never goes (cgame 0x30032de5).
         let mut feet_z = None;
@@ -599,6 +607,9 @@ impl LiveCx<'_> {
                 let va_b = b.ps.viewangles(p);
                 cam.yaw = camera::lerp_angle(va_a[1], va_b[1], f).to_radians();
                 cam.pitch = -camera::lerp_angle(va_a[0], va_b[0], f).to_radians();
+                if pm_type == 5 {
+                    intermission_roll = camera::lerp_angle(va_a[2], va_b[2], f).to_radians();
+                }
             }
         }
         Posed {
@@ -617,6 +628,7 @@ impl LiveCx<'_> {
             view_lean,
             feet_z,
             render_time,
+            intermission_roll,
         }
     }
 
@@ -829,6 +841,7 @@ impl LiveCx<'_> {
         view_lean: f32,
         feet_z: Option<f32>,
         render_time: Option<i32>,
+        intermission_roll: f32,
         seat_now: Option<Seated>,
         predicted: &Option<play::predict::PredictedView>,
         view_ps: &Option<play::view::ViewPs>,
@@ -846,8 +859,11 @@ impl LiveCx<'_> {
         // `CL_FinishMove` reads last frame's syscall 0x56.
         input.kick = view.view_kick();
         // `CG_CalcViewValues` draws the predicted
-        // `viewangles[2]`, the kick's roll included.
-        let mut view_roll = 0.0;
+        // `viewangles[2]`, the kick's roll included; its
+        // intermission arm the snapshot's, and returns before
+        // the seat and the gun (uo cgame 0x30041a75).
+        let intermission = pm_type == 5;
+        let mut view_roll = intermission_roll;
         if !snapshot_view {
             let delta = match &predicted {
                 Some(v) => v.delta_angles,
@@ -915,7 +931,7 @@ impl LiveCx<'_> {
         }
         // In a vehicle seat `CG_VehicleView` (uo cgame
         // 0x30040810) replaces the first-person offsets.
-        if let Some((seat, num, vang)) = seat_now {
+        if let Some((seat, num, vang)) = seat_now.filter(|_| !intermission) {
             let delta = match &predicted {
                 Some(v) => v.delta_angles,
                 None => net.snapshots().newest().map_or([0; 3], |s| {
@@ -1018,7 +1034,10 @@ impl LiveCx<'_> {
         // 1.5's and UO's (1.5 cgame 0x300348c0, uo
         // 0x30041550) hold the view inside the gun's
         // arcs; UO's sways the eye.
-        if let Some(eye) = turret_eye.map(|e| e.kicked(damage_kick)) {
+        if let Some(eye) = turret_eye
+            .filter(|_| !intermission)
+            .map(|e| e.kicked(damage_kick))
+        {
             cam.pos = eye.pos;
             (cam.yaw, cam.pitch) = eye.view();
             view_roll = eye.angles[2].to_radians();
@@ -1837,6 +1856,10 @@ impl LiveCx<'_> {
                     eye: cam.pos,
                     heads,
                     entity_pos,
+                    riding: (newest.ps.field_i32(p, "eFlags") & net::flags::EF_IN_VEHICLE_V22 != 0)
+                        .then(|| u32::try_from(newest.ps.field_i32(p, "viewlocked_entNum")).ok())
+                        .flatten(),
+                    voice: &|num| self.quick_chat.sprite(num, time),
                 },
                 cam_right,
                 cam_up,

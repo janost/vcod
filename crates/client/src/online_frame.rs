@@ -576,6 +576,14 @@ impl App {
         // One quick-chat line per second, played and shown
         // like a chat line (retail queues text + alias).
         if let Some(line) = self.quick_chat.drain(time) {
+            // `cg_noVoiceChats` drops the sound and the icon, not the
+            // text (cgame 0x3002d473).
+            let voice = self.shell.cvar_f32("cg_noVoiceChats") == 0.0;
+            if voice && let Some(s) = net.snapshots().newest() {
+                let viewer = s.ps.field_i32(net.protocol(), "clientNum");
+                let ms = f64::from(self.shell.cvar_f32("cg_voiceSpriteTime"));
+                self.quick_chat.show_sprite(&line, viewer, time, ms);
+            }
             let name = net
                 .snapshots()
                 .newest()
@@ -587,7 +595,9 @@ impl App {
                 let now_ms = (time * 1000.0) as i32;
                 hud.chat.push(&format!("{name}: {}", line.text), now_ms);
             }
-            self.audio.play(&self.fs, line.cue);
+            if voice {
+                self.audio.play(&self.fs, line.cue);
+            }
         }
 
         // Re-send `score` every 2 s while Tab is held, as the

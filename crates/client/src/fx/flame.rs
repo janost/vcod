@@ -231,6 +231,12 @@ const RESIDUE_FLAME_LIFE_MS: f32 = 1400.0;
 const RESIDUE_FLAME_LAG_MS: f32 = 300.0;
 /// A residue's `+0xa8` at the bounce (0x30027ad0's third argument).
 const RESIDUE_SINK: f32 = -0.2;
+/// While more than this is left of a residue's life (1300 ticks,
+/// 0x3007c3d0), each flame it sheds tests its face: a box 4 units into it
+/// (0x3007be40) that meets nothing kills it on the spot (0x300281c6..
+/// 0x300282b2).
+const RESIDUE_FACE_MS: f64 = 650.0;
+const RESIDUE_FACE_DEPTH: f32 = 4.0;
 /// Surfaces that take no residue: ice, snow, water (0x1300000, 0x1400000
 /// and 0xc00000 of the struck `surfaceFlags`).
 const NO_RESIDUE_SURFACES: [i32; 3] = [12, 19, 20];
@@ -401,7 +407,7 @@ impl FlameSystem {
             keep
         });
 
-        self.shed_residue_flames(now);
+        self.shed_residue_flames(now, world);
         let dt = dt_ms / 1000.0;
         let mut smoke = Vec::new();
         let mut struck = Vec::new();
@@ -525,8 +531,10 @@ impl FlameSystem {
     /// to [`RESIDUE_FLAME_LAG_MS`] into it, at a size of 1.5 times the
     /// residue's held to 60..120 plus up to 25, from half of that. It
     /// drifts along the face at 4 units a second or more, off a wall
-    /// as well, and rises ever faster ([`Chunk::lift`]).
-    fn shed_residue_flames(&mut self, now: f64) {
+    /// as well, and rises ever faster ([`Chunk::lift`]). Such a flame
+    /// never trails a smoke (type 2, 0x30028bfb), and a residue whose face
+    /// went dies ([`RESIDUE_FACE_MS`]).
+    fn shed_residue_flames(&mut self, now: f64, world: Option<&ChunkWorld>) {
         for i in 0..self.residues.len() {
             while self.residues[i].next_emit < now.min(self.residues[i].death) {
                 // A wall's residue redraws its `+0xa8` each step (|z| of
@@ -573,7 +581,7 @@ impl FlameSystem {
                     life: RESIDUE_FLAME_LIFE_MS,
                     roll,
                     smoke: None,
-                    shed: false,
+                    shed: true,
                     may_residue: false,
                     residue: true,
                     // `+0xa8` is the parent's less 20, less 5 times
@@ -581,6 +589,14 @@ impl FlameSystem {
                     lift: -((r.sink - 20.0) - (1.0 - n.z) * 5.0),
                     braked: false,
                 });
+                if let Some(w) = world
+                    && r.death - now >= RESIDUE_FACE_MS
+                {
+                    let (tr, _) = w.trace(r.pos, r.pos - n * RESIDUE_FACE_DEPTH, r.owner);
+                    if !tr.allsolid && tr.fraction == 1.0 {
+                        self.residues[i].death = now;
+                    }
+                }
                 let step = RESIDUE_STEP_MS * (0.5 + self.rand());
                 self.residues[i].next_emit += f64::from(step);
             }
@@ -1071,6 +1087,51 @@ mod tests {
     /// flames that burn a player standing in them after the stream is
     /// released, and it dies inside 2.5 s, its flames 1.4 s later. An ice
     /// wall takes none.
+    #[test]
+    fn a_residue_whose_face_is_gone_dies_and_its_flames_trail_no_smoke() {
+        use vcod_common::collision::synthetic_world;
+        let wall = synthetic_world(
+            &[("textures/test/wall", CONTENTS_SOLID, 0)],
+            &[(0, [100.0, -512.0, -64.0], [116.0, 512.0, 256.0])],
+        );
+        // The face moved off: only a brush far away.
+        let empty = synthetic_world(
+            &[("textures/test/wall", CONTENTS_SOLID, 0)],
+            &[(0, [2000.0, -512.0, -64.0], [2016.0, 512.0, 256.0])],
+        );
+        let residue = Residue {
+            owner: 7,
+            pos: Vec3::new(97.0, 0.0, 30.0),
+            normal: Vec3::NEG_X,
+            size: 60.0,
+            born: 1000.0,
+            death: 3000.0,
+            next_emit: 1000.0,
+            sink: RESIDUE_SINK,
+        };
+        let run = |world: &CollisionWorld, from: f64| {
+            let mut f = FlameSystem::default();
+            f.residues.push(Residue {
+                next_emit: from,
+                ..residue
+            });
+            let mut now = from;
+            let mut smoked = false;
+            while now < 3200.0 && !f.residues.is_empty() {
+                f.step(now, 16.0, &[], Vec3::ZERO, Some(&bare(world)));
+                smoked |= f.chunks.iter().any(|c| c.smoke.is_some());
+                now += 16.0;
+            }
+            (now, smoked)
+        };
+        // On its wall it lives to its death and sheds no smoke.
+        assert_eq!(run(&wall, 1000.0), (3016.0, false));
+        // Its face gone, the first flame's test kills it.
+        assert_eq!(run(&empty, 1000.0).0, 1032.0);
+        // Inside its last 650 ms nothing tests.
+        assert!(run(&empty, 2400.0).0 > 3000.0);
+    }
+
     #[test]
     fn a_stream_at_a_wall_leaves_a_residue_that_burns_after_release() {
         use vcod_common::collision::synthetic_world;

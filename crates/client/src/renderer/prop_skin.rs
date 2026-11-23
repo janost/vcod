@@ -9,8 +9,10 @@ pub(super) enum PropSkinDraw {
     /// More than one stage, or a blend: the stage path, `$texturename`
     /// bound to the skin.
     Stages(Box<Material>),
-    /// One stage that alpha-tests: `fs_prop`'s cut.
-    Cut,
+    /// One stage that alpha-tests at 0.5 (0x4d57b0): `fs_prop`'s cut, which
+    /// keeps `>= 0.5`. `flip` for `LT128` (foliage), whose skin uploads with
+    /// its alpha inverted so that cut keeps the texels under 0.5.
+    Cut { flip: bool },
     /// One opaque stage, or the implicit skin: nothing reads the alpha.
     Opaque,
 }
@@ -26,15 +28,20 @@ pub(super) fn prop_skin_draw(fs: &dyn AssetSource, skin: &str) -> PropSkinDraw {
             PropSkinDraw::Opaque
         };
     };
-    if sh.stages.len() > 1 || sh.stages[0].blend.is_some() {
-        return PropSkinDraw::Stages(Box::new(Material::from_shader(
+    let stage_path = |sh| {
+        PropSkinDraw::Stages(Box::new(Material::from_shader(
             &crate::entity_material::bind_texture_name(sh, &format!("skins/{skin}")),
-        )));
+        )))
+    };
+    if sh.stages.len() > 1 || sh.stages[0].blend.is_some() {
+        return stage_path(sh);
     }
-    if sh.stages[0].alpha_func.is_some() {
-        PropSkinDraw::Cut
-    } else {
-        PropSkinDraw::Opaque
+    match sh.stages[0].alpha_func.clone() {
+        None => PropSkinDraw::Opaque,
+        Some(AlphaFunc::Ge128) => PropSkinDraw::Cut { flip: false },
+        Some(AlphaFunc::Lt128) => PropSkinDraw::Cut { flip: true },
+        // `GREATER 0` is no cut at 0.5 either way
+        Some(AlphaFunc::Gt0) => stage_path(sh),
     }
 }
 

@@ -3,7 +3,7 @@
 //! one-line-per-second cadence (docs/research/cod11-quick-chat.md).
 //! Without those files this is inert, exactly like stock retail.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use vcod_common::asset_source::AssetSource;
 
 use glam::Vec3;
@@ -20,6 +20,8 @@ const QUEUE_CAP: usize = 32;
 const DRAIN_INTERVAL_S: f64 = 1.0;
 /// Retail reads the file through a 0x4000-byte cap ("voice chat file too large").
 const FILE_LIMIT: u64 = 0x4000;
+/// The head icon of a variant that names none.
+const VOICE_SHADER: &str = "headiconVoiceChat";
 
 struct Tables {
     axis: Option<VoiceChat>,
@@ -30,13 +32,16 @@ struct Queued {
     client_num: u32,
     pos: Vec3,
     alias: String,
+    head_icon: String,
     text: String,
 }
 
-/// One drained line: play the cue, show the text as `<name>: <text>`.
+/// One drained line: play the cue, show the text as `<name>: <text>`,
+/// hang the head icon over the speaker ([`QuickChat::show_sprite`]).
 pub struct DrainedLine {
     pub client_num: u32,
     pub cue: Cue,
+    pub head_icon: String,
     pub text: String,
 }
 
@@ -45,6 +50,8 @@ pub struct QuickChat {
     queue: VecDeque<Queued>,
     next_due_s: f64,
     rng: Rng,
+    /// Each speaker's voice icon and the time (s) it shows until.
+    sprites: HashMap<u32, (String, f64)>,
 }
 
 impl QuickChat {
@@ -54,6 +61,7 @@ impl QuickChat {
             queue: VecDeque::new(),
             next_due_s: 0.0,
             rng: Rng::new(seed),
+            sprites: HashMap::new(),
         }
     }
 
@@ -70,6 +78,7 @@ impl QuickChat {
     pub fn clear(&mut self) {
         self.queue.clear();
         self.next_due_s = 0.0;
+        self.sprites.clear();
     }
 
     /// The `j`/`k`/`l` handler; true when the command was quick chat. argv
@@ -118,6 +127,10 @@ impl QuickChat {
             client_num,
             pos,
             alias: variants[idx].alias.clone(),
+            head_icon: variants[idx]
+                .head_icon
+                .clone()
+                .unwrap_or_else(|| VOICE_SHADER.into()),
             text: category.clone(),
         });
         while self.queue.len() > QUEUE_CAP {
@@ -135,6 +148,7 @@ impl QuickChat {
         let q = self.queue.pop_front()?;
         Some(DrainedLine {
             client_num: q.client_num,
+            head_icon: q.head_icon,
             text: q.text,
             cue: Cue {
                 alias: q.alias,
@@ -145,6 +159,30 @@ impl QuickChat {
                 delay_s: 0.0,
             },
         })
+    }
+
+    /// Hangs a drained line's icon over its speaker for `sprite_ms`
+    /// (`cg_voiceSpriteTime`), twice that for a variant's own icon. The
+    /// view's own player gets none (cgame 0x3002d470).
+    pub fn show_sprite(&mut self, line: &DrainedLine, viewer: i32, now: f64, sprite_ms: f64) {
+        if line.client_num as i32 == viewer {
+            return;
+        }
+        let ms = if line.head_icon == VOICE_SHADER {
+            sprite_ms
+        } else {
+            2.0 * sprite_ms
+        };
+        self.sprites
+            .insert(line.client_num, (line.head_icon.clone(), now + ms / 1000.0));
+    }
+
+    /// The voice icon over entity `num` at `now`, if it still shows.
+    pub fn sprite(&self, num: u32, now: f64) -> Option<&str> {
+        self.sprites
+            .get(&num)
+            .filter(|(_, until)| *until > now)
+            .map(|(shader, _)| shader.as_str())
     }
 
     #[cfg(test)]
@@ -272,6 +310,27 @@ mod tests {
             if n == 3 { Some(2) } else { None }
         }));
         assert_eq!(qc.drain(0.0).unwrap().cue.alias, "allies_snd");
+    }
+
+    #[test]
+    fn a_line_hangs_its_icon_over_the_speaker() {
+        let mut own = cat("c", &["a"]);
+        own.variants[0].head_icon = Some("icon".into());
+        let mut qc = QuickChat::with_tables(Some(vc(vec![cat("d", &["b"]), own])), None);
+        assert!(qc.on_server_command(&fs(), &cmd("j", 2, "d"), |_| None));
+        let line = qc.drain(0.0).unwrap();
+        assert_eq!(line.head_icon, VOICE_SHADER);
+        qc.show_sprite(&line, 0, 10.0, 6000.0);
+        assert_eq!(qc.sprite(2, 15.9), Some(VOICE_SHADER));
+        assert_eq!(qc.sprite(2, 16.0), None);
+        // A variant's own icon shows twice as long; the view gets none.
+        assert!(qc.on_server_command(&fs(), &cmd("j", 3, "c"), |_| None));
+        let line = qc.drain(1.0).unwrap();
+        qc.show_sprite(&line, 0, 10.0, 6000.0);
+        assert_eq!(qc.sprite(3, 21.9), Some("icon"));
+        qc.clear();
+        qc.show_sprite(&line, 3, 30.0, 6000.0);
+        assert_eq!(qc.sprite(3, 30.0), None);
     }
 
     #[test]

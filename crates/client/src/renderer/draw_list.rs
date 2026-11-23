@@ -73,7 +73,7 @@ pub(super) struct WorldItem {
 #[derive(Copy, Clone, PartialEq)]
 pub(super) enum Bound {
     Legacy(Pass),
-    Stage(StageVariant, bool, bool),
+    Stage(StageVariant, bool, Option<PolygonOffset>),
     /// CoD2's lit pipeline (`cod2::Cod2World`), then a static prop's and
     /// a water's, and which of the depth prepass's pipelines.
     Lit(
@@ -476,8 +476,15 @@ pub(super) enum Emit {
     None,
     World(WorldRunState),
     Ent(EntRunState),
-    Gun { part: u32, bound: EntBound },
-    Fx { blend: FxBlend, soft: bool },
+    Gun {
+        part: u32,
+        bound: EntBound,
+    },
+    Fx {
+        blend: FxBlend,
+        soft: bool,
+        always: bool,
+    },
 }
 
 /// Copies the visible `ranges` out of `src` batch by batch into `out`, one

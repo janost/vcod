@@ -111,7 +111,10 @@ Shutdown restores the saved ramp.
   `*lightmap%d`) runs every texel of each 512x512 page through `0x4d9f30`,
   which calls `0x4d9af0` per texel and sets alpha 255. `0x4d9af0` shifts r,
   g and b left by `1 - overbrightBits`; when any passes 255 it scales all
-  three by `255 / max` (integer divides), keeping the hue. INFERRED: this
+  three by `255 / max` (integer divides), keeping the hue. VERIFIED (the
+  instructions): the test is `(r | g | b) > 0xff` (0x4d9b18..0x4d9b2c)
+  and each channel becomes `c * 255 / max` by `imul` and `idiv`
+  (0x4d9b3e..0x4d9b65), truncated. INFERRED: this
   is Q3's `R_ColorShiftLightingBytes` with `r_mapOverBrightBits` fixed at
   1, so full screen loads lightmaps as they are and windowed doubles them.
   VERIFIED: with no lightmap data the pages are filled with
@@ -175,9 +178,12 @@ every frame and rides the camera uniform (`time_pad.y`), so the lighting
 switches with the window as retail's does at its `vid_restart`:
 
 - Lightmaps: raw full screen; windowed, doubled and scaled back by the
-  brightest channel (`lightmap_shift` in `shader.wgsl`, section 3's
-  `0x4d9af0`). vcod shifts the filtered sample in the shader; retail
-  shifts texels at load.
+  brightest channel in integers (`shift_texel` in `shader.wgsl`, section
+  3's `0x4d9af0`). Retail shifts texels at load and filters them after;
+  vcod keeps the raw page and, windowed, gathers the four bilinear taps,
+  shifts each and blends them (`lightmap_lit`), which is the same pixel
+  without a reload when the window mode switches. Under `vc_bicubic`
+  (vcod's own filter) it shifts the filtered sample.
 - Stage gens (section 5): `vertex` scales the vertex colour by
   `identityLight`; `identityLighting`, `constLighting` and `wave` scale
   the tint (`STAGE_FLAG_VERTEX_RGB_HALF`, `STAGE_FLAG_TINT_LIGHT`).
@@ -219,9 +225,13 @@ Divergences:
   without it; the default is retail's single sample
   (`cod11-client-perf.md` 4).
 - vcod's implicit vertex-lit world surfaces multiply the raw vertex colour
-  in both modes. INFERRED: retail does the same, since `0x4d9af0` is called
-  only for lightmap pages (section 3); the BSP vertex-colour load is not
-  traced.
+  in both modes, as retail does. VERIFIED (the instructions), `CoDMP.exe`
+  0x4da376..0x4da399: the triangle soup loader (0x4dab70, strings
+  "Bad index in triangle soup surface" 0x54d4e8 and "First index is not
+  0 in triangle soup surface" 0x54d50c) hands each 44-byte draw vertex to
+  0x4da2e0 (call 0x4daca6), which copies its colour bytes (`+0x28..+0x2b`)
+  into the surface's colour array (`+0x3c`) unchanged; `0x4d9af0`'s one
+  caller is the lightmap page loop 0x4d9f30 (call 0x4d9f66).
 - The HUD scale comes from the material's first stage; a scripted material
   whose later stages use other gens draws with the first one's. The fx
   pass takes each stage's own gens (`cod11-shader-scripts.md` section 3).

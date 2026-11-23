@@ -3142,7 +3142,10 @@ vcod's (`crate::video`, `apply_video_mode` in `main.rs`):
   `r_customwidth` / `r_customheight` 0; -1 with either at 0 keeps the
   window's own size (1600x900 logical at first start), so a wide size is
   `r_mode -1` with the custom pair (`r_customaspect` is registered and
-  ignored). None of them latches; `vid_restart` reads them.
+  ignored). On a CoD1 install the five latch as retail's do
+  (`Shell::latch_video_mode`): a set waits for `vid_restart`, Alt+Enter's
+  included, and a command-line `+set` takes at start. CoD2's and CoD4's
+  stay live.
 - `r_fullscreen 1` is a borderless window over the window's monitor at the
   desktop resolution, whatever `r_mode` says. `r_fullscreen 2` is
   exclusive: the monitor switches to its video mode closest to the
@@ -3156,6 +3159,13 @@ vcod's (`crate::video`, `apply_video_mode` in `main.rs`):
   windowed and windowed to 1, as retail's boolean flip.
 - The 3D view, HUD and menus on a non-4:3 window are `vc_widescreen`'s
   (cod11-hud-protocol.md section 10, `camera::view_fov_x`).
+- A menu rect spanning the 640 grid's width or height spans the window's.
+  A bordered one stretches as a whole: its fill and four border pieces are
+  cut out of the stretched rect (`Painter::window`). Retail scales every
+  rect by `vidWidth / 640` (0x416810), which stretches it the same way. No
+  stock 1.1, 1.5 or UO menu has a bordered item or menu that spans the
+  grid, so only a mod's menus show this (VERIFIED, a scan of their menu
+  files).
 
 ## 22. The message of the day
 

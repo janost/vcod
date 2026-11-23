@@ -46,7 +46,7 @@ All addresses are `cgame_mp_x86.dll` 1.1.
 | C | `record+0x144 + j*0x40` | a pointer into an inline per-variant area the 1.1 parser never writes |
 
 - Queueing: the entry `{pos.xyz, category copy char[149], client index, handles...}` goes into a 32-slot ring at `DAT_305407c0`, indexed by `DAT_3020d094`. The drain, `FUN_3002d5d0` (`0x3002d5d0`), takes at most one entry per 1000 ms (`DAT_3020d08c = time + 1000`).
-- Presentation, `FUN_3002d470` (`0x3002d470`): copies the head-icon handle into the speaker's clientinfo (drawn over the head elsewhere) and prints `": <text>"` to the console. The localizer `FUN_3002d670` (`0x3002d670`, syscall `0x38` lookup) falls back to the raw key wrapped in `#UNLOCALIZED# ... #`. The chat-line formats in `FUN_3002d770`:
+- Presentation, `FUN_3002d470` (`0x3002d470`): unless `cg_noVoiceChats` is set (0x3002d473), plays the sound and copies the head-icon handle into the speaker's centity (`cent+0x220`, shown until `cent+0x224`; cod11-gametypes-re-bel.md 7.3, "The second sprite"), then prints `": <text>"` to the console. The localizer `FUN_3002d670` (`0x3002d670`, syscall `0x38` lookup) falls back to the raw key wrapped in `#UNLOCALIZED# ... #`. The chat-line formats in `FUN_3002d770`:
 
 | Mode | Format |
 |---|---|
@@ -150,5 +150,9 @@ vcod asks the UI whether `quickmessage` is loaded. When it is not, vcod closes e
 - Variant: random among the category's variants (`rand() % count`).
 - Queue: 32 entries, at most one line drained per 1000 ms (`FUN_3002d5d0`).
 - Text: the raw category string, not localized. Retail's own fallback for a missing key is the raw key wrapped in `#UNLOCALIZED#`.
-- Head icon above the speaker: not drawn. The material name is parsed and kept.
+- Head icon above the speaker: the variant's icon, `headiconVoiceChat` when
+  it names none, for `cg_voiceSpriteTime` ms (twice that for a variant's
+  own icon), never over the view's own player. `cg_noVoiceChats` 1 drops
+  the sound and the icon and keeps the text. The sprite takes the talk
+  balloon's place (cod11-gametypes-re-bel.md 7.3, "The second sprite").
 - The suppression list (`kill_insult` and the rest, gated on `DAT_301ad3cc`) is not replicated; its enabling condition is not traced.

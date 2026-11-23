@@ -422,23 +422,10 @@ pub fn mark_material_image(fs: &Pk3Fs, shaders: &ShaderLib, name: &str) {
     }
 }
 
-/// Foliage skins (`foliage_masked@`, `foliage_detail@`, tga and dds) store
-/// the cutout mask inverted: leaves at alpha 0, fill at 255. Measured by RGB
-/// variance per alpha half over every masked skin in the retail pk3s. The
-/// `treeshdw_*` tree-shadow decals are the one normal set; the `shdw_*`
-/// decals measure inverted despite the name. Other `*_masked@` prefixes
-/// (metal, cloth, flesh) are normal and left alone.
-fn is_inverted_foliage_mask(filename: &str) -> bool {
-    let lower = filename.to_lowercase();
-    ["foliage_masked@", "foliage_detail@"]
-        .iter()
-        .filter_map(|p| lower.strip_prefix(p))
-        .any(|rest| !rest.starts_with("treeshdw"))
-}
-
-/// Flips alpha in place. BC2 alpha is explicit nibbles in the first 8 bytes
-/// of each block; BC3 goes through `invert_bc3_alpha`.
-fn invert_mask_alpha(data: &mut ImageData) {
+/// Flips alpha in place, so a `>= 0.5` cut keeps what `alphaFunc LT128`
+/// keeps. BC2 alpha is explicit nibbles in the first 8 bytes of each block;
+/// BC3 goes through `invert_bc3_alpha`.
+pub fn invert_mask_alpha(data: &mut ImageData) {
     match data {
         ImageData::Rgba8(px) => {
             for a in px.iter_mut().skip(3).step_by(4) {
@@ -458,8 +445,8 @@ fn invert_mask_alpha(data: &mut ImageData) {
                     invert_bc3_alpha(&mut block[..8]);
                 }
             }
-            // BC1's 1-bit alpha is tied to the colour endpoints; no foliage
-            // skin ships as DXT1
+            // BC1's 1-bit alpha is tied to the colour endpoints; no stock
+            // LT128 skin ships as DXT1
             TextureFormat::Bc1RgbaUnorm => {
                 log::warn!("cannot invert the mask alpha of {format:?}, leaving it as-is")
             }
@@ -558,10 +545,7 @@ pub fn load_skin_image(fs: &dyn AssetSource, filename: &str) -> Image {
     let named = format!("skins/{filename}");
     let path = resolve_bundle_image(fs, &named).unwrap_or(named);
     // some prop skins spell the extension in caps ("wood@pine1.TGA")
-    if let Some(mut img) = find_image(fs, &path, &extension(&path), &path) {
-        if is_inverted_foliage_mask(filename) {
-            invert_mask_alpha(&mut img.data);
-        }
+    if let Some(img) = find_image(fs, &path, &extension(&path), &path) {
         return img;
     }
     log::warn!("no texture found for {path}, using the default image");
@@ -1389,25 +1373,6 @@ gfx/effects/second_stage_only
         );
     }
 
-    #[test]
-    fn only_foliage_masks_are_flipped() {
-        assert!(is_inverted_foliage_mask(
-            "foliage_masked@spikeybushsparse.tga"
-        ));
-        assert!(is_inverted_foliage_mask(
-            "foliage_masked@bushwallfill#0.tga"
-        ));
-        assert!(is_inverted_foliage_mask("foliage_detail@grassblades#0.dds"));
-        assert!(is_inverted_foliage_mask("foliage_masked@grassblades2a.dds"));
-        assert!(is_inverted_foliage_mask("foliage_masked@vase.dds"));
-        assert!(!is_inverted_foliage_mask(
-            "foliage_masked@treeshdw_oakfrnt.tga"
-        ));
-        assert!(is_inverted_foliage_mask("foliage_masked@shdw_firfrt.tga"));
-        assert!(!is_inverted_foliage_mask("metal_masked@boucher_sign.tga"));
-        assert!(!is_inverted_foliage_mask("viewmodel@woodk98.dds"));
-    }
-
     fn make_dds(fourcc: &[u8; 4], w: u32, h: u32, blocks: &[u8]) -> Vec<u8> {
         let mut d = vec![0u8; 128];
         d[0..4].copy_from_slice(b"DDS ");
@@ -1576,7 +1541,7 @@ gfx/effects/second_stage_only
     }
 
     #[test]
-    fn dxt3_foliage_mask_flip_inverts_alpha_nibbles() {
+    fn dxt3_mask_flip_inverts_alpha_nibbles() {
         let block: &[u8] = &[
             0xF0, 0x0F, 0xFF, 0x00, 0x12, 0x34, 0x56, 0x78, // alpha nibbles
             0xAA, 0xBB, 0xCC, 0xDD, 0x11, 0x22, 0x33, 0x44, // colors
@@ -1589,7 +1554,8 @@ gfx/effects/second_stage_only
             &[("skins/foliage_masked@x.dds", &dds)],
         );
         let fs = crate::pk3::Pk3Fs::open(dir.path()).unwrap();
-        let img = load_skin_image(&fs, "foliage_masked@x.dds");
+        let mut img = load_skin_image(&fs, "foliage_masked@x.dds");
+        invert_mask_alpha(&mut img.data);
         let ImageData::Bc { mips, .. } = &img.data else {
             panic!("expected compressed data to stay compressed");
         };
@@ -1602,7 +1568,7 @@ gfx/effects/second_stage_only
     }
 
     #[test]
-    fn dxt5_foliage_mask_flip_inverts_decoded_alpha() {
+    fn dxt5_mask_flip_inverts_decoded_alpha() {
         // one block per BC3 mode; endpoints congruent mod 7 and mod 5 keep
         // the interpolation integral; indices walk all 8 codes
         let mut idx = [0u8; 6];
@@ -1626,7 +1592,8 @@ gfx/effects/second_stage_only
             &[("skins/foliage_detail@x.dds", &dds)],
         );
         let fs = crate::pk3::Pk3Fs::open(dir.path()).unwrap();
-        let img = load_skin_image(&fs, "foliage_detail@x.dds");
+        let mut img = load_skin_image(&fs, "foliage_detail@x.dds");
+        invert_mask_alpha(&mut img.data);
         let ImageData::Bc { mips, .. } = &img.data else {
             panic!("expected compressed data to stay compressed");
         };
@@ -1641,55 +1608,6 @@ gfx/effects/second_stage_only
                 assert_eq!(a[t], 255 - b[t], "texel {t}: {b:?} vs {a:?}");
             }
         }
-    }
-
-    #[test]
-    fn real_foliage_dds_masks_come_out_mostly_transparent() {
-        let Some(fs) = crate::testing::game_fs() else {
-            return;
-        };
-        let img = load_skin_image(&fs, "foliage_detail@grassblades#0.dds");
-        let ImageData::Bc { mips, .. } = &img.data else {
-            panic!("expected grassblades to decode as compressed DDS");
-        };
-        // DXT3 alpha: first 8 bytes of each block, one nibble per texel
-        let mut opaque = 0usize;
-        let mut total = 0usize;
-        for block in mips[0].as_chunks::<16>().0 {
-            for byte in &block[..8] {
-                opaque += usize::from(byte & 0xf >= 8) + usize::from(byte >> 4 >= 8);
-                total += 2;
-            }
-        }
-        let frac = opaque as f32 / total as f32;
-        assert!(
-            frac < 0.5,
-            "expected the grassblades mask to be flipped, {frac} opaque"
-        );
-    }
-
-    #[test]
-    fn foliage_skin_masks_come_out_the_right_way_round() {
-        let Some(fs) = crate::testing::game_fs() else {
-            return;
-        };
-        let opaque_fraction = |name: &str| {
-            let img = load_skin_image(&fs, name);
-            let ImageData::Rgba8(px) = img.data else {
-                panic!("{name} did not decode to Rgba8")
-            };
-            let n = px.len() / 4;
-            px.iter().skip(3).step_by(4).filter(|&&a| a >= 128).count() as f32 / n as f32
-        };
-        // the file stores the sparse bush 85% "opaque"
-        assert!(
-            opaque_fraction("foliage_masked@spikeybushsparse.tga") < 0.3,
-            "expected the sparse bush mask to be flipped"
-        );
-        assert!(
-            opaque_fraction("metal_masked@boucher_sign.tga") > 0.9,
-            "expected the sign mask to be left alone"
-        );
     }
 
     /// A 8x8 DXT1 and DXT5, mutated: the decode returns on every input.

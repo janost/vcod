@@ -4,9 +4,9 @@
 //! (docs/research/cod15-protocol-diff.md, "Match timeout").
 
 use super::HudQuad;
-use super::font::{Slot, UiFonts};
+use super::font::{self, Slot, UiFonts};
 use super::hudelem::Virtual;
-use super::player::{menu_text_rgba, text_height, text_width};
+use super::player::menu_text_rgba;
 use vcod_common::localize::Localized;
 
 /// Font 0 at half scale.
@@ -73,7 +73,11 @@ impl MatchTimeout {
         })
     }
 
-    /// Centred on the 640x480 screen in white, line by line under the first.
+    /// Centred on the 640x480 screen in white, in style 6, line by line
+    /// under the first. One `R_DrawText` call (trap 0x36) draws the whole
+    /// string: its size comes off the int traps 0x34 and 0x35, and each `\n`
+    /// starts a line at the same x, `scale` times the font's line height
+    /// lower (cod15-protocol-diff.md, "Match timeout").
     pub fn build(
         &self,
         fonts: &UiFonts,
@@ -86,18 +90,32 @@ impl MatchTimeout {
             return;
         };
         let font = fonts.pick(Slot::Default, SCALE, 480.0 * v.scale);
-        let h = text_height(font, SCALE);
-        let lines: Vec<&str> = text.split('\n').collect();
-        let w = lines
-            .iter()
-            .map(|l| text_width(font, l, SCALE))
-            .fold(0.0, f32::max);
+        let w = font::trap_width(font, &text, SCALE);
+        let h = font::trap_height(font, SCALE);
         let x = (640.0 - w) * 0.5;
         let y = (480.0 - h) * 0.5;
-        for (i, line) in lines.iter().enumerate() {
-            let baseline = y + i as f32 * h;
+        for (i, line) in text.split('\n').enumerate() {
+            let baseline = y + i as f32 * SCALE * font.line_advance;
+            let start = out.len();
             menu_text_rgba(font, line, (x, baseline), SCALE, [1.0; 4], v, out);
+            style_6_shadow(&mut out[start..], v.scale);
         }
+    }
+}
+
+/// Text style 6 (CoDMP.exe 1.1 0x4d803d..0x4d8057, 1.5 0x4bacb1): its
+/// shadow sits 2 virtual units right and down, black at the text's alpha
+/// (0x4d7ddf). `quads` alternate shadow and glyph, the shadow 1 px off.
+fn style_6_shadow(quads: &mut [HudQuad], scale: f32) {
+    let off = 2.0 * scale - 1.0;
+    for i in (0..quads.len()).step_by(2) {
+        let alpha = quads.get(i + 1).map_or(1.0, |g| g.rgba[3]);
+        let q = &mut quads[i];
+        for v in &mut q.verts {
+            v[0] += off;
+            v[1] += off;
+        }
+        q.rgba = [0.0, 0.0, 0.0, alpha];
     }
 }
 
@@ -160,6 +178,39 @@ mod tests {
         assert_eq!(
             t.text(&loc, 100).as_deref(),
             Some("CGAME_PAUSED\nPATCH_1_5_TIMEOUT_ENDING")
+        );
+    }
+
+    /// Style 6: each glyph's shadow two virtual units off, black at the
+    /// glyph's alpha; the second line starts at the first's x, a line
+    /// height lower.
+    #[test]
+    fn the_banner_draws_in_style_6() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let fonts = UiFonts::load(&fs).unwrap();
+        let v = Virtual::new((1280.0, 960.0));
+        let loc = Localized::default();
+        let mut t = MatchTimeout::default();
+        t.update(&cs("", ""), Some(CS_MATCH_TIMEOUT_V6), 0);
+        t.update(&cs("15000", "CB"), Some(CS_MATCH_TIMEOUT_V6), 0);
+        let mut out = Vec::new();
+        t.build(&fonts, &loc, 0, &v, &mut out);
+        let (shadow, glyph) = (&out[0], &out[1]);
+        assert_eq!(shadow.rgba, [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(shadow.verts[0][0] - glyph.verts[0][0], 4.0);
+        assert_eq!(shadow.verts[0][1] - glyph.verts[0][1], 4.0);
+        // The second line's "C" under the first's, a line height lower.
+        let first = t.text(&loc, 0).unwrap();
+        let n = first.split('\n').next().unwrap().chars().count();
+        let next = &out[2 * n + 1];
+        let font = fonts.pick(Slot::Default, SCALE, 960.0);
+        assert_eq!(next.verts[0][0], glyph.verts[0][0]);
+        let step = next.verts[0][1] - glyph.verts[0][1];
+        assert!(
+            (step - SCALE * font.line_advance * 2.0).abs() < 1e-3,
+            "{step}"
         );
     }
 }

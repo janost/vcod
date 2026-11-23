@@ -726,6 +726,7 @@ mod tests {
         }
         let open: Vec<String> = ui.open.iter().map(|&m| ui.menus[m].name.clone()).collect();
         assert_eq!(open, ["muteplayer"]);
+        assert!(ui.player_list_shown(&shell));
         ui.offer_clients(std::time::Instant::now(), || {
             vec![(2, "^1Able".into()), (5, "Baker".into())]
         });

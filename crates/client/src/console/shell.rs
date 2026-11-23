@@ -685,6 +685,11 @@ impl Shell {
         s.register("cg_teamChatsOnly", "0", ARCHIVE);
         s.register("cg_chatHeight", "8", ARCHIVE);
         s.register("cg_chatTime", "12000", ARCHIVE);
+        // cgame's rows at 0x30074fa0 and 0x30074f80: "0" and "6000",
+        // archived. The quick-chat voice and its head icon, and how long
+        // that shows (docs/research/cod11-quick-chat.md 2).
+        s.register("cg_noVoiceChats", "0", ARCHIVE);
+        s.register("cg_voiceSpriteTime", "6000", ARCHIVE);
         // cgame's row at 0x30074a20: default "0", archived and CVAR_CHEAT.
         // 1 drops a blob under each player (crate::blob_shadow).
         s.register("cg_shadows", "0", ARCHIVE | CHEAT);
@@ -1171,6 +1176,23 @@ impl Shell {
     /// (cod11-client-perf.md 4).
     pub fn register_depth_prepass(&mut self, on: bool) {
         self.register("r_vc_depthprepass", if on { "1" } else { "0" }, 0);
+    }
+
+    /// CoD1's video mode cvars latch as `R_Register` registers them
+    /// (`0x21`, CoDMP.exe 0x4b3716..0x4b3786): a set waits for
+    /// `vid_restart` (cod11-front-end.md 21). CoD2's and CoD4's stay live.
+    pub fn latch_video_mode(&mut self) {
+        for name in [
+            "r_mode",
+            "r_fullscreen",
+            "r_customwidth",
+            "r_customheight",
+            "r_customaspect",
+        ] {
+            if let Some(c) = self.cvars.edit().get_mut(name) {
+                c.latch = true;
+            }
+        }
     }
 
     /// Registers `name` at `value`, keeping the value a config already set.
@@ -2666,6 +2688,22 @@ mod tests {
         assert!(!s.apply_latched());
         // Back to the live value with nothing pending is no change at all.
         assert!(s.execute("set cl_language 2").is_empty());
+    }
+
+    #[test]
+    fn cod1_video_modes_wait_for_vid_restart() {
+        let mut s = Shell::new();
+        s.execute("r_mode 3");
+        assert_eq!(s.cvar("r_mode"), Some("3"), "live until latched");
+        s.latch_video_mode();
+        s.execute("r_mode 5; r_fullscreen 1; r_customwidth 1280");
+        assert_eq!(s.cvar("r_mode"), Some("3"));
+        assert_eq!(s.cvar("r_fullscreen"), Some("0"));
+        assert!(s.config_text().contains("seta r_mode \"5\"\n"));
+        assert!(s.apply_latched_video());
+        assert_eq!(s.cvar("r_mode"), Some("5"));
+        assert_eq!(s.cvar("r_fullscreen"), Some("1"));
+        assert_eq!(s.cvar("r_customwidth"), Some("1280"));
     }
 
     #[test]
