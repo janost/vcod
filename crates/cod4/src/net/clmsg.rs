@@ -10,6 +10,7 @@
 
 use super::huffman::Huffman;
 use super::parse::{UNUSED_HUFF, read_string_capped};
+use super::wire::Dialect;
 
 /// The most bytes of a client command the server keeps: the Q3 lineage's
 /// 1024-byte string buffer, as the 0x400-byte userinfo copy
@@ -412,15 +413,82 @@ pub enum ClOp {
     Eof,
 }
 
-/// A client netchan message: the 9-byte plain header and its ops.
+/// A client netchan message: the plain header and its ops.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClientMessage {
     pub sequence: u32,
     pub qport: u16,
-    pub server_id: u8,
+    pub server_id: i32,
     pub message_ack: i32,
     pub reliable_ack: i32,
+    /// CoD4x 21's `configDataAcknowledge`; 0 on 1.7.
+    pub config_ack: i32,
     pub ops: Vec<ClOp>,
+}
+
+/// A client netchan packet's plain head: the sequence and qport, then 1.7's
+/// 9 bytes (`serverId` one byte, `messageAcknowledge`,
+/// `reliableAcknowledge`) or CoD4x 21's 16 (`serverId` a long, the two
+/// acknowledges, `configDataAcknowledge`; `SV_PacketEvent` 0x121f1b,
+/// cod4x-protocol.md 8). The scrambled block follows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ClientHeader {
+    pub sequence: u32,
+    pub qport: u16,
+    pub server_id: i32,
+    pub message_ack: i32,
+    pub reliable_ack: i32,
+    pub config_ack: i32,
+}
+
+impl ClientHeader {
+    /// The bytes ahead of the block.
+    pub fn len(dialect: Dialect) -> usize {
+        match dialect {
+            Dialect::V17 => 15,
+            Dialect::X21 => 22,
+        }
+    }
+
+    pub fn write(&self, dialect: Dialect, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.sequence.to_le_bytes());
+        out.extend_from_slice(&self.qport.to_le_bytes());
+        match dialect {
+            Dialect::V17 => out.push(self.server_id as u8),
+            Dialect::X21 => out.extend_from_slice(&self.server_id.to_le_bytes()),
+        }
+        out.extend_from_slice(&self.message_ack.to_le_bytes());
+        out.extend_from_slice(&self.reliable_ack.to_le_bytes());
+        if dialect == Dialect::X21 {
+            out.extend_from_slice(&self.config_ack.to_le_bytes());
+        }
+    }
+
+    /// The head of `packet` and the block after it; `None` for a packet
+    /// shorter than the head.
+    pub fn read(packet: &[u8], dialect: Dialect) -> Option<(ClientHeader, &[u8])> {
+        let (head, block) = packet.split_at_checked(Self::len(dialect))?;
+        let long = |at: usize| i32::from_le_bytes(head[at..at + 4].try_into().unwrap());
+        let (server_id, at) = match dialect {
+            Dialect::V17 => (i32::from(head[6]), 7),
+            Dialect::X21 => (long(6), 10),
+        };
+        let h = ClientHeader {
+            sequence: long(0) as u32,
+            qport: u16::from_le_bytes([head[4], head[5]]),
+            server_id,
+            message_ack: long(at),
+            reliable_ack: long(at + 4),
+            config_ack: if dialect == Dialect::X21 { long(18) } else { 0 },
+        };
+        Some((h, block))
+    }
+
+    /// The scramble's seed: the low bytes of `serverId`, the challenge and
+    /// `messageAcknowledge` XORed (`SV_Netchan_Decode`, on both wires).
+    pub fn seed(&self, challenge: i32) -> u8 {
+        (challenge as u32 ^ self.server_id as u32 ^ self.message_ack as u32) as u8
+    }
 }
 
 /// `checksumFeed ^ messageAcknowledge ^ Com_HashKey(serverCommand, 32)`:

@@ -1,5 +1,6 @@
-//! CoD4 1.7's wire descriptor [`Cod4Wire`] ([`PROTOCOL_17`], protocol 6 of
-//! [`Game::Cod4`]) and the server's half of the codec: a gamestate built
+//! CoD4's wire descriptors [`Cod4Wire`]: 1.7's ([`PROTOCOL_17`], protocol 6
+//! of [`Game::Cod4`]) and CoD4x 21's ([`PROTOCOL_X21`]), told apart in the
+//! codec by their [`Dialect`]; and the server's half of the 1.7 codec: a gamestate built
 //! from a configstring table by retail's omission rule, and a snapshot
 //! whose change bits the server picks off its own states
 //! (docs/research/cod4-handshake.md 5, cod4-netfields.md).
@@ -21,7 +22,7 @@ use vcod_common::game::Game;
 use vcod_common::net::Msec;
 use vcod_common::net::codec::{FieldCodec, MsgWriter};
 use vcod_common::net::netchan::NetchanParams;
-use vcod_common::net::protocol::{CsLayout, PakRules, SnapshotHead, Transport, WireGame};
+use vcod_common::net::protocol::{CsLayout, PakRules, SnapshotHead, Transport, WireGame, WireId};
 
 /// From this slot on a string equal to its default but for case is still
 /// its default: `SV_SendClientGameState` (0x816e10a) compares a slot past
@@ -77,12 +78,69 @@ pub const CS_LAYOUT_17: CsLayout = CsLayout {
     winner: 19,
 };
 
-/// 1.7's wire: the transport and the configstring layout. The codec is this
-/// crate's own (`delta`, `huffman`); `field_codec` is never read for it.
+/// A CoD4 wire: the transport, the configstring layout and the codec's
+/// [`Dialect`]. The codec is this crate's own (`delta`, `huffman`);
+/// `field_codec` is never read for it.
 pub struct Cod4Wire {
     pub transport: Transport,
     pub cs: CsLayout,
+    pub dialect: Dialect,
 }
+
+/// What the codec reads differently on each CoD4 wire: retail 1.7, or
+/// CoD4x 21 (docs/research/cod4x-protocol.md 8 to 12): origins as whole
+/// floats, the gamestate over the side channel ([`super::reliable`]),
+/// `svc 11` client config, the 16-byte client header and 4883
+/// configstring slots with no defaults. [`Self::wire`] names its wire;
+/// two wires never share one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Dialect {
+    #[default]
+    V17,
+    X21,
+}
+
+impl Dialect {
+    pub fn wire(self) -> &'static Cod4Wire {
+        match self {
+            Dialect::V17 => &PROTOCOL_17,
+            Dialect::X21 => &PROTOCOL_X21,
+        }
+    }
+
+    pub fn id(self) -> WireId {
+        self.wire().id()
+    }
+
+    /// The dialect of a CoD4 wire, `None` for another game's.
+    pub fn of(id: WireId) -> Option<Dialect> {
+        [Dialect::V17, Dialect::X21]
+            .into_iter()
+            .find(|d| d.id() == id)
+    }
+
+    /// Slots in the configstring table.
+    pub fn max_configstrings(self) -> u32 {
+        self.wire().transport.max_configstrings as u32
+    }
+
+    /// Whether a slot the gamestate leaves out holds its
+    /// `constantConfigStrings` default. CoD4x sends every slot
+    /// (cod4x-protocol.md 9), so its table has none.
+    pub fn has_cs_defaults(self) -> bool {
+        self == Dialect::V17
+    }
+}
+
+/// The stock `iw_00`..`iw_13` iwds.
+const PAKS_17: PakRules = PakRules {
+    id_pak_numbers: &[
+        "00", "01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12", "13",
+    ],
+    id_pak_dirs: &["main"],
+    id_pak_prefixes: &["iw_"],
+    skips_svr_paks: false,
+};
 
 /// Protocol 6 of CoD4: `shortversion` 1.7 (`EXE_SERVER_IS_DIFFERENT_VER`
 /// names it, VERIFIED live), CoD2's netchan framing (cod4-handshake.md 4),
@@ -96,16 +154,34 @@ pub static PROTOCOL_17: Cod4Wire = Cod4Wire {
         max_configstrings: MAX_CONFIGSTRINGS as usize,
         field_codec: FieldCodec::COD2,
         netchan: NetchanParams::COD2,
-        paks: PakRules {
-            id_pak_numbers: &[
-                "00", "01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12", "13",
-            ],
-            id_pak_dirs: &["main"],
-            id_pak_prefixes: &["iw_"],
-            skips_svr_paks: false,
-        },
+        paks: PAKS_17,
     },
     cs: CS_LAYOUT_17,
+    dialect: Dialect::V17,
+};
+
+/// `SV_WriteGameState`'s slot count on CoD4x 21: every slot of 0..0x1312
+/// goes out (cod4x-protocol.md 9). VERIFIED (the instructions) and live.
+pub const MAX_CONFIGSTRINGS_X21: u32 = 4883;
+
+/// CoD4x 21's wire: `connect` with protocol 21 after an `xproto`
+/// challenge, `shortversion` `x21` (cod4x-protocol.md 2, 3), 1.7's netchan
+/// framing, Huffman code, netfield tables and configstring layout below
+/// slot 2442 (8, 10, 12). The snapshot it writes picks fields by 1.7's
+/// equality test (10.1); vcod-server does not speak this wire (18).
+pub static PROTOCOL_X21: Cod4Wire = Cod4Wire {
+    transport: Transport {
+        game: Game::Cod4,
+        version: 21,
+        short_version: "x21",
+        own_master: None,
+        max_configstrings: MAX_CONFIGSTRINGS_X21 as usize,
+        field_codec: FieldCodec::COD2,
+        netchan: NetchanParams::COD2,
+        paks: PAKS_17,
+    },
+    cs: CS_LAYOUT_17,
+    dialect: Dialect::X21,
 };
 
 /// One snapshot as the server built it: the client's playerstate, the
@@ -155,7 +231,7 @@ impl WireGame for Cod4Wire {
         head: SnapshotHead,
         baselines: &BTreeMap<u32, EntityState>,
     ) {
-        write_snapshot(w, base, frame, head, baselines);
+        snapshot_in(self.dialect, w, base, frame, head, baselines);
     }
 }
 
@@ -255,8 +331,20 @@ pub(crate) fn entity_wire(from: &EntityState, to: &EntityState, force: bool) -> 
 /// deltaed from `base`'s (origin and velocity left out when its
 /// `origin_sent` is clear, cod4-netfields.md 3), every entity and
 /// client against `base`'s or, new to the frame, its baseline or nothing.
-/// The caller writes the `svc_EOF` terminator.
+/// The caller writes the `svc_EOF` terminator. 1.7's wire.
 pub fn write_snapshot(
+    w: &mut MsgWriter,
+    base: Option<&Frame4>,
+    frame: &Frame4,
+    head: SnapshotHead,
+    baselines: &BTreeMap<u32, EntityState>,
+) {
+    snapshot_in(Dialect::V17, w, base, frame, head, baselines);
+}
+
+/// [`write_snapshot`] in `dialect`'s field codes.
+fn snapshot_in(
+    dialect: Dialect,
     w: &mut MsgWriter,
     base: Option<&Frame4>,
     frame: &Frame4,
@@ -266,6 +354,7 @@ pub fn write_snapshot(
     let ctx = Ctx {
         time: frame.server_time,
         map_center: frame.map_center,
+        dialect,
     };
     w.write_byte(SVC_SNAPSHOT);
     w.write_long(frame.server_time.raw());
@@ -434,6 +523,23 @@ mod tests {
         let s = &client.snapshots[1];
         assert_eq!(s.ps.get_f32("origin[0]"), Some(340.0));
         assert!(s.clients.is_empty());
+    }
+
+    /// A wire is its game and version together: CoD4 1.7 and CoD1 1.5 both
+    /// speak protocol 6, and only CoD4's two map to a dialect.
+    #[test]
+    fn each_dialect_names_its_own_wire() {
+        use vcod_common::game::Game;
+        assert_eq!(Dialect::of(PROTOCOL_17.id()), Some(Dialect::V17));
+        assert_eq!(Dialect::of(PROTOCOL_X21.id()), Some(Dialect::X21));
+        assert_ne!(PROTOCOL_17.id(), PROTOCOL_X21.id());
+        let cod15 = WireId {
+            game: Game::Cod1,
+            version: 6,
+        };
+        assert_eq!(Dialect::of(cod15), None);
+        assert_eq!(Dialect::X21.max_configstrings(), 4883);
+        assert_eq!(Dialect::V17.max_configstrings(), MAX_CONFIGSTRINGS);
     }
 
     /// A demo's sequence is any word: message 2^31 deltas one back from

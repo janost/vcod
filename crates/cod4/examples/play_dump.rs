@@ -238,11 +238,11 @@ fn main() -> Result<()> {
                                 last_ps = Some(w.clone());
                             }
                         }
-                        Op::Nop => {}
+                        Op::Nop | Op::ClientConfig { .. } => {}
                     }
                 }
             }
-            None => {}
+            _ => {}
         }
     }
     Ok(())

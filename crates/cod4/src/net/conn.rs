@@ -5,7 +5,7 @@
 //! (docs/research/cod4-handshake.md, cod4-netfields.md 5 and 8).
 //! `examples/cod4_probe.rs` and the vcod client both join through it.
 
-use super::clmsg::{self, ClOp, CmdWire, UserCmd};
+use super::clmsg::{self, ClOp, ClientHeader, CmdWire, UserCmd};
 use super::demo::Archive;
 use super::parse::{Client, Illegible, Op, Parsed};
 use super::pure;
@@ -431,15 +431,18 @@ impl Conn {
     /// always sends origin and velocity (cod4-netfields.md 13).
     pub fn send(&mut self, cmds: &[UserCmd], origin: Option<Archive>) -> Result<()> {
         self.check_overflow()?;
-        let mut pkt = self.seq.to_le_bytes().to_vec();
+        let dialect = self.client.dialect;
+        let mut head = ClientHeader {
+            sequence: self.seq,
+            qport: self.qport,
+            message_ack: self.ack,
+            config_ack: self.client.config_data_ack,
+            ..ClientHeader::default()
+        };
         self.seq += 1;
-        pkt.extend_from_slice(&self.qport.to_le_bytes());
+        let mut pkt = Vec::new();
         match &self.client.gamestate {
-            None => {
-                pkt.push(0);
-                pkt.extend_from_slice(&self.ack.to_le_bytes());
-                pkt.extend_from_slice(&0i32.to_le_bytes());
-            }
+            None => head.write(dialect, &mut pkt),
             Some(gs) => {
                 let server_id: i32 = gs
                     .systeminfo("sv_serverid")
@@ -479,11 +482,10 @@ impl Conn {
                 ops.push(ClOp::Eof);
                 let mut comp =
                     clmsg::compress_ops(&self.client.huff, &ops, key, &UserCmd::default());
-                let seed = self.challenge as u32 ^ server_id as u32 ^ self.ack as u32;
-                scramble_client_ops(seed as u8, &last, &mut comp);
-                pkt.push(server_id as u8);
-                pkt.extend_from_slice(&self.ack.to_le_bytes());
-                pkt.extend_from_slice(&self.client.server_command_sequence.to_le_bytes());
+                head.server_id = server_id;
+                head.reliable_ack = self.client.server_command_sequence;
+                scramble_client_ops(head.seed(self.challenge), &last, &mut comp);
+                head.write(dialect, &mut pkt);
                 pkt.extend_from_slice(&comp);
             }
         }
@@ -961,7 +963,7 @@ pub fn apply_configstrings(client: &mut Client, applied: &mut i32, parsed: &Pars
         if let Some(i) = std::str::from_utf8(&rest[..at])
             .ok()
             .and_then(|n| n.parse::<u16>().ok())
-            .filter(|&i| u32::from(i) < super::parse::MAX_CONFIGSTRINGS)
+            .filter(|&i| u32::from(i) < gs.dialect.max_configstrings())
         {
             gs.configstrings
                 .insert(i, rest.get(at + 1..).unwrap_or(&[]).to_vec());

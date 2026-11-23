@@ -4,10 +4,9 @@
 //! gamestate), the 16-byte client header, and moves until `--secs` past the
 //! gamestate. It prints what it reads; `tools/lo_capture.py` keeps the
 //! datagrams. It does no authentication and answers no anti-cheat or
-//! screenshot request (cod4x-protocol.md 5 and 18). Snapshots go through
-//! vcod's 1.7 parser, which reads entity origins against the map centre:
-//! until the wire choice of cod4x-protocol.md 18 exists, a snapshot that
-//! sends an entity origin fails to parse (cod4x-protocol.md 10).
+//! screenshot request (cod4x-protocol.md 5 and 18). The side channel's
+//! packets, the gamestate, the snapshots and the client header go through
+//! vcod's codec in its CoD4x 21 dialect (`wire::Dialect::X21`).
 //!
 //!     cargo run -p vcod-cod4 --example cod4x_probe -- HOST:PORT OUTDIR [--secs 15]
 //!         [--protocol 21] [--stats none|skip|fresh] [--qport N] [--cmd "SECS TEXT"]...
@@ -33,25 +32,20 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
-use vcod_cod4::net::clmsg::{self, ClOp, CmdWire, UserCmd};
-use vcod_cod4::net::delta::{self, Ctx, EntityState};
-use vcod_cod4::net::parse::{Client, Gamestate, Op};
-use vcod_common::net::Msec;
-use vcod_common::net::codec::MsgReader;
+use vcod_cod4::net::clmsg::{self, ClOp, ClientHeader, CmdWire, UserCmd};
+use vcod_cod4::net::delta::EntityState;
+use vcod_cod4::net::parse::{Client, GamestateOp, Op};
+use vcod_cod4::net::reliable::{self, Inbound, Packet, StatsMsg};
+use vcod_cod4::net::wire::Dialect;
 use vcod_common::net::netchan::{Netchan, NetchanParams, scramble_client_ops};
 
-/// The reliable side channel's packets open with this sequence word.
-const REL_MARK: i32 = -16;
 const REL_WINDOW: i16 = 20;
 
 /// Client half of the reliable side channel (`ReliableMessage*`).
 #[derive(Default)]
 struct Rel {
     qport: u16,
-    /// Next fragment sequence expected from the server.
-    next_in: i32,
-    early: BTreeMap<i32, Vec<u8>>,
-    stream: Vec<u8>,
+    inbound: Inbound,
     /// Our fragments, by sequence, until the server acknowledges them.
     out: BTreeMap<i32, Vec<u8>>,
     next_out: i32,
@@ -59,60 +53,27 @@ struct Rel {
 }
 
 impl Rel {
-    fn packet(&self, seq: i32, data: &[u8]) -> Vec<u8> {
-        let mut p = REL_MARK.to_le_bytes().to_vec();
-        p.extend_from_slice(&self.qport.to_le_bytes());
-        p.extend_from_slice(&seq.to_le_bytes());
-        p.extend_from_slice(&self.next_in.to_le_bytes());
-        p.push(0);
-        p.push(0); // no selective acknowledges
-        p.extend_from_slice(&REL_WINDOW.to_le_bytes());
-        p.extend_from_slice(&(data.len() as i16).to_le_bytes());
-        p.extend_from_slice(data);
-        p
+    fn packet(&self, sequence: i32, data: &[u8]) -> Vec<u8> {
+        Packet {
+            qport: self.qport,
+            sequence,
+            ack: self.inbound.next(),
+            window: REL_WINDOW,
+            data: data.to_vec(),
+            ..Packet::default()
+        }
+        .write()
     }
 
-    /// Takes one server packet; returns whole messages (bodies past the
-    /// length word) the stream now holds.
+    /// Takes one server packet; returns whole message bodies it completed.
     fn take(&mut self, d: &[u8]) -> Result<Vec<Vec<u8>>> {
-        let mut r = Bytes(d, 4);
-        let _qport = r.short()?;
-        let seq = r.long()?;
-        let ack = r.long()?;
-        let _zero = r.byte()?;
-        let nsel = r.byte()?;
-        for _ in 0..nsel {
-            r.short()?;
-            r.short()?;
-        }
-        let _window = r.short()?;
-        let len = r.short()? as usize;
-        let data = r.take(len)?;
-        self.out.retain(|s, _| *s >= ack);
-        if seq >= self.next_in {
-            self.early.insert(seq, data.to_vec());
-        }
-        while let Some(f) = self.early.remove(&self.next_in) {
-            self.stream.extend_from_slice(&f);
-            self.next_in += 1;
-        }
-        let mut msgs = Vec::new();
-        while self.stream.len() >= 4 {
-            let n = i32::from_le_bytes(self.stream[..4].try_into().unwrap());
-            ensure!(n >= 0, "reliable message length {n}");
-            if self.stream.len() < 4 + n as usize {
-                break;
-            }
-            msgs.push(self.stream[4..4 + n as usize].to_vec());
-            self.stream.drain(..4 + n as usize);
-        }
-        Ok(msgs)
+        let p = Packet::read(d)?;
+        self.out.retain(|s, _| *s >= p.ack);
+        self.inbound.take(&p)
     }
 
     fn queue(&mut self, body: &[u8]) {
-        let mut m = (body.len() as i32).to_le_bytes().to_vec();
-        m.extend_from_slice(body);
-        for c in m.chunks(1200) {
+        for c in reliable::frame(body).chunks(reliable::MAX_FRAGMENT) {
             self.out.insert(self.next_out, c.to_vec());
             self.next_out += 1;
         }
@@ -129,28 +90,9 @@ impl Rel {
         }
         self.last_sent = Some(now);
         if self.out.is_empty() {
-            return vec![self.packet(-1, &[])];
+            return vec![self.packet(reliable::BARE_ACK, &[])];
         }
         self.out.iter().map(|(s, d)| self.packet(*s, d)).collect()
-    }
-}
-
-struct Bytes<'a>(&'a [u8], usize);
-impl<'a> Bytes<'a> {
-    fn take(&mut self, n: usize) -> Result<&'a [u8]> {
-        ensure!(self.1 + n <= self.0.len(), "short packet");
-        let s = &self.0[self.1..self.1 + n];
-        self.1 += n;
-        Ok(s)
-    }
-    fn byte(&mut self) -> Result<u8> {
-        Ok(self.take(1)?[0])
-    }
-    fn short(&mut self) -> Result<i16> {
-        Ok(i16::from_le_bytes(self.take(2)?.try_into().unwrap()))
-    }
-    fn long(&mut self) -> Result<i32> {
-        Ok(i32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }
 }
 
@@ -198,115 +140,40 @@ fn stats_mode2(challenge: i32) -> Result<Vec<u8>> {
         .write_all(&plain.0[..])?;
     let out = child.wait_with_output()?;
     ensure!(
-        out.status.success() && out.stdout.len() == 0x2000,
+        out.status.success() && out.stdout.len() == reliable::STATS_LEN,
         "openssl enc failed"
     );
     Ok(out.stdout)
 }
 
-/// `MSG_ReadDeltaEntity` as protocol 21 sends it: 1.7's but for the
-/// origin codes (-92, -91, -90), a whole float off the byte cursor
-/// (`MSG_WriteOriginFloat` 0xd26d8 is `MSG_WriteFloat`).
-fn read_entity21(
-    r: &mut MsgReader,
-    ctx: &Ctx,
-    from: &EntityState,
-    number: u32,
-) -> Result<Option<EntityState>> {
-    if r.read_bits(1) != 0 {
-        return Ok(None);
-    }
-    let mut to = *from;
-    to.0[0] = number;
-    if r.read_bits(1) == 0 {
-        return Ok(Some(to));
-    }
-    let lc = r.read_bits(delta::min_bits(61) as i32) as usize;
-    let field = |r: &mut MsgReader, to: &mut EntityState, f: &vcod_cod4::net::delta::Field| {
-        if (-92..=-90).contains(&f.bits) {
-            if f.hint == 2 || r.read_bits(1) != 0 {
-                to.0[f.word()] = r.read_long() as u32;
-            }
-        } else {
-            to.0[f.word()] = delta::read_field(r, ctx, from.0[f.word()], f).0;
-        }
-    };
-    if lc > 0 {
-        field(r, &mut to, &vcod_cod4::net::fields::ENTITY_GENERAL[0]);
-    }
-    let table = EntityState::table(to.etype());
-    ensure!(lc <= table.len(), "entity {number}: lc {lc}");
-    for f in &table[1.min(lc)..lc] {
-        field(r, &mut to, f);
-    }
-    Ok(Some(to))
-}
-
-/// Protocol 21's gamestate as `SV_WriteGameState` (0x11eb70) writes it,
-/// into vcod's `Gamestate` so the snapshot parser can run on.
-fn parse_gamestate21(body: &[u8], out: &mut String) -> Result<(Gamestate, i32)> {
-    let mut r = MsgReader::from_plain(body.to_vec());
-    let cmd = r.read_long();
-    ensure!(cmd == 1, "gamestate cmd {cmd}");
-    let mut gs = Gamestate::default();
-    let mut last_entity = -1;
-    ensure!(r.read_byte() == 1, "svc_gamestate");
-    gs.server_command_sequence = r.read_long();
-    loop {
-        let op = r.read_byte();
-        ensure!(!r.is_overflowed(), "gamestate ran out");
+/// A gamestate side channel message (`cmd 1`) read into `client`, and its
+/// text: the configstrings, baselines, client config and trailer.
+fn read_gamestate(client: &mut Client, body: &[u8]) -> Result<String> {
+    client.take_side_gamestate(body)?;
+    let gs = client.gamestate.as_ref().context("gamestate")?;
+    let mut out = String::new();
+    for op in &gs.ops {
         match op {
-            7 => break,
-            2 => {
-                let n = r.read_long();
-                out.push_str(&format!("configstrings {n}\n"));
-                for _ in 0..n {
-                    let i = r.read_long();
-                    let s = r.read_string_bytes();
-                    out.push_str(&format!("cs {i} {:?}\n", String::from_utf8_lossy(&s)));
-                    ensure!((0..0x1313).contains(&i), "configstring {i}");
-                    gs.configstrings.insert(i as u16, s);
-                }
-                gs.map_center = vcod_cod4::net::wire::map_center(
-                    gs.configstrings.get(&12).map_or(&[][..], |v| v),
-                );
-            }
-            3 => {
-                let num = delta::read_entity_index(&mut r, &mut last_entity, 10)?;
-                let ctx = Ctx {
-                    time: Msec::ZERO,
-                    map_center: gs.map_center,
-                };
-                if let Some(e) = read_entity21(&mut r, &ctx, &EntityState::default(), num)? {
-                    out.push_str(&baseline_text(num, &e));
-                    gs.baselines.insert(num, e);
+            GamestateOp::Configstrings(sent) => {
+                out.push_str(&format!("configstrings {}\n", sent.len()));
+                for (i, s) in sent {
+                    out.push_str(&format!("cs {i} {:?}\n", String::from_utf8_lossy(s)));
                 }
             }
-            11 => {
-                let num = r.read_byte();
-                let a = r.read_string_bytes();
-                let b = r.read_string_bytes();
-                out.push_str(&format!(
-                    "clientconfig {num} {:?} {:?}\n",
-                    String::from_utf8_lossy(&a),
-                    String::from_utf8_lossy(&b)
-                ));
-            }
-            o => bail!("gamestate op {o} at byte {}", r.readcount() - 1),
+            GamestateOp::Baseline(n, _) => out.push_str(&baseline_text(*n, &gs.baselines[n])),
+            GamestateOp::ClientConfig(c) => out.push_str(&format!(
+                "clientconfig {} {:?} {:?}\n",
+                c.client_num,
+                String::from_utf8_lossy(&c.name),
+                String::from_utf8_lossy(&c.clan)
+            )),
         }
     }
-    let config_seq = r.read_long();
-    gs.client_num = r.read_long();
-    gs.checksum_feed = r.read_long();
-    let tail = r.read_long();
-    ensure!(!r.is_overflowed(), "gamestate ran out at its tail");
     out.push_str(&format!(
-        "configSequence {config_seq} clientNum {} checksumFeed {:#x} tail {tail} left {}\n",
-        gs.client_num,
-        gs.checksum_feed,
-        body.len() - r.readcount()
+        "configSequence {} clientNum {} checksumFeed {:#x} tail {}\n",
+        gs.config_data_sequence, gs.client_num, gs.checksum_feed, gs.tail
     ));
-    Ok((gs, config_seq))
+    Ok(out)
 }
 
 /// The socket, with every datagram it moves logged when `--log` is set.
@@ -373,10 +240,11 @@ fn main() -> Result<()> {
     if args.get(1).map(String::as_str) == Some("--gamestate") {
         // Offline: decode a saved `rel-<n>-1.bin`.
         let body = std::fs::read(args.get(2).context("FILE")?)?;
-        let mut text = String::new();
-        let r = parse_gamestate21(&body, &mut text);
-        print!("{text}");
-        return r.map(|_| ());
+        print!(
+            "{}",
+            read_gamestate(&mut Client::with_dialect(Dialect::X21), &body)?
+        );
+        return Ok(());
     }
     if args.get(1).map(String::as_str) == Some("--baseline17") {
         // A 1.7 capture's baseline, to set beside a protocol 21 one.
@@ -452,13 +320,12 @@ fn main() -> Result<()> {
     }
 
     let mut chan = Netchan::with_params(qport, challenge, NetchanParams::COD2);
-    let mut client = Client::new();
+    let mut client = Client::with_dialect(Dialect::X21);
     let mut rel = Rel {
         qport,
         ..Rel::default()
     };
     let mut ack: i32 = 0;
-    let mut config_ack: i32 = 0;
     let mut out_seq: u32 = 1;
     let mut nrel = 0;
     let mut gs_at: Option<Instant> = None;
@@ -498,7 +365,7 @@ fn main() -> Result<()> {
                 println!("oob << {:?}", String::from_utf8_lossy(&d[4..]));
                 continue;
             }
-            if word == REL_MARK {
+            if Packet::is_side(&d) {
                 for body in rel.take(&d)? {
                     nrel += 1;
                     let cmd = i32::from_le_bytes(body[..4].try_into().unwrap_or([0; 4]));
@@ -506,40 +373,33 @@ fn main() -> Result<()> {
                     std::fs::write(outdir.join(format!("rel-{nrel}-{cmd}.bin")), &body)?;
                     stats_asked |= cmd == 9;
                     match cmd {
-                        9 if stats == "fresh" => {
-                            let mut b = 9i32.to_le_bytes().to_vec();
-                            b.push(2);
-                            b.extend_from_slice(&0x2000i32.to_le_bytes());
-                            b.extend_from_slice(&stats_mode2(challenge)?);
-                            rel.queue(&b);
+                        reliable::CMD_STATS if stats == "fresh" => {
+                            let m = StatsMsg {
+                                mode: 2,
+                                block: stats_mode2(challenge)?,
+                            };
+                            rel.queue(&m.write());
                             println!("rel >> stats, mode 2, a fresh profile");
                         }
-                        9 if stats == "skip" => {
-                            // cmd 9, mode 0: no stats (`SV_ReceiveStats_f` 0x10f5b0).
-                            let mut b = 9i32.to_le_bytes().to_vec();
-                            b.push(0);
-                            rel.queue(&b);
+                        reliable::CMD_STATS if stats == "skip" => {
+                            // Mode 0: no stats (`SV_ReceiveStats_f` 0x10f5b0).
+                            rel.queue(&StatsMsg::default().write());
                             println!("rel >> stats, mode 0");
                         }
-                        1 => {
-                            let mut text = String::new();
-                            match parse_gamestate21(&body, &mut text) {
-                                Ok((gs, cseq)) => {
-                                    config_ack = cseq;
-                                    println!(
-                                        "gamestate: {} configstrings, {} baselines, client {}",
-                                        gs.configstrings.len(),
-                                        gs.baselines.len(),
-                                        gs.client_num
-                                    );
-                                    client.server_command_sequence = gs.server_command_sequence;
-                                    client.gamestate = Some(gs);
-                                    gs_at = Some(Instant::now());
-                                }
-                                Err(e) => println!("gamestate parse failed: {e:#}"),
+                        reliable::CMD_GAMESTATE => match read_gamestate(&mut client, &body) {
+                            Ok(text) => {
+                                let gs = client.gamestate.as_ref().context("gamestate")?;
+                                println!(
+                                    "gamestate: {} configstrings, {} baselines, client {}",
+                                    gs.configstrings.len(),
+                                    gs.baselines.len(),
+                                    gs.client_num
+                                );
+                                std::fs::write(outdir.join("gamestate.txt"), text)?;
+                                gs_at = Some(Instant::now());
                             }
-                            std::fs::write(outdir.join("gamestate.txt"), text)?;
-                        }
+                            Err(e) => println!("gamestate parse failed: {e:#}"),
+                        },
                         _ => {}
                     }
                 }
@@ -580,6 +440,11 @@ fn main() -> Result<()> {
                                     s.clients.len()
                                 );
                             }
+                            Op::ClientConfig { sequence, config } => println!(
+                                "s2c {seq}: client config {sequence}: {} {:?}",
+                                config.client_num,
+                                String::from_utf8_lossy(&config.name)
+                            ),
                             o => println!("s2c {seq}: {o:?}"),
                         }
                     }
@@ -587,7 +452,7 @@ fn main() -> Result<()> {
                 Err(e) => {
                     let plain = client.huff.decompress(&msg[4..]);
                     let hex: String = plain.iter().take(64).map(|b| format!("{b:02x}")).collect();
-                    println!("s2c {seq}: 1.7 parse failed: {e:#}; plain {hex}");
+                    println!("s2c {seq}: parse failed: {e:#}; plain {hex}");
                 }
             }
         }
@@ -667,15 +532,18 @@ fn main() -> Result<()> {
         }
         ops.push(ClOp::Eof);
         let mut comp = clmsg::compress_ops(&client.huff, &ops, key, &UserCmd::default());
-        let seed = challenge as u32 ^ server_id as u32 ^ ack as u32;
-        scramble_client_ops(seed as u8, &last, &mut comp);
-        let mut pkt = out_seq.to_le_bytes().to_vec();
+        let head = ClientHeader {
+            sequence: out_seq,
+            qport,
+            server_id,
+            message_ack: ack,
+            reliable_ack: client.server_command_sequence,
+            config_ack: client.config_data_ack,
+        };
         out_seq += 1;
-        pkt.extend_from_slice(&qport.to_le_bytes());
-        pkt.extend_from_slice(&server_id.to_le_bytes());
-        pkt.extend_from_slice(&ack.to_le_bytes());
-        pkt.extend_from_slice(&client.server_command_sequence.to_le_bytes());
-        pkt.extend_from_slice(&config_ack.to_le_bytes());
+        scramble_client_ops(head.seed(challenge), &last, &mut comp);
+        let mut pkt = Vec::new();
+        head.write(Dialect::X21, &mut pkt);
         pkt.extend_from_slice(&comp);
         w.send(&pkt)?;
     }

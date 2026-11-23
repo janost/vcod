@@ -236,7 +236,7 @@ fn read(file: &str) -> Capture {
                     }
                 }
             }
-            None => {}
+            _ => {}
         }
     }
     let gs = s.client.gamestate.as_ref().expect("a gamestate");

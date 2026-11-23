@@ -1,7 +1,10 @@
-//! A CoD4 1.7 server message, decompressed: server commands, the gamestate
+//! A CoD4 server message, decompressed: server commands, the gamestate
 //! (configstrings, baselines, clientNum, checksumFeed) and snapshots
 //! (docs/research/cod4-netfields.md 4 and 5), and the writer that
-//! puts a parsed message back together byte for byte.
+//! puts a parsed message back together byte for byte. A [`Client`] reads
+//! one [`Dialect`]: CoD4x 21's gamestate comes over the side channel
+//! ([`Client::take_side_gamestate`]) and its snapshots carry `svc 11`
+//! (cod4x-protocol.md 9, 11).
 
 use super::constant_cs;
 use super::delta::{
@@ -9,6 +12,7 @@ use super::delta::{
     PlayerState, PsWire, Wire,
 };
 use super::huffman::Huffman;
+use super::wire::Dialect;
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use std::collections::BTreeMap;
 use vcod_common::net::Msec;
@@ -29,6 +33,9 @@ pub const SVC_BASELINE: u8 = 3;
 pub const SVC_SERVERCOMMAND: u8 = 4;
 pub const SVC_SNAPSHOT: u8 = 6;
 pub const SVC_EOF: u8 = 7;
+/// CoD4x 21's client config (`SV_WriteClientConfigInfo` 0x1234e2,
+/// cod4x-protocol.md 11).
+pub const SVC_CLIENT_CONFIG: u8 = 11;
 /// `SV_SetConfigstring` (0x8173e54) refuses an index above 0x989 (the
 /// compare at 0x8173e60, `SV_SetConfigstring: bad index` at 0x82320d4),
 /// and `SV_SendClientGameState`'s loops stop at 0x98a. VERIFIED.
@@ -81,40 +88,76 @@ pub fn read_string_capped(r: &mut MsgReader, max: usize) -> Vec<u8> {
     }
 }
 
+/// One CoD4x client's config entry (`svc 11`): its number, the player's
+/// name and a second string, empty in every capture (cod4x-protocol.md 11).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ClientConfig {
+    pub client_num: u8,
+    pub name: Vec<u8>,
+    pub clan: Vec<u8>,
+}
+
+impl ClientConfig {
+    fn read(r: &mut MsgReader) -> ClientConfig {
+        ClientConfig {
+            client_num: r.read_byte(),
+            name: read_raw_string(r),
+            clan: read_raw_string(r),
+        }
+    }
+
+    fn write(&self, w: &mut MsgWriter) {
+        w.write_byte(self.client_num);
+        w.write_string_bytes(&self.name);
+        w.write_string_bytes(&self.clan);
+    }
+}
+
 /// One gamestate op in wire order.
 #[derive(Clone, Debug)]
 pub enum GamestateOp {
     /// One `svc_configstring`: its slots and strings as sent.
     Configstrings(Vec<(u16, Vec<u8>)>),
     Baseline(u32, Wire),
+    /// CoD4x 21: a connected client's config, no sequence.
+    ClientConfig(ClientConfig),
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct Gamestate {
+    pub dialect: Dialect,
     pub server_command_sequence: i32,
-    /// The strings the message carried. A slot left out holds its
+    /// The strings the message carried. On 1.7 a slot left out holds its
     /// `constantConfigStrings` default: [`Gamestate::configstring`] fills it.
     pub configstrings: BTreeMap<u16, Vec<u8>>,
     pub baselines: BTreeMap<u32, EntityState>,
     pub client_num: i32,
     pub checksum_feed: i32,
+    /// CoD4x 21: `configDataSequence`, ahead of `clientNum`, and the long
+    /// after `checksumFeed` (0 in every capture). 0 on 1.7.
+    pub config_data_sequence: i32,
+    pub tail: i32,
     pub map_center: [f32; 3],
     pub ops: Vec<GamestateOp>,
 }
 
 impl Gamestate {
-    /// A slot as the client holds it: the string sent, else the slot's
-    /// `constantConfigStrings` default, else `""`.
+    /// A slot as the client holds it: the string sent, else on 1.7 the
+    /// slot's `constantConfigStrings` default, else `""`.
     pub fn configstring(&self, i: u16) -> &[u8] {
         match self.configstrings.get(&i) {
             Some(s) => s,
-            None => constant_cs::default_of(i).map_or(&[], str::as_bytes),
+            None if self.dialect.has_cs_defaults() => {
+                constant_cs::default_of(i).map_or(&[], str::as_bytes)
+            }
+            None => &[],
         }
     }
 
-    /// Every slot, `MAX_CONFIGSTRINGS` of them, as [`Self::configstring`].
+    /// Every slot of the dialect's table (`MAX_CONFIGSTRINGS` on 1.7), as
+    /// [`Self::configstring`].
     pub fn all_configstrings(&self) -> Vec<&[u8]> {
-        (0..MAX_CONFIGSTRINGS as u16)
+        (0..self.dialect.max_configstrings() as u16)
             .map(|i| self.configstring(i))
             .collect()
     }
@@ -165,6 +208,11 @@ pub enum Op {
     Snapshot(usize),
     /// One `svc_download` (cod4-handshake.md 11).
     Download(super::download::DownloadMsg),
+    /// CoD4x 21's `svc 11`: a config entry and its `configDataSequence`.
+    ClientConfig {
+        sequence: i32,
+        config: ClientConfig,
+    },
     Nop,
 }
 
@@ -182,6 +230,7 @@ pub struct Parsed {
 /// The client side's state across messages.
 #[derive(Default)]
 pub struct Client {
+    pub dialect: Dialect,
     pub huff: Huffman,
     pub gamestate: Option<Gamestate>,
     /// Every snapshot parsed, in order, but those [`Self::shed`] dropped.
@@ -197,11 +246,77 @@ pub struct Client {
     /// out, or a demo's archive records; a playerstate sent without
     /// origin takes its predicted fields off it (cod4-netfields.md 13).
     pub archive: super::demo::ArchiveRing,
+    /// CoD4x 21: the newest `configDataSequence` read, the client header's
+    /// `configDataAcknowledge` (cod4x-protocol.md 8, 11), and each
+    /// client's newest entry.
+    pub config_data_ack: i32,
+    pub client_configs: BTreeMap<u8, ClientConfig>,
 }
 
 impl Client {
+    /// A 1.7 client.
     pub fn new() -> Client {
         Client::default()
+    }
+
+    pub fn with_dialect(dialect: Dialect) -> Client {
+        Client {
+            dialect,
+            ..Client::default()
+        }
+    }
+
+    /// A gamestate read: the command sequence, the delta ring and, on
+    /// CoD4x, the client config it carried.
+    fn install_gamestate(&mut self, gs: Gamestate) {
+        self.server_command_sequence = gs.server_command_sequence;
+        if self.dialect == Dialect::X21 {
+            self.config_data_ack = gs.config_data_sequence;
+            self.client_configs.clear();
+            for op in &gs.ops {
+                if let GamestateOp::ClientConfig(c) = op {
+                    self.client_configs.insert(c.client_num, c.clone());
+                }
+            }
+        }
+        self.gamestate = Some(gs);
+        self.ring = [None; PACKET_BACKUP];
+    }
+
+    /// CoD4x 21's gamestate, one side channel message (`cmd 1`, the
+    /// length word left off), read to its last byte
+    /// (`SV_WriteGameState` 0x11eb70, cod4x-protocol.md 9).
+    pub fn take_side_gamestate(&mut self, body: &[u8]) -> Result<()> {
+        ensure!(
+            self.dialect == Dialect::X21,
+            "a side channel gamestate on 1.7"
+        );
+        let mut r = MsgReader::from_plain(body.to_vec());
+        let cmd = r.read_long();
+        ensure!(
+            cmd == super::reliable::CMD_GAMESTATE,
+            "side channel message {cmd}"
+        );
+        let op = r.read_byte();
+        ensure!(op == SVC_GAMESTATE, "gamestate op {op}");
+        let gs = parse_gamestate(&mut r, self.dialect)?;
+        ensure!(
+            r.readcount() == body.len(),
+            "{} bytes past the gamestate",
+            body.len().saturating_sub(r.readcount())
+        );
+        self.install_gamestate(gs);
+        Ok(())
+    }
+
+    /// The side channel message [`Self::take_side_gamestate`] read, written
+    /// back from the gamestate.
+    pub fn write_side_gamestate(&self) -> Result<Vec<u8>> {
+        let gs = self.gamestate.as_ref().context("no gamestate")?;
+        let mut w = MsgWriter::new(&UNUSED_HUFF);
+        w.write_long(super::reliable::CMD_GAMESTATE);
+        write_gamestate(&mut w, gs);
+        Ok(w.into_ops())
     }
 
     /// Snapshots parsed so far, those shed included: counts on as
@@ -301,11 +416,18 @@ impl Client {
                     });
                 }
                 SVC_GAMESTATE => {
-                    let gs = parse_gamestate(r)?;
-                    self.server_command_sequence = gs.server_command_sequence;
-                    self.gamestate = Some(gs);
-                    self.ring = [None; PACKET_BACKUP];
+                    let gs = parse_gamestate(r, self.dialect)?;
+                    self.install_gamestate(gs);
                     ops.push(Op::Gamestate);
+                }
+                SVC_CLIENT_CONFIG if self.dialect == Dialect::X21 => {
+                    let sequence = r.read_long();
+                    let config = ClientConfig::read(r);
+                    ensure!(!r.is_overflowed(), "svc 11 ran out");
+                    self.config_data_ack = self.config_data_ack.max(sequence);
+                    self.client_configs
+                        .insert(config.client_num, config.clone());
+                    ops.push(Op::ClientConfig { sequence, config });
                 }
                 SVC_SNAPSHOT => {
                     let snap = self.parse_snapshot(r, sequence as i32)?;
@@ -356,6 +478,7 @@ impl Client {
         let ctx = Ctx {
             time: server_time,
             map_center: gs.map_center,
+            dialect: gs.dialect,
         };
         let mut wire = SnapshotWire::default();
         let (mut ps, ps_wire) = delta::read_delta_playerstate(r, &ctx, old.map(|o| &o.ps))
@@ -459,6 +582,11 @@ impl Client {
                 }
                 Op::Snapshot(i) => self.write_snapshot(&mut w, &self.snapshots[*i])?,
                 Op::Download(d) => d.write(&mut w),
+                Op::ClientConfig { sequence, config } => {
+                    w.write_byte(SVC_CLIENT_CONFIG);
+                    w.write_long(*sequence);
+                    config.write(&mut w);
+                }
             }
         }
         w.write_byte(SVC_EOF);
@@ -471,6 +599,7 @@ impl Client {
         let ctx = Ctx {
             time: s.server_time,
             map_center: gs.map_center,
+            dialect: gs.dialect,
         };
         w.write_byte(SVC_SNAPSHOT);
         w.write_long(s.server_time.raw());
@@ -521,9 +650,12 @@ impl Client {
     }
 }
 
-/// `CL_ParseGamestate`, after its `svc_gamestate` byte.
-pub fn parse_gamestate(r: &mut MsgReader) -> Result<Gamestate> {
+/// `CL_ParseGamestate`, after its `svc_gamestate` byte. CoD4x 21's
+/// differs in the configstrings (a long count, each index a long), the
+/// client config op and the longs around `clientNum` (cod4x-protocol.md 9).
+pub fn parse_gamestate(r: &mut MsgReader, dialect: Dialect) -> Result<Gamestate> {
     let mut gs = Gamestate {
+        dialect,
         server_command_sequence: r.read_long(),
         ..Gamestate::default()
     };
@@ -533,6 +665,23 @@ pub fn parse_gamestate(r: &mut MsgReader) -> Result<Gamestate> {
         ensure!(!r.is_overflowed(), "gamestate ran out");
         match op {
             SVC_EOF => break,
+            SVC_CONFIGSTRING if dialect == Dialect::X21 => {
+                let count = r.read_long();
+                let mut sent = Vec::new();
+                for _ in 0..count {
+                    let i = r.read_long();
+                    let s = read_raw_string(r);
+                    ensure!(!r.is_overflowed(), "configstrings ran out");
+                    ensure!(
+                        (0..dialect.max_configstrings() as i32).contains(&i),
+                        "configstring {i}"
+                    );
+                    gs.configstrings.insert(i as u16, s.clone());
+                    sent.push((i as u16, s));
+                }
+                gs.map_center = super::wire::map_center(gs.configstring(CS_MAPCENTER));
+                gs.ops.push(GamestateOp::Configstrings(sent));
+            }
             SVC_CONFIGSTRING => {
                 let count = r.read_short() as u16;
                 let mut last: i32 = -1;
@@ -558,17 +707,28 @@ pub fn parse_gamestate(r: &mut MsgReader) -> Result<Gamestate> {
                 let ctx = Ctx {
                     time: Msec::ZERO,
                     map_center: gs.map_center,
+                    dialect,
                 };
                 let (e, wire) = delta::read_delta_entity(r, &ctx, &EntityState::default(), num)?;
                 let e = e.with_context(|| format!("baseline {num} removed"))?;
                 gs.baselines.insert(num, e);
                 gs.ops.push(GamestateOp::Baseline(num, wire));
             }
+            SVC_CLIENT_CONFIG if dialect == Dialect::X21 => {
+                gs.ops
+                    .push(GamestateOp::ClientConfig(ClientConfig::read(r)));
+            }
             o => bail!("gamestate op {o} at byte {}", r.readcount() - 1),
         }
     }
+    if dialect == Dialect::X21 {
+        gs.config_data_sequence = r.read_long();
+    }
     gs.client_num = r.read_long();
     gs.checksum_feed = r.read_long();
+    if dialect == Dialect::X21 {
+        gs.tail = r.read_long();
+    }
     ensure!(!r.is_overflowed(), "gamestate ran out before checksumFeed");
     Ok(gs)
 }
@@ -576,17 +736,28 @@ pub fn parse_gamestate(r: &mut MsgReader) -> Result<Gamestate> {
 /// `SV_SendClientGameState`'s body, after the server commands: each
 /// configstring's index explicit when it does not follow the last one or
 /// when its string is empty (the server writes an emptied default that
-/// way, INFERRED), then the baselines.
+/// way, INFERRED), then the baselines. CoD4x 21's as [`parse_gamestate`]
+/// reads it.
 pub fn write_gamestate(w: &mut MsgWriter, gs: &Gamestate) {
+    let x21 = gs.dialect == Dialect::X21;
     w.write_byte(SVC_GAMESTATE);
     w.write_long(gs.server_command_sequence);
     let mut last_entity = -1;
     let ctx = Ctx {
         time: Msec::ZERO,
         map_center: gs.map_center,
+        dialect: gs.dialect,
     };
     for op in &gs.ops {
         match op {
+            GamestateOp::Configstrings(sent) if x21 => {
+                w.write_byte(SVC_CONFIGSTRING);
+                w.write_long(sent.len() as i32);
+                for (i, s) in sent {
+                    w.write_long(i32::from(*i));
+                    w.write_string_bytes(s);
+                }
+            }
             GamestateOp::Configstrings(sent) => {
                 w.write_byte(SVC_CONFIGSTRING);
                 w.write_short(sent.len() as i16);
@@ -609,11 +780,21 @@ pub fn write_gamestate(w: &mut MsgWriter, gs: &Gamestate) {
                 let to = gs.baselines.get(num).copied().unwrap_or_default();
                 delta::write_delta_entity(w, &ctx, &EntityState::default(), &to, wire);
             }
+            GamestateOp::ClientConfig(c) => {
+                w.write_byte(SVC_CLIENT_CONFIG);
+                c.write(w);
+            }
         }
     }
     w.write_byte(SVC_EOF);
+    if x21 {
+        w.write_long(gs.config_data_sequence);
+    }
     w.write_long(gs.client_num);
     w.write_long(gs.checksum_feed);
+    if x21 {
+        w.write_long(gs.tail);
+    }
 }
 
 #[cfg(test)]
@@ -674,7 +855,7 @@ mod tests {
         ps2.origin_sent = false;
         let ctx = Ctx {
             time: Msec::from_raw(1050),
-            map_center: Default::default(),
+            ..Ctx::default()
         };
         let mut w = MsgWriter::new(&UNUSED_HUFF);
         w.write_byte(SVC_SNAPSHOT);
@@ -697,6 +878,31 @@ mod tests {
         assert_eq!(ps.word(ps_word!("bobCycle")), 7);
         assert_eq!(ps.word(ps_word!("movementDir")) as i32, -8);
         assert_eq!(ps.word(ps_word!("commandTime")), 1050);
+    }
+
+    /// CoD4x 21's table holds no defaults: a slot no string reached reads
+    /// empty where 1.7's reads its `constantConfigStrings` default, and a
+    /// `d` reaches slots past 2441.
+    #[test]
+    fn an_x21_table_has_no_defaults_and_4883_slots() {
+        let mut c = Client::with_dialect(Dialect::X21);
+        c.gamestate = Some(Gamestate {
+            dialect: Dialect::X21,
+            ..Gamestate::default()
+        });
+        let gs = c.gamestate.as_ref().unwrap();
+        assert_eq!(gs.configstring(20), b"");
+        assert!(!Gamestate::default().configstring(20).is_empty());
+        let d = Parsed {
+            ops: vec![Op::ServerCommand {
+                sequence: 1,
+                text: b"d 4882 z".to_vec(),
+            }],
+            eof_at: 0,
+            exact: true,
+        };
+        super::super::conn::apply_configstrings(&mut c, &mut 0, &d);
+        assert_eq!(c.gamestate.as_ref().unwrap().configstring(4882), b"z");
     }
 
     /// A long connection keeps a bounded window of server commands, and a
