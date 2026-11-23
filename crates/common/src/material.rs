@@ -768,6 +768,11 @@ impl MaterialLib {
         self.by_name.get(&norm_key(name))
     }
 
+    /// Adds `m` under its name, keeping a material already there.
+    pub fn insert_missing(&mut self, m: Material) {
+        self.by_name.entry(norm_key(&m.name)).or_insert(m);
+    }
+
     /// The material's first image path; `None` when it names no real
     /// texture.
     pub fn image(&self, name: &str) -> Option<&str> {

@@ -88,6 +88,9 @@ pub struct Props {
     pub vert_placement: Vec<u32>,
     /// Per vertex: its skin is `lightingDiffuse`, lit from the map.
     pub vert_lit: Vec<bool>,
+    /// Per vertex, the normal its colour is lit with: the scaled axis
+    /// renormalised, as retail lights it (0x4e57e0).
+    pub vert_lit_normal: Vec<[f32; 3]>,
     /// Per vertex, the colour its model stores (white on v14), which a CoD2
     /// probe technique multiplies its light by.
     pub vert_colour: Vec<[u8; 4]>,
@@ -529,7 +532,7 @@ fn build_with(
         );
     }
     // Vertex alpha 255 marks a `lightingDiffuse` skin, which dynamic lights
-    // reach (`vs_prop` in the client's shader.wgsl); the other gens read 0,
+    // relight (the client's `prop_relight`); the other gens read 0,
     // but a model's own colours keep the alpha they store, as a CoD2 lit
     // model's do once the client lights it from the grid (its `_a`
     // techniques output it; cod2-materials.md 9.2).
@@ -601,6 +604,7 @@ fn build_with(
         verts,
         vert_placement,
         vert_lit,
+        vert_lit_normal: lit_normals.iter().map(|n| n.to_array()).collect(),
         vert_colour,
         vert_ambient,
         vert_smodel,

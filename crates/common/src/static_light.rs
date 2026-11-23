@@ -748,6 +748,18 @@ impl StaticLighting {
         self.select(center, &ids, &weights, &[], sky)
     }
 
+    /// A static model's lights while `near`, scene lights that reach it
+    /// ([`reaches`]), stand around it: the pick again, the scene lights
+    /// competing for the eight slots as an entity's do (0x5053c7).
+    pub fn model_lights_near(&mut self, center: Vec3, near: &[SceneLight]) -> ModelLights {
+        let near: Vec<Light> = near
+            .iter()
+            .map(|l| Light::dynamic(l.origin, l.color, l.intensity))
+            .collect();
+        let (ids, weights, sky) = self.sample(center);
+        self.select(center, &ids, &weights, &near, sky)
+    }
+
     /// An entity model's lights for this frame (0x4b7320 -> 0x4b7290): the
     /// grid sample at its lighting origin, then the pick with every scene
     /// light within twice its intensity competing for the eight slots.
@@ -924,15 +936,17 @@ impl StaticLighting {
     }
 }
 
-/// The scene lights that reach a model at `origin`: within twice their
-/// intensity (0x4b69f0, 0x569080 being 4.0).
+/// Whether scene light `l` reaches a model lit from `origin`: within twice
+/// its intensity (0x4b69f0, 0x569080 being 4.0).
+pub fn reaches(origin: Vec3, l: &SceneLight) -> bool {
+    l.intensity > 0.0 && (origin - l.origin).length_squared() <= 4.0 * l.intensity * l.intensity
+}
+
+/// The scene lights that reach a model at `origin`.
 fn scene_candidates(origin: Vec3, scene: &[SceneLight]) -> Vec<Light> {
     scene
         .iter()
-        .filter(|l| {
-            l.intensity > 0.0
-                && (origin - l.origin).length_squared() <= 4.0 * l.intensity * l.intensity
-        })
+        .filter(|l| reaches(origin, l))
         .map(|l| Light::dynamic(l.origin, l.color, l.intensity))
         .collect()
 }
