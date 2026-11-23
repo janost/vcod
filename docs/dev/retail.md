@@ -30,6 +30,12 @@ them on vcod.
 - Run the retail CoD2 and CoD4 Linux servers only inside `unshare -rn`.
   A new namespace's loopback is down: run `ip link set lo up` inside it
   before a probe client joins `127.0.0.1`.
+- `tools/cod4x_capture.sh <server binary> <out dir> [client command]` runs
+  a CoD4x release server (or 1.7's `cod4_lnxded`) on `$COD4_DIR`'s data in
+  its own rootless namespace, the install read-only, every master and
+  update name on 127.0.0.2, and logs every packet on `lo` through
+  `tools/lo_capture.py` while the client command runs
+  (`cod4x-protocol.md` 16).
 - `tools/run_probe.sh <probe> [map] [+set ...]` boots retail with a
   `crates/gsc/tests/fixtures/semantics/probe_*.gsc` (or
   `client-probes/probe_*`) installed as the gametype and prints its `PROBE`
