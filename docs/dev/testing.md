@@ -179,7 +179,7 @@ matches retail.
 
 ## The gate runner
 
-`tools/gate.sh [area...]` runs fmt, clippy and the suite at each install
+`tools/gate.sh [area...]` runs fmt, both clippys and the suite at each install
 the environment names: `COD_DIR` (1.1) with `COD2_DIR` and `COD4_DIR`,
 then the server suite again at `COD_UO_DIR` (a stock-only UO tree) with
 `COD4_DIR` unset. It sets `VCOD_REQUIRE_INSTALL` to match, so no install

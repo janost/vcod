@@ -16,7 +16,6 @@ use vcod_common::net::msg::UserCmd;
 use vcod_common::net::protocol::CsRange;
 
 use super::{Cod4Server, State};
-use crate::botmgmt::Side;
 use crate::bots::cod4::{self, Cod4Bots, Cod4Own};
 use crate::bots::driver::{Body, BotDriver, BotWorld, CoverBody, Joining};
 use crate::bots::{BotView, EnemyView, Noise};
@@ -34,6 +33,7 @@ impl Cod4Server {
     /// so a body put somewhere stands there as put. Its slot.
     #[cfg(any(test, feature = "testing"))]
     pub fn add_held_bot_for_test(&mut self, axis: bool) -> Option<usize> {
+        use crate::botmgmt::Side;
         let side = if axis { Side::Axis } else { Side::Allies };
         let slot = self.add_bot(side, false, None)?;
         let bots = self.game.bots.as_mut()?;
