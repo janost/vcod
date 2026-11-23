@@ -2,7 +2,8 @@
 //! packets beside the netchan on the same socket, the stream of
 //! length-framed messages their fragments carry, and the stats message.
 //! The gamestate it carries is [`super::parse::Client::take_side_gamestate`]'s.
-//! No timing here: the resend and the window are the connection's.
+//! [`Link`] is one end's driver (the window, the resend and the
+//! acknowledge), timed on the caller's millisecond clock.
 
 use anyhow::{Result, ensure};
 use std::collections::BTreeMap;
@@ -30,6 +31,22 @@ pub const CMD_STATS: i32 = 9;
 
 /// The stats block's size in modes 1 and 2 (`SV_ReceiveStats_f` 0x10f5b0).
 pub const STATS_LEN: usize = 0x2000;
+
+/// Fragments a second a sender sends, and how far past the oldest
+/// unacknowledged one it goes before it starts over there: `+0x14`, set
+/// to 20 by `ReliableMessageSetup` (0xd5f7b) and written as the packet's
+/// window.
+pub const WINDOW: i32 = 20;
+/// How far past the next expected fragment a receiver takes a packet:
+/// `+0x52c`, 4 (0xd5f82); one further on is dropped whole, its
+/// acknowledge too (0xd5960..0xd5971).
+pub const RECEIVE_AHEAD: i32 = 4;
+/// With nothing in flight, a bare acknowledge goes this long after the
+/// last packet (`add eax,0x15e` at 0xd57ec, 0xd58f7).
+pub const IDLE_ACK_MS: i32 = 350;
+/// A frame further than this from the last sends nothing and only
+/// restarts the clock (`cmp ecx,0xfa` at 0xd623c).
+pub const MAX_FRAME_GAP_MS: i32 = 250;
 
 /// One side channel datagram (`ReliableMessagesTransmitNextFragment`
 /// 0xd56b4, `ReliableMessagesReceiveNextFragment` 0xd5918).
@@ -158,6 +175,146 @@ impl Inbound {
     }
 }
 
+/// One end of the side channel: the stream it reads ([`Inbound`]) and
+/// the fragments it sends. The sender is `ReliableMessageSend` (0xd5d98:
+/// the message cut into [`MAX_FRAGMENT`]-byte fragments, 0xd5e37..0xd5ebf),
+/// `ReliableMessagesFrame` (0xd621b: [`WINDOW`] fragments a second off the
+/// frame time, 0xd6244..0xd6291) and `ReliableMessagesTransmitNextFragment`
+/// (0xd56b4: one packet a call, the cursor walking from the oldest
+/// unacknowledged fragment up to [`WINDOW`] past it and starting over,
+/// 0xd56f2..0xd572f, so an unacknowledged fragment goes again each lap;
+/// with none in flight a bare acknowledge [`IDLE_ACK_MS`] after the last
+/// packet, 0xd574a..0xd57f1). The receiver's checks are
+/// `ReliableMessagesReceiveNextFragment`'s (0xd5918). VERIFIED (the
+/// instructions); that CoD4x's client runs the same code is INFERRED.
+#[derive(Clone, Debug, Default)]
+pub struct Link {
+    pub qport: u16,
+    pub inbound: Inbound,
+    /// Fragments not yet acknowledged, by sequence, each with its
+    /// selective acknowledge mark (`+0x4b4`).
+    out: BTreeMap<i32, (Vec<u8>, bool)>,
+    /// The next sequence a fragment takes (`+0x0`).
+    head: i32,
+    /// The oldest unacknowledged sequence (`+0x8`).
+    acked: i32,
+    /// The next sequence to transmit (`+0x10`).
+    cursor: i32,
+    /// The last frame's time (`+0xa54`), `None` before the first.
+    last: Option<i32>,
+    /// The send credit left over, in fragment-milliseconds (`+0x514`).
+    credit: i32,
+    /// When a bare acknowledge may go (`+0xa58`).
+    ack_due: i32,
+}
+
+impl Link {
+    pub fn new(qport: u16) -> Link {
+        Link {
+            qport,
+            ..Link::default()
+        }
+    }
+
+    /// Queues one message body, framed and cut into fragments.
+    pub fn send(&mut self, body: &[u8]) {
+        for c in frame(body).chunks(MAX_FRAGMENT) {
+            self.out.insert(self.head, (c.to_vec(), false));
+            self.head += 1;
+        }
+    }
+
+    /// Whether every fragment sent was acknowledged.
+    pub fn is_idle(&self) -> bool {
+        self.acked == self.head
+    }
+
+    /// Takes one packet from the other end; returns the message bodies it
+    /// completed. A packet past [`RECEIVE_AHEAD`], or whose acknowledge is
+    /// behind the last one, past the window or past what was sent, is
+    /// dropped whole, as the receiver drops it (0xd596f..0xd59e3).
+    pub fn receive(&mut self, p: &Packet) -> Result<Vec<Vec<u8>>> {
+        if p.sequence != BARE_ACK && p.sequence.wrapping_sub(self.inbound.next()) >= RECEIVE_AHEAD {
+            return Ok(Vec::new());
+        }
+        if p.ack > self.acked + WINDOW || p.ack < self.acked || p.ack > self.head {
+            return Ok(Vec::new());
+        }
+        // (offset from the acknowledge, count), each within the window
+        // (0xd5a59..0xd5aad).
+        for &(off, n) in &p.sacks {
+            let (start, n) = (p.ack + i32::from(off), i32::from(n));
+            if !(0..=WINDOW).contains(&n) || start > p.ack + WINDOW - n {
+                return Ok(Vec::new());
+            }
+            for s in start..start + n {
+                if let Some(f) = self.out.get_mut(&s) {
+                    f.1 = true;
+                }
+            }
+        }
+        if p.ack > self.acked {
+            self.acked = p.ack;
+            self.out.retain(|s, _| *s >= p.ack);
+        }
+        self.inbound.take(p)
+    }
+
+    /// `ReliableMessagesFrame` at `now_ms`: the packets due since the
+    /// last frame.
+    pub fn frame(&mut self, now_ms: i32) -> Vec<Packet> {
+        let Some(last) = self.last.replace(now_ms) else {
+            return Vec::new();
+        };
+        let dt = now_ms.wrapping_sub(last);
+        if dt > MAX_FRAME_GAP_MS {
+            return Vec::new();
+        }
+        let credit = dt.max(0) * WINDOW + self.credit;
+        self.credit = credit % 1000;
+        (0..credit / 1000)
+            .filter_map(|_| self.transmit(now_ms))
+            .collect()
+    }
+
+    /// `ReliableMessagesTransmitNextFragment`: the packet at the cursor, a
+    /// bare acknowledge when nothing is in flight and one is due, or none.
+    fn transmit(&mut self, now_ms: i32) -> Option<Packet> {
+        let packet = |sequence, data: &[u8]| Packet {
+            qport: self.qport,
+            sequence,
+            ack: self.inbound.next(),
+            window: WINDOW as i16,
+            data: data.to_vec(),
+            ..Packet::default()
+        };
+        if self.acked == self.head {
+            if self.ack_due >= now_ms {
+                return None;
+            }
+            self.ack_due = now_ms + IDLE_ACK_MS;
+            return Some(packet(BARE_ACK, &[]));
+        }
+        self.cursor = self.cursor.max(self.acked);
+        let out = match self.out.get(&self.cursor) {
+            Some((data, false)) => {
+                self.ack_due = now_ms + IDLE_ACK_MS;
+                Some(packet(self.cursor, data))
+            }
+            _ => None,
+        };
+        self.cursor = if self.cursor + 1 < self.acked + WINDOW {
+            self.cursor + 1
+        } else {
+            self.acked
+        };
+        out
+    }
+}
+
+/// Mode 2's IV words (cod4x-protocol.md 7.1).
+pub const STATS_IV: [u32; 4] = [0xeb62114f, 0x66996144, 0x7341cfa4, 0xb9551299];
+
 /// `cmd 9` both ways: the server's request is mode 0 with no block
 /// (`SV_RequestStats` 0x10eef0); the client's answer is mode 0 (no stats),
 /// or 1 or 2 with a [`STATS_LEN`] block, mode 2's AES-128-CBC
@@ -187,6 +344,23 @@ impl StatsMsg {
             body.len() - r.1
         );
         Ok(StatsMsg { mode, block })
+    }
+
+    /// Mode 2: `block` under AES-128-CBC as `SV_ReceiveStats_f` takes it
+    /// (0x10f5eb..0x10f81a): the key the connection's challenge four
+    /// times, the IV [`STATS_IV`]'s words, each little-endian, no padding.
+    pub fn mode2(block: &[u8; STATS_LEN], challenge: i32) -> StatsMsg {
+        use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::NoPadding};
+        let key: Vec<u8> = (0..4).flat_map(|_| challenge.to_le_bytes()).collect();
+        let iv: Vec<u8> = STATS_IV.iter().flat_map(|w| w.to_le_bytes()).collect();
+        let mut buf = block.to_vec();
+        cbc::Encryptor::<aes::Aes128>::new(key[..].into(), iv[..].into())
+            .encrypt_padded_mut::<NoPadding>(&mut buf, STATS_LEN)
+            .expect("a whole number of blocks");
+        StatsMsg {
+            mode: 2,
+            block: buf,
+        }
     }
 
     pub fn write(&self) -> Vec<u8> {
@@ -244,6 +418,70 @@ mod tests {
         bad[15] = 4;
         assert!(Packet::read(&bad).is_err());
         assert!(Packet::read(&d[..d.len() - 1]).is_err());
+    }
+
+    /// The sender's pace and laps: a fragment each 50 ms (20 a second), the
+    /// cursor running 20 past the oldest unacknowledged fragment and back,
+    /// an acknowledge moving the lap's start; idle, a bare acknowledge each
+    /// 350 ms (0xd621b, 0xd56b4).
+    #[test]
+    fn the_sender_laps_its_window_at_twenty_a_second() {
+        let mut l = Link::new(7);
+        l.send(&vec![9; 5000]);
+        assert_eq!(l.head, 5);
+        let mut sent = Vec::new();
+        for t in (0..=1500).step_by(50) {
+            sent.extend(l.frame(t).iter().map(|p| p.sequence));
+            if t == 700 {
+                // The other end has 0..2.
+                let ack = Packet {
+                    sequence: BARE_ACK,
+                    ack: 3,
+                    ..Packet::default()
+                };
+                l.receive(&ack).unwrap();
+            }
+        }
+        // 0..4, then the empty slots of the lap; the acknowledge at 700
+        // stretches it to 22, and it starts over at 3.
+        assert_eq!(sent, [0, 1, 2, 3, 4, 3, 4]);
+        let all = Packet {
+            sequence: BARE_ACK,
+            ack: 5,
+            ..Packet::default()
+        };
+        l.receive(&all).unwrap();
+        assert!(l.is_idle());
+        let acks: Vec<i32> = (1550..=2600)
+            .step_by(50)
+            .filter(|&t| !l.frame(t).is_empty())
+            .collect();
+        assert_eq!(acks, [1650, 2050, 2450]);
+        // A frame 251 ms after the last sends nothing.
+        assert!(l.frame(2851).is_empty());
+    }
+
+    /// The receiver drops a packet four or more past the next fragment,
+    /// and one whose acknowledge is behind, past the window or past what
+    /// was sent, acknowledge and all (0xd5918).
+    #[test]
+    fn the_receiver_drops_what_retail_drops() {
+        let mut l = Link::new(7);
+        l.send(&[1; 10]);
+        let frag = |sequence, ack| Packet {
+            sequence,
+            ack,
+            data: frame(&[5]),
+            ..Packet::default()
+        };
+        assert!(l.receive(&frag(4, 1)).unwrap().is_empty());
+        assert_eq!((l.inbound.next(), l.acked), (0, 0));
+        assert!(l.receive(&frag(0, 2)).unwrap().is_empty());
+        assert_eq!(l.acked, 0, "past what was sent");
+        assert_eq!(l.receive(&frag(0, 1)).unwrap(), [vec![5]]);
+        assert!(l.is_idle());
+        assert!(l.receive(&frag(1, 0)).unwrap().is_empty());
+        assert_eq!(l.inbound.next(), 1, "an acknowledge behind");
     }
 
     /// Fragments out of order and repeated reassemble once; a length word

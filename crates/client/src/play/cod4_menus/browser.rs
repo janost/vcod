@@ -555,8 +555,9 @@ impl ScriptMenus {
 
     /// `UI_BuildServerDisplayList` (0x5472b0): the source's marked rows
     /// with a ping (any favourite), through the filter dvars, sorted.
-    /// vcod also leaves out CoD4x servers, which never let 1.7 play
-    /// (cod4-handshake.md 13), unless [`SHOW_COD4X`] is set.
+    /// vcod also leaves out CoD4x servers, which it joins only without
+    /// client authentication (cod4x-protocol.md 18.3), unless
+    /// [`SHOW_COD4X`] is set.
     pub(super) fn build_display(&mut self) {
         let src = self.net_source();
         let d = |m: &Self, n: &str| atoi(&m.dvar(n).unwrap_or_default());

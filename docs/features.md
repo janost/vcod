@@ -9,7 +9,7 @@ still missing against retail, and what vcod adds that retail never had.
 | Call of Duty | 1.1, 1.5 | 1, 6 | Plays | Hosts | Yes | [features/cod1.md](features/cod1.md) |
 | United Offensive | 1.51 | 22 | Plays, vehicles included | Hosts, vehicles included | Yes | [features/uo.md](features/uo.md) |
 | Call of Duty 2 | 1.3 | 118 | Plays | Hosts | Yes | [features/cod2.md](features/cod2.md) |
-| Call of Duty 4 | 1.7 | 6 | Plays (stock 1.7 servers, not CoD4x) | Hosts | Yes | [features/cod4.md](features/cod4.md) |
+| Call of Duty 4 | 1.7 | 6 | Plays (stock 1.7 servers, CoD4x ones without client authentication) | Hosts | Yes | [features/cod4.md](features/cod4.md) |
 
 ## What every game shares
 

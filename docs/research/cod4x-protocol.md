@@ -122,9 +122,10 @@ The rows for 6, 7, 8, 20 and 21 are VERIFIED live (`run-oob-auth`); the
   freed. VERIFIED live (`cap-legacy`: the error at 18.02 s).
 - So a retail 1.7 client does not play on a CoD4x server as 1.7: it is
   handed to the update host or refused. INFERRED (the bullets above).
-- vcod's join (`vcod_cod4::net::conn`, the client's own, run as the
-  `cod4_probe` example) stops at the challenge: `This server runs CoD4x
-  (xproto 18) ...`. VERIFIED live (`cap-vcod`).
+- Before stage 2, vcod's join (`vcod_cod4::net::conn`, the client's own,
+  run as the `cod4_probe` example) stopped at the challenge: `This server
+  runs CoD4x (xproto 18) ...`. VERIFIED live (`cap-vcod`). Since 18.3 it
+  joins an `xproto 18` server as a protocol 21 client and never as 1.7.
 
 ## 5. Client authentication
 
@@ -191,9 +192,10 @@ authentication and anti-cheat traffic.
   acknowledge is the 20 bytes `f0ffffff a40f ffffffff 00000000 00 00
   1400 0000`.
 - A fragment holds at most 1200 bytes (0x4b0, 0xd5aca). The window was 20
-  both ways. The sender repeats an unacknowledged fragment or a bare
-  acknowledge 350 ms (0x15e, 0xd57ec) after the last. VERIFIED (the
-  instructions) and live.
+  both ways. With nothing in flight the sender repeats a bare
+  acknowledge 350 ms (0x15e, 0xd57ec) after its last packet; an
+  unacknowledged fragment goes again on its window's next lap, not on a
+  timer (7.4). VERIFIED (the instructions) and live.
 - The stream holds messages, each `long length` then that many bytes
   (`SV_SendReliableServerCommand` 0x10eea0 writes `size - 4` over the first
   long). A message's body opens with `long cmd`. The data is plain: no
@@ -265,6 +267,50 @@ The s2c 1 and 9 rows are VERIFIED live.
 - Every packet re-encodes to its datagram from its fields, and the
   stream's messages (`long` length, body) reassemble from the fragments in
   sequence order. VERIFIED live (`x21_join_decodes_and_reencodes`).
+
+### 7.4 The sender and the receiver
+
+The release's own side channel code, which `vcod_cod4::net::reliable::Link`
+ports. Each bullet VERIFIED (the instructions at the addresses named):
+
+- `ReliableMessageSetup` (0xd5f09) sets the window `+0x14` to 20
+  (0xd5f7b), the send ring `+0x4` and the receive ring `+0x51c` to 32
+  fragments (0xd5f8c, 0xd5f93) and `+0x52c` to 4 (0xd5f82).
+- `ReliableMessageSend` (0xd5d98) cuts a message into fragments of 1200
+  bytes and a last shorter one (0xd5e37..0xd5ebf), each marked unsent
+  (`+0x4b4` -1, 0xd5e6e), and grows the send ring when the message does
+  not fit (`ReliableMessageChangeSendBufferSize`, 0xd5e24).
+- `SV_SendClientMessages` (0x1250d5) calls `ReliableMessagesFrame` with
+  the server time for each client every frame (0x125188), then
+  `SV_ReceiveReliableMessages`. `ReliableMessagesFrame` (0xd621b) skips a
+  frame more than 250 ms after the last (`cmp ecx,0xfa` at 0xd623c) and
+  otherwise calls `ReliableMessagesTransmitNextFragment` once per 1000
+  of `elapsed ms * window` plus the remainder it keeps at `+0x514`
+  (0xd6244..0xd6291): 20 packets a second.
+- `ReliableMessagesTransmitNextFragment` (0xd56b4) sends one packet a
+  call. With nothing in flight it sends a bare acknowledge once 350 ms
+  passed since the last packet (0xd574a..0xd57f1). Otherwise it sends the
+  fragment at its cursor unless that one was selectively acknowledged
+  (0xd5710), then moves the cursor on by one, back to the oldest
+  unacknowledged fragment once it reaches that plus the window
+  (0xd571c..0xd572f). There is no per-fragment timer: an unacknowledged
+  fragment goes again on the cursor's next lap, about a second later.
+- `ReliableMessagesReceiveNextFragment` (0xd5918) drops a packet whole,
+  its acknowledge too, when its sequence is 4 or more past the next one
+  expected (0xd5960..0xd5971), or when its acknowledge is past the oldest
+  unacknowledged plus the window (`Illegible reliable acknowledge`),
+  behind it (`Too old reliable acknowledge`) or past the newest sent
+  (`Invalid reliable acknowledge`, 0xd5977..0xd59f8). It reads the
+  window short and ignores it (0xd5ab4), refuses a fragment over 1200
+  bytes (0xd5aca), and a selective acknowledge is (offset from the
+  acknowledge, count), refused past the window (0xd5a59..0xd5a86).
+- The cursor does not go back when a message is queued, so the first lap
+  of a new message can start past its first fragment: in a first run of
+  18.3's gate (not kept) the gamestate's fragments came 2..20 and 1 a lap
+  later, and the receiver's limit of 4 dropped 5..20 until then. In
+  `cap-join1` the cursor started at 1 and the last of 44 fragments was
+  acknowledged 2.7 s after the challenge. VERIFIED live. That the CoD4x
+  client runs this same code, its limit of 4 included, is INFERRED.
 
 ## 8. Netchan, scramble, Huffman, the client header
 
@@ -405,9 +451,11 @@ The s2c 1 and 9 rows are VERIFIED live.
   `svc_snapshot`. VERIFIED live (`a.log`; the 13 of `two-x21-first.txt`).
 - vcod's client keeps the newest `configDataSequence` it read, the
   gamestate's or an `svc 11`'s (`parse::Client::config_data_ack`), and its
-  header sends that. That the server then stops repeating the entry
-  follows from the compare in section 11. INFERRED; stage 2's live join
-  measures it.
+  header sends that. The server then stops repeating the entry: in
+  `cap-join1` the first client got the second's entry 2 in one message
+  and in none after its header carried 2. VERIFIED live
+  (`cod4x_live_join_spawns_and_leaves`). The second client's leave sent
+  the first no entry. VERIFIED live.
 
 ## 12. Configstrings
 
@@ -453,7 +501,12 @@ for its own client were not looked for; open (section 17).
 - `cod4x_patchv2.ff`: a server that has it loads it with the common zones
   (`R_Init` 0x12f4de). Whether it then appears in `sv_referencedFFNames`
   and the client must hold the same zone is not measured: the release
-  does not ship it and nothing here could fetch it. INFERRED; open.
+  does not ship it and nothing here could fetch it. INFERRED; open. The
+  release here references `code_post_gfx_mp common_mp mp_crash` and no
+  CoD4x zone. VERIFIED live (`cap-join1`). Were the name there, vcod's
+  `download::missing_files` would not fetch it (it fetches only fastfiles
+  under the server's `fs_game` or `usermaps/`) and the join would go on
+  without the zone's assets. INFERRED (the code).
 - `xbase_00.iwd`: the server reads its certificates from it
   (`InitCA Attempting to read certificates from file main/xbase_00.iwd`).
   Whether clients are asked for it is not known. INFERRED; open.
@@ -489,6 +542,8 @@ for its own client were not looked for; open (section 17).
   | `cap-noauth1`, `cap-noauth0` | `+set sv_noauth 1` / `0` | `cod4x_probe $ADDR <dir> --secs 20 --stats fresh --cmd '2 mr {sid} {menu:team_marinesopfor} autoassign' --cmd '3.5 mr {sid} {menu:changeclass} assault_mp,0' --cmd '8 say hello'`, with the origin change of section 10 built in |
   | `cap-two` | `+set sv_noauth 1` | two `cod4x_probe`s, `--qport 1001` and, 6 s later, `--qport 1002` |
   | `cap-retail` | (`cod4_lnxded` as `BIN`) | `oob_walk.py $ADDR 21 6` |
+  | `cap-join1`, `cap-join2` | `+set sv_noauth 1` | the test `cod4x_live_join_spawns_and_leaves` run inside, `COD4X_OUT` naming the directory (18.3) |
+  | `cap-vcod-probe` | `+set sv_noauth 1` | `vcod --game cod4 --game-dir <1.7 install> --net-probe $ADDR --team allies --probe-secs 15` |
 
   `oob_walk.py` and `legacy_walk.py` are throwaway scripts beside the
   captures (getchallenge and connect per protocol; a 1.7 join resending
@@ -608,6 +663,73 @@ Questions for the owner:
   side channel gamestate needs the same reset.
 - What the client does with `Client::client_configs` (names beside the
   scoreboard's) is open.
+
+### 18.3 Stage 2: the side channel and the join
+
+- `Conn::join` reads the `challengeResponse`: no `xproto` joins as 1.7;
+  `xproto 18` (`conn::XPROTO`, every CoD4x server of section 19 sent 18)
+  connects with protocol 21 (`PROTOCOL_X21`) and the same userinfo
+  otherwise, builds `Client::with_dialect(Dialect::X21)` and sends no
+  out-of-band stats; any other `xproto` is refused before `connect` with
+  `This server runs a CoD4x vcod does not know (xproto N) ...`. A
+  connect refused with `protocolmismatch CoD4X- N` (section 3's row 22)
+  reads `This server needs CoD4x protocol N; vcod speaks CoD4x protocol
+  21.`
+- The side channel is `reliable::Link`, section 7.4's sender and
+  receiver: 20 packets a second off the frame time, the cursor's laps,
+  a bare acknowledge 350 ms after the last packet when nothing is in
+  flight, a packet 4 past the next fragment or with a bad acknowledge
+  dropped whole. `Conn::poll` routes a `-16` datagram to it before the
+  netchan and runs its frame once a poll.
+- The stats request is answered in mode 2 with the profile's stats
+  block, the one 1.7's seven packets carry (`Join::stats`, or the
+  `fs_game` one through `Join::stats_for`), a fresh profile's without a
+  profile. The cipher is RustCrypto's `aes` 0.8 and `cbc` 0.1
+  (`reliable::StatsMsg::mode2`); it gives `handshake-x21.txt`'s mode 2
+  block from a fresh profile and the capture's challenge. VERIFIED
+  (`net_decode::x21_join_decodes_and_reencodes`).
+- The gamestate message goes into the client
+  (`Client::take_side_gamestate`), `cp` is queued as on 1.7, and
+  `Conn::poll` returns it as a `Received` holding `Op::Gamestate` alone
+  with an empty `msg`, which a demo recording skips. The configstring
+  sequence `apply_configstrings` keeps starts at the gamestate's
+  `serverCommandSequence`, and any `d` the netchan brought past it while
+  the fragments came is applied to the new table
+  (`a_side_gamestate_takes_the_newer_configstring_commands`).
+- Before the gamestate the client's messages carry its commands and
+  `clc_EOF` under serverId 0, as the probe's did. The server sends no
+  snapshot until the client's first move: a client that sent none got 30
+  s of 9-byte messages after its gamestate. VERIFIED live (a first run
+  of the gate, not kept).
+- Messages other than the stats request and the gamestate (a download,
+  `cmd 8`) are logged and left.
+
+The gate, `cod4x_live_join_spawns_and_leaves` (`tools/cod4x_capture.sh`
+on the release with `sv_noauth 1`, mp_crash; capture `cap-join1`), each
+result VERIFIED live:
+
+- Client A, a bare `Conn`: challenge, `challengeResponse`, `connect`,
+  `connectResponse`, the server's first netchan message and the client's
+  ahead of the stats request, the stats in fragments 0..6, the gamestate
+  in 1..44, the last acknowledged 2.7 s after the challenge, then the
+  first snapshot after the gamestate: section 6's order.
+- Client B, the client's session: team `allies` and class
+  `assault_mp,0` answered through the menus, spawned with `m16_gl_mp`, 60
+  snapshots in the next 3 s, left with `disconnect`. The server logged
+  both clients connecting and dropping with `EXE_DISCONNECTED`, and no
+  reliable acknowledge error, unknown client command or kick.
+- B's join brought A one `svc 11` entry, which stopped once A's header
+  acknowledged it (11.1).
+- `vcod --game cod4 --net-probe` against the same server (capture
+  `cap-vcod-probe`): joined, answered the team and class menus, spawned,
+  279 snapshots in 15 s at 20 a second, no warning in the log.
+
+Left for later stages: the browser and the authenticating server's
+refusal (stage 3: a server sending `cmd 8` is not told apart yet, the
+join waits for a gamestate that never comes and ends on the session's
+30 s `no gamestate`), downloads over `cmd 5` (stage 4), a demo recorded
+on a CoD4x server (the writer is 1.7's), `Client::client_configs` in the
+scoreboard, and a map change on a CoD4x server, which no run made.
 
 ## 19. Public reach, 2026-11-23
 

@@ -539,10 +539,11 @@ editor picked).
   `Status::is_cod4x`). `UI_BuildServerDisplayList`'s port leaves such
   rows out of all three sources unless `ui_browserShowCoD4x` (a vcod
   cvar, archived, default 0) is 1; then the name column reads
-  `[CoD4x] <hostname>`, since the join is refused at the challenge.
+  `[CoD4x] <hostname>`.
   The mark is not a `serverInfo_t` field, so `servercache.dat` does not
-  keep it: a cached favourite shows until its ping answers. vcod joins
-  stock 1.7 servers only; playing on CoD4x servers is not supported.
+  keep it: a cached favourite shows until its ping answers. A join of
+  such a row plays only on a CoD4x server without client
+  authentication (cod4x-protocol.md 18.3).
 - Left: the Create a Class editor's stat commands (section 4).
 - `cdkey_menu` (`ui_mp.ff`): `onOpen` `setfocus firstkey`,
   `setlocalvarint ui_show_cancel 1`, `uiScript getCDKey`; five

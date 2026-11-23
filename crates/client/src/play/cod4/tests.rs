@@ -16,6 +16,7 @@ mod capture;
 mod capture_bodies;
 mod capture_bullets;
 mod capture_view;
+mod cod4x;
 mod demo;
 mod join;
 mod live_hud;

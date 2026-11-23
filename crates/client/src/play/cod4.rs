@@ -772,7 +772,8 @@ impl Cod4Session {
                     self.timeout_frames = 0;
                 }
                 if let Some(rec) = self.recording.as_mut() {
-                    for r in &got {
+                    // A CoD4x side channel gamestate has no netchan message.
+                    for r in got.iter().filter(|r| !r.msg.is_empty()) {
                         // `CL_ParseSnapshot` clears `demowaiting` on a full
                         // frame (0x4737d5) before `CL_PacketEvent` writes.
                         if r.parsed.ops.iter().any(|o| {

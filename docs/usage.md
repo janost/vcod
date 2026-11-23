@@ -503,7 +503,8 @@ Client:
   - Join Game lists LAN servers (Source: Local), favourites and, on
     Refresh List, `master.cod.pm`'s CoD4 list. Password sets a server's
     password. CoD4x servers stay out of the lists unless
-    `ui_browserShowCoD4x` is 1 (vcod's own cvar).
+    `ui_browserShowCoD4x` is 1 (vcod's own cvar); vcod plays only on
+    those that run without client authentication.
   - Mods runs a `mods/<dir>` mod. Options and Controls set the options
     and binds vcod has.
   - Select Profile creates, deletes and loads a profile in
@@ -516,9 +517,10 @@ Client:
     custom classes' names are the archived cvars `customclass1`..`5`.
   - `connect ip:port` on the console joins a server. Esc or `disconnect`
     on the connect screen calls the join off.
-- `vcod --connect ip:port` joins a 1.7 server through its team and class
-  menus, drawn as the zones give them. The mouse or the arrows and Tab
-  move the focus, a click or Enter picks, Esc runs the menu's `onEsc` or,
+- `vcod --connect ip:port` joins a 1.7 server, or a CoD4x server that
+  runs without client authentication, through its team and class menus,
+  drawn as the zones give them. The mouse or the arrows and Tab move the
+  focus, a click or Enter picks, Esc runs the menu's `onEsc` or,
   with none up, the server's `g_scriptMainMenu`. A menu vcod cannot
   evaluate shows as a numbered list (1-9 pick). `--team` and `--class`
   answer them unseen.

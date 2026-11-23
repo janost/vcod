@@ -2,15 +2,20 @@
 //! makes (challenge, connect, the seven stats packets), the `cp` answer to
 //! the gamestate, then move messages keyed and scrambled as the client's
 //! and server messages parsed into [`Client`]
-//! (docs/research/cod4-handshake.md, cod4-netfields.md 5 and 8).
+//! (docs/research/cod4-handshake.md, cod4-netfields.md 5 and 8). On an
+//! `xproto` challenge it joins as a CoD4x 21 client instead: protocol 21,
+//! the stats and the gamestate over the side channel ([`reliable::Link`]),
+//! the 16-byte header (docs/research/cod4x-protocol.md 6 to 11, 18.3).
 //! `examples/cod4_probe.rs` and the vcod client both join through it.
 
 use super::clmsg::{self, ClOp, ClientHeader, CmdWire, UserCmd};
 use super::demo::Archive;
 use super::parse::{Client, Illegible, Op, Parsed};
 use super::pure;
+use super::reliable::{self, Link, Packet, StatsMsg};
 use super::stats::{STAT_PACKETS, Stats};
 use super::voice;
+use super::wire::Dialect;
 use anyhow::{Context, Result, bail};
 use std::net::{SocketAddr, UdpSocket};
 use std::path::PathBuf;
@@ -241,6 +246,10 @@ pub struct Conn {
     /// The userinfo dvars as the connect sent them, which a change sends
     /// again ([`Conn::set_name`]).
     userinfo: String,
+    /// CoD4x 21: the side channel, `None` on 1.7.
+    side: Option<Link>,
+    /// What the side channel's millisecond clock counts from.
+    born: Instant,
 }
 
 impl Conn {
@@ -286,15 +295,19 @@ impl Conn {
             voice_in: Vec::new(),
             prints: Vec::new(),
             userinfo: String::new(),
+            side: None,
+            born: now(),
         };
         c.note(JoinNote::Challenging);
         let key = cdkey::lookup(KeyGame::Cod4);
         let hash = key.as_ref().map(|k| k.hash(KeyGame::Cod4));
         let ask = format!("getchallenge 0 \"{}\"", hash.as_deref().unwrap_or(KEY_HASH));
         let chal = c.challenge_reply(ask.as_bytes(), key.as_ref())?;
-        if let Some(x) = cod4x_proto(&chal) {
-            return Err(Refused(cod4x_refusal(x)).into());
-        }
+        let dialect = match cod4x_proto(&chal) {
+            None => Dialect::V17,
+            Some(XPROTO) => Dialect::X21,
+            Some(x) => return Err(Refused(cod4x_refusal(x)).into()),
+        };
         c.challenge = String::from_utf8_lossy(&chal)
             .split_whitespace()
             .nth(1)
@@ -303,8 +316,11 @@ impl Conn {
         let www = if opts.www { "\\cl_wwwDownload\\1" } else { "" };
         let vc = if opts.voice { "\\cl_voice\\1" } else { "" };
         let mut ui = format!(
-            "{USERINFO}{www}{vc}\\name\\{}\\protocol\\6\\challenge\\{}\\qport\\{}",
-            opts.name, c.challenge, c.qport
+            "{USERINFO}{www}{vc}\\name\\{}\\protocol\\{}\\challenge\\{}\\qport\\{}",
+            opts.name,
+            dialect.wire().transport.version,
+            c.challenge,
+            c.qport
         );
         if !opts.password.is_empty() {
             ui.push_str(&format!("\\password\\{}", opts.password));
@@ -319,12 +335,21 @@ impl Conn {
                 format!("connect \"{ui}\"").as_bytes(),
                 b"connectResponse",
                 10,
-            )?
+            )
+            .map_err(cod4x_mismatch)?
             .context("no connectResponse")?;
         c.note(JoinNote::Connected);
         let fs_game = String::from_utf8_lossy(&reply[b"connectResponse".len()..]);
         if let Some(stats) = opts.stats_for.and_then(|mut f| f(fs_game.trim())) {
             c.stats = stats;
+        }
+        c.chan = Netchan::with_params(c.qport, c.challenge, NetchanParams::COD2);
+        if dialect == Dialect::X21 {
+            // The stats go when the side channel asks (`SV_RequestStats`).
+            c.client = Client::with_dialect(dialect);
+            c.side = Some(Link::new(c.qport));
+            c.born = now();
+            return Ok(c);
         }
 
         // Stats: the lowest index the server still wants, until its mask is 0.
@@ -345,7 +370,6 @@ impl Conn {
         if want != 0 {
             bail!("stats not accepted (mask {want})");
         }
-        c.chan = Netchan::with_params(c.qport, c.challenge, NetchanParams::COD2);
         Ok(c)
     }
 
@@ -441,15 +465,23 @@ impl Conn {
         };
         self.seq += 1;
         let mut pkt = Vec::new();
-        match &self.client.gamestate {
-            None => head.write(dialect, &mut pkt),
-            Some(gs) => {
-                let server_id: i32 = gs
-                    .systeminfo("sv_serverid")
+        // CoD4x's client sends its commands and `clc_EOF` before the
+        // gamestate too, under serverId 0 and feed 0 (cod4x-protocol.md 6).
+        let ids = match (&self.client.gamestate, dialect) {
+            (Some(gs), _) => Some((
+                gs.systeminfo("sv_serverid")
                     .context("sv_serverid")?
-                    .parse()?;
+                    .parse::<i32>()?,
+                gs.checksum_feed,
+            )),
+            (None, Dialect::X21) => Some((0, 0)),
+            (None, Dialect::V17) => None,
+        };
+        match ids {
+            None => head.write(dialect, &mut pkt),
+            Some((server_id, feed)) => {
                 let last = self.client.last_server_command().to_vec();
-                let key = clmsg::usercmd_key(gs.checksum_feed, self.ack, &last);
+                let key = clmsg::usercmd_key(feed, self.ack, &last);
                 // The ack is the server's word, any `i32`.
                 let mut ops: Vec<ClOp> = (self.commands_acked.saturating_add(1)
                     ..=self.reliable_sequence())
@@ -467,7 +499,7 @@ impl Conn {
                     wired.push((*c, wire));
                     self.last_cmd = *c;
                 }
-                if !wired.is_empty() {
+                if !wired.is_empty() && self.client.gamestate.is_some() {
                     let (at, time) = origin.map_or(([1.0e6; 3], 0), |a| (a.origin, a.server_time));
                     ops.push(ClOp::Move {
                         delta: !self.client.snapshots.is_empty() && !self.no_delta,
@@ -536,6 +568,10 @@ impl Conn {
             if d.len() < 4 {
                 continue;
             }
+            if self.side.is_some() && Packet::is_side(&d) {
+                out.extend(self.side_packet(&d)?);
+                continue;
+            }
             let Some((s, mut msg)) = self.chan.frame(&d)? else {
                 continue;
             };
@@ -582,7 +618,100 @@ impl Conn {
                 msg,
             });
         }
+        self.side_frame()?;
         Ok(out)
+    }
+
+    /// One side channel packet: its acknowledge, and the messages it
+    /// completed answered. The stats request gets the profile's block in
+    /// mode 2 (cod4x-protocol.md 7.1); the gamestate goes into the client
+    /// and comes back as a [`Received`] holding [`Op::Gamestate`] alone,
+    /// with no message for a demo. Other messages (downloads, the
+    /// authentication library's) are logged and left.
+    fn side_packet(&mut self, d: &[u8]) -> Result<Option<Received>> {
+        let p = match Packet::read(d) {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!("cod4x: ignoring side channel packet: {e:#}");
+                return Ok(None);
+            }
+        };
+        let side = self.side.as_mut().context("side channel")?;
+        let mut got = None;
+        for body in side.receive(&p)? {
+            let cmd = body
+                .get(..4)
+                .map_or(0, |w| i32::from_le_bytes(w.try_into().unwrap()));
+            match cmd {
+                reliable::CMD_STATS => {
+                    let m = StatsMsg::mode2(&self.stats.0, self.challenge);
+                    self.side.as_mut().context("side channel")?.send(&m.write());
+                    log::info!("cod4x: stats requested, sent in mode 2");
+                }
+                reliable::CMD_GAMESTATE => {
+                    self.client.take_side_gamestate(&body)?;
+                    self.side_gamestate();
+                    self.answer_gamestate()?;
+                    got = Some(Received {
+                        sequence: self.ack as u32,
+                        parsed: Parsed {
+                            ops: vec![Op::Gamestate],
+                            eof_at: 0,
+                            exact: true,
+                        },
+                        msg: Vec::new(),
+                    });
+                }
+                cmd => log::info!(
+                    "cod4x: side channel message cmd {cmd}, {} bytes, left",
+                    body.len()
+                ),
+            }
+        }
+        Ok(got)
+    }
+
+    /// A side channel gamestate's table takes the server commands from its
+    /// sequence on: the netchan may have brought newer ones while the
+    /// fragments came, and the reset of [`apply_configstrings`] on a
+    /// netchan gamestate is this one's.
+    fn side_gamestate(&mut self) {
+        let Some(from) = self
+            .client
+            .gamestate
+            .as_ref()
+            .map(|g| g.server_command_sequence)
+        else {
+            return;
+        };
+        self.applied = from;
+        let newer = Parsed {
+            ops: self
+                .client
+                .server_commands
+                .range(from.saturating_add(1)..)
+                .map(|(s, t)| Op::ServerCommand {
+                    sequence: *s,
+                    text: t.clone(),
+                })
+                .collect(),
+            eof_at: 0,
+            exact: true,
+        };
+        self.apply_configstrings(&newer);
+    }
+
+    /// The side channel packets due now ([`Link::frame`]).
+    fn side_frame(&mut self) -> Result<()> {
+        let ms = now().saturating_duration_since(self.born).as_millis() as i32;
+        let due = match self.side.as_mut() {
+            Some(side) => side.frame(ms),
+            None => return Ok(()),
+        };
+        for p in due {
+            self.send_raw(&p.write())?;
+        }
+        Ok(())
     }
 
     /// The voice packets the server relayed since the last call, (talker,
@@ -904,14 +1033,39 @@ pub fn cod4x_proto(reply: &[u8]) -> Option<&str> {
     Some(words.next().unwrap_or(""))
 }
 
-/// Why vcod does not go on into a CoD4x server: it parks a protocol 6
-/// client and relays it to CoD4x's client-update backend, which never
-/// lets a 1.7 client play (cod4-handshake.md 13).
+/// The `xproto` of the CoD4x server vcod joins as a protocol 21 client
+/// (`SV_GetChallenge`'s format at 0x10e700, cod4x-protocol.md 2).
+pub const XPROTO: &str = "18";
+
+/// Why vcod does not go on into a CoD4x server whose `xproto` is not
+/// [`XPROTO`]: its side channel or protocol may not be the one vcod
+/// speaks.
 pub fn cod4x_refusal(xproto: &str) -> String {
     format!(
-        "This server runs CoD4x (xproto {xproto}). CoD4x hands a 1.7 client to its own client \
-         update, which vcod does not install; vcod joins stock 1.7 servers only."
+        "This server runs a CoD4x vcod does not know (xproto {xproto}); vcod joins CoD4x \
+         servers of xproto {XPROTO} (protocol 21) and stock 1.7 servers."
     )
+}
+
+/// A CoD4x server's refusal of the protocol vcod sent, which ends in
+/// `{OOBErrorParser protocolmismatch CoD4X- <n>}` (0x2c1538,
+/// cod4x-protocol.md 3), in plain words; any other error as it came.
+fn cod4x_mismatch(e: anyhow::Error) -> anyhow::Error {
+    let Some(Refused(why)) = e.downcast_ref() else {
+        return e;
+    };
+    let Some(n) = why
+        .split("protocolmismatch CoD4X-")
+        .nth(1)
+        .and_then(|t| t.split('}').next())
+        .map(str::trim)
+    else {
+        return e;
+    };
+    Refused(format!(
+        "This server needs CoD4x protocol {n}; vcod speaks CoD4x protocol 21."
+    ))
+    .into()
 }
 
 /// `ANGLE2SHORT`.
@@ -1033,6 +1187,8 @@ mod tests {
             voice_in: Vec::new(),
             prints: Vec::new(),
             userinfo: String::new(),
+            side: None,
+            born: Instant::now(),
         }
     }
 
@@ -1219,6 +1375,49 @@ mod tests {
         let e = c.send(&[], None).unwrap_err();
         assert_eq!(e.to_string(), "EXE_ERR_CLIENT_CMD_OVERFLOW");
         assert!(c.poll(Instant::now()).is_err());
+    }
+
+    /// A side channel gamestate's table takes the `d` commands the
+    /// netchan brought past its sequence while its fragments came, and
+    /// none from before it.
+    #[test]
+    fn a_side_gamestate_takes_the_newer_configstring_commands() {
+        use super::super::parse::{Gamestate, MAX_CONFIGSTRINGS};
+        use std::collections::BTreeMap;
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut c = joined(server.local_addr().unwrap());
+        c.client = Client::with_dialect(Dialect::X21);
+        let table = vec![String::new(); MAX_CONFIGSTRINGS as usize];
+        let mut gs = Gamestate::from_table(5, &table, &BTreeMap::new(), 0, 0);
+        gs.dialect = Dialect::X21;
+        c.client.gamestate = Some(gs);
+        for (seq, text) in [(4, "d 9 old"), (6, "d 9 new"), (7, "d 4000 high")] {
+            c.client
+                .server_commands
+                .insert(seq, text.as_bytes().to_vec());
+        }
+        c.side_gamestate();
+        let gs = c.client.gamestate.as_ref().unwrap();
+        assert_eq!(
+            (gs.configstring(9), gs.configstring(4000)),
+            (&b"new"[..], &b"high"[..])
+        );
+        assert_eq!(c.applied, 7);
+    }
+
+    /// A CoD4x server's protocol refusal reads plainly; another error
+    /// stays as it came (cod4x-protocol.md 3).
+    #[test]
+    fn a_cod4x_protocol_mismatch_reads_plainly() {
+        let why = "This server requires protocol version: 22\nPlease restart CoD4 \
+                   {OOBErrorParser protocolmismatch CoD4X- 22}";
+        let e = cod4x_mismatch(Refused(why.into()).into());
+        assert_eq!(
+            e.to_string(),
+            "This server needs CoD4x protocol 22; vcod speaks CoD4x protocol 21."
+        );
+        let e = cod4x_mismatch(Refused("GAME_INVALIDPASSWORD".into()).into());
+        assert_eq!(e.to_string(), "GAME_INVALIDPASSWORD");
     }
 
     /// The challenge replies of a CoD4x server and of retail 1.7
