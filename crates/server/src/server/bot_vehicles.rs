@@ -102,12 +102,12 @@ impl Server {
         if crewed.is_empty() {
             return;
         }
-        // What a rocket meets by the muzzle besides the world: the script
-        // models and the hulls.
-        let models = if views
-            .iter()
-            .any(|(_, v)| v.seat.is_none() && v.rocket.is_some())
-        {
+        // What a rocket meets by the muzzle, or a tank's shell on its way,
+        // besides the world: the script models and the hulls.
+        let models = if views.iter().any(|(_, v)| match v.seat {
+            None => v.rocket.is_some(),
+            Some(s) => s.sight.is_some(),
+        }) {
             self.game
                 .module
                 .script
@@ -158,7 +158,8 @@ impl Server {
     /// [`crate::bots::BotView::armor`]: the nearest vehicle an enemy rides
     /// in, in a clear line from the eye, for a bot on foot with a loaded
     /// launcher (past a rocket's splash, inside its range) or one driving a
-    /// tank (inside the gun's range).
+    /// tank (inside the gun's range), and whether the tank's shell fired
+    /// now meets it ([`shell_on_hull`]).
     fn armor_view(
         &self,
         slot: usize,
@@ -225,6 +226,14 @@ impl Server {
             ),
             _ => true,
         };
+        let shell_on = match (view.seat.and_then(|s| s.sight), world) {
+            (Some(g), Some(w)) => {
+                let rt = self.game.module.script.as_ref()?;
+                let own = rt.host.vehicles.seat_of(slot)?.0;
+                shell_on_hull(w, models, own, g, &c.spot)
+            }
+            _ => true,
+        };
         Some(ArmorView {
             num: c.spot.num,
             centre: c.spot.centre(),
@@ -235,6 +244,7 @@ impl Server {
                 .bot_friend_in_line(slot, c.spot.centre(), teams, None, false)
                 .0,
             muzzle_clear,
+            shell_on,
         })
     }
 
@@ -388,6 +398,34 @@ fn hull_met(spot: &VehicleSpot, fraction: f32, end: [f32; 3]) -> bool {
         || spot.gap(end) < ARMOR_REACH
             && up > spot.mins[2] - ARMOR_REACH
             && up < spot.maxs[2] + ARMOR_REACH
+}
+
+/// Whether a shell from the tank gun `gun` (its own hull `own`) strikes
+/// the hull `spot` before anything else, or bursts on the world within
+/// [`ARMOR_REACH`] of its box. A line the driver's eye had over a wall
+/// flew the shell over the hull it aimed at, into a wall 800 units past
+/// it, on mp_cassino (bot-objectives.md 10.11).
+fn shell_on_hull(
+    world: &vcod_common::collision::CollisionWorld,
+    models: &[crate::game::combat::PlacedModel],
+    own: vcod_gsc::EntId,
+    gun: GunSight,
+    spot: &VehicleSpot,
+) -> bool {
+    let muzzle = glam::Vec3::from(gun.muzzle);
+    let half = spot
+        .mins
+        .iter()
+        .chain(&spot.maxs)
+        .fold(0.0f32, |m, v| m.max(v.abs()));
+    let reach = muzzle.distance(spot.centre().into()) + half + ARMOR_REACH;
+    let strike =
+        super::breach::shell_strike(world, models, own, muzzle, gun.dir.into(), gun.speed, reach);
+    match strike {
+        Some((_, Some(m))) => m.id.0 == spot.num,
+        Some((at, None)) => hull_met(spot, 0.0, at.into()),
+        None => false,
+    }
 }
 
 /// A vehicle with a rider, for [`Server::armor_view`].
@@ -1186,6 +1224,42 @@ mod tests {
 
     use super::*;
     use crate::nav::NavGraph;
+
+    /// A tank's shell meets an enemy hull (here a world box in its place)
+    /// along a level line; pitched 4 degrees up it flies over it into the
+    /// wall behind, and a high wall between takes a level one.
+    #[test]
+    fn a_shell_over_the_hull_or_into_a_wall_is_not_on_it() {
+        let spot = VehicleSpot {
+            num: 7,
+            origin: [800.0, 0.0, 0.0],
+            yaw: 0.0,
+            mins: [-100.0, -50.0, 0.0],
+            maxs: [100.0, 50.0, 80.0],
+            tank: true,
+        };
+        let hull = (Vec3::new(700.0, -50.0, 0.0), Vec3::new(900.0, 50.0, 80.0));
+        let behind = (
+            Vec3::new(1000.0, -512.0, 0.0),
+            Vec3::new(1016.0, 512.0, 400.0),
+        );
+        let between = (
+            Vec3::new(400.0, -512.0, 0.0),
+            Vec3::new(416.0, 512.0, 300.0),
+        );
+        let gun = |pitch: f32| GunSight {
+            muzzle: [0.0, 0.0, 60.0],
+            dir: [pitch.to_radians().cos(), 0.0, pitch.to_radians().sin()],
+            speed: 10000.0,
+            eye: [-100.0, 0.0, 160.0],
+        };
+        let own = vcod_gsc::EntId(1, 0);
+        let open = test_world(&[hull, behind]);
+        assert!(shell_on_hull(&open, &[], own, gun(0.0), &spot));
+        assert!(!shell_on_hull(&open, &[], own, gun(4.0), &spot));
+        let walled = test_world(&[hull, behind, between]);
+        assert!(!shell_on_hull(&walled, &[], own, gun(0.0), &spot));
+    }
 
     /// A `nx` by `ny` grid of nodes `pitch` apart from the origin, each
     /// joined both ways to its four neighbours.

@@ -1846,6 +1846,7 @@ mod tests {
             shot_speed: 2800.0,
             friend_in_line: false,
             muzzle_clear: true,
+            shell_on: true,
         });
         let (pitch, yaw) = aim_angles(&v, at);
         v.view = [pitch, yaw, 0.0];
@@ -1919,9 +1920,54 @@ mod tests {
             shot_speed: 10000.0,
             friend_in_line: false,
             muzzle_clear: true,
+            shell_on: true,
         });
         let cmd = bot.think(&v);
         assert_eq!(cmd.forward, 0, "the tank does not hold for the shot");
         assert_ne!(cmd.buttons & BUTTON_ATTACK, 0, "the laid gun did not fire");
+    }
+
+    /// A gun laid on an enemy hull in yaw whose shell would miss it (over
+    /// it, into a wall past it: mp_cassino, bot-objectives.md 10.11) holds
+    /// its fire, and after 10 s the tank drives on with the gun still on
+    /// the hull, firing once the line meets it.
+    #[test]
+    fn a_tank_gun_with_no_line_on_an_enemy_hull_holds_its_fire() {
+        let mut bot = Bot::new("allies", true, 1);
+        let mut v = driving(Crowd::default());
+        v.armor = Some(ArmorView {
+            num: 90,
+            centre: [1500.0, 300.0, 100.0],
+            velocity: [0.0; 3],
+            crew: 1 << 5,
+            shot_speed: 10000.0,
+            friend_in_line: false,
+            muzzle_clear: true,
+            shell_on: false,
+        });
+        let (_, yaw) = aim_angles(&v, [1500.0, 300.0, 100.0]);
+        v.seat.as_mut().unwrap().gun_yaw = Some(yaw);
+        for tick in 0..vehicle::SHELL_WAIT_TICKS {
+            let cmd = bot.think(&v);
+            assert_eq!(
+                cmd.buttons & BUTTON_ATTACK,
+                0,
+                "fired off the hull at {tick}"
+            );
+            assert_eq!(cmd.forward, 0, "drove off the fight at {tick}");
+        }
+        let cmd = bot.think(&v);
+        assert_eq!(cmd.buttons & BUTTON_ATTACK, 0);
+        assert_ne!(cmd.forward, 0, "still held for a shot that never comes");
+        let (pitch, yaw) = aim_angles(&v, [1500.0, 300.0, 100.0]);
+        assert_eq!(
+            cmd.angles,
+            cmd_angles(&v, [pitch, yaw]),
+            "the gun left the hull"
+        );
+        v.armor.as_mut().unwrap().shell_on = true;
+        let cmd = bot.think(&v);
+        assert_ne!(cmd.buttons & BUTTON_ATTACK, 0, "the line came and no shell");
+        assert_eq!(cmd.forward, 0, "the tank does not hold for the shot");
     }
 }
