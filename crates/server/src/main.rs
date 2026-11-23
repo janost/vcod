@@ -106,6 +106,12 @@ struct Args {
     /// slowest tick and how far the loop ran behind its schedule.
     #[arg(long, help_heading = "Developer")]
     trace: bool,
+    /// CoD1: log every human client's usercmds, client commands, the events
+    /// its cmds raised and the snapshots it was sent to this file, a line
+    /// each (`vcod_server::client_log`). How a retail client is captured
+    /// (docs/dev/retail.md, "Retail client captures").
+    #[arg(long, value_name = "PATH", help_heading = "Developer")]
+    client_log: Option<std::path::PathBuf>,
 }
 
 /// `--nav-cache`, else `navcache/` beside the binary when that is not
@@ -211,6 +217,16 @@ fn main() -> Result<()> {
         let (mut server, net) = cod4_server(args, sock)?;
         return serve(&mut server, net, console, trace, interrupt);
     }
+    // On this thread, which runs the loop.
+    if let Some(path) = &args.client_log {
+        let header = format!(
+            "vcod-server {} client log, map {}",
+            vcod_server::VERSION,
+            args.map
+        );
+        vcod_server::client_log::install(path, &header)
+            .with_context(|| format!("opening --client-log {}", path.display()))?;
+    }
     let (mut server, net) = cod1_server(args, sock, &sets_after_map)?;
     serve(&mut server, net, console, trace, interrupt)
 }
@@ -247,8 +263,9 @@ fn from_command_line(matches: &ArgMatches, id: &str) -> bool {
 }
 
 /// The flags only some games read, by clap id, and those games.
-const GAME_FLAGS: [(&str, &[Game]); 5] = [
+const GAME_FLAGS: [(&str, &[Game]); 6] = [
     ("vanilla", &[Game::Cod1]),
+    ("client_log", &[Game::Cod1]),
     ("mod_dir", &[Game::Cod1, Game::Cod2]),
     ("gametype_script", &[Game::Cod1, Game::Cod2]),
     ("test_entities", &[Game::Cod1]),

@@ -170,6 +170,23 @@ impl Server {
                     }
                 }
                 ClientOp::Move { cmds, delta } => {
+                    if crate::client_log::on() {
+                        let svs = self.svs_time_ms();
+                        crate::client_log::write(|w| {
+                            let mut line = format!(
+                                "move w={w:.1} svs={svs} slot={slot} seq={} ack={} delta={} n={}",
+                                m.sequence,
+                                m.message_ack,
+                                u8::from(delta),
+                                cmds.len()
+                            );
+                            for c in &cmds {
+                                line.push_str("\ncmd ");
+                                line.push_str(&crate::client_log::cmd_fields(slot, c));
+                            }
+                            line
+                        });
+                    }
                     // `SV_UserMove` sets `deltaMessage` before anything else.
                     let c = self.core.clients[slot].as_mut().unwrap();
                     c.delta_message = if delta { c.message_ack } else { -1 };
@@ -293,6 +310,15 @@ impl Server {
                 log::debug!("client text ignored for {}: {trimmed}", c.name);
             }
             c.link.next_reliable_ms = svs_ms.wrapping_add(FLOOD_WINDOW_MS);
+        }
+        if crate::client_log::on() {
+            crate::client_log::write(|w| {
+                format!(
+                    "ccmd w={w:.1} svs={svs_ms} slot={slot} seq={seq} ok={} text={}",
+                    u8::from(client_ok),
+                    crate::client_log::escape(trimmed)
+                )
+            });
         }
         let engine_command = matches!(
             word,
@@ -956,6 +982,35 @@ mod tests {
             )
             .unwrap();
         sv.handle_packet(addr(5), &pkt, now);
+    }
+
+    /// `--client-log` records each new client command with whether the
+    /// flood window kept it from the game: `fdc` opens the window, `score `
+    /// is exempt.
+    #[test]
+    fn the_client_log_records_commands_and_the_flood_drop() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        let mut nc = begun(&mut sv, now);
+        let path = std::env::temp_dir().join(format!("vcod-client-log-{}", std::process::id()));
+        crate::client_log::install(&path, "test").unwrap();
+        pipelined(&mut sv, &mut nc, &["fdc 1", "fdc 1", "score 1"], now);
+        crate::client_log::finish();
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let ccmd: Vec<&str> = text
+            .lines()
+            .filter(|l| l.starts_with("ccmd "))
+            .map(|l| &l[l.find(" seq=").unwrap() + 1..])
+            .collect();
+        assert_eq!(
+            ccmd,
+            [
+                "seq=1 ok=1 text=fdc 1",
+                "seq=2 ok=0 text=fdc 1",
+                "seq=3 ok=1 text=score 1"
+            ]
+        );
     }
 
     /// Fifty `donedl` in one message build one gamestate: a second one

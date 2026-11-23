@@ -30,6 +30,18 @@ impl Server {
             return;
         };
         c.state = ClientState::Active;
+        if crate::client_log::on() && !c.is_bot {
+            let (proto, addr, name) = (
+                self.game.proto.transport.version,
+                c.link.addr,
+                crate::client_log::escape(&c.name),
+            );
+            crate::client_log::write(|w| {
+                format!(
+                    "enter w={w:.1} svs={svs_ms} slot={slot} proto={proto} addr={addr} name={name}"
+                )
+            });
+        }
         // The first snapshot goes this frame, not after the primed client's
         // 1 s keepalive interval (0x80877d8).
         c.link.next_message_ms = svs_ms;

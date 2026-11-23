@@ -129,7 +129,8 @@ vcod-server <map> [--port 28960] [--hostname vcod] [--max-clients 8] [--gametype
 A flag the game does not read is refused at start, as are a bad
 `--set`, more bots than slots and a port in use, all before the level
 loads: `--vanilla` is CoD1 and UO only, `--mod-dir` and
-`--gametype-script` are not read on CoD4, `--script-dir` is CoD4 only.
+`--gametype-script` are not read on CoD4, `--script-dir` is CoD4 only,
+`--client-log` is CoD1 and UO only.
 
 The server answers `getinfo`, `getstatus` and `getchallenge` from
 anyone, rate limited per address and server-wide where retail is not
@@ -578,7 +579,10 @@ Server (`vcod-server <map> --game cod4`, or a CoD4 install):
 - Server: `--trace` logs every snapshot per client and a per-second tick
   summary; `--test-entities <n>` adds up to 32 invisible moving entities
   (numbers 32 to 63, so `--max-clients` 32 or fewer) to exercise the
-  entity encoding.
+  entity encoding; `--client-log <file>` (CoD1 and UO) writes every human
+  client's usercmds, client commands, the events its cmds raised and the
+  snapshots it was sent, a line each
+  ([retail.md](dev/retail.md#retail-client-captures)).
 
 ## Environment variables
 
