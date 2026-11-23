@@ -17,7 +17,7 @@
 //! A `--cmd` text may hold `{sid}` (the serverid) and `{menu:NAME}` (a
 //! menu's index), for `mr {sid} {menu:team_marinesopfor} autoassign`.
 //! `--stats fresh` (the default) answers the stats request with a fresh
-//! profile's block in mode 2 (`openssl` on the path), `skip` with mode 0
+//! profile's block in mode 2 (`StatsMsg::mode2`), `skip` with mode 0
 //! (no stats, which the stock scripts kick), `none` not at all.
 //! `--until-stats` ends the join at the stats request, or `--secs` after the
 //! start without one, for a reach check that sends no stats. `--log` writes
@@ -27,7 +27,7 @@
 //! (its body, past the length word) and `gamestate.txt`, the decoded
 //! gamestate.
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, bail};
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::net::{SocketAddr, UdpSocket};
@@ -35,66 +35,9 @@ use std::time::{Duration, Instant};
 use vcod_cod4::net::clmsg::{self, ClOp, ClientHeader, CmdWire, UserCmd};
 use vcod_cod4::net::delta::EntityState;
 use vcod_cod4::net::parse::{Client, GamestateOp, Op};
-use vcod_cod4::net::reliable::{self, Inbound, Packet, StatsMsg};
+use vcod_cod4::net::reliable::{self, Link, Packet, StatsMsg};
 use vcod_cod4::net::wire::Dialect;
 use vcod_common::net::netchan::{Netchan, NetchanParams, scramble_client_ops};
-
-const REL_WINDOW: i16 = 20;
-
-/// Client half of the reliable side channel (`ReliableMessage*`).
-#[derive(Default)]
-struct Rel {
-    qport: u16,
-    inbound: Inbound,
-    /// Our fragments, by sequence, until the server acknowledges them.
-    out: BTreeMap<i32, Vec<u8>>,
-    next_out: i32,
-    last_sent: Option<Instant>,
-}
-
-impl Rel {
-    fn packet(&self, sequence: i32, data: &[u8]) -> Vec<u8> {
-        Packet {
-            qport: self.qport,
-            sequence,
-            ack: self.inbound.next(),
-            window: REL_WINDOW,
-            data: data.to_vec(),
-            ..Packet::default()
-        }
-        .write()
-    }
-
-    /// Takes one server packet; returns whole message bodies it completed.
-    fn take(&mut self, d: &[u8]) -> Result<Vec<Vec<u8>>> {
-        let p = Packet::read(d)?;
-        self.out.retain(|s, _| *s >= p.ack);
-        self.inbound.take(&p)
-    }
-
-    fn queue(&mut self, body: &[u8]) {
-        for c in reliable::frame(body).chunks(reliable::MAX_FRAGMENT) {
-            self.out.insert(self.next_out, c.to_vec());
-            self.next_out += 1;
-        }
-    }
-
-    /// The packets due now: unacknowledged fragments every 300 ms, else a
-    /// bare acknowledge.
-    fn due(&mut self, now: Instant) -> Vec<Vec<u8>> {
-        if self
-            .last_sent
-            .is_some_and(|t| now.duration_since(t) < Duration::from_millis(300))
-        {
-            return Vec::new();
-        }
-        self.last_sent = Some(now);
-        if self.out.is_empty() {
-            return vec![self.packet(reliable::BARE_ACK, &[])];
-        }
-        self.out.iter().map(|(s, d)| self.packet(*s, d)).collect()
-    }
-}
 
 /// A baseline's non-zero fields, one per line.
 fn baseline_text(num: u32, e: &EntityState) -> String {
@@ -111,39 +54,6 @@ fn baseline_text(num: u32, e: &EntityState) -> String {
         }
     }
     out
-}
-
-/// A fresh profile's stats block as `SV_ReceiveStats_f` (0x10f5b0) takes
-/// mode 2: AES-128-CBC, the key the connection's challenge four times,
-/// a fixed IV. Runs the `openssl` CLI, so the probe links no cipher.
-fn stats_mode2(challenge: i32) -> Result<Vec<u8>> {
-    use std::process::{Command, Stdio};
-    let key: String = (0..4)
-        .flat_map(|_| challenge.to_le_bytes())
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    let iv: String = [0xeb62114fu32, 0x66996144, 0x7341cfa4, 0xb9551299]
-        .iter()
-        .flat_map(|w| w.to_le_bytes())
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    let mut child = Command::new("openssl")
-        .args(["enc", "-aes-128-cbc", "-nopad", "-K", &key, "-iv", &iv])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()?;
-    let plain = vcod_cod4::net::stats::Stats::fresh();
-    child
-        .stdin
-        .take()
-        .context("stdin")?
-        .write_all(&plain.0[..])?;
-    let out = child.wait_with_output()?;
-    ensure!(
-        out.status.success() && out.stdout.len() == reliable::STATS_LEN,
-        "openssl enc failed"
-    );
-    Ok(out.stdout)
 }
 
 /// A gamestate side channel message (`cmd 1`) read into `client`, and its
@@ -321,10 +231,7 @@ fn main() -> Result<()> {
 
     let mut chan = Netchan::with_params(qport, challenge, NetchanParams::COD2);
     let mut client = Client::with_dialect(Dialect::X21);
-    let mut rel = Rel {
-        qport,
-        ..Rel::default()
-    };
+    let mut rel = Link::new(qport);
     let mut ack: i32 = 0;
     let mut out_seq: u32 = 1;
     let mut nrel = 0;
@@ -366,7 +273,7 @@ fn main() -> Result<()> {
                 continue;
             }
             if Packet::is_side(&d) {
-                for body in rel.take(&d)? {
+                for body in rel.receive(&Packet::read(&d)?)? {
                     nrel += 1;
                     let cmd = i32::from_le_bytes(body[..4].try_into().unwrap_or([0; 4]));
                     println!("rel << message {nrel}: cmd {cmd}, {} bytes", body.len());
@@ -374,16 +281,13 @@ fn main() -> Result<()> {
                     stats_asked |= cmd == 9;
                     match cmd {
                         reliable::CMD_STATS if stats == "fresh" => {
-                            let m = StatsMsg {
-                                mode: 2,
-                                block: stats_mode2(challenge)?,
-                            };
-                            rel.queue(&m.write());
+                            let fresh = vcod_cod4::net::stats::Stats::fresh();
+                            rel.send(&StatsMsg::mode2(&fresh.0, challenge).write());
                             println!("rel >> stats, mode 2, a fresh profile");
                         }
                         reliable::CMD_STATS if stats == "skip" => {
                             // Mode 0: no stats (`SV_ReceiveStats_f` 0x10f5b0).
-                            rel.queue(&StatsMsg::default().write());
+                            rel.send(&StatsMsg::default().write());
                             println!("rel >> stats, mode 0");
                         }
                         reliable::CMD_GAMESTATE => match read_gamestate(&mut client, &body) {
@@ -459,8 +363,8 @@ fn main() -> Result<()> {
         // Send.
         let now = Instant::now();
         if leaving.is_none() {
-            for p in rel.due(now) {
-                w.send(&p)?;
+            for p in rel.frame(start.elapsed().as_millis() as i32) {
+                w.send(&p.write())?;
             }
         }
         if now < next_send {

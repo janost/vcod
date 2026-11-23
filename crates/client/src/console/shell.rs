@@ -746,8 +746,8 @@ impl Shell {
         s.register("ui_netSource", "0", ARCHIVE);
         // The browser's game type filter (vmCvar row at 0x40036cbc).
         s.register("ui_joinGametype", "0", ARCHIVE);
-        // vcod's CoD4 browser filter: 1 lists CoD4x servers, which never
-        // let 1.7 play (docs/research/cod4-handshake.md 13).
+        // vcod's CoD4 browser filter: 1 lists CoD4x servers, which vcod
+        // joins only without client authentication (cod4x-protocol.md 18.3).
         s.register("ui_browserShowCoD4x", "0", ARCHIVE);
         // The menu list `ui_load` reads, not archived (vmCvar row at
         // 0x40036c9c).

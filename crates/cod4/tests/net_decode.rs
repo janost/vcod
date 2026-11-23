@@ -715,6 +715,10 @@ fn x21_join_decodes_and_reencodes() {
         .collect();
     assert_eq!((stats[0].mode, stats[0].block.len()), (0, 0));
     assert_eq!((stats[1].mode, stats[1].block.len()), (2, 0x2000));
+    // A fresh profile's block under the challenge of the capture's
+    // `challengeResponse` (cod4x-protocol.md 7.1).
+    let fresh = vcod_cod4::net::stats::Stats::fresh();
+    assert_eq!(StatsMsg::mode2(&fresh.0, -1240723127), stats[1]);
 
     let gs = w.client.gamestate.as_ref().unwrap();
     assert_eq!(gs.configstrings.len(), 4883);

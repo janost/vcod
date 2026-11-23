@@ -10,7 +10,7 @@ Nobody ever wrote those protocols down, so I dug them out of the binaries.
 | Call of Duty | 1.1, 1.5 | 1, 6 | Plays | Hosts | Yes | [cod1.md](docs/features/cod1.md) |
 | United Offensive | 1.51 | 22 | Plays, vehicles included | Hosts, vehicles included | Yes | [uo.md](docs/features/uo.md) |
 | Call of Duty 2 | 1.3 | 118 | Plays | Hosts | Yes | [cod2.md](docs/features/cod2.md) |
-| Call of Duty 4 | 1.7 | 6 | Plays on stock 1.7 servers (not CoD4x) | Hosts | Yes | [cod4.md](docs/features/cod4.md) |
+| Call of Duty 4 | 1.7 | 6 | Plays on stock 1.7 servers and CoD4x ones without client authentication | Hosts | Yes | [cod4.md](docs/features/cod4.md) |
 
 Each game's page says what works, what's still missing against retail,
 and what vcod adds. [docs/features.md](docs/features.md) covers what they
@@ -112,8 +112,9 @@ The ones you'll hit first, in every game. Each game's page lists the rest.
 - No listen server. Start New Server always runs a separate `vcod-server`.
 - No PunkBuster, no anti-cheat.
 - Audio follows the engine on paper but has had little checking by ear.
-- CoD 4: most public servers run CoD4x, which no stock 1.7 client can
-  play on. vcod refuses them and hides them in the browser.
+- CoD 4: most public servers run CoD4x with client authentication, which
+  vcod does not do. It joins the few CoD4x servers that run without it
+  (`--connect`) and hides CoD4x servers in the browser.
 
 And one that looks like a fix and is one. Asphalt footsteps are silent in
 CoD 1 retail because the engine asks for `asphalt` and the sound table

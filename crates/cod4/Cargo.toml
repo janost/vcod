@@ -21,6 +21,9 @@ anyhow.workspace = true
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 vcod-common = { path = "../common" }
 glam.workspace = true
+# CoD4x 21's mode 2 stats block is AES-128-CBC (net::reliable, cod4x-protocol.md 7.1).
+aes = "0.8"
+cbc = "0.1"
 log.workspace = true
 
 [dev-dependencies]

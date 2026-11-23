@@ -469,12 +469,16 @@ Ranked by how much a player notices. The research-side lists are
 [cod4-server-gaps.md](../research/cod4-server-gaps.md) (server).
 
 1. **CoD4x servers.** Most public CoD4 servers run CoD4x, which parks a
-   1.7 client and hands it to CoD4x's own update backend. vcod refuses
-   them at the challenge and hides them in the browser unless
-   `ui_browserShowCoD4x` is 1 ([cod4-handshake.md](../research/cod4-handshake.md)
-   13). vcod joins stock 1.7 servers only, which are rarer than they
-   should be. What playing on one would take:
-   [cod4x-protocol.md](../research/cod4x-protocol.md).
+   1.7 client and hands it to CoD4x's own update backend. vcod joins a
+   CoD4x server as a CoD4x protocol 21 client: its stats, the gamestate,
+   the team and class menus, the spawn and play. That works only on a
+   server running without client authentication (`sv_noauth 1`, or no
+   Steam library), 2 of 40 public ones sampled; vcod does not do the
+   authentication. On one that does, the join waits 30 s for a gamestate
+   and fails with `no gamestate`, with no clearer reason yet. The browser
+   hides CoD4x servers unless `ui_browserShowCoD4x` is 1, and a CoD4x
+   server's mod files do not download. Details:
+   [cod4x-protocol.md](../research/cod4x-protocol.md) 18.3.
 2. **Ranks start fresh.** vcod keeps its own stats file per profile
    (`vcod_mpdata`) and never reads retail's `mpdata`: your retail rank
    and custom classes are safe, and no use here. Create a Class opens at
