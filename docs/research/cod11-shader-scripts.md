@@ -1187,10 +1187,10 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   through `vcod_common::deform`'s encoders): autosprite's centre, stamp
   corner and half-width (`tangent[0]`), its four vertices on the first
   one's bones; autosprite2's end midpoints, axis (the normal) and signed
-  half end-length. `dynamic_model.wgsl` poses the centre, then steps out
-  along the world-space view axes by the size times the entity's scale
-  (the first axis's length). The viewmodel uploads its surfaces as they
-  are. No stock MP entity skin carries a sprite (8.2, "Entity models").
+  half end-length. `dynamic_model.wgsl` poses the centre, brings the
+  view's axes into the entity's frame through its axes and makes them
+  unit, steps out there, and the entity's axes carry the step back out,
+  scale included. The viewmodel uploads its surfaces as they are. No stock MP entity skin carries a sprite (8.2, "Entity models").
 
 ### 8.2 Model skin scripts
 

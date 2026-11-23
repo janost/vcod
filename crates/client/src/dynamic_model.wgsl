@@ -233,32 +233,23 @@ fn vs_main(
     p = vec4<f32>(d.pos, 1.0);
     n = d.normal;
     var world = model * p;
-    // rotation + translation, so the upper 3x3 is valid for the normal
-    var world_n = (model * vec4<f32>(n, 0.0)).xyz;
-    // the sprites (renderer::encode_entity_sprite): the posed centre or end
-    // midpoint, out along the view's axes by the size `tangent.x` holds,
-    // which the entity's scale scales as retail's nonNormalizedAxes path
-    // does (0x51425b)
-    if ((stage.flags & F_AUTOSPRITE) != 0u) {
-        let sprite_r = tangent.x * length(m0.xyz);
-        let vp = camera.view_proj;
-        let right = normalize(vec3<f32>(vp[0].x, vp[1].x, vp[2].x));
-        let up = normalize(vec3<f32>(vp[0].y, vp[1].y, vp[2].y));
-        let off = right * ((2.0 * uv.x - 1.0) * sprite_r) + up * ((1.0 - 2.0 * uv.y) * sprite_r);
-        world = world + vec4<f32>(off, 0.0);
-        world_n = -camera.view_fwd.xyz;
-    }
-    if ((stage.flags & F_AUTOSPRITE2) != 0u) {
-        let c = cross(world_n, camera.view_fwd.xyz);
-        if (dot(c, c) > 0.0) {
-            world = world + vec4<f32>(normalize(c) * (tangent.x * length(m0.xyz)), 0.0);
-        }
-        world_n = -camera.view_fwd.xyz;
+    // the sprites (renderer::encode_entity_sprite) step out in the entity's
+    // frame, as retail's do (cod11-shader-scripts.md 8.1.1); the offset
+    // shares no operation with the normal or the env axes, which would
+    // otherwise join the invariant position and round apart
+    let sprite = (stage.flags & (F_AUTOSPRITE | F_AUTOSPRITE2)) != 0u;
+    if (sprite) {
+        let rot = mat3x3<f32>(m0.xyz, m1.xyz, m2.xyz);
+        world = world + vec4<f32>(rot * sprite_offset(rot, n, uv, tangent.x), 0.0);
     }
     var out: VsOut;
     out.clip = camera.view_proj * world;
     out.screen = screen_coords(out.clip);
-    out.normal = world_n;
+    // rotation + translation, so the upper 3x3 is valid for the normal
+    out.normal = (model * vec4<f32>(n, 0.0)).xyz;
+    if (sprite) {
+        out.normal = -camera.view_fwd.xyz;
+    }
     var base = uv;
     if ((stage.flags & F_BUNDLE0_ENV) != 0u) {
         // world to the entity's frame (its axes are rigid)
@@ -305,6 +296,26 @@ fn vs_main(
     }
     out.uv = cod2_scroll(out.uv, stage.flags, out.game_time);
     return out;
+}
+
+// An entity sprite corner's step from its encoded centre or end midpoint,
+// in the entity's frame: the view's axes brought in through the entity's
+// axes (CoDMP.exe 0x514010) and made unit (0x51425b's 1 / |axis|), then
+// autosprite's stamp corner (0x514080) or autosprite2's side across the
+// axis `n` (0x514330), `r` its half-width or signed half end.
+fn sprite_offset(rot: mat3x3<f32>, n: vec3<f32>, uv: vec2<f32>, r: f32) -> vec3<f32> {
+    let to_local = transpose(rot);
+    if ((stage.flags & F_AUTOSPRITE) != 0u) {
+        let vp = camera.view_proj;
+        let right = normalize(to_local * vec3<f32>(vp[0].x, vp[1].x, vp[2].x));
+        let up = normalize(to_local * vec3<f32>(vp[0].y, vp[1].y, vp[2].y));
+        return right * ((2.0 * uv.x - 1.0) * r) + up * ((1.0 - 2.0 * uv.y) * r);
+    }
+    let c = cross(n, to_local * camera.view_fwd.xyz);
+    if (dot(c, c) > 0.0) {
+        return normalize(c) * r;
+    }
+    return vec3<f32>(0.0);
 }
 
 // glFog GL_EXP / GL_LINEAR factors (see shader.wgsl); depth along the view

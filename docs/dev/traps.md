@@ -28,6 +28,13 @@ by doc and section. Grep `Trap:` in the subsystem doc you were sent to.
   The Windows and macOS builds therefore run movement and combat on another
   libm than the gates ran on, and a glibc update can move a gate by a bit.
   Pin a function the same way before a gate depends on its last bit.
+- Every `vs_main` position is `@invariant`, so Mesa computes each operation
+  it reads unfused, and an operation it shares with another output rounds
+  that output differently in every game. A CoD1-only sprite step that read
+  the entity's world normal moved CoD4 lighting by a byte at scattered
+  pixels (GPU kit pack 8). Keep a new position term off the other outputs'
+  operations; `renderer::tests::the_entity_position_reads_no_world_normal_operation`
+  holds it for the normal.
 
 ### Script host and VM
 

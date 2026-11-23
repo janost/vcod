@@ -1293,6 +1293,171 @@ fn weapon_icons_register_mipmapped() {
     assert!(hud_mip_names(&[]).contains("gfx/2d/net"));
 }
 
+/// The entity position is `@invariant`, so a driver computes every
+/// operation it reads unfused (Mesa's `nir_propagate_invariant`); one it
+/// shares with another output rounds that output differently too. The
+/// world normal (`out.normal`) must stay off the position's inputs, or a
+/// sprite branch on CoD1 moves every entity's lighting in CoD2 and CoD4
+/// frames by a byte (GPU kit pack 8).
+#[test]
+fn the_entity_position_reads_no_world_normal_operation() {
+    use std::collections::HashSet;
+    use wgpu::naga::{self, Expression as E, Handle, Statement as S};
+    let module = naga::front::wgsl::parse_str(crate::entity_material::DYNAMIC_WGSL).unwrap();
+    let f = &module
+        .entry_points
+        .iter()
+        .find(|e| e.name == "vs_main")
+        .unwrap()
+        .function;
+    let ex = &f.expressions;
+    // (local, member) a pointer writes or reads
+    let root = |mut h: Handle<E>| {
+        let mut member = None;
+        loop {
+            match ex[h] {
+                E::AccessIndex { base, index } => {
+                    member = Some(index);
+                    h = base;
+                }
+                E::Access { base, .. } => h = base,
+                E::LocalVariable(v) => return Some((v, member)),
+                _ => return None,
+            }
+        }
+    };
+    let mut stores = Vec::new();
+    let mut calls = std::collections::HashMap::new();
+    fn walk(
+        b: &naga::Block,
+        stores: &mut Vec<(Handle<E>, Handle<E>)>,
+        calls: &mut std::collections::HashMap<Handle<E>, Vec<Handle<E>>>,
+    ) {
+        for st in b.iter() {
+            match st {
+                S::Store { pointer, value } => stores.push((*pointer, *value)),
+                S::Call {
+                    arguments,
+                    result: Some(r),
+                    ..
+                } => {
+                    calls.insert(*r, arguments.clone());
+                }
+                S::Block(b) => walk(b, stores, calls),
+                S::If { accept, reject, .. } => {
+                    walk(accept, stores, calls);
+                    walk(reject, stores, calls);
+                }
+                S::Loop {
+                    body, continuing, ..
+                } => {
+                    walk(body, stores, calls);
+                    walk(continuing, stores, calls);
+                }
+                S::Switch { cases, .. } => cases.iter().for_each(|c| walk(&c.body, stores, calls)),
+                _ => {}
+            }
+        }
+    }
+    walk(&f.body, &mut stores, &mut calls);
+    // every expression `from` reads, through locals and call arguments
+    let closure = |from: Vec<Handle<E>>| {
+        let mut seen = HashSet::new();
+        let mut todo = from;
+        while let Some(h) = todo.pop() {
+            if !seen.insert(h) {
+                continue;
+            }
+            match &ex[h] {
+                E::Load { pointer } => {
+                    todo.push(*pointer);
+                    if let Some((v, m)) = root(*pointer) {
+                        for (p, val) in &stores {
+                            if let Some((pv, pm)) = root(*p)
+                                && pv == v
+                                && (m.is_none() || pm.is_none() || pm == m)
+                            {
+                                todo.push(*val);
+                            }
+                        }
+                    }
+                }
+                E::Compose { components, .. } => todo.extend(components),
+                E::Access { base, index } => todo.extend([*base, *index]),
+                E::AccessIndex { base, .. } => todo.push(*base),
+                E::Splat { value, .. } => todo.push(*value),
+                E::Swizzle { vector, .. } => todo.push(*vector),
+                E::Unary { expr, .. } | E::As { expr, .. } | E::Derivative { expr, .. } => {
+                    todo.push(*expr)
+                }
+                E::Binary { left, right, .. } => todo.extend([*left, *right]),
+                E::Select {
+                    condition,
+                    accept,
+                    reject,
+                } => todo.extend([*condition, *accept, *reject]),
+                E::Relational { argument, .. } => todo.push(*argument),
+                E::Math {
+                    arg,
+                    arg1,
+                    arg2,
+                    arg3,
+                    ..
+                } => todo.extend([Some(*arg), *arg1, *arg2, *arg3].into_iter().flatten()),
+                E::CallResult(_) => todo.extend(calls[&h].iter().copied()),
+                E::Literal(_)
+                | E::Constant(_)
+                | E::ZeroValue(_)
+                | E::FunctionArgument(_)
+                | E::GlobalVariable(_)
+                | E::LocalVariable(_) => {}
+                other => panic!("unhandled expression {other:?}"),
+            }
+        }
+        seen
+    };
+    let out = f
+        .local_variables
+        .iter()
+        .find(|(_, v)| v.name.as_deref() == Some("out"))
+        .unwrap();
+    let naga::TypeInner::Struct { members, .. } = &module.types[out.1.ty].inner else {
+        panic!("VsOut")
+    };
+    let member = |name: &str| {
+        members
+            .iter()
+            .position(|m| m.name.as_deref() == Some(name))
+            .unwrap() as u32
+    };
+    let written = |m: u32| -> Vec<Handle<E>> {
+        stores
+            .iter()
+            .filter(|(p, _)| root(*p) == Some((out.0, Some(m))))
+            .map(|(_, v)| *v)
+            .collect()
+    };
+    let clip = closure(written(member("clip")));
+    // the normal's own operations: its closure less what the deformed
+    // vertex already brings, which the position reads by design
+    let deformed: Vec<Handle<E>> = calls
+        .keys()
+        .filter(|r| matches!(ex[**r], E::CallResult(c) if module.functions[c].name.as_deref() == Some("deform_vertex")))
+        .copied()
+        .collect();
+    assert!(!deformed.is_empty());
+    let shared = closure(deformed);
+    let normal_ops: Vec<_> = closure(written(member("normal")))
+        .into_iter()
+        .filter(|h| !shared.contains(h))
+        .filter(|h| matches!(ex[*h], E::Binary { .. } | E::Math { .. } | E::Unary { .. }))
+        .collect();
+    assert!(!normal_ops.is_empty());
+    for h in normal_ops {
+        assert!(!clip.contains(&h), "the position reads {:?}", ex[h]);
+    }
+}
+
 /// Every module the client builds, as its `create_shader_module` site
 /// builds it, parses and validates with no GPU; every `.wgsl` file under
 /// src is part of one of them.
