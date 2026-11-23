@@ -4,7 +4,7 @@
 //! (docs/research/cod11-votes.md, "The client").
 
 use super::HudQuad;
-use super::font::{Slot, UiFonts};
+use super::font::{Slot, TextStyle, UiFonts};
 use super::hudelem::Virtual;
 use super::player::menu_text_rgba;
 use vcod_common::localize::Localized;
@@ -30,6 +30,8 @@ pub struct Vote {
     modified: bool,
     /// The four raw values last read, to tell a change.
     seen: Option<[String; 4]>,
+    /// The lines' style: 3 on CoD1 (`0x30018309`).
+    pub style: TextStyle,
 }
 
 impl Vote {
@@ -130,7 +132,7 @@ impl Vote {
         };
         let font = fonts.pick(Slot::Default, SCALE, 480.0 * v.scale);
         for (line, y) in lines.iter().zip([200.0, 210.0]) {
-            menu_text_rgba(font, line, (8.0, y), SCALE, COLOR, v, out);
+            menu_text_rgba(font, line, (8.0, y), SCALE, COLOR, self.style, v, out);
         }
         std::mem::take(&mut self.modified)
     }
@@ -217,7 +219,16 @@ impl Complaint {
         };
         let font = fonts.pick(Slot::Default, SCALE, 480.0 * v.scale);
         for (line, y) in lines.iter().zip([200.0, 210.0]) {
-            menu_text_rgba(font, line, (8.0, y), SCALE, COLOR, v, out);
+            menu_text_rgba(
+                font,
+                line,
+                (8.0, y),
+                SCALE,
+                COLOR,
+                TextStyle::SHADOWED,
+                v,
+                out,
+            );
         }
         true
     }

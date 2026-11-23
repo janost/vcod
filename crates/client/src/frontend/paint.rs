@@ -22,7 +22,7 @@ use super::{
     UI_STARTMAPCINEMATIC, Ui, UiEffect, cod2, listbox,
 };
 use crate::console::shell::Shell;
-use crate::hud::font::{Slot, UiFonts};
+use crate::hud::font::{Slot, TextStyle, UiFonts};
 use crate::hud::hudelem::{Virtual, full_width};
 use crate::hud::{HudQuad, font};
 
@@ -164,7 +164,7 @@ impl Ui {
                 if item.ownerdraw == UI_GLINFO {
                     let [x, y, w, h] = item.rect;
                     let r = [x + item.text_align_x, y + item.text_align_y, w, h];
-                    gl_info(&p, r, item.text_scale, color, &mut out);
+                    gl_info(&p, r, item, color, &mut out);
                     continue;
                 }
                 if item.ownerdraw == UI_STARTMAPCINEMATIC {
@@ -230,12 +230,14 @@ impl Ui {
                 }
                 if item.autowrap {
                     for (line, x, ly) in p.wrap_lines(&label, item) {
-                        p.text(&line, x, ly, item.text_scale, color, &mut out);
+                        let style = item.text_style;
+                        p.text(&line, x, ly, item.text_scale, color, style, &mut out);
                     }
                     continue;
                 }
                 if !label.is_empty() {
-                    p.text(&label, left, y, item.text_scale, color, &mut out);
+                    let style = item.text_style;
+                    p.text(&label, left, y, item.text_scale, color, style, &mut out);
                 }
                 if item.kind == ITEM_TYPE_SLIDER {
                     let end = (!label.is_empty()).then_some(left + label_end);
@@ -249,6 +251,7 @@ impl Ui {
                         y,
                         item.text_scale,
                         color,
+                        item.text_style,
                         &mut out,
                     );
                 }
@@ -415,10 +418,10 @@ fn gl_info_lines(info: &GpuInfo, r: [f32; 4]) -> Vec<(String, f32, f32)> {
     out
 }
 
-fn gl_info(p: &Painter, r: [f32; 4], scale: f32, color: [f32; 4], out: &mut Vec<HudQuad>) {
+fn gl_info(p: &Painter, r: [f32; 4], item: &UiItem, color: [f32; 4], out: &mut Vec<HudQuad>) {
     let info = GPU_INFO.get().cloned().unwrap_or_default();
     for (line, x, y) in gl_info_lines(&info, r) {
-        p.text(&line, x, y, scale, color, out);
+        p.text(&line, x, y, item.text_scale, color, item.text_style, out);
     }
 }
 
@@ -765,7 +768,9 @@ impl Painter<'_> {
         })
     }
 
-    /// `text` with its baseline at grid `(x, y)`.
+    /// `text` with its baseline at grid `(x, y)`, in an item's `textstyle`
+    /// on CoD1 (every `Item_*_Paint` passes item `+0xe4`); CoD2 keeps
+    /// vcod's shadow.
     pub(crate) fn text(
         &self,
         text: &str,
@@ -773,20 +778,19 @@ impl Painter<'_> {
         y: f32,
         scale: f32,
         color: [f32; 4],
+        style: i32,
         out: &mut Vec<HudQuad>,
     ) {
         let Some(f) = self.font(scale) else { return };
         let top = y - f.max_height as f32 * f.glyph_scale * scale;
         let [px, py] = self.v.point(x, top);
-        font::layout(
-            f,
-            text,
-            px,
-            py,
-            scale * self.v.scale / f.unit_scale(),
-            color,
-            out,
-        );
+        let px_scale = scale * self.v.scale / f.unit_scale();
+        if self.exact {
+            font::layout(f, text, px, py, px_scale, color, out);
+        } else {
+            let style = TextStyle::Retail(style);
+            font::layout_styled(f, text, px, py, px_scale, color, style, self.v.scale, out);
+        }
     }
 }
 
@@ -807,6 +811,29 @@ mod tests {
             cvar,
             height: 12.9,
         }
+    }
+
+    /// CoD1 menu text takes the item's `textstyle`; CoD2's keeps vcod's
+    /// 1 px shadow at 0.8.
+    #[test]
+    fn menu_text_draws_in_the_items_style_on_cod1() {
+        let fonts = crate::hud::hudelem::tests::test_fonts();
+        let draw = |exact, style| {
+            let p = Painter {
+                v: Virtual::new((1280.0, 960.0)),
+                fonts: Some(&fonts),
+                exact,
+            };
+            let mut out = Vec::new();
+            p.text("a", 0.0, 20.0, 0.3, [1.0; 4], style, &mut out);
+            out
+        };
+        let offset = |q: &[HudQuad]| q[0].verts[0][0] - q[1].verts[0][0];
+        assert_eq!(draw(false, 0).len(), 1);
+        let q = draw(false, 6);
+        assert_eq!((offset(&q), q[0].rgba[3]), (4.0, 1.0));
+        let q = draw(true, 0);
+        assert_eq!((offset(&q), q[0].rgba[3]), (1.0, 0.8));
     }
 
     /// `Window_Paint` style 3 draws its handle whatever it is: no

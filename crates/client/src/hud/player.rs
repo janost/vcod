@@ -5,7 +5,7 @@
 //! docs/research/cod11-hud-protocol.md, section 9.
 
 use super::HudQuad;
-use super::font::{self, Font};
+use super::font::{self, Font, TextStyle};
 use super::friends::{CompassFriends, Sighting};
 use super::hudelem::{self, Virtual};
 use super::scope::{self, GunAim, GunPose};
@@ -292,16 +292,28 @@ impl PlayerHud {
     }
 }
 
-/// Text at a virtual baseline, at a menu `textscale`.
+/// The stock `hud.menu`'s `textstyle` for `CG_PLAYER_STANCE` (its hints
+/// and the prone-blocked notice), which the owner draw passes to the text
+/// trap (cod11-hud-protocol.md 6.2).
+const STANCE_STYLE: TextStyle = TextStyle::SHADOWED_MORE;
+/// The stock `hud.menu`'s `textstyle` for `CG_PLAYER_WEAPON_NAME`.
+const WEAPON_NAME_STYLE: TextStyle = TextStyle::SHADOWED;
+/// The stock `hud.menu`'s `textstyle` for `CG_PLAYER_AMMO_VALUE`.
+const AMMO_STYLE: TextStyle = TextStyle::SHADOWED;
+/// The stock `hud.menu`'s `textstyle` for `CG_CURSORHINT`.
+const HINT_STYLE: TextStyle = TextStyle::SHADOWED_MORE;
+
+/// White text at a virtual baseline, at a menu `textscale`, in `style`.
 pub(super) fn menu_text(
     font: &Font,
     s: &str,
-    (x, baseline): (f32, f32),
+    at: (f32, f32),
     textscale: f32,
+    style: TextStyle,
     v: &Virtual,
     out: &mut Vec<HudQuad>,
 ) {
-    menu_text_rgba(font, s, (x, baseline), textscale, WHITE, v, out);
+    menu_text_rgba(font, s, at, textscale, WHITE, style, v, out);
 }
 
 /// [`menu_text`] in `rgba`, which a `^N` code overrides and `^7` restores.
@@ -311,19 +323,13 @@ pub(crate) fn menu_text_rgba(
     (x, baseline): (f32, f32),
     textscale: f32,
     rgba: [f32; 4],
+    style: TextStyle,
     v: &Virtual,
     out: &mut Vec<HudQuad>,
 ) {
     let top = baseline - text_height(font, textscale);
-    hudelem::text(
-        font,
-        s,
-        (x, top),
-        textscale * v.scale / font.unit_scale(),
-        rgba,
-        v,
-        out,
-    );
+    let px_scale = textscale * v.scale / font.unit_scale();
+    hudelem::text(font, s, (x, top), px_scale, rgba, style, v, out);
 }
 
 pub(crate) fn text_width(font: &Font, s: &str, textscale: f32) -> f32 {
@@ -439,6 +445,7 @@ fn stance_hints(bits: (bool, bool), cx: &Context, alpha: f32, v: &Virtual, out: 
             (140.0, y),
             0.21,
             [1.0, 1.0, 1.0, alpha],
+            STANCE_STYLE,
             v,
             out,
         );
@@ -477,6 +484,7 @@ fn prone_blocked(cx: &Context, alpha: f32, v: &Virtual, out: &mut Vec<HudQuad>) 
         (x, 270.0),
         0.21,
         [1.0, 1.0, 1.0, alpha],
+        STANCE_STYLE,
         v,
         out,
     );
@@ -755,7 +763,8 @@ fn weapon_info(
         out.push(v.quad(537.5, 430.375 + ammo_dy, 20.0, 20.0, WHITE, icon));
     }
     if let (Some(rgba), Some((_, name, w))) = (faded, &named) {
-        menu_text_rgba(cx.font, name, (562.5 - w - 28.0, 446.0), 0.3, rgba, v, out);
+        let at = (562.5 - w - 28.0, 446.0);
+        menu_text_rgba(cx.font, name, at, 0.3, rgba, WEAPON_NAME_STYLE, v, out);
     }
 
     let (Some(_), Some(def)) = (p.weapon, p.ammo_weapon) else {
@@ -771,21 +780,31 @@ fn weapon_info(
     let reserve = reserve.min(999).to_string();
     let centred = |s: &str| x + (w - text_width(cx.font, s, 0.21)) / 2.0;
     if def.clip_only {
-        menu_text(
-            cx.font,
-            &reserve,
-            (centred(&reserve), baseline),
-            0.21,
-            v,
-            out,
-        );
+        let at = (centred(&reserve), baseline);
+        menu_text(cx.font, &reserve, at, 0.21, AMMO_STYLE, v, out);
         return;
     }
     let clip = format!("{:2}", clip.min(999));
-    menu_text(cx.font, &clip, (x, baseline), 0.21, v, out);
-    menu_text(cx.font, "|", (centred("|"), baseline), 0.21, v, out);
+    menu_text(cx.font, &clip, (x, baseline), 0.21, AMMO_STYLE, v, out);
+    menu_text(
+        cx.font,
+        "|",
+        (centred("|"), baseline),
+        0.21,
+        AMMO_STYLE,
+        v,
+        out,
+    );
     let right = x + w - text_width(cx.font, &reserve, 0.21);
-    menu_text(cx.font, &reserve, (right, baseline), 0.21, v, out);
+    menu_text(
+        cx.font,
+        &reserve,
+        (right, baseline),
+        0.21,
+        AMMO_STYLE,
+        v,
+        out,
+    );
 }
 
 /// How far each crosshair arm sits off the centre, in virtual pixels, `x`
@@ -1098,7 +1117,8 @@ fn cursor_hint(p: &PlayerView, cx: &Context, now: i32, v: &Virtual, out: &mut Ve
     };
     let tw = text_width(cx.font, &s, 0.21);
     let baseline = y - text_height(cx.font, 0.21);
-    menu_text(cx.font, &s, (x + (w - tw) / 2.0, baseline), 0.21, v, out);
+    let at = (x + (w - tw) / 2.0, baseline);
+    menu_text(cx.font, &s, at, 0.21, HINT_STYLE, v, out);
 }
 
 /// The cursor hint numbering `p`'s game sends.

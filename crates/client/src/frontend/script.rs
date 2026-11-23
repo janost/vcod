@@ -291,7 +291,8 @@ impl Ui {
             "loadarenas" => self.load_arenas(out),
             "startserver" => self.start_server(out),
             w @ ("votemap" | "votetypemap" | "votegame") => self.vote_script(w, out),
-            "votekick" => self.vote_kick(out),
+            "votekick" => self.vote_player("kick", out),
+            "votetempban" => self.vote_player("tempBanUser", out),
             // vcod reads binds straight from the console, so there is
             // nothing to load; one language is all vcod reads.
             "loadcontrols" | "getlanguage" | "verifylanguage" => {}
@@ -454,6 +455,20 @@ mod tests {
         out.clear();
         ui.ui_script(&["voteKick".to_string()], &mut out);
         assert!(out.is_empty(), "row 1 is past the rebuilt list");
+    }
+
+    /// 1.5's TEMPBAN list votes the same selected row as the kick list.
+    #[test]
+    fn the_temp_ban_pick_names_the_selected_player() {
+        let mut ui = Ui::new(&Pk3Fs::empty(), "0");
+        ui.offer_players(Instant::now(), || vec!["Able".into(), "^2Baker".into()]);
+        ui.player_row = 1;
+        let mut out = Vec::new();
+        ui.ui_script(&["voteTempBan".to_string()], &mut out);
+        assert_eq!(
+            out,
+            [UiEffect::Command("callvote tempBanUser \"Baker\"".into())]
+        );
     }
 
     /// The list's clock runs only while a menu shows the list, as retail's

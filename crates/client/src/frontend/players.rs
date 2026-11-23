@@ -1,5 +1,5 @@
 //! `FEEDER_PLAYER_LIST`, the call vote menu's kick list, and `uiScript
-//! voteKick` (cod11-votes.md section 5); CoD2's `FEEDER_MUTELIST`, the
+//! voteKick` and 1.5's `voteTempBan` (cod11-votes.md section 5); CoD2's `FEEDER_MUTELIST`, the
 //! `muteplayer` script menu's list over the same rows, and `uiScript
 //! mutePlayer` (cod2-voice.md 5).
 
@@ -68,12 +68,13 @@ impl Ui {
         self.muted = muted;
     }
 
-    /// `uiScript voteKick` (0x4000afc7): `callvote kick "<name>"` off the
-    /// selected row; nothing when the row is past the list.
-    pub(super) fn vote_kick(&self, out: &mut Vec<UiEffect>) {
+    /// `uiScript voteKick` (0x4000afc7) and 1.5's `voteTempBan` (1.5
+    /// 0x4000b3b1): `callvote <kind> "<name>"` off the selected row, `kind`
+    /// `kick` or `tempBanUser`; nothing when the row is past the list.
+    pub(super) fn vote_player(&self, kind: &str, out: &mut Vec<UiEffect>) {
         if let Some(name) = self.players.get(self.player_row) {
             let name = quotable(name);
-            out.push(UiEffect::Command(format!("callvote kick \"{name}\"")));
+            out.push(UiEffect::Command(format!("callvote {kind} \"{name}\"")));
         }
     }
 

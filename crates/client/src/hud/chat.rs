@@ -3,7 +3,7 @@
 //! and timing are in docs/research/cod11-chat.md.
 
 use super::HudQuad;
-use super::font::{Slot, UiFonts, trap_width};
+use super::font::{Slot, TextStyle, UiFonts, trap_width};
 use super::hudelem::Virtual;
 use super::player::{menu_text_rgba, text_width};
 
@@ -169,7 +169,8 @@ impl Chat {
     /// Each live line from the newest up, 10 units apart with the newest's
     /// baseline at 83: a `hudColorBar` strip behind it in the viewer's team
     /// colour at a quarter, the speaker's name (up to the first `^7`) in that
-    /// colour, the rest white. `team_rgb` is the viewer's team colour.
+    /// colour, the rest white, in style 3 (0x300152fb). `team_rgb` is the
+    /// viewer's team colour.
     pub fn build(
         &mut self,
         fonts: &UiFonts,
@@ -203,7 +204,8 @@ impl Chat {
             let mut x = 8.0;
             if !name.is_empty() {
                 let rgba = [r, g, b, alpha];
-                menu_text_rgba(font, name, (x, baseline), SCALE, rgba, v, out);
+                let style = TextStyle::SHADOWED;
+                menu_text_rgba(font, name, (x, baseline), SCALE, rgba, style, v, out);
                 x += trap_width(font, name, SCALE);
             }
             menu_text_rgba(
@@ -212,6 +214,7 @@ impl Chat {
                 (x, baseline),
                 SCALE,
                 [1.0, 1.0, 1.0, alpha],
+                TextStyle::SHADOWED,
                 v,
                 out,
             );
@@ -308,10 +311,30 @@ pub fn field(
     let font = fonts.pick(Slot::Default, FIELD_SCALE, 480.0 * v.scale);
     let baseline = 116.0;
     let white = [1.0; 4];
-    menu_text_rgba(font, &label, (8.0, baseline), FIELD_SCALE, white, v, out);
+    // Both style 3 (CoDMP.exe 0x409e05, and 0x40c500 for font 0).
+    let style = TextStyle::SHADOWED;
+    menu_text_rgba(
+        font,
+        &label,
+        (8.0, baseline),
+        FIELD_SCALE,
+        white,
+        style,
+        v,
+        out,
+    );
     let x = text_width(font, &label, FIELD_SCALE).trunc() + 8.0;
     let typed = format!("{}_", field.text);
-    menu_text_rgba(font, &typed, (x, baseline), FIELD_SCALE, white, v, out);
+    menu_text_rgba(
+        font,
+        &typed,
+        (x, baseline),
+        FIELD_SCALE,
+        white,
+        style,
+        v,
+        out,
+    );
 }
 
 /// `CG_AddToTeamChat`'s line breaking. 1.5's (cgame 0x3002de50) and UO's

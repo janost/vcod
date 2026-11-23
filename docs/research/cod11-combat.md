@@ -10411,3 +10411,9 @@ pass (17.2) for events whose `client_num` is the drawn playerstate's, and
 `OnlineView::land_dip` on the camera before the lean, skipped at the
 intermission; `OnlineView::frame` adds a quarter of the dip along world
 up in the view's frame.
+
+### 17.6 The view axis through the pole
+
+VERIFIED (the instructions), `cgame_mp_x86.dll` 1.1: after the shake (`0x30033da9`), `0x30033db8` calls `AnglesToAxis` (`0x3003c770`) with `refdefViewAngles` (`0x302095cc`) into `refdef.viewaxis` (`0x302095a0`). `AnglesToAxis` calls `AngleVectors` (`0x3003a790`) for forward into `axis[0]` and up into `axis[2]` (`+0x18`), and stores `vec3_origin - right` (`0x300608e8`) as `axis[1]`. VERIFIED: that `AngleVectors` is instruction for instruction `CoDMP.exe`'s (`0x42e660`, operands aside), and `CoDMP.exe`'s `AnglesToAxis` (`0x430640`) has the same body. Its up is Q3's `(cr sp cy + sr sy, cr sp sy - sr cy, cr cp)` off the sines and cosines of all three angles, so it turns smoothly through pitch +-90 (`cp` crosses 0 and up tips past horizontal) and never flips. INFERRED (Q3 shape): the renderer builds the view matrix straight off `viewaxis`.
+
+vcod: `camera::up_hint` hands `look_to` world Z turned by roll while `cos(pitch)` is above 0, which builds the same view as that up, and past the pole that up (the unrolled `basis` up turned by roll about forward). World Z alone flipped the view 180 degrees as pitch crossed +-90, at exactly +-90 included, since `cos(pi/2)` is a small negative `f32`.

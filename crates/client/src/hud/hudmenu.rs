@@ -96,7 +96,15 @@ impl HudMenu {
                     _ => 0.0,
                 };
             let y = item.rect[1] + item.text_align_y;
-            p.text(&text, x, y, item.text_scale, item.fore, out);
+            p.text(
+                &text,
+                x,
+                y,
+                item.text_scale,
+                item.fore,
+                item.text_style,
+                out,
+            );
         }
     }
 }
@@ -125,7 +133,7 @@ mod tests {
     itemDef { name "healthbar" visible 1 rect 10 10 64 8 background "gfx/hud/hud@health_bar.tga" ownerdraw 21 }
   }
   menuDef { name "mod_corner" visible MENU_TRUE rect 0 0 640 480
-    itemDef { name "banner" type 1 visible MENU_TRUE rect 5 3 480 14 cvar "scr_mod_banner" decoration textscale 0.22 textaligny 10 }
+    itemDef { name "banner" type 1 visible MENU_TRUE rect 5 3 480 14 cvar "scr_mod_banner" decoration textscale 0.22 textaligny 10 textstyle 3 }
     itemDef { name "label" visible 1 rect 5 20 100 14 text "Hello" textscale 0.22 }
     itemDef { name "gated" visible 1 rect 5 40 100 14 text "Gated" cvartest "scr_mod_on" showCvar { "1" } }
     itemDef { name "off" visible 0 rect 5 60 100 14 text "Off" }
@@ -179,8 +187,12 @@ mod tests {
         let label = quads(&|_| None);
         assert!(label > 0, "the static label draws");
         let banner = quads(&|c| (c == "scr_mod_banner").then(|| "King".to_string()));
-        assert_eq!(banner, label + 2 * 4, "four glyphs, each with its shadow");
+        assert_eq!(
+            banner,
+            label + 2 * 4,
+            "four glyphs, each with its style 3 shadow"
+        );
         let gated = quads(&|c| (c == "scr_mod_on").then(|| "1".to_string()));
-        assert_eq!(gated, label + 2 * 5);
+        assert_eq!(gated, label + 5, "style 0: no shadows");
     }
 }

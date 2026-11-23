@@ -450,6 +450,80 @@ fn push_quad(
     ));
 }
 
+/// `R_DrawText`'s `style` argument (`ITEM_TEXTSTYLE_*` in `menudef.h`):
+/// 3 and 6 draw a black shadow at the text's alpha under each glyph, 1 and
+/// 2 virtual units right and down; every other style draws none
+/// (CoDMP.exe 1.1 0x4d803d, cod11-hud-protocol.md 6.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextStyle {
+    Retail(i32),
+    /// vcod's own shadow, 1 px at 0.8 of the text's alpha: the CoD2 draws
+    /// not read against retail yet.
+    Vcod,
+}
+
+/// Style 3, which nearly every fixed-style CoD1 HUD draw passes.
+impl Default for TextStyle {
+    fn default() -> Self {
+        TextStyle::SHADOWED
+    }
+}
+
+impl TextStyle {
+    pub const NORMAL: TextStyle = TextStyle::Retail(0);
+    pub const SHADOWED: TextStyle = TextStyle::Retail(3);
+    pub const SHADOWED_MORE: TextStyle = TextStyle::Retail(6);
+
+    /// The shadow's offset in window px and its alpha for text at `alpha`,
+    /// `unit` px to a virtual unit.
+    fn shadow(self, unit: f32, alpha: f32) -> Option<(f32, f32)> {
+        match self {
+            TextStyle::Retail(3) => Some((unit, alpha)),
+            TextStyle::Retail(6) => Some((2.0 * unit, alpha)),
+            TextStyle::Retail(_) => None,
+            TextStyle::Vcod => Some((1.0, 0.8 * alpha)),
+        }
+    }
+}
+
+/// Lays out `text` with its top-left at (x, y) in `style`, `unit` window px
+/// to a virtual unit: each glyph's shadow quad, if the style has one, then
+/// the glyph's. Returns the advance in window px. Every CoD1 HUD and menu
+/// string goes through here or [`layout_fixed_styled`].
+#[expect(clippy::too_many_arguments)]
+pub fn layout_styled(
+    font: &Font,
+    text: &str,
+    x: f32,
+    y: f32,
+    scale: f32,
+    color: [f32; 4],
+    style: TextStyle,
+    unit: f32,
+    out: &mut Vec<HudQuad>,
+) -> f32 {
+    let shadow = style.shadow(unit, color[3]);
+    lay(font, text, x, y, scale, None, color, shadow, out)
+}
+
+/// [`layout_styled`] on a fixed pitch, as [`layout_cells`].
+#[expect(clippy::too_many_arguments)]
+pub fn layout_fixed_styled(
+    font: &Font,
+    text: &str,
+    x: f32,
+    y: f32,
+    scale: f32,
+    cell: f32,
+    color: [f32; 4],
+    style: TextStyle,
+    unit: f32,
+    out: &mut Vec<HudQuad>,
+) -> f32 {
+    let shadow = style.shadow(unit, color[3]);
+    lay(font, text, x, y, scale, Some(cell), color, shadow, out)
+}
+
 /// Lays out `text` with its top-left at (x, y): a 1px black shadow quad, then
 /// the glyph quad, per char. Returns the advance in window px.
 pub fn layout(
@@ -475,32 +549,17 @@ pub fn layout_shadowed(
     shadow_alpha: f32,
     out: &mut Vec<HudQuad>,
 ) -> f32 {
-    let s = font.glyph_scale * font.unit_scale() * scale;
-    let mut cursor = x;
-    for (seg, seg_color) in split_color_codes(text, color) {
-        for c in seg.chars() {
-            let g = &font.glyphs[glyph_index(c)];
-            let w = g.image_width as f32 * s;
-            let h = g.image_height as f32 * s;
-            let gx = cursor + g.bearing * s;
-            let gy = y + (font.max_height as f32 - g.top) * s;
-
-            push_quad(
-                out,
-                gx + 1.0,
-                gy + 1.0,
-                w,
-                h,
-                g,
-                [0.0, 0.0, 0.0, shadow_alpha],
-                font.glyph_page(g),
-            );
-            push_quad(out, gx, gy, w, h, g, seg_color, font.glyph_page(g));
-
-            cursor += g.advance * s;
-        }
-    }
-    cursor - x
+    lay(
+        font,
+        text,
+        x,
+        y,
+        scale,
+        None,
+        color,
+        Some((1.0, shadow_alpha)),
+        out,
+    )
 }
 
 /// The printable characters in `text`, which a fixed-width slot lays out one
@@ -509,45 +568,9 @@ pub fn char_count(text: &str) -> usize {
     strip_color_codes(text).chars().count()
 }
 
-/// [`layout`] on a fixed pitch: every glyph centred in a `cell`-wide cell,
-/// window px, however wide its own advance. Returns the advance.
-pub fn layout_fixed(
-    font: &Font,
-    text: &str,
-    x: f32,
-    y: f32,
-    scale: f32,
-    cell: f32,
-    color: [f32; 4],
-    out: &mut Vec<HudQuad>,
-) -> f32 {
-    let s = font.glyph_scale * font.unit_scale() * scale;
-    let mut cursor = x;
-    for (seg, seg_color) in split_color_codes(text, color) {
-        for c in seg.chars() {
-            let g = &font.glyphs[glyph_index(c)];
-            let w = g.image_width as f32 * s;
-            let h = g.image_height as f32 * s;
-            let gx = cursor + (cell - g.advance * s) * 0.5 + g.bearing * s;
-            let gy = y + (font.max_height as f32 - g.top) * s;
-            push_quad(
-                out,
-                gx + 1.0,
-                gy + 1.0,
-                w,
-                h,
-                g,
-                [0.0, 0.0, 0.0, 0.8],
-                font.glyph_page(g),
-            );
-            push_quad(out, gx, gy, w, h, g, seg_color, font.glyph_page(g));
-            cursor += cell;
-        }
-    }
-    cursor - x
-}
-
-/// [`layout_fixed`] without the shadow, as the console draws its text.
+/// [`layout`] on a fixed pitch without the shadow, as the console draws
+/// its text: every glyph centred in a `cell`-wide cell, window px, however
+/// wide its own advance.
 pub fn layout_cells(
     font: &Font,
     text: &str,
@@ -558,18 +581,44 @@ pub fn layout_cells(
     color: [f32; 4],
     out: &mut Vec<HudQuad>,
 ) {
+    lay(font, text, x, y, scale, Some(cell), color, None, out);
+}
+
+/// The layouts' one loop: per char, the shadow `(offset px, alpha)` if any,
+/// then the glyph; on `cell`'s fixed pitch when given.
+#[expect(clippy::too_many_arguments)]
+fn lay(
+    font: &Font,
+    text: &str,
+    x: f32,
+    y: f32,
+    scale: f32,
+    cell: Option<f32>,
+    color: [f32; 4],
+    shadow: Option<(f32, f32)>,
+    out: &mut Vec<HudQuad>,
+) -> f32 {
     let s = font.glyph_scale * font.unit_scale() * scale;
     let mut cursor = x;
     for (seg, seg_color) in split_color_codes(text, color) {
         for c in seg.chars() {
             let g = &font.glyphs[glyph_index(c)];
-            let gx = cursor + (cell - g.advance * s) * 0.5 + g.bearing * s;
+            let w = g.image_width as f32 * s;
+            let h = g.image_height as f32 * s;
+            let gx = match cell {
+                Some(cell) => cursor + (cell - g.advance * s) * 0.5 + g.bearing * s,
+                None => cursor + g.bearing * s,
+            };
             let gy = y + (font.max_height as f32 - g.top) * s;
-            let (w, h) = (g.image_width as f32 * s, g.image_height as f32 * s);
+            if let Some((off, alpha)) = shadow {
+                let black = [0.0, 0.0, 0.0, alpha];
+                push_quad(out, gx + off, gy + off, w, h, g, black, font.glyph_page(g));
+            }
             push_quad(out, gx, gy, w, h, g, seg_color, font.glyph_page(g));
-            cursor += cell;
+            cursor += cell.unwrap_or(g.advance * s);
         }
     }
+    cursor - x
 }
 
 #[cfg(test)]
@@ -815,6 +864,34 @@ mod tests {
             "{}",
             f.line_height(2.0)
         );
+    }
+
+    /// Styles 3 and 6 put a black shadow at the text's alpha 1 and 2 units
+    /// off; 0 and every other style draw the glyphs alone, whatever `^N`.
+    #[test]
+    fn retail_styles_shadow_only_3_and_6() {
+        let f = crate::hud::hudelem::tests::test_font();
+        let rgba = [1.0, 1.0, 1.0, 0.5];
+        let quads = |style| {
+            let mut out = Vec::new();
+            layout_styled(&f, "a^1b", 10.0, 20.0, 1.0, rgba, style, 2.0, &mut out);
+            out
+        };
+        for (style, off) in [(TextStyle::SHADOWED, 2.0), (TextStyle::SHADOWED_MORE, 4.0)] {
+            let q = quads(style);
+            assert_eq!(q.len(), 4, "{style:?}");
+            for pair in q.chunks(2) {
+                assert_eq!(pair[0].rgba, [0.0, 0.0, 0.0, 0.5], "{style:?}");
+                assert_eq!(pair[0].verts[0][0] - pair[1].verts[0][0], off);
+                assert_eq!(pair[0].verts[0][1] - pair[1].verts[0][1], off);
+            }
+            assert_eq!(q[3].rgba[3], 0.5, "a ^N keeps the text's alpha");
+        }
+        for style in [0, 1, 2, 4, 5, 7] {
+            let q = quads(TextStyle::Retail(style));
+            assert_eq!(q.len(), 2, "{style}");
+            assert_eq!(q[0].rgba, rgba);
+        }
     }
 
     #[test]

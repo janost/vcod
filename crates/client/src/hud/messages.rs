@@ -6,7 +6,7 @@
 //! 4) go into the game window: docs/research/cod11-hud-protocol.md 1.1.
 
 use super::HudQuad;
-use super::font::{Slot, UiFonts};
+use super::font::{Slot, TextStyle, UiFonts};
 use super::hudelem::Virtual;
 use super::player::{menu_text_rgba, text_width};
 
@@ -113,6 +113,8 @@ pub struct Window {
     /// Where the newest line's baseline goes, in place of the kind's own
     /// (CoD2's game window, cod2-hud.md 14).
     pub origin: Option<(f32, f32)>,
+    /// The text's style: 3 for both 1.1 windows (CoDMP.exe 0x4098df).
+    pub style: TextStyle,
 }
 
 impl Window {
@@ -123,6 +125,7 @@ impl Window {
             slots: Default::default(),
             current: 0,
             origin: None,
+            style: TextStyle::SHADOWED,
         }
     }
 
@@ -236,7 +239,8 @@ impl Window {
             let text = match &l.body {
                 Body::Text(text) => text,
                 Body::Kill(k) => {
-                    kill_line(k, font, scale, (x0, y + 12.0), alpha, v, out);
+                    let at = (x0, y + 12.0);
+                    kill_line(k, font, scale, at, alpha, self.style, v, out);
                     continue;
                 }
             };
@@ -250,6 +254,7 @@ impl Window {
                 (x, y + 12.0),
                 scale,
                 [1.0, 1.0, 1.0, alpha],
+                self.style,
                 v,
                 out,
             );
@@ -372,12 +377,22 @@ fn kill_line(
     scale: f32,
     (x0, baseline): (f32, f32),
     alpha: f32,
+    style: TextStyle,
     v: &Virtual,
     out: &mut Vec<HudQuad>,
 ) {
     let mut x = x0;
     let run = |s: &str, [r, g, b]: [f32; 3], x: &mut f32, out: &mut Vec<HudQuad>| {
-        menu_text_rgba(font, s, (*x, baseline), scale, [r, g, b, alpha], v, out);
+        menu_text_rgba(
+            font,
+            s,
+            (*x, baseline),
+            scale,
+            [r, g, b, alpha],
+            style,
+            v,
+            out,
+        );
         *x += text_width(font, s, scale).trunc();
     };
     if let Some((name, rgb)) = &k.attacker {

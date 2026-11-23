@@ -26,7 +26,7 @@ use crate::cod2_player_hud::{HudInput, PlayerHud};
 use crate::hud::centerprint::{CenterPrint, OBITUARY_Y};
 use crate::hud::chat::{self, Chat};
 use crate::hud::cod2elem::{self, ScreenPlacement};
-use crate::hud::font::UiFonts;
+use crate::hud::font::{TextStyle, UiFonts};
 use crate::hud::hudelem::Virtual;
 use crate::hud::messages::{KillLine, Kind, Window};
 use crate::hud::scoreboard::{self, BoardView, Scoreboard};
@@ -255,8 +255,13 @@ impl Default for Cod2Hud {
         scoreboard.style = &scoreboard::COD2;
         let mut kills = Window::new(Kind::Game);
         kills.origin = Some(GAME_MESSAGES);
+        kills.style = TextStyle::Vcod;
+        let mut subtitles = Window::new(Kind::Subtitle);
+        subtitles.style = TextStyle::Vcod;
         let mut center = CenterPrint::default();
         center.cod2 = true;
+        let mut vote = crate::hud::vote::Vote::default();
+        vote.style = TextStyle::Vcod;
         Cod2Hud {
             fonts: None,
             player: PlayerHud::default(),
@@ -270,10 +275,10 @@ impl Default for Cod2Hud {
             chat: Chat::default(),
             chat_field: None,
             kills,
-            subtitles: Window::new(Kind::Subtitle),
+            subtitles,
             center,
             kill_icons: Default::default(),
-            vote: Default::default(),
+            vote,
             objective: String::new(),
             follow_keys: Default::default(),
             crosshair_hit: None,
@@ -304,7 +309,16 @@ fn connection_interrupted(
     let font = fonts.pick(Slot::Default, 0.5, 480.0 * v.scale);
     let w = text_width(font, &text, 0.5) as i32;
     let x = ((640 - w) / 2) as f32;
-    menu_text_rgba(font, &text, (x, 100.0), 0.5, [1.0; 4], v, out);
+    menu_text_rgba(
+        font,
+        &text,
+        (x, 100.0),
+        0.5,
+        [1.0; 4],
+        TextStyle::Vcod,
+        v,
+        out,
+    );
     if now & 0x200 == 0 {
         out.push(v.quad(296.0, 416.0, 48.0, 48.0, [1.0; 4], "net_disconnect"));
     }
