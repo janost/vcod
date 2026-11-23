@@ -1517,9 +1517,27 @@ chunks against its own box and reports the burn (section 21,
     step comes `step / 2 + rand * step` on (0x3007bde8) (VERIFIED decompile).
   - The report tests these type 2 flames besides the stream (above), so a
     residue burns for its own life plus 1.4 s (INFERRED).
-  - Under 1300 ticks from its death a residue whose face is gone dies (a
-    4-unit trace behind it, VERIFIED decompile). vcod's world never moves,
-    so vcod skips it.
+  - A residue whose face is gone dies (VERIFIED (the instructions),
+    0x300281af..0x300282b2). In each trail step, after the type 2 flame,
+    the check runs when the residue's speed `+0x94` is at most 1.0
+    (0x3007bce0), its `+0x40` is 0, and more than 1300 ticks (650 ms,
+    0x3007c3d0) are left before its death `+0x50`. It traces a -2..2 box
+    (0x300851c4, 0x300851d0) through 0x30025cd0, mask 0x2810011, passing
+    `+0x34`. The start is the residue's position at `+0x130 + 1300`
+    (0x3007c3c8, through 0x30025990); the end is that less 4 (0x3007be40)
+    times the normal `+0x118`. A trace not stuck inside that meets nothing
+    (fraction exactly 1.0) sets the death to the clock. The flames already
+    shed live out their time. vcod (`RESIDUE_FACE_MS`) traces from the
+    residue's still position, as it has no rise. A residue can rest on a
+    vehicle, mover or script model, and this is what ends it when that
+    moves off.
+  - No type 5 smoke comes off a residue or its flames (VERIFIED (the
+    instructions)). 0x30028bed..0x30028c2c skips a type 2 parent. It also
+    skips a parent outside 0.02..0.8 of its life (0x3007c2b8, 0x3007c358).
+    Past that, the smoke's chance scales with `(speed / 900)^2`
+    (0x3007c0d8), which is 0 for a residue. The smoke itself is set up at
+    0x30028cca..0x30028d36. vcod's residue flames carry `shed` from birth,
+    so they never queue its puff.
   - 0x30027d10 also makes a type 3 off a chunk whose `+0x140` lies between 0
     and the clock (`0x30027ad0(chunk, 3, 40)` at 0x30027e9d, VERIFIED
     disassembly), but nothing sets a time there ("`+0x140`" below).
@@ -1918,8 +1936,8 @@ wire's, as `event_dump` prints them.
   `fx/*.csv`, the `vehicle` column included.
 - The MG loop (`AudioSystem::step_fire_loops`), the flamethrower
   (`fx::flame`, retail's constants; chunks clip bodies and the local player,
-  residue flames drift and rise; no chain merging, one smoke puff per
-  chunk), `CameraShake` and `F` (`fx::sim`), UO's earthquake fields
+  residue flames drift and rise and trail no smoke, a residue dies off a
+  gone face; no chain merging, one smoke puff per stream chunk), `CameraShake` and `F` (`fx::sim`), UO's earthquake fields
   (`play::quake`).
 - The HUD items above (`hud::uo`). Decoded `pm_flags` keep sprinting,
   winded and overheated at 0x1000000, 0x2000000, 0x4000000 (`PMF_*_V22`).
