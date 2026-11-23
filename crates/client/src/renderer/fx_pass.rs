@@ -295,7 +295,7 @@ pub(super) fn fx_blend_state(blend: FxBlend) -> Option<wgpu::BlendState> {
     }
 }
 
-/// Matches `FxLights` in shader.wgsl (std140, vec4 aligned); `vs_prop` reads it.
+/// Matches `FxLights` in shader.wgsl (std140, vec4 aligned).
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct FxLightsUniform {
@@ -538,8 +538,8 @@ impl Renderer {
     }
 
     /// The frame's scene lights (at most `MAX_SCENE_LIGHTS`), nearest the
-    /// camera first: entity picks and the dlight pass see all of them, the
-    /// prop vertex shader the first `MAX_LIGHTS`. An empty slice zeroes
+    /// camera first: entity and prop picks and the dlight pass see all of
+    /// them. An empty slice zeroes
     /// every slot.
     pub fn set_fx_lights(&mut self, lights: &[FxLight]) {
         self.dynamic.scene_lights = entity_light::scene_lights(lights);

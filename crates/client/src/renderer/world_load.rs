@@ -18,6 +18,9 @@ pub(super) struct WorldGpu {
     pub(super) prop_ranges: Vec<(u32, u8, IndexRange)>,
     /// LOD 0's box per placement.
     pub(super) prop_bounds: Vec<(glam::Vec3, glam::Vec3)>,
+    /// CoD1 props that relight under dynamic lights; `None` elsewhere and
+    /// on a map without leaf lights.
+    pub(super) prop_relight: Option<prop_relight::PropRelight>,
     pub(super) prop_lods: Vec<props::PropLod>,
     /// Each placement's LOD at the last gather, `None` past its last.
     pub(super) prop_lod: Vec<Option<u8>>,
@@ -338,6 +341,9 @@ impl Renderer {
                 )
             })
             .collect();
+        let prop_relight = (fs.game() == vcod_common::game::Game::Cod1
+            && self.dynamic.lighting.as_ref().is_some_and(|l| l.lit()))
+        .then(|| prop_relight::PropRelight::new(&props, prop_first_vertex));
         let mut vertices = bsp.verts.clone();
         encode_world_sprites(
             bsp,
@@ -351,7 +357,8 @@ impl Renderer {
         let vertex_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("map vertices"),
             contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
+            // the relit props write theirs
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
         let mut s_axes = dlight::soup_s_axes(&bsp.soups, &bsp.verts, &bsp.indices);
         s_axes.resize(vertices.len(), [0.0; 3]);
@@ -1601,6 +1608,7 @@ impl Renderer {
             soup_ranges,
             prop_ranges,
             prop_bounds: props.bounds,
+            prop_relight,
             prop_lods: props.lods,
             prop_lod: Vec::new(),
             batch_draws,

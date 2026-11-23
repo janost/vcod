@@ -17,6 +17,8 @@ struct Camera {
 };
 @group(0) @binding(0) var<uniform> camera: Camera;
 
+// The frame's first eight fx lights. No entry point reads them since the
+// props relight on the CPU (renderer/prop_relight.rs); group 0 keeps the slot.
 struct FxLights {
     pos_radius: array<vec4<f32>, 8>,
     color: array<vec4<f32>, 8>,
@@ -367,38 +369,13 @@ fn lightmap_lit(uv: vec2<f32>) -> vec4<f32> {
     return mix(mix(t0, t1, f.x), mix(t2, t3, f.x), f.y);
 }
 
-// Retail's dynamic lights on a lit model vertex, in framebuffer units:
-// RE_AddLightToScene (0x4e9b00) builds a point light with diffuse
-// identityLight * r^2 / 32 * rgb, no ambient and attenuation 1 / (d^2 + 0.001),
-// and the light pick (0x4b69f0) takes it within twice its radius
-// (cod11-light-grid-and-leaf-lights.md, section 11).
-fn dlight_term(p: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
-    var sum = vec3(0.0);
-    for (var i = 0u; i < 8u; i++) {
-        let l = fx_lights.pos_radius[i];
-        if (l.w <= 0.0) { continue; }
-        let to = l.xyz - p;
-        let d2 = dot(to, to);
-        if (d2 > 4.0 * l.w * l.w) { continue; }
-        let lambert = max(dot(n, to * inverseSqrt(max(d2, 1e-6))), 0.0);
-        sum += fx_lights.color[i].rgb
-            * (camera.time_pad.y * l.w * l.w / 32.0 * lambert / (d2 + 0.001));
-    }
-    return sum;
-}
-
-// Static props: the baked vertex colour is a framebuffer value at
-// identityLight 0.5, rescaled to the current one. Vertex alpha marks a
-// `lightingDiffuse` skin, the only kind retail relights while a dynamic
-// light is near (0x505260); the sum clamps like GL lighting does.
+// Static props: the vertex colour, baked or relit under a dynamic light
+// (renderer/prop_relight.rs), is a framebuffer value at identityLight 0.5,
+// rescaled to the current one.
 @vertex
 fn vs_prop(in: VsIn) -> VsOut {
     var out = map_vertex(in);
-    var rgb = min(in.color.rgb * (2.0 * camera.time_pad.y), vec3(1.0));
-    if (in.color.a > 0.5) {
-        rgb = min(rgb + dlight_term(in.pos, normalize(in.normal)), vec3(1.0));
-    }
-    out.color = vec4<f32>(rgb, 1.0);
+    out.color = vec4<f32>(min(in.color.rgb * (2.0 * camera.time_pad.y), vec3(1.0)), 1.0);
     return out;
 }
 

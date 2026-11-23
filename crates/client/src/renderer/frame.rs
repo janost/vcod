@@ -468,6 +468,7 @@ impl Renderer {
         self.cull_and_gather(&frame, &lod_view, t0, &mut prof);
         let hud_quads = self.upload_hud_text(&frame);
         self.upload_entities(&frame);
+        self.relight_props();
         let draw_vm = self.upload_view_model(&frame, vm.as_ref());
         let ent_draws = self.frame_ent_draws(&frame, draw_vm);
         prof.next(crate::frame_prof::Stage::Acquire);

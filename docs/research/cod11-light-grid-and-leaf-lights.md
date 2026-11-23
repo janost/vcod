@@ -270,7 +270,8 @@ the normal taken through the scaled axis and renormalised by 0x42db90
   overbright bit (`identityLight` 0.5, as `renderer.rs` assumes), in
   reverse entity order so misses fill the cache in retail's order. The
   bounds centre is the AABB of the baked LOD-0 vertices.
-- Dynamic lights add per vertex on top of the baked colour (section 11).
+- A prop a dynamic light reaches is lit again from the pick with that
+  light in its eight slots (section 11).
 - Misses trace through a `CollisionWorld` built from the world brushes
   alone, no static models, the first time a sample is missing.
 - `shadow_*` placements are not drawn (section 12).
@@ -324,6 +325,14 @@ lightingPrecalc` (mp_carentan 62 against 49, mp_brecourt 66 against 60).
   5) with the dynamic light among its eight, and goes back to its cache
   once the light is gone. The materials with bit 0x18 are those with a
   `lightingDiffuse` or `lightingAmbient` stage (section 13).
+- VERIFIED (the instructions), 0x5053b7..0x50541f: the bit 0x18 test is
+  `test byte [material+0x54], 0x18`; the pick (0x4b7450, `ecx` 0x16c5638)
+  runs, and with `+0xa0` set the surface (`edi - 0xc`) goes onto the
+  frame's draw list (count 0x16c57b0 under 0x10000, eight-byte records at
+  0x16c57b4: a key of `([edi - 8] << 12 | material[+0x48]) << 18 |
+  [0x16c5348]`, then the surface) instead of the cached draw at 0x505424. INFERRED: the list entry is drawn as an entity
+  model's surface, so its colour is `shade` of section 8 over the eight
+  picked lights, not the cache plus the light.
 - INFERRED: GL lighting gives a dynamic light
   `max(0, N . L) * diffuse / (d^2 + 0.001)` per vertex: at intensity 800
   (the grenade's `Light`), one framebuffer unit at 100 units, a quarter at
@@ -357,14 +366,21 @@ lightingPrecalc` (mp_carentan 62 against 49, mp_brecourt 66 against 60).
   (0x4e9c10, cgame trap 0x43) adds a corona ("added corona with invalid
   id", 0x20 per frame), and its cgame wrapper 0x30030ff0 has no callers.
 
-vcod (`vs_prop` in `shader.wgsl`):
+vcod (`renderer/prop_relight.rs`):
 
-- A prop vertex of a `lightingDiffuse` skin (vertex alpha 255) adds every
-  fx light within twice its radius, by the formula above, to its baked
-  colour, clamped at 1, then doubles for the display. The fx `Light`
-  block's size stands in for the intensity (INFERRED: the efx renderer's
-  call is not traced). On a prop the dynamic light does not push a baked
-  light out of the eight slots; on an entity model it does (section 13).
+- A placement with a `lightingDiffuse` vertex keeps a copy of its baked
+  vertices. Each frame the scene lights within twice their intensity of
+  its lighting origin (the bake's box centre) are its near list; when that
+  list changes, its `lightingDiffuse` vertices are lit again by section 8
+  from `StaticLighting::model_lights_near`, the grid sample with the near
+  lights competing for the eight slots as on an entity, and the placement's
+  run of the map's vertex buffer is rewritten. An empty list writes the
+  baked copy back. The other skins' vertices keep their colours. The fx
+  `Light` block's size stands in for the intensity (INFERRED: the efx
+  renderer's call is not traced). A map without leaf lights keeps its
+  `identityLight` props unlit.
+- INFERRED: the vertex colour comes from section 8's byte rounding where
+  retail's GL lighting keeps floats; a difference under one byte.
 - The world takes the dlight pass with every scene light, fx and cgame
   alike, as the projection of 0x4ff690 over the soups each light reaches
   (`cod11-shader-scripts.md` section 3).
