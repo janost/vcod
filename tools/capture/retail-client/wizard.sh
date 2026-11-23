@@ -123,13 +123,20 @@ start_server() {
 		install=$COD_DIR
 		args=(--game-dir "$install")
 	fi
+	# UO's dm.gsc precaches `serverinfo_<g_gametype>` and the gametype is the
+	# script's file name: run the probe as tdm, a name UO ships a menu for.
+	local script=$PROBES/$probe.gsc
+	if [ "$game" = uo ]; then
+		cp "$script" "$dir/tdm.gsc"
+		script=$dir/tdm.gsc
+	fi
 	rm -f "$dir/fifo"
 	mkfifo "$dir/fifo"
 	# The stock paks only, and sv_pure 1 (vcod-server's default) keeps the
 	# client on them too, whatever else its install holds.
 	"$SERVER" "${args[@]}" --vanilla --port "$PORT" --set "net_ip=$ADDR" \
 		--set "fs_homepath=$dir" --set g_log=games_mp.log --set g_logSync=1 \
-		--gametype-script "$PROBES/$probe.gsc" --client-log "$dir/client.log" \
+		--gametype-script "$script" --client-log "$dir/client.log" \
 		"$@" "$map" < "$dir/fifo" > "$dir/server.log" 2>&1 &
 	SPID=$!
 	exec 3> "$dir/fifo"
