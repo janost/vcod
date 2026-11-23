@@ -420,6 +420,51 @@ The server's half of the round trip (`ClientSim::to_wire`, protocol map,
 codec, `from_wire`) is `predict_ab`'s UO gate over the same six captures,
 with the seat put on the sim at each snapshot (`coduo-movement.md` 15).
 
+### 7.1 The push-off
+
+`CG_PredictPlayerState` (0x30035800) runs its own version of the game's
+section 11.6 ahead of each predicted cmd's `Pmove` (VERIFIED (the
+instructions), 0x30035dba..0x30035f87):
+
+1. A `CG_Trace` (0x30035390) position test at `ps.origin` with the box of
+   `ps` +0x55c..+0x570, `maxs.z` 30 under `pm_flags` 1 and 50 under 2,
+   passing `ps` +0xd4, under `pm.tracemask` (0x2810011 below `pm_type` 6,
+   0x810011 from it, less 0x2010000 when `cg.snap`'s `pm_type` is 4;
+   0x300358b0..0x300358cf). Nothing tests a seat: the arm runs seated too.
+2. Allsolid or startsolid (trace +0x2e, +0x2f) on an entity whose centity
+   is valid (+0x1e8) with `eType` 12 (+0x4): `dir` is `ps.origin` less the
+   centity's `lerpOrigin` (+0x208), `VectorNormalize`d whole (0x30049700),
+   and the velocity's `VectorNormalize2` (0x30049920) gives `along` and the
+   speed; `dir` then loses its z. Both normalizers store the squared length
+   and the length as floats and multiply by `1 / length`.
+3. Speed under 1.0 (0x3007bce0), or `along.y * dir.y + along.x * dir.x`
+   past 0.8 (0x3007bdf0): the centity's +0x238 is set, which
+   `CG_ClipMoveToEntities` (0x300350f8) skips, and cleared after the
+   `Pmove` (0x30035f7d). Otherwise nothing.
+4. Then, not prone (`pm_flags` 1) and speed under 1.0: the velocity becomes
+   `(200 dir.x, 200 dir.y, 0)` (200.0 at 0x3007bf44), `pm_time` 200 and
+   `pm_flags` takes 0x200.
+
+So the client has neither the game's seat test nor its moving-vehicle arm
+(`VEH_PlayerCollision`, the 200 floor on the struck velocity): off a moving
+vehicle it predicts the resting push, and the snapshot corrects it
+(INFERRED from the two). The prone damage is the game's alone.
+
+Run over the binary seat captures (`gamestate-uo-*.bin`, `snapshots-uo-*.bin`)
+on their maps, with every vehicle's collmap where its snapshot has it, the
+seated box starts inside the jeep's collmap on all 736 seated snapshots of
+`-uo-jeep` and 1041 of `-uo-overheat`, and inside the tank's on 52 of 734
+(VERIFIED, a one-off replay through `vehicle_push_off` and vcod's trace,
+2026-11-23). So retail's client predicts a jeep rider
+pushed off his own jeep on every frame (INFERRED). The seat's pmove moves
+nothing (section 3) and nothing vcod draws in a seat reads the predicted
+velocity.
+
+vcod: `play::predict::vehicle_push_off` before each replayed cmd, the
+collmap copy unlinked for the cmd as the server's is
+(`CollisionWorld::unlink_model_instance`), off `Predictor::vehicles`, the
+snapshot's vehicles where they were drawn last frame.
+
 ## 8. Captures
 
 All retail UO 1.51b, in `crates/server/tests/fixtures/playerstate/`.
@@ -567,8 +612,8 @@ capture in `crates/common/tests/fixtures/net/` with its trajectory fields.
   `the_jeep_gun_replays_on_ours` replays the capture on vcod-server: every
   vehicle field matches on all 501 seated snapshots, view and cone
   included (VERIFIED, replay).
-- **Not done.** The push-off 0x30035800 gives
-  a body that walks into a vehicle. The hatch needs nothing: retail
+- **The push-off** of a body inside a vehicle is 7.1's.
+- **Not done.** The hatch needs nothing: retail
   disabled it (section 1). Vehicle sounds and the vehicle MG's
   client-traced impacts are `coduo-diff.md` 19's; wheel dust and a
   vehicle's death are section 15's.

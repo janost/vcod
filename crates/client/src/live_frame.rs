@@ -681,6 +681,18 @@ impl LiveCx<'_> {
         predictor.seat_angles = seat_now.map_or([0.0; 3], |(_, num, vang)| {
             drawn_vehicle_angles.get(&num).copied().unwrap_or(vang)
         });
+        predictor.vehicles.clear();
+        if let Some(s) = net.snapshots().newest().filter(|_| p.is_uo()) {
+            predictor.vehicles.extend(
+                s.entities
+                    .iter()
+                    .filter(|(_, e)| e.field_i32(p, "eType") == net::flags::ET_VEHICLE_V22)
+                    .map(|(&n, e)| {
+                        let at = drawn_pos.get(&n).copied();
+                        (n, at.unwrap_or_else(|| Vec3::from(e.origin(p))))
+                    }),
+            );
+        }
         // The cgame's `bg_*` cvars, off the 140/204 mirror.
         // UO's cgame never registers `bg_nofatigue`.
         predictor.bg = pmove::BgCvars {

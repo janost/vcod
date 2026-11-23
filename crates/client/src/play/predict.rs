@@ -58,6 +58,8 @@ struct Replay {
     bodies: Vec<Body>,
     /// The snapshot's brush models and its serverTime, where they are posed.
     movers: (SnapshotMovers, i32),
+    /// [`Predictor::vehicles`] as this replay ran under.
+    vehicles: Vec<(u32, Vec3)>,
     pred: Predicted,
     /// `(commandTime, origin, view height)` after each of the last few cmds
     /// run, oldest first; the camera samples between them.
@@ -80,12 +82,14 @@ impl Replay {
         snap: &msg::PlayerState,
         bodies: &[Body],
         movers: &(SnapshotMovers, i32),
+        vehicles: &[(u32, Vec3)],
         pred: Predicted,
     ) -> Self {
         let mut r = Replay {
             snap: snap.clone(),
             bodies: bodies.to_vec(),
             movers: movers.clone(),
+            vehicles: vehicles.to_vec(),
             pred,
             results: VecDeque::with_capacity(RESULTS),
             turned: false,
@@ -190,7 +194,12 @@ impl Replay {
                 turn_at = None;
             }
             let before = self.pred.command_time;
+            let unlinked = vehicle_push_off(&mut self.pred, world, &self.vehicles)
+                .and_then(|e| world.world.unlink_model_instance(e));
             predict::run_cmd(&mut self.pred, cmd, world, weapons);
+            if let Some(u) = unlinked {
+                world.world.relink_model_instance(u);
+            }
             if self.pred.command_time != before {
                 self.record();
             }
@@ -244,6 +253,10 @@ pub struct Predictor {
     /// In a UO vehicle seat, the vehicle's angles the view's arcs are
     /// measured from (`pm` +0x3c); the caller keeps them current.
     pub seat_angles: [f32; 3],
+    /// A UO snapshot's vehicles (`eType` 12) and where each was drawn last
+    /// frame (`lerpOrigin`), which [`vehicle_push_off`] pushes a body off;
+    /// the caller keeps them current.
+    pub vehicles: Vec<(u32, Vec3)>,
     #[cfg(test)]
     cmds_run: usize,
     /// Snapshots whose correction was not zero, and those past
@@ -292,7 +305,7 @@ impl Predictor {
         // stand in for that, so the frame replays.
         let mut stale = false;
         if let Some(r) = &mut self.replay {
-            stale = r.needs_replay(ring, turn_at);
+            stale = r.needs_replay(ring, turn_at) || r.vehicles != self.vehicles;
             if !stale {
                 let n = r.run(ring, world, weapons, turn_at, |_| {});
                 self.count(n);
@@ -392,7 +405,7 @@ impl Predictor {
         if let Some(seat) = &mut pred.ps.seat {
             seat.angles = self.seat_angles;
         }
-        let mut r = Replay::new(ps, world.bodies, movers, pred);
+        let mut r = Replay::new(ps, world.bodies, movers, &self.vehicles, pred);
         if let Some(old) = &self.replay {
             r.carry_older(old);
         }
@@ -539,6 +552,73 @@ impl OldVelocity {
     pub fn clear(&mut self) {
         self.0.clear();
     }
+}
+
+/// UO's `CG_PredictPlayerState` ahead of each cmd's `Pmove` (cgame
+/// 0x30035dba..0x30035f87, coduo-vehicles.md 7.1): a body whose box starts
+/// inside a vehicle gets out of it. The vehicle leaves the clip for this cmd
+/// (returned) while the body is slower than 1 or moves away from it (the
+/// flat dot past 0.8); one slower than 1 and not prone is also pushed off
+/// at 200 along the flat direction from the vehicle's drawn origin, with a
+/// 200 ms damage timer. The game's own push (`ClientThink_real`, 11.6) skips
+/// a seated body and runs a moving vehicle's strike; this one does neither.
+fn vehicle_push_off(
+    pred: &mut Predicted,
+    world: &MoveWorld,
+    vehicles: &[(u32, Vec3)],
+) -> Option<u32> {
+    use vcod_common::net::flags::{PM_DEAD, PM_SPECTATOR};
+    use vcod_common::pmove::{HEIGHT_CROUCH, HEIGHT_PRONE, MoveRules, PMF_TIME_DAMAGE, Stance};
+    if vehicles.is_empty() || pred.ps.rules != MoveRules::Uo {
+        return None;
+    }
+    // `pm.tracemask` (0x300358b0..0x300358cf).
+    let mut mask = if pred.pm_type < PM_DEAD {
+        vcod_common::collision::MASK_PLAYERSOLID
+    } else {
+        vcod_common::movetrace::MASK_DEADSOLID
+    };
+    if pred.pm_type == PM_SPECTATOR {
+        mask &= !0x201_0000;
+    }
+    let mut maxs = pred.ps.maxs();
+    maxs.z = match pred.ps.stance {
+        Stance::Prone => HEIGHT_PRONE,
+        Stance::Crouch => HEIGHT_CROUCH,
+        Stance::Stand => maxs.z,
+    };
+    let at = pred.ps.origin;
+    let t = world.box_trace(at, at, pred.ps.mins(), maxs, mask);
+    if !t.startsolid && !t.allsolid {
+        return None;
+    }
+    let entity = world.entity_num(&t);
+    let &(_, origin) = vehicles.iter().find(|v| v.0 == entity)?;
+    let (mut dir, _) = normalize_cg(at - origin);
+    let (along, speed) = normalize_cg(pred.ps.velocity);
+    dir.z = 0.0;
+    let dot = f64::from(along.y) * f64::from(dir.y) + f64::from(along.x) * f64::from(dir.x);
+    if speed >= 1.0 && dot <= f64::from(0.8f32) {
+        return None;
+    }
+    if pred.ps.stance != Stance::Prone && speed < 1.0 {
+        pred.ps.velocity = Vec3::new(dir.x * 200.0, dir.y * 200.0, 0.0);
+        pred.ps.knockback_ms = 200.0;
+        pred.ps.knockback_flags |= PMF_TIME_DAMAGE;
+    }
+    Some(entity)
+}
+
+/// The cgame's `VectorNormalize2` (0x30049920): the squared length and the
+/// length each stored as a float, the unit `v` times `1 / length`; a zero
+/// length gives zero. With the length.
+fn normalize_cg(v: Vec3) -> (Vec3, f32) {
+    let d = |a: f32| f64::from(a) * f64::from(a);
+    let len = f64::from((d(v.x) + d(v.y) + d(v.z)) as f32).sqrt() as f32;
+    if len == 0.0 {
+        return (Vec3::ZERO, 0.0);
+    }
+    (v * (1.0 / f64::from(len)) as f32, len)
 }
 
 /// The snapshot's solid entities as the predictor clips them, retail's
@@ -1212,5 +1292,95 @@ mod tests {
                 "unacked {unacked}: {xs:?}"
             );
         }
+    }
+
+    /// A UO body standing in a jeep's collmap (`x` 20 of its 32, an eighth
+    /// above the floor) at 5000, moving `vel`: where 320 ms of idle cmds
+    /// against the jeep drawn at the origin (or with no vehicle list) leave
+    /// it, and the push-off's first cmd, with the vehicle it unlinked.
+    fn in_a_jeep(vel: Vec3, prone: bool, listed: bool) -> (Vec3, Predicted, Option<u32>) {
+        use vcod_common::collision::submodel_test_world;
+        use vcod_common::net::flags::ET_VEHICLE_V22;
+        use vcod_common::net::protocol::PROTOCOL_V22;
+        let p = &PROTOCOL_V22;
+        let world = submodel_test_world(
+            "{\n\"classname\" \"script_vehicle_collmap\"\n\"model\" \"*1\"\n}",
+            &[([-32.0, -32.0, 0.0], [32.0, 32.0, 48.0])],
+        );
+        let mut jeep = msg::EntityState::null(p);
+        jeep.number = 70;
+        for (name, v) in [
+            ("eType", ET_VEHICLE_V22),
+            ("solid", SOLID_BMODEL),
+            ("index", 1),
+        ] {
+            jeep.fields[msg::EntityState::field_index(p, name).unwrap()] = v;
+        }
+        let ents: BTreeMap<u32, msg::EntityState> = [(70, jeep)].into_iter().collect();
+        let movers = (SnapshotMovers::from_entities(p, &ents), 5000);
+        let mut w = msg::PlayerState::null(p);
+        let mut put = |name: &str, v: i32| {
+            w.fields[msg::PlayerState::field_index(p, name).unwrap()] = v;
+        };
+        put("groundEntityNum", ENTITYNUM_WORLD as i32);
+        put("viewHeightCurrent", 60.0f32.to_bits() as i32);
+        put("origin[0]", 20.0f32.to_bits() as i32);
+        put("origin[2]", 0.125f32.to_bits() as i32);
+        for (i, v) in vel.to_array().into_iter().enumerate() {
+            put(&format!("velocity[{i}]"), v.to_bits() as i32);
+        }
+        put("pm_flags", if prone { 1 } else { 0 });
+        put("commandTime", 5000);
+        put("speed", 190);
+        put("gravity", 800);
+        let mut pr = Predictor::default();
+        if listed {
+            pr.vehicles = vec![(70, Vec3::ZERO)];
+        }
+        let r = ring((5000..=5320).step_by(8), false);
+        let v = pr
+            .predict(p, &w, &r, &world, &[], &movers, &[], 0.0)
+            .expect("predicted");
+        let mut first = predict::from_wire(p, &w, None);
+        let unlinked = vehicle_push_off(&mut first, &MoveWorld::new(&world, &[], 0), &pr.vehicles);
+        (v.pred.ps.origin, first, unlinked)
+    }
+
+    /// UO's predictor pushes a body standing in a vehicle off it at 200
+    /// along the flat line from the vehicle's drawn origin, and it walks
+    /// clear; without the push the vehicle holds it where it stood.
+    #[test]
+    fn a_body_standing_in_a_vehicle_is_pushed_off_it() {
+        let (at, first, unlinked) = in_a_jeep(Vec3::ZERO, false, true);
+        assert_eq!(unlinked, Some(70));
+        // The direction is normalized with its z, then loses it.
+        let x = 200.0 * (20.0 / Vec3::new(20.0, 0.0, 0.125).length());
+        assert_eq!(first.ps.velocity, Vec3::new(x, 0.0, 0.0));
+        assert_eq!(first.ps.knockback_ms, 200.0);
+        assert_ne!(
+            first.ps.knockback_flags & vcod_common::pmove::PMF_TIME_DAMAGE,
+            0
+        );
+        assert!(at.x > 47.0, "{at}");
+        let (at, _, _) = in_a_jeep(Vec3::ZERO, false, false);
+        assert_eq!(at.x, 20.0);
+    }
+
+    /// A prone body is let through but not pushed, one walking out goes at
+    /// its own speed, and one walking further in is held: the cmd ends it at
+    /// rest, and the next pushes it off.
+    #[test]
+    fn a_vehicle_lets_a_body_out_only_away_from_it() {
+        let (_, first, unlinked) = in_a_jeep(Vec3::ZERO, true, true);
+        assert_eq!(unlinked, Some(70));
+        assert_eq!(first.ps.velocity, Vec3::ZERO);
+        assert_eq!(first.ps.knockback_flags, 0);
+        let (_, first, unlinked) = in_a_jeep(Vec3::new(150.0, 0.0, 0.0), false, true);
+        assert_eq!(unlinked, Some(70));
+        assert_eq!(first.ps.velocity, Vec3::new(150.0, 0.0, 0.0));
+        let (at, first, unlinked) = in_a_jeep(Vec3::new(-150.0, 0.0, 0.0), false, true);
+        assert_eq!(unlinked, None);
+        assert_eq!(first.ps.velocity, Vec3::new(-150.0, 0.0, 0.0));
+        assert!(at.x > 47.0, "{at}");
     }
 }

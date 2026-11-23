@@ -72,7 +72,7 @@ Vehicles:
   gunsight, the gunner on his gun with sway and firing shake, a jeep's
   riders turning and rolling with it. Your own body draws in the seat.
 - Prediction holds a seat's view clamps and sight, replayed against retail
-  captures.
+  captures, and pushes you off a vehicle you stand inside as UO's does.
 
 ### Server
 
