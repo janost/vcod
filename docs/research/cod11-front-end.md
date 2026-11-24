@@ -3367,9 +3367,20 @@ Sources: `ui_mp_x86.dll` 1.1 and `CoDMP.exe` 1.1, read with `objdump`
   `0x53f1e0`, the focus test `0x53f27e`..`0x53f29c` on flags 4 and 2,
   `focusColor` at menu `+0x25c`, `0x5c4158`, `0x5c3d0c`, `0x5c3d30`) do
   the same. VERIFIED (asm).
+- The bind paint (`0x40015230`) takes a different low colour when the item
+  is `g_bindItem` (`0x401bf3f8`): `0.8 0 0 0.8` (`0x40015287`..`0x4001529f`),
+  so its keys pulse from `focusColor` toward dark red. `g_bindItem` is
+  stored once, when a wait starts (`0x40015464`), and never cleared; the
+  wait flag is `0x401bf3f0`. VERIFIED (asm, every reference). So the last
+  bind to wait keeps the red pulse whenever it has the focus, after the
+  wait too. INFERRED (the combination). The paint draws `BindingFromName`'s
+  text whether or not a wait runs (`0x40015367`). VERIFIED (asm). CoD2's
+  bind paint has the same colour (`0x540a12`..`0x540a32`) and its
+  `g_bindItem` (`0x19a1c98`) one store (`0x540bfb`). VERIFIED (asm).
 - vcod: `paint::pulse` over `Ui::real_time`, milliseconds since the UI's
   first frame (`Ui::frame`), for the label, the value, the slider's bar
-  and thumb and the edit cursor. The phase differs from retail's
+  and thumb and the edit cursor; `options::State::bind_item` keeps
+  `g_bindItem`. The phase differs from retail's
   `realTime`, which counts from the engine's start. INFERRED.
 
 ## 21. Video modes, fullscreen and wide windows

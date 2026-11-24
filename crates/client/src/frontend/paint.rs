@@ -121,7 +121,12 @@ impl Ui {
                     true => pulse(menu.focus_color, dim(menu.focus_color), rt),
                     false => item.fore,
                 };
-                let value_color = color;
+                // The last bind to wait for a key pulses toward dark red
+                // (0x4001527f..0x4001529f, CoD2MP_s.exe 0x540a12).
+                let value_color = match self.options.bind_item == Some((m, i)) && focused {
+                    true => pulse(menu.focus_color, [0.8, 0.0, 0.0, 0.8], rt),
+                    false => color,
+                };
                 if let Some((len, first)) = self.list_scroll(item) {
                     let thumb = self
                         .thumb_drag
@@ -1171,6 +1176,41 @@ mod tests {
             .map(|q| q.rgba)
             .collect();
         assert_eq!(slider, [lit, lit]);
+    }
+
+    /// The bind whose wait last started shows its keys in a pulse toward
+    /// dark red while it has the focus, during the wait and after it.
+    #[test]
+    fn the_last_waiting_bind_pulses_red() {
+        let mut ui = ui_with_menu(
+            r#"{ menuDef { name "main" rect 0 0 640 480 focuscolor 1 .5 0 1
+            itemDef { type 13 visible 1 rect 10 40 100 20 text "Fire" cvar "+attack" } } }"#,
+        );
+        ui.fonts = Some(crate::hud::hudelem::tests::test_fonts());
+        let mut shell = Shell::new();
+        shell.execute("bind f +attack");
+        let loc = Localized::default();
+        ui.open_main(&shell, &mut Vec::new());
+        let m = ui.find("main").unwrap();
+        ui.focus.insert(m, 0);
+        let focus = [1.0, 0.5, 0.0, 1.0];
+        let (lit, red) = (
+            pulse(focus, dim(focus), 0),
+            pulse(focus, [0.8, 0.0, 0.0, 0.8], 0),
+        );
+        let count = |ui: &Ui, c| {
+            (ui.build(640.0, 480.0, &loc, &shell).iter())
+                .filter(|q| q.rgba == c)
+                .count()
+        };
+        let keys = (super::super::options::bind_text("+attack", &loc, &shell).chars()).count();
+        assert!(keys > 0);
+        assert_eq!((count(&ui, lit), count(&ui, red)), (4 + keys, 0));
+        ui.options.waiting = Some((m, 0));
+        ui.options.bind_item = Some((m, 0));
+        assert_eq!((count(&ui, lit), count(&ui, red)), (4, keys));
+        ui.options.waiting = None;
+        assert_eq!(count(&ui, red), keys);
     }
 
     /// `Item_SetTextExtents`: int widths, a centred shift rounded toward

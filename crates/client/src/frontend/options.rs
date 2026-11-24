@@ -100,6 +100,9 @@ const SLIDER_THUMB: &str = "ui/assets/sliderbutt_1.tga";
 pub(super) struct State {
     /// The bind item waiting for a key (`g_waitingForKey`), as (menu, item).
     pub(super) waiting: Option<(usize, usize)>,
+    /// `g_bindItem` (0x401bf3f8): the bind whose wait last started. Retail
+    /// never clears it, so its value pulses red whenever it has the focus.
+    pub(super) bind_item: Option<(usize, usize)>,
     /// The edit field taking typed text.
     pub(super) editing: Option<(usize, usize)>,
     /// `key_overstrikeMode` (CoDMP.exe 0x142f628, UI traps 0x2d and 0x2e):
@@ -354,7 +357,10 @@ impl Ui {
             return true;
         };
         match item.kind {
-            ITEM_TYPE_BIND => self.options.waiting = Some((m, i)),
+            ITEM_TYPE_BIND => {
+                self.options.waiting = Some((m, i));
+                self.options.bind_item = Some((m, i));
+            }
             ITEM_TYPE_YESNO => {
                 // `Item_YesNo_HandleKey`: `va("%i", !value)`.
                 let on = self.cvar_value(&cvar, shell) != 0.0;
@@ -879,12 +885,9 @@ impl Ui {
                 };
                 loc.translate(key).into_owned()
             }
-            ITEM_TYPE_BIND => {
-                if self.options.waiting == Some((m, i)) {
-                    return Some(String::new());
-                }
-                bind_text(cvar, loc, shell)
-            }
+            // `Item_Bind_Paint` draws the keys during the wait too
+            // (0x40015367).
+            ITEM_TYPE_BIND => bind_text(cvar, loc, shell),
             // `Item_TextField_Paint` (0x40014600): from the paint offset, at
             // most `maxPaintChars` (none with 0).
             k if super::is_edit_field(k) => {
@@ -964,7 +967,7 @@ impl Ui {
 
 /// `BindingFromName` (0x40014cf0): the first two keys bound to `cmd` as
 /// "A or B", or "Unbound". Key names go through `KEY_*` in `key.str`.
-fn bind_text(cmd: &str, loc: &Localized, shell: &Shell) -> String {
+pub(super) fn bind_text(cmd: &str, loc: &Localized, shell: &Shell) -> String {
     let name = |k: &str| {
         loc.get(&format!("KEY_{k}"))
             .map_or_else(|| k.to_string(), str::to_string)
