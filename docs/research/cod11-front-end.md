@@ -3215,8 +3215,8 @@ Sources: `ui_mp_x86.dll` 1.1 and `CoDMP.exe` 1.1, read with `objdump`
   a slider, yes/no, multi, bind or owner draw with text; their value or
   slider bar follows the kept rect's width. Every item's text moves by the
   border size when it has a border. An item draws in the focus colour when
-  it has the focus (`Ui::focus`), not when hovered; vcod does not pulse
-  the colour.
+  it has the focus (`Ui::focus`), not when hovered, pulsing as 20.12
+  says.
 - In an edit field Tab, down and up step the focus and carry the edit to
   an edit field (`Ui::edit_step`); the keypad arrows do so only with Num
   Lock off, since with it on they type digits. Mouse moves change nothing
@@ -3227,7 +3227,7 @@ Sources: `ui_mp_x86.dll` 1.1 and `CoDMP.exe` 1.1, read with `objdump`
   `Ui::start_edit`, `options::Field`, `Ui::edit_cursor`): the cursor,
   paint offset and overstrike outlive an edit, the field paints from its
   offset, and the cursor blinks on the 256 ms steps of a clock started at
-  the first cursor drawn. The overstrike flag is the UI's own: vcod's
+  the first cursor drawn (the drawn `serverTime` under `VCOD_FRAME_DIGEST`). The overstrike flag is the UI's own: vcod's
   console has no overstrike mode, so Insert there changes nothing. CoD2
   keeps vcod's own edit, since its handler moves the cursor otherwise
   (cod2-fonts-menus.md 4.2).
@@ -3235,6 +3235,168 @@ Sources: `ui_mp_x86.dll` 1.1 and `CoDMP.exe` 1.1, read with `objdump`
   the cursor over it. Enter joining the selected server anywhere in the
   browser (unless the focused item's handler takes Enter), and an arrow
   with nothing selected picking the first row, are vcod's own.
+
+### 20.9 `textfont`
+
+- `textfont` is an item keyword in every CoD1-family UI and in CoD2: the
+  item table's record pairs the string with a handler that reads one
+  integer into the item (1.1 `ui_mp_x86.dll`: record `0x40036790`, string
+  `0x4002d4bc`, handler `0x40017750`, item `+0xd0`; 1.5 record
+  `0x40037790`, handler `0x400184f0`; UO `uo_ui_mp_x86.dll` record
+  `0x40040d88`, handler `0x4001b410`; CoD2 `CoD2MP_s.exe` record
+  `0x5dd4b8`, handler `0x544c50`). VERIFIED (the tables, 1.1's handler).
+- Every 1.1 text call of an item passes `+0xd0` as the font: the width
+  (display context `+0x14`) and height (`+0x18`) in `Item_SetTextExtents`
+  (`0x40013c3b`..`0x40013d55`), the draw (`+0x10`) in `Item_Text_Paint`
+  (`0x400141d9`), the autowrap measure (`0x40014012`), the field, yes/no,
+  multi and bind values (`0x400145af`..`0x400153cb`), the list rows
+  (`0x40015f32`, `0x40015fb5`) and the owner draw call (`0x400163c1`).
+  VERIFIED (asm). Whether each UI owner draw uses its font argument is
+  INFERRED.
+- The renderer asks the UI for the font by handle and scale (`vmMain` case
+  `0x10`, cod11-hud-protocol.md 8.2). `0x400079e0` answers: handle 2
+  `bigFont`, 3 `smallFont`, 5 `consoleFont` whatever the scale; for the
+  rest `s` is the scale times the display context's `yscale`
+  (`0x401c3dc0`), and handle 4 gives `smallFont` for `s <= ui_smallFont`,
+  `font` below `ui_bigFont`, `boldFont` from it, any other handle
+  `smallFont`, `font`, `bigFont` from `ui_bigFont` and `extraBigFont`
+  from `ui_extraBigFont`. VERIFIED (asm). CoD2's `0x532410` is the same
+  picker over its registered `$bigfont` (`0x1979110`), `$smallfont`
+  (`0x1979114`), `$consolefont` (`0x1979118`), `$boldfont` (`0x197911c`),
+  `$font` (`0x1979120`) and `$extrabigfont` (`0x1979124`), stored in that
+  order at `0x531fb6`..`0x53202a`, against the same three dvars' values
+  and a placement scale (`0xc94c0c`). VERIFIED (asm).
+- `menudef.h` names the handles `UI_FONT_DEFAULT` 0, `NORMAL` 1, `BIG` 2,
+  `SMALL` 3, `BOLD` 4, `CONSOLE` 5 (1.1 `pak0.pk3`, 1.5, UO, CoD2's
+  `ui/menudefinition.h`). Every stock CoD1-family front-end item says
+  `UI_FONT_NORMAL` or nothing, so the stock menus draw as before; CoD2's
+  `ui_mp` front end too. UO's `hud.menu` uses 1 and 2 (the cgame's
+  vehicle keys, coduo-diff.md). VERIFIED (the paks).
+- vcod: `UiItem::text_font`; the front end's `Painter` measures and draws
+  an item's text in the font `ui_font` picks for its handle and scale
+  (`Size::from(&UiItem)`), in both games.
+
+### 20.10 Borders
+
+- `border`, `bordersize` and `bordercolor` are item keywords (1.1
+  `ui_mp_x86.dll` records `0x40036718`, `0x40036724`, `0x400367b4`,
+  handlers `0x400175f0` to item `+0x38`, `0x40017610` to `+0x44`,
+  `0x40017820` four floats to `+0x94`) and menu keywords (`0x40036994`,
+  `0x400369a0` spelled `borderSize`, `0x400369c4`, handlers `0x40018350`,
+  `0x40018370`, `0x40018440`, the same offsets of the menu's window).
+  VERIFIED (the tables, the handlers). 1.5, UO and CoD2 have the same
+  pairs (1.5 `0x40037718`.., UO `0x40040d10`.., CoD2 `0x5dd440`..).
+  VERIFIED (the tables).
+- `Window_Paint` (`0x4000f8f0`) with a border insets the window's fill or
+  shader by the size at the left and top and by the size plus 1 at the
+  right and bottom (`0x4000f97a`..`0x4000f9b9`), then draws the border in
+  `bordercolor` by its type (`0x4000fb64`..`0x4000fcf2`). VERIFIED (asm):
+  - 1, full: the display context's `drawRect` (`+0x38`, `0x40007990`),
+    which runs `drawTopBottom` (`0x40007910`) then `drawSides`
+    (`0x40007890`). A style 4 (team colour) window takes a fixed colour
+    instead (`0x4000fb70`).
+  - 2, horizontal: `drawTopBottom` alone (`+0x40`), between its own set
+    colour calls.
+  - 3, vertical: `drawSides` alone (`+0x3c`).
+  - 4, `WINDOW_BORDER_KCGRADIENT`: `GradientBar_Paint` (`0x4000f810`)
+    twice over the window's width, `bordersize` tall, at the top and at
+    `y + h - 1`: the display context's gradient bar shader (`+0x1e2c0`,
+    `0x401e1fa0`, registered from `ui/assets/gradientbar2.tga`,
+    `0x4002f48c`, at `0x400077f0` and replaced by `assetGlobalDef`'s
+    `gradientBar`, `0x40007f66`) in `bordercolor`.
+- `drawTopBottom` scales the size by `yscale` (`0x401c3dc0`) and draws
+  `(x, y, w, size)` and `(x, y + h - size, w, size)`; `drawSides` by
+  `xscale` (`0x401c3dc4`), `(x, y, size, h)` and `(x + w - size, y, size,
+  h)`, both through `0x400192f0` with the white shader (`0x401e20b0`).
+  VERIFIED (asm). So a full border's sides run the whole height and its
+  corners draw twice. INFERRED (the arithmetic).
+- 1.5 (`0x40010387`..) and UO (`0x400128c5`..) have the same four types.
+  CoD2's `Window_Paint` (`0x539e40`) has 1 (`0x532200`, running
+  `0x532120` then `0x532040`), 2 (`0x532120`) and 3 (`0x532040`), and no
+  4 (`0x53a2df`..`0x53a316`). VERIFIED (asm). That `0x532120` is the top
+  and bottom and `0x532040` the sides is INFERRED (the call order matching
+  1.1's `drawRect`).
+- Stock menus use types 0 and 1 (1.1 `pak0.pk3`; `UI_BUTTON_BORDER` is 1);
+  the one `border 4` sits in `ui_mp/multi.menu` inside a comment. 1.5 and
+  UO add `UI_TAB_BORDER`, also 1. VERIFIED (the paks).
+- vcod: `Painter::window` draws `border_pieces`: types 1 to 3 as above,
+  4 on CoD1 only. A full border's sides now run the whole height as
+  retail's do, where vcod drew them between the top and bottom.
+
+### 20.11 The menu's own window
+
+- `Menu_Paint` (`0x40016cf0`) paints a fullscreen menu's background
+  (`+0xb4`) over 640x480 when its `fullscreen` (`+0xbc`, handler
+  `0x40018270`) is set (`0x40016d40`..`0x40016d65`), then `Window_Paint`
+  on the menu's own window (`0x40016d8d`), then the items. VERIFIED (asm).
+  The menu keywords `style` (`0x400182b0`), `forecolor` (`0x400183e0`),
+  `backcolor` (`0x40018390`), `background` (`0x40018550`) and the border
+  ones (20.10) fill that window. VERIFIED (the table). CoD2's
+  `Menu_Paint` calls its `Window_Paint` (`0x539e40`) the same way
+  (`0x542660`, `0x542891`, `0x542b95`). VERIFIED (asm).
+- Stock windows that show: `joinserver.menu`'s `del_fav_popmenu` and
+  `fav_message_popmenu` (1.1, 1.5, CoD2: `backcolor .1 .15 .1 1`,
+  `border 1`, `bordercolor .5 .5 .5 .5`) and `vid_restart.menu`'s popups
+  (1.1, 1.5: `backcolor 0 0 0 0.5`, `bordercolor 1 1 1 .5`); every other
+  stock menu window has a zero alpha or style 0. VERIFIED (the paks).
+- vcod: `UiMenu::window` holds those keywords and `menu_window` paints it
+  under the items. The fullscreen background is not drawn: no stock
+  fullscreen menu names one, and the items' backdrops cover the default
+  shader handle 0 would draw. INFERRED (the stock files).
+
+### 20.12 The focus pulse
+
+- `Item_TextColor` (`0x40013df0`) with the focus flag sets the low colour
+  to the menu's `focusColor` (`+0x4ec`) times 0.8 (`0x40030010`) and lerps
+  from `focusColor` toward it by `(sin(realTime / 75) + 1) * 0.5`
+  (`0x40013e3b`..`0x40013ec4`): `realTime` is the display context's
+  (`+0xec`, `0x401c3dcc`, stored by `UI_Refresh` `0x40007b20`), the
+  division an int's (`imul 0x1b4e81b5; sar 3`), 1.0 at `0x4002feb4`, 0.5
+  at `0x4002febc`. `LerpColor` (`0x4000f160`) clamps each channel to
+  0..1. VERIFIED (asm). So a focused item breathes between its focus
+  colour and 0.8 of it about every 0.47 s (2 pi times 75 ms). INFERRED
+  (the arithmetic).
+- The values pulse the same way while the item has the focus, else take
+  the item's `forecolor`: the edit field's text (`0x4001464e`..`0x40014719`),
+  yes/no (`0x4001484e`..), multi (`0x400149d0`..), slider
+  (`0x400150c2`..`0x40015179`, the colour the bar and thumb draw in), bind
+  (`0x4001526f`..) and owner draw (`0x400161cc`..). VERIFIED (asm).
+- 1.5 (`ui_mp_x86.dll` `0x40014990`, constants `0x40031538`,
+  `0x400313dc`, `0x400313e4`), UO (`uo_ui_mp_x86.dll` `0x40017493`..,
+  `0x40035a3c`, `0x400358c4`, `0x400358cc`) and CoD2 (`CoD2MP_s.exe`
+  `0x53f1e0`, the focus test `0x53f27e`..`0x53f29c` on flags 4 and 2,
+  `focusColor` at menu `+0x25c`, `0x5c4158`, `0x5c3d0c`, `0x5c3d30`) do
+  the same. VERIFIED (asm).
+- The bind paint (`0x40015230`) takes a different low colour when the item
+  is `g_bindItem` (`0x401bf3f8`): `0.8 0 0 0.8` (`0x40015287`..`0x4001529f`),
+  so its keys pulse from `focusColor` toward dark red. `g_bindItem` is
+  stored once, when a wait starts (`0x40015464`), and never cleared; the
+  wait flag is `0x401bf3f0`. VERIFIED (asm, every reference). So the last
+  bind to wait keeps the red pulse whenever it has the focus, after the
+  wait too. INFERRED (the combination). The paint draws `BindingFromName`'s
+  text whether or not a wait runs (`0x40015367`). VERIFIED (asm). CoD2's
+  bind paint has the same colour (`0x540a12`..`0x540a32`) and its
+  `g_bindItem` (`0x19a1c98`) one store (`0x540bfb`). VERIFIED (asm).
+- Without the focus, `Item_TextColor` pulses `forecolor` the same way when
+  the item's `textstyle` (`+0xe4`) is 1 and `(realTime / 256) & 1` is 0
+  (`0x40013ed1`..`0x40013f73`), else takes `forecolor`
+  (`0x40013f75`). VERIFIED (asm). Style 1, `ITEM_TEXTSTYLE_BLINK`,
+  breathes for 256 ms and holds for 256 ms; style 2, `PULSE`, has no
+  case in it nor in the renderer (cod11-hud-protocol.md 6.2), so it draws
+  as style 0. INFERRED (the combination). Of the value paints only the
+  owner draw has the style 1 case (`0x4001623f`); the others take
+  `forecolor`. VERIFIED (asm, the two `cmp [+0xe4], 1` in the module).
+  1.5 (`0x40014a71`, style at `+0xe8`), UO (`0x4001752d`) and CoD2
+  (`0x53f32d`, `0x5416ce`, style at `+0x290`) have the same cases.
+  VERIFIED (asm). Every stock style 1 item has its text commented out
+  but `cdkey.menu`'s `demo_only` line. VERIFIED (the paks).
+- vcod: `paint::pulse` over `Ui::real_time`, milliseconds since the UI's
+  first frame (`Ui::frame`), for the label, the value, the slider's bar
+  and thumb and the edit cursor; `options::State::bind_item` keeps
+  `g_bindItem`; `paint::text_color` blinks style 1. Under
+  `VCOD_FRAME_DIGEST` the clock is the drawn `serverTime`
+  (`Ui::set_digest_clock`), so a replay repeats it. The phase differs from retail's
+  `realTime`, which counts from the engine's start. INFERRED.
 
 ## 21. Video modes, fullscreen and wide windows
 

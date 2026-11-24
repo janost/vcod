@@ -190,17 +190,20 @@ nothing past the decoder sees the difference.
 | 0x2000 | none | jump penalty: set with 0x8 by the jump (0x1f882) and by prone entry (0x24037), timed by `pm_time` up to 1800 ms, scaling friction (0x1eab3) and the next jump's speed (`cod15-movement.md` 2) | decompile, INFERRED; set on every takeoff in the moves capture, VERIFIED |
 | 0x10000 | 0x10000 | following a player | `SpectatorThink` and `StopFollowing` in both, INFERRED |
 | 0x20000 | 0x40000 | own view, a live client in its own body | `ClientEndFrame` (1.1 0x40e98, 1.5 0x3ab2a) sets it on the playing branch where 1.1 sets 0x40000; `GetFollowPlayerState`, `StuckInClient` and `BG_PlayerStateToEntityState` (1.1 0x2cbe8 tests 0x50000, 1.5 0x1c449 0x30000) test it, INFERRED; every frame of a spawned player in the live capture reads 0x20000, VERIFIED |
-| 0x40000 | none | a spectator may change whom it follows | `SpectatorClientEndFrame` (1.5 0x39edd) sets it on a free follow and clears it on a forced one, INFERRED; a spectator in the live capture reads 0x40000, VERIFIED |
-| 0x80000 | none | a following spectator may leave to free flight (`G_ClientCanSpectateTeam(4)`) | same function, INFERRED |
+| 0x40000 | `PMF_MAY_CYCLE` (0x80000) off a follow | a spectator may change whom it follows | `SpectatorClientEndFrame` (1.5 0x39edd) sets it on a free follow and clears it on a forced one, INFERRED; a spectator in the live capture reads 0x40000, VERIFIED |
+| 0x80000 | `PMF_MAY_FREE` (0x100000) | a following spectator may leave to free flight (`G_ClientCanSpectateTeam(4)`) | same function, INFERRED |
 | 0x100000 | none | `disableWeapon` | the method table at file offset 0x82da4 pairs `disableweapon` with 0x408e0, which sets it, and `enableweapon` with 0x40983, which clears it, VERIFIED |
 | (FOLLOW without 0x40000) | 0x20000 | forced follow | 1.1's `SpectatorClientEndFrame` (0x40760) sets 0x20000 on the branch where 1.5 clears 0x40000 and 0x80000, INFERRED |
 
 - 1.1 never sets 0x2000, so the rewrite keeps it in place for the predictor's
   1.5 rules.
 - 0x100000 lands on `flags::PMF_WEAPON_DISABLED`, above 1.1's 19 bits.
-- The follow permissions drop on the client's way in. The server keeps them as
-  `PMF_MAY_CYCLE` and `PMF_MAY_FREE` and maps all three back on the way out
-  (`flags::pm_flags_v1_to_v6`, section 13).
+- The follow permissions land above 1.1's 19 bits as `PMF_MAY_CYCLE` and
+  `PMF_MAY_FREE`. On a follow the cycle permission is the absence of
+  `PMF_FORCED_FOLLOW` and sets no bit. The spectator's key lines read them
+  (`cod11-spectator-follow.md` 11.2). The server keeps the same bits and
+  maps all three back on the way out (`flags::pm_flags_v1_to_v6`, section
+  13).
 
 ## 6. eFlags, entity types, events
 

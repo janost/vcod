@@ -342,6 +342,27 @@ impl App {
     }
 }
 
+/// The playerstate a view with no replay draws from, a follower's or a
+/// demo's: the pair at `render_time` through
+/// `play::view::interpolated_ps`, else the newest snapshot's.
+fn snapshot_view_ps(
+    p: &net::protocol::Cod1Wire,
+    net: &net::NetClient<net::UdpTransport>,
+    render_time: Option<i32>,
+) -> Option<net::msg::PlayerState> {
+    let snaps = net.snapshots();
+    let pair = render_time.and_then(|t| Some((t, snaps.two_for_time(t)?)));
+    match pair {
+        Some((t, (a, b))) => Some(play::view::interpolated_ps(
+            p,
+            (&a.ps, a.server_time.raw()),
+            (&b.ps, b.server_time.raw()),
+            t,
+        )),
+        None => snaps.newest().map(|s| s.ps.clone()),
+    }
+}
+
 /// The viewer's values every step of the live frame reads.
 #[derive(Clone, Copy)]
 struct Viewer {
@@ -751,7 +772,10 @@ impl LiveCx<'_> {
                         &v.pred,
                         s.ps.field_i32(p, "viewmodelIndex"),
                     ),
-                    None => play::view::ViewPs::from_snapshot(p, &s.ps),
+                    None => {
+                        let drawn = snapshot_view_ps(p, net, render_time);
+                        play::view::ViewPs::from_snapshot(p, drawn.as_ref().unwrap_or(&s.ps))
+                    }
                 };
                 v.seat = seat_now.map(|s| s.0);
                 v
@@ -899,13 +923,13 @@ impl LiveCx<'_> {
             && let (Some(hud), Some(s)) = (&mut self.hud, net.snapshots().newest())
         {
             let own = pmove::predict::on_foot(pm_type);
-            let [kp, ky, kr] = hud.view_kick(
-                p,
-                &s.ps,
-                predicted.as_ref().filter(|_| own).map(|v| &v.pred),
-                render_time.unwrap_or(0),
-                weapons,
-            );
+            let replay = predicted.as_ref().filter(|_| own).map(|v| &v.pred);
+            let drawn = replay
+                .is_none()
+                .then(|| snapshot_view_ps(p, net, render_time))
+                .flatten();
+            let ps = drawn.as_ref().unwrap_or(&s.ps);
+            let [kp, ky, kr] = hud.view_kick(p, ps, replay, render_time.unwrap_or(0), weapons);
             damage_kick = [kp, ky, kr];
             cam.pitch -= kp.to_radians();
             cam.yaw += ky.to_radians();
@@ -923,13 +947,7 @@ impl LiveCx<'_> {
                 cam.yaw.to_degrees(),
                 view_roll.to_degrees(),
             ];
-            cam.pos += hud.eye_bob(
-                p,
-                &s.ps,
-                predicted.as_ref().filter(|_| own).map(|v| &v.pred),
-                render_time.unwrap_or(0),
-                kicked,
-            );
+            cam.pos += hud.eye_bob(p, ps, replay, render_time.unwrap_or(0), kicked);
         }
         // Then the landing's dip (0x30032ca1), and it
         // ends on `AddLeanToPosition` (cgame
@@ -1214,14 +1232,17 @@ impl LiveCx<'_> {
             hud.set_shock_left(shock.left_ms);
         }
         let gun = match (&mut self.hud, net.snapshots().newest()) {
-            (Some(hud), Some(s)) => hud.step_gun(
-                p,
-                &s.ps,
-                predicted.as_ref().filter(|_| local_player).map(|v| &v.pred),
-                render_time.unwrap_or(0),
-                weapons,
-                view.gun_kick(),
-            ),
+            (Some(hud), Some(s)) => {
+                let replay = predicted.as_ref().filter(|_| local_player).map(|v| &v.pred);
+                // A follower's gun sways off the target's lerped view.
+                let drawn = replay
+                    .is_none()
+                    .then(|| snapshot_view_ps(p, net, render_time))
+                    .flatten();
+                let ps = drawn.as_ref().unwrap_or(&s.ps);
+                let time = render_time.unwrap_or(0);
+                hud.step_gun(p, ps, replay, time, weapons, view.gun_kick())
+            }
             _ => None,
         };
         let world_up = {

@@ -608,4 +608,42 @@ mod tests {
         let [tl, tr, _, _] = out[q].verts;
         assert!((tr[0] - tl[0] - 33.375).abs() < 1e-3);
     }
+
+    /// CoDMP.exe 0x409870 draws a bold line at `y + 12` in font handle 4
+    /// at 1/3, which the UI's pick (ui_mp 0x400079e0) turns into `font` at
+    /// 480 lines and `boldFont` at 720 (cod11-chat.md 3.3.1).
+    #[test]
+    fn the_bold_window_draws_its_baseline_in_the_handle_4_font() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let fonts = UiFonts::load(&fs).unwrap();
+        for (h, atlas) in [(480.0, &fonts.normal), (720.0, &fonts.bold)] {
+            let v = Virtual::new((h * 4.0 / 3.0, h));
+            let mut w = Window::new(Kind::Bold);
+            w.push("Bold line", 1000);
+            let mut out = Vec::new();
+            w.build(&fonts, 2000, &v, &mut out);
+            let font = fonts.pick(Slot::BigFixed, 1.0 / 3.0, h);
+            assert!(std::ptr::eq(font, atlas), "{h}");
+            // One steady line: 180 less one 16-unit line, plus 12.
+            let x = 320.0 - (text_width(font, "Bold line", 1.0 / 3.0) / 2.0).trunc();
+            let mut expected = Vec::new();
+            let style = TextStyle::SHADOWED;
+            let white = [1.0; 4];
+            menu_text_rgba(
+                font,
+                "Bold line",
+                (x, 176.0),
+                1.0 / 3.0,
+                white,
+                style,
+                &v,
+                &mut expected,
+            );
+            let key = |q: &HudQuad| (q.texture.clone(), q.verts, q.uvs, q.rgba);
+            let keys = |qs: &[HudQuad]| qs.iter().map(key).collect::<Vec<_>>();
+            assert!(!out.is_empty() && keys(&out) == keys(&expected), "{h}");
+        }
+    }
 }

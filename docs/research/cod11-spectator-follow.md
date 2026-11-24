@@ -423,6 +423,115 @@ event path.
   measured that. The own predicted ring is `PredictedEvents`
   (`crates/client/src/play/events.rs`), which compares across the wrap.
 
+### 11.2 The client: the spectator's lines
+
+The 2D pass draws two spectator functions while the scoreboard is down
+(`cod11-hud-protocol.md` 3.1) and never at intermission (9.1): the follow
+keys and whom the view follows. Addresses are the cgames' (1.1
+`0x30018550`/`0x30018710`, 1.5 `0x30019740`/`0x300198e0`, UO
+`0x3001bd50`/`0x3001bee0`), each called from the 2D pass right after its
+first scoreboard test (1.1 `0x300188c1`, 1.5 `0x30019a91`, UO
+`0x3001c09a`). Flags below are the wire's `pm_flags` of `cg.snap`'s
+playerstate.
+
+VERIFIED (the instructions), the key lines:
+
+- Every build returns at once with `cg_descriptiveText` 0 (vmCvar integer
+  1.1 `0x30298b4c`, 1.5 `0x3029c90c`, UO `0x3052f6ac`; table rows 1.1
+  `0x30075120`, 1.5 `0x30077110`, UO `0x300859b0`, default `"1"`, flags 1).
+- 1.1 returns while `pm_flags & 0x60000` (forced follow or own view,
+  `0x30018585`), then always draws `CGAME_FOLLOWNEXTPLAYER` with the key
+  bound to `+attack` at y 426 and `CGAME_FOLLOWPREVIOUSPLAYER` with
+  `+melee` at 436; with `pm_flags & 0x10000` (`0x3001869e`) it draws
+  `CGAME_FOLLOWSTOP` with `toggle cl_run`'s key, else `+speed`'s, at 446,
+  and no line when neither is bound (`0x300186b7..0x300186c7`).
+- 1.5 returns unless `pm_flags & 0xc0000` (`0x30019775`); the pair draws on
+  0x40000 (may cycle, `0x3001978d`) at 426 and 436, the stop line on
+  0x80000 (may leave, `0x30019861`) at 426 without the pair and 446 with it
+  (`[esp+4]`, set at `0x30019794` and `0x30019854`).
+- UO returns unless `pm_flags & 0x300000` (`0x3001bd85`); the pair draws on
+  0x100000 (`0x3001bd9d`) at 416 and 426, the stop line on 0x200000
+  (`0x3001be6b`) at 416 or 436.
+- An unbound cycle key reads as the command's own name (1.1 `0x300185a9`,
+  `0x30018628`). The key text is the cgame's key lookup (1.1 `0x30046940`),
+  the one `cod11-hud-protocol.md` 1.2's `[{command}]` pass takes. The line
+  is the localized `cgame` string with `%s` replaced (`va`, `0x3003eb40`):
+  `- Press [%s] to follow next player` in `localizedstrings/english/cgame.str`
+  (1.1 `localized_english_pak1.pk3`; 1.5 and UO the same).
+- Each line: x 240, font 0 at 0.208333 (`0x3e555555`), white, style 3,
+  through trap `0x36` (1.1) or its wrapper (1.5 `0x30032560`, UO
+  `0x3003de30`).
+
+VERIFIED (the instructions), the follow string: with the follow bit (1.1
+and 1.5 0x10000, `0x30018738`, `0x30019908`; UO 0x40000, `0x3001bf08`) the
+function formats `CGAME_FOLLOWING\x15: %s` with the followed client's name,
+`?` without client info (`clientNum` at `ps+0xac`, UO `ps+0xd4`), localizes
+it under `"spectator follow string"` (trap `0x39`) and draws it font 0 at
+1/3, style 3, white, at x `(640 - width) * 0.5` (trap `0x34`'s int width)
+and y 414 (1.1 `0x300187ad`, 1.5 `0x3001997d`), UO 404 (`0x3001bf7d`).
+English reads `following: <name>`.
+
+VERIFIED (the instructions), traps `0x1c` and `0x1d`, drawn after the
+message windows behind the second scoreboard test: `0x1c` is the minicon
+(1.1 `0x300179f0`), drawn at (2, 4) while `con_minicon` (row `0x30075070`)
+is not negative and it or `developer` (row `0x30075060`) is set; CoDMP.exe
+(0x409eb0) shows `con_miniconlines` lines of the console's window 0, a
+value over 100 set back to 100 (0x408ec8..0x408ee9). `0x1d` is the subtitle window (`cod11-chat.md` 3.3),
+empty on 1.1 MP. vcod draws neither: the minicon is off at the defaults
+(`con_minicon` 0, `developer` 0).
+
+vcod: `hud::spectator` draws both lines through `Hud::build` with the
+board down, off the newest snapshot's playerstate in vcod's `pm_flags`
+layout. The 1.5 and UO decoders keep the permissions for it:
+`flags::PMF_MAY_FREE`, and `flags::PMF_MAY_CYCLE` off a follow, where a
+follow without `PMF_FORCED_FOLLOW` may cycle (`cod15-protocol-diff.md` 5).
+Tests: `the_1_1_key_lines_follow_its_view_bits`,
+`the_1_5_and_uo_key_lines_follow_the_permissions`,
+`the_spectator_key_lines_draw_under_no_board`. The client registers
+`cg_descriptiveText` `1`, archived.
+
+### 11.3 The client: the follower's playerstate
+
+VERIFIED (the instructions), `CG_PredictPlayerState` (1.1 `0x300294f0`,
+1.5 `0x3002a860`, UO `0x30035800`): during demo playback, or while
+`cg.snap`'s `pm_flags` carries the follow bit (1.1 and 1.5 0x10000 at
+`0x30029525` and `0x3002a895`, UO 0x40000 at `0x30035834`), it calls
+`CG_InterpolatePlayerState` with 0 (1.1 `0x30029a4a`, 1.5 `0x3002adba`, UO
+`0x30036048`) and predicts nothing. That function (1.1 `0x300291d0`, 1.5
+`0x3002a540`, UO `0x300354b0`):
+
+- copies `cg.nextSnap`'s (`0x301e2164`) playerstate into
+  `cg.predictedPlayerState` (`0x3020715c`, `rep movs` at `0x300291f0`; 1.5
+  `0x3002a560`, UO `0x300354d0`);
+- returns there unless `nextSnap`'s `serverTime` is past `cg.snap`'s
+  (`0x30029241`);
+- takes `f = (cg.time - snap.serverTime) / (next - snap)`, stored as a
+  float (`0x3002926b`);
+- lerps from `cg.snap`'s: `bobCycle` (`next + 256` when below, truncated
+  by `_ftol`, `0x30029266..0x3002928b`), `aimSpreadScale` (`ps+0x3d8`),
+  `origin`, the view angles through `LerpAngle` (`0x3003c2a0`: the far
+  angle moved by 360 when the two are over 180 apart, the result not
+  wrapped), `velocity` (the loop `0x300292e0..0x3002933f`), then
+  `viewHeightCurrent` (`ps+0xd0`), `leanf` (`ps+0x40`) and `fWeaponPosFrac`
+  (`ps+0xb8`, `0x30029341..0x30029386`). 1.5 lerps the same offsets; UO the
+  same fields at its own (`aimSpreadScale` `ps+0x628`, `viewHeightCurrent`
+  `ps+0xf8`, `leanf` `ps+0x44`, `fWeaponPosFrac` `ps+0xe0`), field names
+  from `fields_v1.rs` and `fields_v22.rs`.
+
+VERIFIED: the gun step (`0x300371f0`, `cod11-combat.md` 17.4) is handed that
+playerstate (`push 0x3020715c` at `0x30033dff`), and the function at
+`0x30032ae8`, which holds `CG_OffsetFirstPersonView`'s kick adds
+(`0x30032b58`, `cod11-combat.md` 15.5), loads its address at `0x30032b06`. So a
+follower's view weapon sways off the target's view lerped frame by frame.
+
+vcod built the follower's gun sway, the view's damage kick and walk bob and
+the view weapon's playerstate from the newest snapshot as it came, so the
+sway saw the target's turn in one step per snapshot. It now takes
+`play::view::interpolated_ps` over the drawn pair at the render clock
+whenever no replay runs (a follow or a demo); test
+`a_followed_playerstate_lerps_retails_fields`. The spectator's own mouse
+never reached it: with no replay the gun steps off the snapshot alone.
+
 ## 12. The killcam
 
 A killcam is a forced follow whose copy comes from the engine's frame

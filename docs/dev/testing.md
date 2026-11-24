@@ -354,6 +354,9 @@ What the frame checks see:
 - `VCOD_FRAME_DIGEST` (`frame_digest.rs`) hashes what the frame hands the
   renderer (view, view weapon, entities, HUD list, sounds, effects,
   console), never a pixel. A shader-only change leaves it the same.
+  Under it the menus' colour pulses and edit cursor blink run on the
+  drawn `serverTime` (`Ui::set_digest_clock`), so a menu up during a
+  replay digests the same twice.
 - `VCOD_C1_SHOTS=<dir>` writes CoD1 frames as TGAs for a byte compare
   across builds. `cod1_renderer_builds_and_draws_without_validation_errors`
   writes `mp_carentan.tga` at the renderer's default identityLight 0.5
