@@ -2560,6 +2560,59 @@ clients unless named.
 - So a pure server whose paks lack the DLLs (1.5's server directory has no
   `pak6`) drops everyone. INFERRED.
 
+### The unpure drop (`SV_ExecuteClientMessage` 0x80872ec)
+
+- With `sv_pure` (`->integer`, `0x83b6758` + 0x20) on and `pureAuthentic` 2,
+  the message's commands done, 1.1d sets `nextSnapshotTime` (`cl+0x10b14`)
+  to -1 and the state to 4 (`CS_ACTIVE`), runs `SV_SendClientSnapshot`
+  (`0x808f844`) and then `SV_DropClient` (`0x8085cf4`) with
+  `EXE_UNPURECLIENTDETECTED` (`0x80d4b23`). VERIFIED (the instructions,
+  `0x8087491..0x80874cd`).
+- 1.5b (`0x808cfc1..0x808d007`, `SV_SendClientSnapshot` `0x8097c2f`) and UO
+  1.51b (`0x808dd92..0x808ddd8`, `0x8098c23`) do the same. CoD2 1.3
+  (`cod2_lnxded` `0x80912de..0x8091310`) and CoD4 1.7 (`cod4_lnxded`
+  `0x8172a6d..0x8172a98`) set `nextSnapshotTime` to -1 and drop: no state
+  change and no snapshot. VERIFIED (the instructions).
+- A state-4 snapshot sets `cl+4` and carries no `SNAPFLAG_NOT_ACTIVE`, and
+  the zombie keeps `cl+4` (protocol doc, `snapFlags`). VERIFIED (the
+  instructions, `0x808dfc1..0x808dfe3`).
+- Why it matters: `CL_FirstSnapshot` (CoDMP.exe `0x404d00`) returns on
+  `snapFlags & 2` (`test byte [0x1432968],2`) before it stores state 6
+  (`CA_ACTIVE`, `0x404d1e`). VERIFIED (the instructions). A client still
+  loading (`CA_PRIMED`) that is only sent `SNAPFLAG_NOT_ACTIVE` snapshots
+  stays primed. It never runs the `w` either: the cgame's server-command
+  pass runs the `w`, and a primed client never draws an active frame.
+  INFERRED (Q3's shape; the hang below).
+- Live 2026-11-24, `--probe-edge unpure` (a `cp 1 2 @ 3 4` in the first
+  message after the gamestate, no usercmd), loopback `mp_carentan`, 1.1d
+  with `sv_pure 1` before the map (`PRE_MAP_ARGS`). VERIFIED (capture):
+  - the next message, 5 ms after the `cp`, is the snapshot alone:
+    `snapFlags` 4, no delta, 12 entities (eTypes 3, 8 and 11). Its
+    playerstate holds only `eFlags` 0x10, `stats[3]` -1 and the level's
+    clock hudelem (type 4, x 320, y 460, time 1800000);
+  - then 40 zombie messages, one a frame: `w "EXE_UNPURECLIENTDETECTED"`,
+    `snapFlags` 4, no entities, a null playerstate. Message 34, 32 after
+    the forced one, carries that one's `eFlags` and hudelem out of the
+    ring.
+- The retail client: in the 2026-11-23 session a 1.1 `CoDMP.exe` whose
+  `main/` held third-party paks sent `cp` to vcod-server `--vanilla`. It was
+  dropped with `EXE_UNPURECLIENTDETECTED` (VERIFIED, the session's
+  `server.log`) and sat on the loading screen, its bar nearly full, until
+  it was quit (VERIFIED, by eye in the session). The same probe against
+  that vcod-server read 40 zombie messages with `snapFlags` 6 and no
+  snapshot before them. VERIFIED (capture).
+- vcod: `Server::send_forced_snapshot` runs before the drop. It sets the
+  slot `Active` and `was_active`, sends an active snapshot at once and files
+  it in the ring. Its playerstate is null and it carries no entities: vcod
+  has no playerstate for a client that never entered the world, and the
+  client only has to leave `CA_PRIMED`. vcod's own.
+  `an_unpure_client_still_loading_is_sent_an_active_snapshot_before_its_w`
+  pins the flags. The same probe against it read the forced snapshot
+  (`snapFlags` 4, no entities) 2 ms after the `cp`, then 40 zombie messages
+  with `w "EXE_UNPURECLIENTDETECTED"` and `snapFlags` 4. VERIFIED (capture,
+  2026-11-24). Whether a retail client now leaves the loading screen and
+  shows the reason is a check for the owner.
+
 ### Serving a download
 
 - ucmds: `download` (`0x8087a64`: closes any transfer, keeps up to 64 bytes of

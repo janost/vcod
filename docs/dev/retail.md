@@ -128,6 +128,9 @@ COD_DIR=<1.1 install> COD_UO_DIR=<stock 1.5 main/ + uo/ tree> \
   (`--addr` defaults to 127.0.0.1) or on a LAN PC. No cfg or binds: each
   step joins with `/connect <addr>:<port>` in the console (port 28963),
   and the probes answer the team and weapon menus for the client.
+- Move third-party pk3s out of the client's `main/` and `uo/` for the
+  session: on 2026-11-23 a client holding them failed the `--vanilla`
+  server's `cp` check and was dropped with `EXE_UNPURECLIENTDETECTED`.
 - Screenshots: the probe puts `screenshot rc_<phase>_1; wait 25; ...` in
   the client's `rc_shot` cvar (a server `v`, cod11-hud-protocol.md 0), so
   every phase's console line is the same, `toggleconsole; wait 60; vstr
