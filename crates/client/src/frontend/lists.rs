@@ -25,6 +25,8 @@ impl Ui {
     /// Once a frame while a menu is up: reads the browser's cvars and runs
     /// the network queries.
     pub fn frame(&mut self, now: Instant, shell: &Shell) {
+        let start = *self.clock.get_or_insert(now);
+        self.real_time = now.duration_since(start).as_millis() as i32;
         self.cvars = UI_CVARS
             .iter()
             .map(|n| {

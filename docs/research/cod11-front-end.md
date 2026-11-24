@@ -3215,8 +3215,8 @@ Sources: `ui_mp_x86.dll` 1.1 and `CoDMP.exe` 1.1, read with `objdump`
   a slider, yes/no, multi, bind or owner draw with text; their value or
   slider bar follows the kept rect's width. Every item's text moves by the
   border size when it has a border. An item draws in the focus colour when
-  it has the focus (`Ui::focus`), not when hovered; vcod does not pulse
-  the colour.
+  it has the focus (`Ui::focus`), not when hovered, pulsing as 20.12
+  says.
 - In an edit field Tab, down and up step the focus and carry the edit to
   an edit field (`Ui::edit_step`); the keypad arrows do so only with Num
   Lock off, since with it on they type digits. Mouse moves change nothing
@@ -3343,6 +3343,34 @@ Sources: `ui_mp_x86.dll` 1.1 and `CoDMP.exe` 1.1, read with `objdump`
   under the items. The fullscreen background is not drawn: no stock
   fullscreen menu names one, and the items' backdrops cover the default
   shader handle 0 would draw. INFERRED (the stock files).
+
+### 20.12 The focus pulse
+
+- `Item_TextColor` (`0x40013df0`) with the focus flag sets the low colour
+  to the menu's `focusColor` (`+0x4ec`) times 0.8 (`0x40030010`) and lerps
+  from `focusColor` toward it by `(sin(realTime / 75) + 1) * 0.5`
+  (`0x40013e3b`..`0x40013ec4`): `realTime` is the display context's
+  (`+0xec`, `0x401c3dcc`, stored by `UI_Refresh` `0x40007b20`), the
+  division an int's (`imul 0x1b4e81b5; sar 3`), 1.0 at `0x4002feb4`, 0.5
+  at `0x4002febc`. `LerpColor` (`0x4000f160`) clamps each channel to
+  0..1. VERIFIED (asm). So a focused item breathes between its focus
+  colour and 0.8 of it about every 0.47 s (2 pi times 75 ms). INFERRED
+  (the arithmetic).
+- The values pulse the same way while the item has the focus, else take
+  the item's `forecolor`: the edit field's text (`0x4001464e`..`0x40014719`),
+  yes/no (`0x4001484e`..), multi (`0x400149d0`..), slider
+  (`0x400150c2`..`0x40015179`, the colour the bar and thumb draw in), bind
+  (`0x4001526f`..) and owner draw (`0x400161cc`..). VERIFIED (asm).
+- 1.5 (`ui_mp_x86.dll` `0x40014990`, constants `0x40031538`,
+  `0x400313dc`, `0x400313e4`), UO (`uo_ui_mp_x86.dll` `0x40017493`..,
+  `0x40035a3c`, `0x400358c4`, `0x400358cc`) and CoD2 (`CoD2MP_s.exe`
+  `0x53f1e0`, the focus test `0x53f27e`..`0x53f29c` on flags 4 and 2,
+  `focusColor` at menu `+0x25c`, `0x5c4158`, `0x5c3d0c`, `0x5c3d30`) do
+  the same. VERIFIED (asm).
+- vcod: `paint::pulse` over `Ui::real_time`, milliseconds since the UI's
+  first frame (`Ui::frame`), for the label, the value, the slider's bar
+  and thumb and the edit cursor. The phase differs from retail's
+  `realTime`, which counts from the engine's start. INFERRED.
 
 ## 21. Video modes, fullscreen and wide windows
 

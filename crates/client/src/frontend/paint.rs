@@ -114,12 +114,14 @@ impl Ui {
                     continue;
                 }
                 p.window(item, st, None, &mut out);
-                let focused = self.focused(m, i);
-                let color = if focused && !item.decoration && item.kind != ITEM_TYPE_LISTBOX {
-                    menu.focus_color
-                } else {
-                    item.fore
+                let focused =
+                    self.focused(m, i) && !item.decoration && item.kind != ITEM_TYPE_LISTBOX;
+                let rt = self.real_time;
+                let color = match focused {
+                    true => pulse(menu.focus_color, dim(menu.focus_color), rt),
+                    false => item.fore,
                 };
+                let value_color = color;
                 if let Some((len, first)) = self.list_scroll(item) {
                     let thumb = self
                         .thumb_drag
@@ -242,13 +244,13 @@ impl Ui {
                 }
                 if item.kind == ITEM_TYPE_SLIDER {
                     let end = (!label.is_empty()).then_some(left + label_end);
-                    self.slider_quads(&p, (m, i), item, end, color, shell, &mut out);
+                    self.slider_quads(&p, (m, i), item, end, value_color, shell, &mut out);
                 }
                 if let Some(v) = value {
                     let gap = if label.is_empty() { 0.0 } else { 8.0 };
                     let x = left + label_end + gap;
                     let style = item.text_style;
-                    p.text(&v, x, y, item, color, style, &mut out);
+                    p.text(&v, x, y, item, value_color, style, &mut out);
                     if let Some((at, glyph)) = self.edit_cursor(m, i)
                         && at <= v.chars().count()
                         && cursor_blink_on(blink_clock(), self.cod2.is_some())
@@ -259,7 +261,7 @@ impl Ui {
                         // CoD2 draws the cursor glyph once, unshadowed
                         // (`gfx_d3d_mp_x86_s.dll` 0x10032877..0x100328e5).
                         let style = if self.cod2.is_some() { 0 } else { style };
-                        p.text(&glyph, cx, y, item, color, style, &mut out);
+                        p.text(&glyph, cx, y, item, value_color, style, &mut out);
                     }
                 }
             }
@@ -487,6 +489,21 @@ pub(super) fn truncate_visible(text: &str, n: usize) -> String {
         count += 1;
     }
     out
+}
+
+/// The pulse of a focused item's colours (ui_mp_x86.dll 1.1
+/// `Item_TextColor` 0x40013e3b..0x40013ec4, the value paints alike;
+/// cod11-front-end.md 20.12): from `c` toward `low` by `(sin(realTime / 75)
+/// + 1) / 2`, the division an int's, each channel clamped to 0..1
+/// (`LerpColor` 0x4000f160).
+pub(super) fn pulse(c: [f32; 4], low: [f32; 4], real_time: i32) -> [f32; 4] {
+    let t = ((f64::from(real_time / 75).sin() + 1.0) * 0.5) as f32;
+    std::array::from_fn(|i| (c[i] + t * (low[i] - c[i])).clamp(0.0, 1.0))
+}
+
+/// The low end of a pulse: 0.8 of the colour (`0x40030010`).
+fn dim(c: [f32; 4]) -> [f32; 4] {
+    c.map(|v| v * 0.8)
 }
 
 /// Milliseconds since the first edit cursor drawn, the base the renderer
@@ -1115,6 +1132,47 @@ mod tests {
         assert_eq!(quads[0].verts[2], [449.0, 299.0]);
     }
 
+    /// The pulse runs from the colour to 0.8 of it on `sin(realTime / 75)`,
+    /// steps each 75 ms and clamps each channel.
+    #[test]
+    fn the_focus_pulse_follows_item_text_color() {
+        let c = [1.0, 0.5, 0.0, 1.0];
+        let mid = [0.9, 0.45, 0.0, 0.9];
+        assert_eq!(pulse(c, dim(c), 0), mid);
+        assert_eq!(pulse(c, dim(c), 74), mid);
+        // sin(11) is -0.99999: the full colour; sin(8) is 0.989: near 0.8.
+        let near = |a: [f32; 4], b: [f32; 4]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.003);
+        assert!(near(pulse(c, dim(c), 11 * 75), c));
+        assert!(near(pulse(c, dim(c), 8 * 75), dim(c)));
+        assert_eq!(pulse([1.2; 4], [1.2; 4], 0), [1.0; 4]);
+    }
+
+    /// A focused slider's bar and thumb pulse with its text.
+    #[test]
+    fn a_focused_slider_pulses() {
+        let mut ui = ui_with_menu(
+            r#"{ menuDef { name "main" rect 0 0 640 480 focuscolor 1 .5 0 1
+            itemDef { type 10 visible 1 rect 10 10 100 20 cvarFloat "s_volume" 0.5 0 1 } } }"#,
+        );
+        let shell = Shell::new();
+        let loc = Localized::default();
+        ui.open_main(&shell, &mut Vec::new());
+        let t0 = std::time::Instant::now();
+        ui.frame(t0, &shell);
+        ui.frame(t0 + std::time::Duration::from_millis(1234), &shell);
+        let m = ui.find("main").unwrap();
+        let focus = [1.0, 0.5, 0.0, 1.0];
+        let lit = pulse(focus, dim(focus), 1234);
+        assert_ne!(lit, pulse(focus, dim(focus), 0));
+        ui.focus.insert(m, 0);
+        let quads = ui.build(640.0, 480.0, &loc, &shell);
+        let slider: Vec<_> = (quads.iter())
+            .filter(|q| q.texture.contains("slider"))
+            .map(|q| q.rgba)
+            .collect();
+        assert_eq!(slider, [lit, lit]);
+    }
+
     /// `Item_SetTextExtents`: int widths, a centred shift rounded toward
     /// zero, alignment 3 measured as right aligned and never kept, and a
     /// centred owner draw measured again with its value's width.
@@ -1332,8 +1390,9 @@ mod tests {
         ui.menus[m].focus_color = focus_color;
         let loc = Localized::default();
         let lit = |ui: &Ui| {
+            let c = pulse(focus_color, dim(focus_color), ui.real_time);
             (ui.build(640.0, 480.0, &loc, &shell).iter())
-                .filter(|q| q.rgba == focus_color)
+                .filter(|q| q.rgba == c)
                 .count()
         };
         let glyphs = |ui: &Ui, i: usize| {

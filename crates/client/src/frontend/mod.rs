@@ -296,6 +296,10 @@ pub struct Ui {
     /// ([`Self::text_rect`]). A load clears it, as `Item_SetScreenCoords`
     /// (0x4000fd00) zeroes the width.
     text_rects: RefCell<HashMap<(usize, usize), [f32; 4]>>,
+    /// `uiDC.realTime`, ms since the first [`Self::frame`]: the clock the
+    /// focus pulse reads ([`paint::pulse`]); 0 until a frame runs.
+    real_time: i32,
+    clock: Option<Instant>,
     /// The menus the lists loaded; the script menus the server precached
     /// follow them ([`Self::load_script_menus`]).
     list_menus: usize,

@@ -99,7 +99,7 @@ const SLIDER_THUMB: &str = "ui/assets/sliderbutt_1.tga";
 #[derive(Default)]
 pub(super) struct State {
     /// The bind item waiting for a key (`g_waitingForKey`), as (menu, item).
-    waiting: Option<(usize, usize)>,
+    pub(super) waiting: Option<(usize, usize)>,
     /// The edit field taking typed text.
     pub(super) editing: Option<(usize, usize)>,
     /// `key_overstrikeMode` (CoDMP.exe 0x142f628, UI traps 0x2d and 0x2e):
