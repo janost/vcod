@@ -84,6 +84,9 @@ pub struct UiItem {
     /// `textstyle` (`ITEM_TEXTSTYLE_*`, item `+0xe4` in 1.1's
     /// `ui_mp_x86.dll`): the style every text draw of the item passes.
     pub text_style: i32,
+    /// `textfont` (`UI_FONT_*`, item `+0xd0` in 1.1's `ui_mp_x86.dll`): the
+    /// font handle every text draw and measure of the item passes.
+    pub text_font: i32,
     pub fore: [f32; 4],
     pub back: [f32; 4],
     pub border: i32,
@@ -154,6 +157,7 @@ impl Default for UiItem {
             text_align_x: 0.0,
             text_align_y: 0.0,
             text_style: 0,
+            text_font: 0,
             fore: [1.0; 4],
             back: [0.0; 4],
             border: 0,
@@ -216,6 +220,10 @@ pub struct UiMenu {
     pub align: [i32; 2],
     /// CoD2's `blurWorld`: the world blurred behind the menu, 0 for none.
     pub blur_world: f32,
+    /// The menu's own window, which `Menu_Paint` draws under its items:
+    /// `style`, `forecolor`, `backcolor`, `border`, `borderSize`,
+    /// `bordercolor` and `background`. Its rect is the menu's.
+    pub window: UiItem,
 }
 
 /// `text` as tokens after the precompiler (`crate::menu_precomp`):
@@ -563,6 +571,26 @@ fn parse_menu(body: &[String], game: Game, errors: &mut Vec<String>) -> UiMenu {
                 menu.focus_color = nums::<4>(body, i);
                 i += 5;
             }
+            "forecolor" | "backcolor" | "bordercolor" => {
+                let c = nums::<4>(body, i);
+                match key.as_str() {
+                    "forecolor" => menu.window.fore = c,
+                    "backcolor" => menu.window.back = c,
+                    _ => menu.window.border_color = c,
+                }
+                i += 5;
+            }
+            "style" | "border" | "bordersize" | "background" => {
+                let w = &mut menu.window;
+                let arg = body.get(i + 1);
+                match key.as_str() {
+                    "style" => w.style = num(arg) as i32,
+                    "border" => w.border = num(arg) as i32,
+                    "bordersize" => w.border_size = num(arg),
+                    _ => w.background = arg.cloned(),
+                }
+                i += 2;
+            }
             "onopen" | "onclose" | "onesc" => {
                 i += 1;
                 let script = block(body, &mut i).to_vec();
@@ -657,6 +685,7 @@ fn parse_item(tokens: &[String], game: Game, errors: &mut Vec<String>) -> UiItem
             "textalignx" => item.text_align_x = num(tokens.get(i + 1)),
             "textaligny" => item.text_align_y = num(tokens.get(i + 1)),
             "textstyle" => item.text_style = num(tokens.get(i + 1)) as i32,
+            "textfont" => item.text_font = num(tokens.get(i + 1)) as i32,
             "forecolor" | "backcolor" | "bordercolor" | "outlinecolor" => {
                 let c = nums::<4>(tokens, i);
                 match key.as_str() {
@@ -1054,6 +1083,7 @@ mod tests {
     focusColor FOCUS
     onESC { uiScript closeJoin
       close joinserver ; open main }
+    style 1 backcolor .1 .15 .1 1 border 1 borderSize 2 bordercolor .5 .5 .5 .5
     #include "bg.menu"
     itemDef {
       name play
@@ -1063,6 +1093,7 @@ mod tests {
       textscale .4
       textaligny 14
       textstyle ITEM_TEXTSTYLE_SHADOWEDMORE
+      textfont 2
       forecolor .9 .9 .9 .9
       visible 1
       action { play "mouse_click"; close main ; open joinserver }
@@ -1099,6 +1130,9 @@ mod tests {
         let m = &menus[0];
         assert_eq!(m.name, "main");
         assert_eq!(m.focus_color, [0.98, 0.96, 0.39, 1.0]);
+        let w = &m.window;
+        assert_eq!((w.style, w.border, w.border_size), (1, 1, 2.0));
+        assert_eq!((w.back, w.border_color), ([0.1, 0.15, 0.1, 1.0], [0.5; 4]));
         assert_eq!(m.items.len(), 3);
         let bg = &m.items[0];
         assert_eq!(bg.style, WINDOW_STYLE_SHADER);
@@ -1109,6 +1143,7 @@ mod tests {
         assert_eq!(play.rect, [395.0, 210.0, 250.0, 15.0]);
         assert_eq!(play.fore, [0.9, 0.9, 0.9, 0.9]);
         assert_eq!((play.text_align_y, play.text_style), (14.0, 6));
+        assert_eq!((play.text_font, m.items[2].text_font), (2, 0));
         let gate = play.gate.as_ref().unwrap();
         assert_eq!((gate.cvar.as_str(), gate.show), ("cl_ingame", true));
         assert_eq!(

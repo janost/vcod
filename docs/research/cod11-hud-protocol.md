@@ -1213,8 +1213,8 @@ front end's `Painter::text` with the item's `text_style`. The draws above
 pass their retail style; owner draws vcod draws natively take the stock
 `hud.menu`'s. vcod's own spectator header (`hud::status`) keeps vcod's 1 px
 shadow at 0.8. CoD2's draws take `TextStyle::Cod2` (cod2-fonts-menus.md
-1.1). The UI's blink and pulse colours (`Item_TextColor`,
-cod11-front-end.md 20.7) are not drawn.
+1.1). The UI's style 1 blink and focus pulse (`Item_TextColor`,
+cod11-front-end.md 20.12) are the front end's `paint::pulse`.
 
 ---
 

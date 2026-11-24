@@ -10,7 +10,7 @@ use vcod_common::ui_menu::{
     FEEDER_SERVERS, FEEDER_SERVERSTATUS, ITEM_ALIGN_CENTER, ITEM_ALIGN_RIGHT, ITEM_TYPE_BIND,
     ITEM_TYPE_BUTTON, ITEM_TYPE_DECIMALFIELD, ITEM_TYPE_DVARENUM, ITEM_TYPE_EDITFIELD,
     ITEM_TYPE_LISTBOX, ITEM_TYPE_MULTI, ITEM_TYPE_NUMERICFIELD, ITEM_TYPE_OWNERDRAW,
-    ITEM_TYPE_SLIDER, ITEM_TYPE_TEXT, ITEM_TYPE_YESNO, UiItem, WINDOW_STYLE_CVAR_SHADER,
+    ITEM_TYPE_SLIDER, ITEM_TYPE_TEXT, ITEM_TYPE_YESNO, UiItem, UiMenu, WINDOW_STYLE_CVAR_SHADER,
     WINDOW_STYLE_FILLED, WINDOW_STYLE_SHADER,
 };
 
@@ -100,6 +100,7 @@ impl Ui {
         };
         for &m in self.painted() {
             let menu = &self.menus[m];
+            menu_window(&p, menu, &mut out);
             for (i, item) in menu.items.iter().enumerate() {
                 if !self.shown(m, i, shell) {
                     continue;
@@ -113,11 +114,21 @@ impl Ui {
                     continue;
                 }
                 p.window(item, st, None, &mut out);
-                let focused = self.focused(m, i);
-                let color = if focused && !item.decoration && item.kind != ITEM_TYPE_LISTBOX {
-                    menu.focus_color
-                } else {
-                    item.fore
+                let focused =
+                    self.focused(m, i) && !item.decoration && item.kind != ITEM_TYPE_LISTBOX;
+                let rt = self.real_time;
+                let lit = focused.then(|| pulse(menu.focus_color, dim(menu.focus_color), rt));
+                let color = lit.unwrap_or_else(|| text_color(item, rt));
+                // The values blink only on an owner draw (0x4001623f); the
+                // last bind to wait for a key pulses toward dark red
+                // (0x4001527f..0x4001529f, CoD2MP_s.exe 0x540a12).
+                let value_color = match lit {
+                    Some(_) if self.options.bind_item == Some((m, i)) => {
+                        pulse(menu.focus_color, [0.8, 0.0, 0.0, 0.8], rt)
+                    }
+                    Some(c) => c,
+                    None if item.kind == ITEM_TYPE_OWNERDRAW => color,
+                    None => item.fore,
                 };
                 if let Some((len, first)) = self.list_scroll(item) {
                     let thumb = self
@@ -192,11 +203,11 @@ impl Ui {
                 };
                 // An owner draw or a multi's value follows 8 units after
                 // the label.
-                let label_w = p.width(&label, item.text_scale);
+                let label_w = p.width(&label, item);
                 let value_w = value
                     .as_ref()
                     .filter(|_| item.kind == ITEM_TYPE_OWNERDRAW)
-                    .map_or(0.0, |v| p.width(v, item.text_scale));
+                    .map_or(0.0, |v| p.width(v, item));
                 let (mut left, mut y) = Self::text_origin(item, label_w, value_w, label.is_empty());
                 // Where the label's width ends, which a value follows.
                 let mut label_end = label_w;
@@ -206,7 +217,7 @@ impl Ui {
                     let mut rects = self.text_rects.borrow_mut();
                     let cvar_w = match item.cvar.as_ref() {
                         Some(c) if takes_cvar_width(item) => {
-                            p.width(&self.cvar(c, shell).unwrap_or_default(), item.text_scale)
+                            p.width(&self.cvar(c, shell).unwrap_or_default(), item)
                         }
                         _ => 0.0,
                     };
@@ -214,7 +225,7 @@ impl Ui {
                         label: label_w,
                         value: value_w,
                         cvar: cvar_w,
-                        height: p.height(item.text_scale),
+                        height: p.height(item),
                     };
                     let rect = text_extents(item, rects.get(&(m, i)).copied(), widths);
                     [left, y, label_end] = [rect[0], rect[1], rect[2]];
@@ -231,34 +242,34 @@ impl Ui {
                 if item.autowrap {
                     for (line, x, ly) in p.wrap_lines(&label, item) {
                         let style = item.text_style;
-                        p.text(&line, x, ly, item.text_scale, color, style, &mut out);
+                        p.text(&line, x, ly, item, color, style, &mut out);
                     }
                     continue;
                 }
                 if !label.is_empty() {
                     let style = item.text_style;
-                    p.text(&label, left, y, item.text_scale, color, style, &mut out);
+                    p.text(&label, left, y, item, color, style, &mut out);
                 }
                 if item.kind == ITEM_TYPE_SLIDER {
                     let end = (!label.is_empty()).then_some(left + label_end);
-                    self.slider_quads(&p, (m, i), item, end, color, shell, &mut out);
+                    self.slider_quads(&p, (m, i), item, end, value_color, shell, &mut out);
                 }
                 if let Some(v) = value {
                     let gap = if label.is_empty() { 0.0 } else { 8.0 };
                     let x = left + label_end + gap;
                     let style = item.text_style;
-                    p.text(&v, x, y, item.text_scale, color, style, &mut out);
+                    p.text(&v, x, y, item, value_color, style, &mut out);
                     if let Some((at, glyph)) = self.edit_cursor(m, i)
                         && at <= v.chars().count()
-                        && cursor_blink_on(blink_clock(), self.cod2.is_some())
+                        && cursor_blink_on(self.cursor_clock(), self.cod2.is_some())
                     {
                         let head: String = v.chars().take(at).collect();
-                        let cx = x + p.width(&head, item.text_scale);
+                        let cx = x + p.width(&head, item);
                         let glyph = glyph.to_string();
                         // CoD2 draws the cursor glyph once, unshadowed
                         // (`gfx_d3d_mp_x86_s.dll` 0x10032877..0x100328e5).
                         let style = if self.cod2.is_some() { 0 } else { style };
-                        p.text(&glyph, cx, y, item.text_scale, color, style, &mut out);
+                        p.text(&glyph, cx, y, item, value_color, style, &mut out);
                     }
                 }
             }
@@ -270,6 +281,12 @@ impl Ui {
             p.quad([x - 16.0, y - 16.0, 32.0, 32.0], [1.0; 4], cursor, &mut out);
         }
         out
+    }
+
+    /// The edit cursor's blink clock: [`blink_clock`], or the digest's.
+    fn cursor_clock(&self) -> u128 {
+        self.digest_clock
+            .map_or_else(blink_clock, |ms| ms.max(0) as u128)
     }
 
     /// The selected server's `levelshots/<mapname>`, or
@@ -427,7 +444,7 @@ fn gl_info_lines(info: &GpuInfo, r: [f32; 4]) -> Vec<(String, f32, f32)> {
 fn gl_info(p: &Painter, r: [f32; 4], item: &UiItem, color: [f32; 4], out: &mut Vec<HudQuad>) {
     let info = GPU_INFO.get().cloned().unwrap_or_default();
     for (line, x, y) in gl_info_lines(&info, r) {
-        p.text(&line, x, y, item.text_scale, color, item.text_style, out);
+        p.text(&line, x, y, item, color, item.text_style, out);
     }
 }
 
@@ -486,6 +503,32 @@ pub(super) fn truncate_visible(text: &str, n: usize) -> String {
         count += 1;
     }
     out
+}
+
+/// The pulse of a focused item's colours (ui_mp_x86.dll 1.1
+/// `Item_TextColor` 0x40013e3b..0x40013ec4, the value paints alike;
+/// cod11-front-end.md 20.12): from `c` toward `low` by `(sin(realTime / 75)
+/// + 1) / 2`, the division an int's, each channel clamped to 0..1
+/// (`LerpColor` 0x4000f160).
+pub(super) fn pulse(c: [f32; 4], low: [f32; 4], real_time: i32) -> [f32; 4] {
+    let t = ((f64::from(real_time / 75).sin() + 1.0) * 0.5) as f32;
+    std::array::from_fn(|i| (c[i] + t * (low[i] - c[i])).clamp(0.0, 1.0))
+}
+
+/// `Item_TextColor` (0x40013ed1..0x40013f8f) for an item without the
+/// focus: `ITEM_TEXTSTYLE_BLINK` (1) pulses its `forecolor` in the even
+/// 256 ms steps of `realTime` and holds it in the odd ones; every other
+/// style, `ITEM_TEXTSTYLE_PULSE` (2) included, takes `forecolor`.
+fn text_color(item: &UiItem, real_time: i32) -> [f32; 4] {
+    match item.text_style == 1 && (real_time / 256) & 1 == 0 {
+        true => pulse(item.fore, dim(item.fore), real_time),
+        false => item.fore,
+    }
+}
+
+/// The low end of a pulse: 0.8 of the colour (`0x40030010`).
+fn dim(c: [f32; 4]) -> [f32; 4] {
+    c.map(|v| v * 0.8)
 }
 
 /// Milliseconds since the first edit cursor drawn, the base the renderer
@@ -606,6 +649,59 @@ fn text_extents(item: &UiItem, kept: Option<[f32; 4]>, widths: TextWidths) -> [f
     ]
 }
 
+/// `Menu_Paint` (ui_mp_x86.dll 1.1 0x40016cf0) paints the menu's own
+/// window over its rect before the items (0x40016d8d); `Window_Paint`
+/// draws nothing for style 0 with no border (0x4000f961..0x4000f96d).
+fn menu_window(p: &Painter, menu: &UiMenu, out: &mut Vec<HudQuad>) {
+    let w = &menu.window;
+    if w.style == 0 && w.border == 0 {
+        return;
+    }
+    let mut window = w.clone();
+    window.rect = menu.rect;
+    let st = ItemState {
+        visible: true,
+        back: w.back,
+        border_color: w.border_color,
+        edit: Default::default(),
+    };
+    p.window(&window, &st, None, out);
+}
+
+/// `Window_Paint`'s border shader for style 4 (`DC->Assets.gradientBar`,
+/// registered from `0x4002f48c` unless `assetGlobalDef` names another).
+const GRADIENT_BAR: &str = "ui/assets/gradientbar2.tga";
+
+/// `Window_Paint`'s border (ui_mp_x86.dll 1.1 0x4000fb64..0x4000fcf2,
+/// cod11-front-end.md 20.10) over the rect's edges `[left, top, right,
+/// bottom]`, `bs` its size and `one` one unit, as edges and a shader: 1
+/// (full) the top and bottom across the width and then the sides down the
+/// whole height, so the corners draw twice; 2 (horizontal) the top and
+/// bottom; 3 (vertical) the sides; 4 the gradient bar `bs` tall across the
+/// top and again from one unit above the bottom, when `gradient` (CoD1).
+fn border_pieces(
+    border: i32,
+    [l, t, r, b]: [f32; 4],
+    bs: f32,
+    one: f32,
+    gradient: bool,
+) -> Vec<([f32; 4], &'static str)> {
+    let top = ([l, t, r, t + bs], "white");
+    let bottom = ([l, b - bs, r, b], "white");
+    let left = ([l, t, l + bs, b], "white");
+    let right = ([r - bs, t, r, b], "white");
+    match border {
+        1 => vec![top, bottom, left, right],
+        2 => vec![top, bottom],
+        3 => vec![left, right],
+        4 if gradient => vec![
+            ([l, t, r, t + bs], GRADIENT_BAR),
+            ([l, b - one, r, b - one + bs], GRADIENT_BAR),
+        ],
+        _ => Vec::new(),
+    }
+}
+
 /// An upright quad over window px `[left, top, right, bottom]`.
 fn quad_px([l, t, r, b]: [f32; 4], rgba: [f32; 4], texture: &str, out: &mut Vec<HudQuad>) {
     out.push(HudQuad {
@@ -614,6 +710,44 @@ fn quad_px([l, t, r, b]: [f32; 4], rgba: [f32; 4], texture: &str, out: &mut Vec<
         rgba,
         texture: texture.to_string(),
     });
+}
+
+/// A text draw's font handle and scale: an item's `textfont` and
+/// `textscale`, or a bare scale in the default handle.
+#[derive(Clone, Copy)]
+pub(crate) struct Size {
+    font: i32,
+    scale: f32,
+}
+
+impl From<f32> for Size {
+    fn from(scale: f32) -> Size {
+        Size { font: 0, scale }
+    }
+}
+
+impl From<&UiItem> for Size {
+    fn from(item: &UiItem) -> Size {
+        Size {
+            font: item.text_font,
+            scale: item.text_scale,
+        }
+    }
+}
+
+/// The font a `textfont` handle draws in at `scale` on a screen `screen_h`
+/// tall (ui_mp_x86.dll 1.1 0x400079e0, CoD2MP_s.exe 0x532410;
+/// cod11-front-end.md 20.9): 2 `bigFont`, 3 `smallFont` and 5 `consoleFont`
+/// at any size, 4 small, normal or bold by drawn size (the hudelems'
+/// `bigfixed` pick), any other the default pick.
+fn ui_font(fonts: &UiFonts, font: i32, scale: f32, screen_h: f32) -> &font::Font {
+    match font {
+        2 => &fonts.big,
+        3 => &fonts.small,
+        4 => fonts.pick(Slot::BigFixed, scale, screen_h),
+        5 => &fonts.console,
+        _ => fonts.pick(Slot::Default, scale, screen_h),
+    }
 }
 
 /// Paints menu items on the 640 grid, drawn in the window's centred 4:3
@@ -650,8 +784,8 @@ impl Painter<'_> {
         }
     }
 
-    /// `Window_Paint`: the fill or shader inside the border, then a full
-    /// border of `border_size`. `cvar_shader` is a
+    /// `Window_Paint`: the fill or shader inside the border, then the
+    /// border ([`border_pieces`]) in `bordercolor`. `cvar_shader` is a
     /// `WINDOW_STYLE_CVAR_SHADER` item's shader; an empty one draws nothing.
     /// A bordered rect spanning the grid stretches with its border: its
     /// pieces are cut out of the stretched rect in window px.
@@ -679,6 +813,9 @@ impl Painter<'_> {
         let [x, y, w, h] = item.rect;
         let b = item.border_size;
         let spans = full_width(x, w) || (y <= 0.0 && y + h >= 480.0);
+        let c = st.border_color;
+        // CoD2's `Window_Paint` has no gradient border (0x53a2df).
+        let gradient = !self.exact;
         if item.border != 0 && spans && !self.exact {
             let q = self.v.quad_fill(x, y, w, h, [0.0; 4], "");
             let [l, t] = q.verts[0];
@@ -687,12 +824,10 @@ impl Painter<'_> {
             if let Some((rgba, tex)) = face {
                 quad_px([l + bs, t + bs, r - one, bot - one], rgba, &tex, out);
             }
-            if item.border == 1 && st.border_color[3] > 0.0 {
-                let c = st.border_color;
-                quad_px([l, t, r, t + bs], c, "white", out);
-                quad_px([l, bot - bs, r, bot], c, "white", out);
-                quad_px([l, t + bs, l + bs, bot - bs], c, "white", out);
-                quad_px([r - bs, t + bs, r, bot - bs], c, "white", out);
+            if c[3] > 0.0 {
+                for (e, tex) in border_pieces(item.border, [l, t, r, bot], bs, one, gradient) {
+                    quad_px(e, c, tex, out);
+                }
             }
             return;
         }
@@ -703,12 +838,12 @@ impl Painter<'_> {
         if let Some((rgba, tex)) = face {
             self.quad(inner, rgba, &tex, out);
         }
-        if item.border == 1 {
-            let c = st.border_color;
-            self.fill([x, y, w, b], c, out);
-            self.fill([x, y + h - b, w, b], c, out);
-            self.fill([x, y + b, b, h - 2.0 * b], c, out);
-            self.fill([x + w - b, y + b, b, h - 2.0 * b], c, out);
+        if c[3] > 0.0 {
+            for ([l, t, r, bot], tex) in
+                border_pieces(item.border, [x, y, x + w, y + h], b, 1.0, gradient)
+            {
+                self.quad([l, t, r - l, bot - t], c, tex, out);
+            }
         }
     }
 
@@ -721,7 +856,7 @@ impl Painter<'_> {
     /// word's end, as retail's lagging measure does, and lines sit the
     /// text height plus 5 apart; `\r` reads as a space.
     fn wrap_lines(&self, text: &str, item: &UiItem) -> Vec<(String, f32, f32)> {
-        let scale = item.text_scale;
+        let scale = Size::from(item);
         let rect_w = item.rect[2];
         let total = self.width(text, scale);
         let aim = if total > rect_w {
@@ -771,16 +906,19 @@ impl Painter<'_> {
         }
     }
 
-    /// The font the UI picks for `scale` on this window.
-    pub(super) fn font(&self, scale: f32) -> Option<&font::Font> {
+    /// The font the UI picks for `size` on this window.
+    pub(super) fn font(&self, size: impl Into<Size>) -> Option<&font::Font> {
+        let Size { font, scale } = size.into();
         self.fonts
-            .map(|f| f.pick(Slot::Default, scale, 480.0 * self.v.scale))
+            .map(|f| ui_font(f, font, scale, 480.0 * self.v.scale))
     }
 
     /// Width on the 640 grid: on CoD1 the DC's `textWidth`, syscall 0x43's
     /// int ([`font::trap_width`]); CoD2's unrounded.
-    pub(crate) fn width(&self, text: &str, scale: f32) -> f32 {
-        self.font(scale).map_or(0.0, |f| match self.exact {
+    pub(crate) fn width(&self, text: &str, size: impl Into<Size>) -> f32 {
+        let size = size.into();
+        let scale = size.scale;
+        self.font(size).map_or(0.0, |f| match self.exact {
             false => font::trap_width(f, text, scale),
             true => font::measure(f, text, scale / f.unit_scale()),
         })
@@ -790,8 +928,10 @@ impl Painter<'_> {
     /// syscall 0x44's int ([`font::trap_height`]); on CoD2 the font's
     /// tallest glyph at `scale`, as far above the baseline as
     /// [`Self::text`] puts the top.
-    pub(crate) fn height(&self, scale: f32) -> f32 {
-        self.font(scale).map_or(0.0, |f| match self.exact {
+    pub(crate) fn height(&self, size: impl Into<Size>) -> f32 {
+        let size = size.into();
+        let scale = size.scale;
+        self.font(size).map_or(0.0, |f| match self.exact {
             false => font::trap_height(f, scale),
             true => f.max_height as f32 * f.glyph_scale * scale,
         })
@@ -805,12 +945,14 @@ impl Painter<'_> {
         text: &str,
         x: f32,
         y: f32,
-        scale: f32,
+        size: impl Into<Size>,
         color: [f32; 4],
         style: i32,
         out: &mut Vec<HudQuad>,
     ) {
-        let Some(f) = self.font(scale) else { return };
+        let size = size.into();
+        let scale = size.scale;
+        let Some(f) = self.font(size) else { return };
         let top = y - f.max_height as f32 * f.glyph_scale * scale;
         let [px, py] = self.v.point(x, top);
         let px_scale = scale * self.v.scale / f.unit_scale();
@@ -863,6 +1005,45 @@ mod tests {
         assert_eq!(draw(true, 0).len(), 1);
         let q = draw(true, 6);
         assert_eq!((offset(&q), q[0].rgba[3]), (2.0, 1.0));
+    }
+
+    /// `textfont` picks the atlas as `0x400079e0` does: 2, 3 and 5 at any
+    /// size, 4 small, normal or bold by drawn size, the rest by drawn size.
+    #[test]
+    fn textfont_picks_the_retail_font() {
+        let font = |size| font::Font {
+            size,
+            ..crate::hud::hudelem::tests::test_font()
+        };
+        let fonts = UiFonts {
+            small: font(12),
+            normal: font(16),
+            console: font(18),
+            big: font(24),
+            bold: font(30),
+            extra_big: font(32),
+        };
+        let size = |handle, scale| ui_font(&fonts, handle, scale, 480.0).size;
+        for scale in [0.2, 0.6] {
+            assert_eq!([2, 3, 5].map(|h| size(h, scale)), [24, 12, 18]);
+        }
+        assert_eq!([0.25, 0.3, 0.6].map(|s| size(4, s)), [12, 16, 30]);
+        for h in [0, 1, 6] {
+            assert_eq!([0.25, 0.3, 0.45, 0.6].map(|s| size(h, s)), [12, 16, 24, 32]);
+        }
+        // The item's handle reaches the painter.
+        let p = Painter {
+            v: Virtual::new((640.0, 480.0)),
+            fonts: Some(&fonts),
+            exact: false,
+        };
+        let item = |text_font| UiItem {
+            text_font,
+            text_scale: 0.3,
+            ..UiItem::default()
+        };
+        assert_eq!(p.font(&item(1)).map(|f| f.size), Some(16));
+        assert_eq!(p.font(&item(2)).map(|f| f.size), Some(24));
     }
 
     /// `Window_Paint` style 3 draws its handle whatever it is: no
@@ -925,6 +1106,194 @@ mod tests {
         assert_eq!(span(&out[0]), (2.0, 1279.0), "the fill");
         assert_eq!(span(&out[3]), (0.0, 2.0), "the left side");
         assert_eq!(span(&out[4]), (1278.0, 1280.0), "the right side");
+    }
+
+    /// `Window_Paint`'s borders: full sides down the whole height over the
+    /// top and bottom, the horizontal and vertical pairs alone, and on CoD1
+    /// the gradient bar `bordersize` tall at the top and one unit above the
+    /// bottom.
+    #[test]
+    fn borders_follow_window_paint() {
+        let r = [10.0, 20.0, 110.0, 70.0];
+        let edges = |border, gradient| {
+            border_pieces(border, r, 2.0, 1.0, gradient)
+                .into_iter()
+                .map(|(e, tex)| (e, tex == GRADIENT_BAR))
+                .collect::<Vec<_>>()
+        };
+        let top = ([10.0, 20.0, 110.0, 22.0], false);
+        let bottom = ([10.0, 68.0, 110.0, 70.0], false);
+        let left = ([10.0, 20.0, 12.0, 70.0], false);
+        let right = ([108.0, 20.0, 110.0, 70.0], false);
+        assert_eq!(edges(1, true), [top, bottom, left, right]);
+        assert_eq!(edges(2, true), [top, bottom]);
+        assert_eq!(edges(3, true), [left, right]);
+        assert_eq!(
+            edges(4, true),
+            [
+                ([10.0, 20.0, 110.0, 22.0], true),
+                ([10.0, 69.0, 110.0, 71.0], true)
+            ]
+        );
+        assert!(edges(4, false).is_empty() && edges(5, true).is_empty());
+    }
+
+    /// A popup's own window (`del_fav_popmenu`'s) paints under its items:
+    /// the fill inside the border, then the border.
+    #[test]
+    fn a_menus_own_window_paints_under_its_items() {
+        let mut ui = ui_with_menu(
+            r#"{ menuDef { name "main" rect 200 220 250 80 style 1
+            backcolor .1 .15 .1 1 border 1 bordercolor .5 .5 .5 .5
+            itemDef { visible 1 rect 0 0 10 10 style 1 backcolor 1 1 1 1 decoration } } }"#,
+        );
+        let shell = Shell::new();
+        ui.open_main(&shell, &mut Vec::new());
+        let quads = ui.build(640.0, 480.0, &Localized::default(), &shell);
+        let rgba: Vec<_> = quads.iter().map(|q| q.rgba).collect();
+        let (fill, edge) = ([0.1, 0.15, 0.1, 1.0], [0.5; 4]);
+        assert_eq!(rgba, [fill, edge, edge, edge, edge, [1.0; 4]]);
+        assert_eq!(quads[0].verts[0], [201.0, 221.0]);
+        assert_eq!(quads[0].verts[2], [449.0, 299.0]);
+    }
+
+    /// The pulse runs from the colour to 0.8 of it on `sin(realTime / 75)`,
+    /// steps each 75 ms and clamps each channel.
+    #[test]
+    fn the_focus_pulse_follows_item_text_color() {
+        let c = [1.0, 0.5, 0.0, 1.0];
+        let mid = [0.9, 0.45, 0.0, 0.9];
+        assert_eq!(pulse(c, dim(c), 0), mid);
+        assert_eq!(pulse(c, dim(c), 74), mid);
+        // sin(11) is -0.99999: the full colour; sin(8) is 0.989: near 0.8.
+        let near = |a: [f32; 4], b: [f32; 4]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.003);
+        assert!(near(pulse(c, dim(c), 11 * 75), c));
+        assert!(near(pulse(c, dim(c), 8 * 75), dim(c)));
+        assert_eq!(pulse([1.2; 4], [1.2; 4], 0), [1.0; 4]);
+    }
+
+    /// A focused slider's bar and thumb pulse with its text.
+    #[test]
+    fn a_focused_slider_pulses() {
+        let mut ui = ui_with_menu(
+            r#"{ menuDef { name "main" rect 0 0 640 480 focuscolor 1 .5 0 1
+            itemDef { type 10 visible 1 rect 10 10 100 20 cvarFloat "s_volume" 0.5 0 1 } } }"#,
+        );
+        let shell = Shell::new();
+        let loc = Localized::default();
+        ui.open_main(&shell, &mut Vec::new());
+        let t0 = std::time::Instant::now();
+        ui.frame(t0, &shell);
+        ui.frame(t0 + std::time::Duration::from_millis(1234), &shell);
+        let m = ui.find("main").unwrap();
+        let focus = [1.0, 0.5, 0.0, 1.0];
+        let lit = pulse(focus, dim(focus), 1234);
+        assert_ne!(lit, pulse(focus, dim(focus), 0));
+        ui.focus.insert(m, 0);
+        let quads = ui.build(640.0, 480.0, &loc, &shell);
+        let slider: Vec<_> = (quads.iter())
+            .filter(|q| q.texture.contains("slider"))
+            .map(|q| q.rgba)
+            .collect();
+        assert_eq!(slider, [lit, lit]);
+    }
+
+    /// The bind whose wait last started shows its keys in a pulse toward
+    /// dark red while it has the focus, during the wait and after it.
+    #[test]
+    fn the_last_waiting_bind_pulses_red() {
+        let mut ui = ui_with_menu(
+            r#"{ menuDef { name "main" rect 0 0 640 480 focuscolor 1 .5 0 1
+            itemDef { type 13 visible 1 rect 10 40 100 20 text "Fire" cvar "+attack" } } }"#,
+        );
+        ui.fonts = Some(crate::hud::hudelem::tests::test_fonts());
+        let mut shell = Shell::new();
+        shell.execute("bind f +attack");
+        let loc = Localized::default();
+        ui.open_main(&shell, &mut Vec::new());
+        let m = ui.find("main").unwrap();
+        ui.focus.insert(m, 0);
+        let focus = [1.0, 0.5, 0.0, 1.0];
+        let (lit, red) = (
+            pulse(focus, dim(focus), 0),
+            pulse(focus, [0.8, 0.0, 0.0, 0.8], 0),
+        );
+        let count = |ui: &Ui, c| {
+            (ui.build(640.0, 480.0, &loc, &shell).iter())
+                .filter(|q| q.rgba == c)
+                .count()
+        };
+        let keys = (super::super::options::bind_text("+attack", &loc, &shell).chars()).count();
+        assert!(keys > 0);
+        assert_eq!((count(&ui, lit), count(&ui, red)), (4 + keys, 0));
+        ui.options.waiting = Some((m, 0));
+        ui.options.bind_item = Some((m, 0));
+        assert_eq!((count(&ui, lit), count(&ui, red)), (4, keys));
+        ui.options.waiting = None;
+        assert_eq!(count(&ui, red), keys);
+    }
+
+    /// Style 1 pulses its colour in the even 256 ms steps and holds it in
+    /// the odd ones; style 2 never changes. A value keeps `forecolor`.
+    #[test]
+    fn text_style_1_blinks_and_2_holds() {
+        let fore = [1.0, 0.5, 0.0, 1.0];
+        let item = |text_style| UiItem {
+            text_style,
+            fore,
+            ..UiItem::default()
+        };
+        let mid = pulse(fore, dim(fore), 0);
+        let at = |style, rt| text_color(&item(style), rt);
+        assert_eq!(
+            [0, 255, 256, 511, 512].map(|t| at(1, t) == fore),
+            [false, false, true, true, false]
+        );
+        assert_eq!(at(1, 0), mid);
+        assert_eq!([0, 256].map(|t| at(2, t)), [fore, fore]);
+
+        let mut ui = ui_with_menu(
+            r#"{ menuDef { name "main" rect 0 0 640 480
+            itemDef { type 11 visible 1 rect 10 40 100 20 text "Ab" cvar "x" textstyle 1
+              forecolor 1 .5 0 1 } } }"#,
+        );
+        ui.fonts = Some(crate::hud::hudelem::tests::test_fonts());
+        let shell = Shell::new();
+        let loc = Localized::default();
+        ui.open_main(&shell, &mut Vec::new());
+        let quads = ui.build(640.0, 480.0, &loc, &shell);
+        let count = |c| quads.iter().filter(|q| q.rgba == c).count();
+        assert_eq!(count(mid), 2, "the label blinks");
+        assert!(count(fore) > 0, "the value holds");
+    }
+
+    /// Under the digest clock a menu frame draws the same quads whatever
+    /// the wall clock did: the focus pulse and the edit cursor read it.
+    #[test]
+    fn a_menu_frame_repeats_at_the_same_digest_clock() {
+        let mut ui = ui_with_menu(
+            r#"{ menuDef { name "main" rect 0 0 640 480 focuscolor 1 .5 0 1
+            itemDef { type 4 visible 1 rect 10 10 100 20 text "Name" cvar "name" } } }"#,
+        );
+        ui.fonts = Some(crate::hud::hudelem::tests::test_fonts());
+        let shell = Shell::new();
+        let loc = Localized::default();
+        ui.open_main(&shell, &mut Vec::new());
+        let m = ui.find("main").unwrap();
+        ui.focus.insert(m, 0);
+        ui.start_edit(m, 0, true);
+        let t0 = std::time::Instant::now();
+        let frame = |ui: &mut Ui, wall: u64, clock: i32| {
+            ui.frame(t0 + std::time::Duration::from_millis(wall), &shell);
+            ui.set_digest_clock(Some(clock));
+            (ui.build(640.0, 480.0, &loc, &shell).iter())
+                .map(|q| (q.verts, q.uvs, q.rgba, q.texture.clone()))
+                .collect::<Vec<_>>()
+        };
+        let a = frame(&mut ui, 0, 300);
+        assert_eq!(a, frame(&mut ui, 4321, 300));
+        // The cursor shows in the odd 256 ms steps of the digest clock.
+        assert_eq!(frame(&mut ui, 0, 0).len() + 1, a.len());
     }
 
     /// `Item_SetTextExtents`: int widths, a centred shift rounded toward
@@ -1144,8 +1513,9 @@ mod tests {
         ui.menus[m].focus_color = focus_color;
         let loc = Localized::default();
         let lit = |ui: &Ui| {
+            let c = pulse(focus_color, dim(focus_color), ui.real_time);
             (ui.build(640.0, 480.0, &loc, &shell).iter())
-                .filter(|q| q.rgba == focus_color)
+                .filter(|q| q.rgba == c)
                 .count()
         };
         let glyphs = |ui: &Ui, i: usize| {
