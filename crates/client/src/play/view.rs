@@ -92,6 +92,66 @@ impl ViewPs {
     }
 }
 
+/// `CG_InterpolatePlayerState(0)` (cgame 1.1 0x300291d0, 1.5 0x3002a540,
+/// UO 0x300354b0), the playerstate a follower or a demo draws: `next`'s,
+/// with the bob cycle, `aimSpreadScale`, origin, view angles, velocity,
+/// `viewHeightCurrent`, `leanf` and `fWeaponPosFrac` lerped from `prev`'s
+/// at `time`. A pair whose times do not rise is `next`'s as it is
+/// (cod11-spectator-follow.md 11.3).
+pub fn interpolated_ps(
+    p: &Cod1Wire,
+    (prev, prev_time): (&msg::PlayerState, i32),
+    (next, next_time): (&msg::PlayerState, i32),
+    time: i32,
+) -> msg::PlayerState {
+    let mut out = next.clone();
+    if next_time <= prev_time {
+        return out;
+    }
+    let f = f64::from((f64::from(time - prev_time) / f64::from(next_time - prev_time)) as f32);
+    let field = |name: &str| msg::PlayerState::field_index(p, name);
+    let float = |ps: &msg::PlayerState, i: usize| f64::from(f32::from_bits(ps.fields[i] as u32));
+    if let Some(i) = field("bobCycle") {
+        let (a, mut b) = (prev.fields[i], next.fields[i]);
+        if b < a {
+            b += 256;
+        }
+        out.fields[i] = a + (f64::from(b - a) * f) as i32;
+    }
+    let lerped = [
+        "aimSpreadScale",
+        "origin[0]",
+        "origin[1]",
+        "origin[2]",
+        "velocity[0]",
+        "velocity[1]",
+        "velocity[2]",
+        "viewHeightCurrent",
+        "leanf",
+        "fWeaponPosFrac",
+    ];
+    for i in lerped.iter().filter_map(|n| field(n)) {
+        let a = float(prev, i);
+        out.fields[i] = ((a + (float(next, i) - a) * f) as f32).to_bits() as i32;
+    }
+    // `LerpAngle` (0x3003c2a0): the short way round, unwrapped.
+    for i in ["viewangles[0]", "viewangles[1]", "viewangles[2]"]
+        .iter()
+        .filter_map(|n| field(n))
+    {
+        let (a, mut b) = (float(prev, i) as f32, float(next, i) as f32);
+        if b - a > 180.0 {
+            b -= 360.0;
+        }
+        if b - a < -180.0 {
+            b += 360.0;
+        }
+        let v = f64::from(a) + (f64::from(b) - f64::from(a)) * f;
+        out.fields[i] = (v as f32).to_bits() as i32;
+    }
+    out
+}
+
 /// What a rig is built from: the weapon file and the hands model override.
 #[derive(Clone, Debug, PartialEq)]
 struct RigKey {
@@ -637,6 +697,41 @@ fn view_to_world(
 mod tests {
     use super::*;
     use vcod_common::weapon::CG_FOV;
+
+    /// A follower's view between two snapshots (0x300291d0): `next`'s
+    /// playerstate with the lerped fields from `prev`, the view angles the
+    /// short way round and unwrapped, the bob cycle across its 8-bit wrap.
+    #[test]
+    fn a_followed_playerstate_lerps_retails_fields() {
+        for p in [
+            &vcod_common::net::protocol::PROTOCOL_V1,
+            &vcod_common::net::protocol::PROTOCOL_V22,
+        ] {
+            let ps = |yaw: f32, x: f32, bob: i32, weapon: i32| {
+                let mut ps = msg::PlayerState::null(p);
+                let mut set = |name: &str, v: i32| {
+                    ps.fields[msg::PlayerState::field_index(p, name).expect(name)] = v;
+                };
+                set("viewangles[1]", yaw.to_bits() as i32);
+                set("origin[0]", x.to_bits() as i32);
+                set("fWeaponPosFrac", (x / 100.0).to_bits() as i32);
+                set("bobCycle", bob);
+                set("weapon", weapon);
+                ps
+            };
+            let (prev, next) = (ps(350.0, 0.0, 250, 1), ps(10.0, 100.0, 4, 2));
+            let mid = interpolated_ps(p, (&prev, 1000), (&next, 1050), 1025);
+            let f = |name: &str| mid.field_f32(p, name);
+            assert_eq!(f("viewangles[1]"), 360.0);
+            assert_eq!(f("origin[0]"), 50.0);
+            assert_eq!(f("fWeaponPosFrac"), 0.5);
+            assert_eq!(mid.field_i32(p, "bobCycle"), 255);
+            assert_eq!(mid.field_i32(p, "weapon"), 2);
+            // A pair that does not rise in time draws `next` as it is.
+            let held = interpolated_ps(p, (&prev, 1050), (&next, 1050), 1050);
+            assert_eq!(held.fields, next.fields);
+        }
+    }
 
     #[test]
     fn the_intermission_view_sits_at_the_origin() {

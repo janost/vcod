@@ -490,6 +490,48 @@ Tests: `the_1_1_key_lines_follow_its_view_bits`,
 `the_spectator_key_lines_draw_under_no_board`. The client registers
 `cg_descriptiveText` `1`, archived.
 
+### 11.3 The client: the follower's playerstate
+
+VERIFIED (the instructions), `CG_PredictPlayerState` (1.1 `0x300294f0`,
+1.5 `0x3002a860`, UO `0x30035800`): during demo playback, or while
+`cg.snap`'s `pm_flags` carries the follow bit (1.1 and 1.5 0x10000 at
+`0x30029525` and `0x3002a895`, UO 0x40000 at `0x30035834`), it calls
+`CG_InterpolatePlayerState` with 0 (1.1 `0x30029a4a`, 1.5 `0x3002adba`, UO
+`0x30036048`) and predicts nothing. That function (1.1 `0x300291d0`, 1.5
+`0x3002a540`, UO `0x300354b0`):
+
+- copies `cg.nextSnap`'s (`0x301e2164`) playerstate into
+  `cg.predictedPlayerState` (`0x3020715c`, `rep movs` at `0x300291f0`; 1.5
+  `0x3002a560`, UO `0x300354d0`);
+- returns there unless `nextSnap`'s `serverTime` is past `cg.snap`'s
+  (`0x30029241`);
+- takes `f = (cg.time - snap.serverTime) / (next - snap)`, stored as a
+  float (`0x3002926b`);
+- lerps from `cg.snap`'s: `bobCycle` (`next + 256` when below, truncated
+  by `_ftol`, `0x30029266..0x3002928b`), `aimSpreadScale` (`ps+0x3d8`),
+  `origin`, the view angles through `LerpAngle` (`0x3003c2a0`: the far
+  angle moved by 360 when the two are over 180 apart, the result not
+  wrapped), `velocity` (the loop `0x300292e0..0x3002933f`), then
+  `viewHeightCurrent` (`ps+0xd0`), `leanf` (`ps+0x40`) and `fWeaponPosFrac`
+  (`ps+0xb8`, `0x30029341..0x30029386`). 1.5 lerps the same offsets; UO the
+  same fields at its own (`aimSpreadScale` `ps+0x628`, `viewHeightCurrent`
+  `ps+0xf8`, `leanf` `ps+0x44`, `fWeaponPosFrac` `ps+0xe0`), field names
+  from `fields_v1.rs` and `fields_v22.rs`.
+
+VERIFIED: the gun step (`0x300371f0`, `cod11-combat.md` 17.4) is handed that
+playerstate (`push 0x3020715c` at `0x30033dff`), and the function at
+`0x30032ae8`, which holds `CG_OffsetFirstPersonView`'s kick adds
+(`0x30032b58`, `cod11-combat.md` 15.5), loads its address at `0x30032b06`. So a
+follower's view weapon sways off the target's view lerped frame by frame.
+
+vcod built the follower's gun sway, the view's damage kick and walk bob and
+the view weapon's playerstate from the newest snapshot as it came, so the
+sway saw the target's turn in one step per snapshot. It now takes
+`play::view::interpolated_ps` over the drawn pair at the render clock
+whenever no replay runs (a follow or a demo); test
+`a_followed_playerstate_lerps_retails_fields`. The spectator's own mouse
+never reached it: with no replay the gun steps off the snapshot alone.
+
 ## 12. The killcam
 
 A killcam is a forced follow whose copy comes from the engine's frame

@@ -822,8 +822,9 @@ fn steps_gun(pm_type: i32, e_flags: i32) -> bool {
 }
 
 /// The playerstate the gun's aim and the damage kick run on, and its clock:
-/// the replay at its own clock, or a followed player's snapshot at the
-/// render clock. Retail runs both on whichever playerstate it draws.
+/// the replay at its own clock, or `ps` at the render clock, which for a
+/// follower is the lerped pair (`play::view::interpolated_ps`). Retail runs
+/// both on whichever playerstate it draws.
 fn gun_clock(
     p: &Cod1Wire,
     ps: &PlayerState,
