@@ -1584,6 +1584,20 @@ compass. vcod draws it on those terms, off the snapshot's playerstate
 without prediction while following, and rebases the hit-direction feedback
 when the playerstate's `clientNum` changes.
 
+VERIFIED (live capture, retail-client 2026-11-24 step `2-intermission`:
+`client.log` and `rc_{play,intermission}_{1,2,3}.tga`): a 1.1 `CoDMP.exe`
+drew the probe's level hudelem and its client hudelem in all three shots at
+`pm_type` 0, and neither in all three at `pm_type` 5, while every snapshot
+of both phases (68 and 122) still carried three archived elements. VERIFIED
+(the instructions): 1.5's 2D pass `0x300199e0` and UO's `0x3001bfe0` take
+the same `pm_type` 5 branch (`0x30019a2c`, `0x3001c02c`) to a call
+(`0x30019710`, `0x3001bd20`) that tail-jumps into the scoreboard draw
+(`0x3002cae0`, `0x30037d90`), and return. INFERRED, off their position in
+the other branches: their hudelem passes are `0x30020c10` and `0x3002a4a0`.
+So no build draws a hudelem at intermission; vcod's `Hud::build` skips them
+at `pm_type` 5 (test `the_intermission_capture_draws_no_hudelems`, fixture
+`crates/client/tests/fixtures/retail-client-intermission.txt`).
+
 VERIFIED, the cvar rows: `cg_drawStatus` at `0x30074a44` binds
 `0x301d9ec0`, `cg_drawCrosshair` at `0x30074aa4` binds `0x301d9020`, both
 default `"1"`, flags 1 (archive). INFERRED, from Q3's `vmCvar_t`: each

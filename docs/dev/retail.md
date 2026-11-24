@@ -176,7 +176,9 @@ draws either kind of hudelem.
 
 Fixture: the verdict per box with the `snap` lines that carried the
 elements (`hud=`), so a HUD test builds that frame and asserts the
-elements drawn or not; the shots stay in `tmp/`.
+elements drawn or not; the shots stay in `tmp/`. The 2026-11-24 capture's
+is `crates/client/tests/fixtures/retail-client-intermission.txt`: neither
+box at intermission (`cod11-hud-protocol.md` 9.1).
 
 ### Cursor hint width (1.1 and UO)
 

@@ -513,7 +513,9 @@ impl Hud {
             }
             None => self.player.hidden(),
         }
-        if let Some(ps) = f.ps.filter(|_| f.draw.status) {
+        // The 2D pass draws only the scoreboard at intermission (pm_type 5),
+        // no hudelems (cod11-hud-protocol.md 9.1).
+        if let Some(ps) = f.ps.filter(|ps| f.draw.status && pm_type(ps) != 5) {
             let elems: Vec<HudElem> = ps
                 .arrays
                 .hud_archived
@@ -1382,7 +1384,7 @@ mod tests {
     }
 
     #[test]
-    fn the_native_hud_draws_for_any_player_view_and_hudelems_always() {
+    fn the_native_hud_draws_for_any_player_view_and_hudelems_but_at_intermission() {
         let Some(fs) = vcod_common::testing::game_fs() else {
             return;
         };
@@ -1396,7 +1398,8 @@ mod tests {
         bar.set(msg_field::COLOR, -1);
         ps.arrays.hud_current.push(bar);
         let mut cs = vec![String::new(); hudelem::CS_SHADERS_V1 + 2];
-        cs[hudelem::CS_SHADERS_V1 + 1] = "white".into();
+        // A name nothing else draws: the scoreboard and header draw `white`.
+        cs[hudelem::CS_SHADERS_V1 + 1] = "hudelem_bar".into();
         let (loc, clients) = (Localized::default(), BTreeMap::new());
         let pm_type = PlayerState::field_index(&PROTOCOL_V1, "pm_type").expect("pm_type");
         let mut drawn = |pm: i32, local_player: bool| -> Vec<String> {
@@ -1411,14 +1414,12 @@ mod tests {
         let native = |t: &[String]| t.iter().any(|t| t.contains("health_back"));
         let header = hud_header_page(&fs);
 
-        // A free-flying spectator, and the intermission: hudelems only.
-        for pm in [4, 5] {
-            let t = drawn(pm, false);
-            assert!(
-                t.iter().any(|t| t == "white") && !native(&t),
-                "pm_type {pm}"
-            );
-        }
+        // A free-flying spectator: hudelems only. The intermission: neither.
+        let bar = |t: &[String]| t.iter().any(|t| t == "hudelem_bar");
+        let t = drawn(4, false);
+        assert!(bar(&t) && !native(&t));
+        let t = drawn(5, false);
+        assert!(!bar(&t) && !native(&t));
         // Following: the target's HUD, and vcod's header.
         let following = drawn(0, false);
         assert!(native(&following) && following.contains(&header));
@@ -1426,6 +1427,83 @@ mod tests {
         let own = drawn(0, true);
         assert!(native(&own) && !own.contains(&header));
         assert!(native(&drawn(6, false)), "dead");
+    }
+
+    /// A retail 1.1 client drew a level and a client hudelem alive and
+    /// neither at intermission, with both still in the snapshot.
+    #[test]
+    fn the_intermission_capture_draws_no_hudelems() {
+        let fixture = include_str!("../../tests/fixtures/retail-client-intermission.txt");
+        let mut boxes = Vec::new();
+        let mut snap = None;
+        let mut shots = Vec::new();
+        for line in fixture.lines().filter(|l| !l.starts_with('#')) {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            let field = |key: &str| {
+                let at = words
+                    .iter()
+                    .find_map(|w| w.strip_prefix(key)?.strip_prefix('='));
+                at.unwrap_or_else(|| panic!("{key} in {line}"))
+            };
+            match words[0] {
+                "hud" => {
+                    let n: Vec<i32> = words[2..].iter().map(|w| w.parse().unwrap()).collect();
+                    let [x, y, w, h, r, g, b] = n[..] else {
+                        panic!("{line}")
+                    };
+                    let mut e = HudElem::default();
+                    e.set(msg_field::TYPE, 3);
+                    e.set(msg_field::SHADER, 1);
+                    e.set(msg_field::X, x);
+                    e.set(msg_field::Y, y);
+                    e.set(msg_field::WIDTH, w);
+                    e.set(msg_field::HEIGHT, h);
+                    e.set(
+                        msg_field::COLOR,
+                        i32::from_le_bytes([r, g, b, 1].map(|c| c as u8 * 255)),
+                    );
+                    boxes.push((words[1], x as f32, e));
+                }
+                "snap" => {
+                    let (archived, current) = field("hud").split_once(',').unwrap();
+                    let counts: (usize, usize) =
+                        (archived.parse().unwrap(), current.parse().unwrap());
+                    snap = Some((field("pm_type").parse::<i32>().unwrap(), counts));
+                }
+                "shot" => {
+                    let (pm_type, counts) = snap.take().expect("a snap before its shot");
+                    let drawn = |name: &str| field(name) == "1";
+                    shots.push((words[1], pm_type, counts, drawn("level"), drawn("client")));
+                }
+                _ => panic!("{line}"),
+            }
+        }
+        assert_eq!(shots.len(), 2);
+
+        let mut hud = bare_hud();
+        let mut cs = vec![String::new(); hudelem::CS_SHADERS_V1 + 2];
+        cs[hudelem::CS_SHADERS_V1 + 1] = "white".into();
+        let (loc, clients) = (Localized::default(), BTreeMap::new());
+        let pm_index = PlayerState::field_index(&PROTOCOL_V1, "pm_type").expect("pm_type");
+        for (phase, pm_type, (archived, current), level, client) in shots {
+            // The snapshot carried the probe's two boxes among its archived elements.
+            assert!(archived >= boxes.len() && current == 0, "{phase}");
+            let mut ps = PlayerState::null(&PROTOCOL_V1);
+            ps.fields[pm_index] = pm_type;
+            ps.arrays.hud_archived = boxes.iter().map(|b| b.2).collect();
+            let f = HudFrame {
+                configstrings: &cs,
+                ..frame(&ps, None, &loc, &clients)
+            };
+            let quads = hud.build(&f);
+            let seen = |name: &str| {
+                let x = boxes.iter().find(|b| b.0 == name).expect(name).1;
+                quads
+                    .iter()
+                    .any(|q| q.texture == "white" && (q.verts[0][0] - x).abs() < 0.5)
+            };
+            assert_eq!((seen("level"), seen("client")), (level, client), "{phase}");
+        }
     }
 
     #[test]

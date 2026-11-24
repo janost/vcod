@@ -1,0 +1,13 @@
+# Retail CoD 1.1 CoDMP.exe on vcod-server, capture 2026-11-24, step
+# 2-intermission (probe_rc_intermission.gsc, docs/dev/retail.md "Retail
+# client captures"). `hud` rows: the probe's two boxes (games_mp.log `PROBE
+# hud`: x y w h r g b). `snap` rows: client.log's first snapshot of each phase
+# (68 at pm_type 0, 122 at pm_type 5, every one hud=3,0). `shot` rows: whether
+# rc_<phase>_{1,2,3}.tga showed each box (analyze.py intermission), the same
+# on all three shots.
+hud level 16 216 48 48 1 0 1
+hud client 576 216 48 48 0 1 0
+snap svs=6850 slot=0 msg=36 time=6850 ct=6850 pm_type=0 health=100 weapon=12 hint=0,0,255 hud=3,0 es=0 ev=0:0,0:0,0:0,0:0
+shot play level=1 client=1
+snap svs=10250 slot=0 msg=104 time=10250 ct=10184 pm_type=5 health=0 weapon=0 hint=0,0,0 hud=3,0 es=0 ev=0:0,0:0,0:0,0:0
+shot intermission level=0 client=0
