@@ -3377,10 +3377,23 @@ Sources: `ui_mp_x86.dll` 1.1 and `CoDMP.exe` 1.1, read with `objdump`
   text whether or not a wait runs (`0x40015367`). VERIFIED (asm). CoD2's
   bind paint has the same colour (`0x540a12`..`0x540a32`) and its
   `g_bindItem` (`0x19a1c98`) one store (`0x540bfb`). VERIFIED (asm).
+- Without the focus, `Item_TextColor` pulses `forecolor` the same way when
+  the item's `textstyle` (`+0xe4`) is 1 and `(realTime / 256) & 1` is 0
+  (`0x40013ed1`..`0x40013f73`), else takes `forecolor`
+  (`0x40013f75`). VERIFIED (asm). Style 1, `ITEM_TEXTSTYLE_BLINK`,
+  breathes for 256 ms and holds for 256 ms; style 2, `PULSE`, has no
+  case in it nor in the renderer (cod11-hud-protocol.md 6.2), so it draws
+  as style 0. INFERRED (the combination). Of the value paints only the
+  owner draw has the style 1 case (`0x4001623f`); the others take
+  `forecolor`. VERIFIED (asm, the two `cmp [+0xe4], 1` in the module).
+  1.5 (`0x40014a71`, style at `+0xe8`), UO (`0x4001752d`) and CoD2
+  (`0x53f32d`, `0x5416ce`, style at `+0x290`) have the same cases.
+  VERIFIED (asm). Every stock style 1 item has its text commented out
+  but `cdkey.menu`'s `demo_only` line. VERIFIED (the paks).
 - vcod: `paint::pulse` over `Ui::real_time`, milliseconds since the UI's
   first frame (`Ui::frame`), for the label, the value, the slider's bar
   and thumb and the edit cursor; `options::State::bind_item` keeps
-  `g_bindItem`. The phase differs from retail's
+  `g_bindItem`; `paint::text_color` blinks style 1. The phase differs from retail's
   `realTime`, which counts from the engine's start. INFERRED.
 
 ## 21. Video modes, fullscreen and wide windows

@@ -117,15 +117,18 @@ impl Ui {
                 let focused =
                     self.focused(m, i) && !item.decoration && item.kind != ITEM_TYPE_LISTBOX;
                 let rt = self.real_time;
-                let color = match focused {
-                    true => pulse(menu.focus_color, dim(menu.focus_color), rt),
-                    false => item.fore,
-                };
-                // The last bind to wait for a key pulses toward dark red
+                let lit = focused.then(|| pulse(menu.focus_color, dim(menu.focus_color), rt));
+                let color = lit.unwrap_or_else(|| text_color(item, rt));
+                // The values blink only on an owner draw (0x4001623f); the
+                // last bind to wait for a key pulses toward dark red
                 // (0x4001527f..0x4001529f, CoD2MP_s.exe 0x540a12).
-                let value_color = match self.options.bind_item == Some((m, i)) && focused {
-                    true => pulse(menu.focus_color, [0.8, 0.0, 0.0, 0.8], rt),
-                    false => color,
+                let value_color = match lit {
+                    Some(_) if self.options.bind_item == Some((m, i)) => {
+                        pulse(menu.focus_color, [0.8, 0.0, 0.0, 0.8], rt)
+                    }
+                    Some(c) => c,
+                    None if item.kind == ITEM_TYPE_OWNERDRAW => color,
+                    None => item.fore,
                 };
                 if let Some((len, first)) = self.list_scroll(item) {
                     let thumb = self
@@ -504,6 +507,17 @@ pub(super) fn truncate_visible(text: &str, n: usize) -> String {
 pub(super) fn pulse(c: [f32; 4], low: [f32; 4], real_time: i32) -> [f32; 4] {
     let t = ((f64::from(real_time / 75).sin() + 1.0) * 0.5) as f32;
     std::array::from_fn(|i| (c[i] + t * (low[i] - c[i])).clamp(0.0, 1.0))
+}
+
+/// `Item_TextColor` (0x40013ed1..0x40013f8f) for an item without the
+/// focus: `ITEM_TEXTSTYLE_BLINK` (1) pulses its `forecolor` in the even
+/// 256 ms steps of `realTime` and holds it in the odd ones; every other
+/// style, `ITEM_TEXTSTYLE_PULSE` (2) included, takes `forecolor`.
+fn text_color(item: &UiItem, real_time: i32) -> [f32; 4] {
+    match item.text_style == 1 && (real_time / 256) & 1 == 0 {
+        true => pulse(item.fore, dim(item.fore), real_time),
+        false => item.fore,
+    }
 }
 
 /// The low end of a pulse: 0.8 of the colour (`0x40030010`).
@@ -1211,6 +1225,40 @@ mod tests {
         assert_eq!((count(&ui, lit), count(&ui, red)), (4, keys));
         ui.options.waiting = None;
         assert_eq!(count(&ui, red), keys);
+    }
+
+    /// Style 1 pulses its colour in the even 256 ms steps and holds it in
+    /// the odd ones; style 2 never changes. A value keeps `forecolor`.
+    #[test]
+    fn text_style_1_blinks_and_2_holds() {
+        let fore = [1.0, 0.5, 0.0, 1.0];
+        let item = |text_style| UiItem {
+            text_style,
+            fore,
+            ..UiItem::default()
+        };
+        let mid = pulse(fore, dim(fore), 0);
+        let at = |style, rt| text_color(&item(style), rt);
+        assert_eq!(
+            [0, 255, 256, 511, 512].map(|t| at(1, t) == fore),
+            [false, false, true, true, false]
+        );
+        assert_eq!(at(1, 0), mid);
+        assert_eq!([0, 256].map(|t| at(2, t)), [fore, fore]);
+
+        let mut ui = ui_with_menu(
+            r#"{ menuDef { name "main" rect 0 0 640 480
+            itemDef { type 11 visible 1 rect 10 40 100 20 text "Ab" cvar "x" textstyle 1
+              forecolor 1 .5 0 1 } } }"#,
+        );
+        ui.fonts = Some(crate::hud::hudelem::tests::test_fonts());
+        let shell = Shell::new();
+        let loc = Localized::default();
+        ui.open_main(&shell, &mut Vec::new());
+        let quads = ui.build(640.0, 480.0, &loc, &shell);
+        let count = |c| quads.iter().filter(|q| q.rgba == c).count();
+        assert_eq!(count(mid), 2, "the label blinks");
+        assert!(count(fore) > 0, "the value holds");
     }
 
     /// `Item_SetTextExtents`: int widths, a centred shift rounded toward
