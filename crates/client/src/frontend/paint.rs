@@ -10,7 +10,7 @@ use vcod_common::ui_menu::{
     FEEDER_SERVERS, FEEDER_SERVERSTATUS, ITEM_ALIGN_CENTER, ITEM_ALIGN_RIGHT, ITEM_TYPE_BIND,
     ITEM_TYPE_BUTTON, ITEM_TYPE_DECIMALFIELD, ITEM_TYPE_DVARENUM, ITEM_TYPE_EDITFIELD,
     ITEM_TYPE_LISTBOX, ITEM_TYPE_MULTI, ITEM_TYPE_NUMERICFIELD, ITEM_TYPE_OWNERDRAW,
-    ITEM_TYPE_SLIDER, ITEM_TYPE_TEXT, ITEM_TYPE_YESNO, UiItem, WINDOW_STYLE_CVAR_SHADER,
+    ITEM_TYPE_SLIDER, ITEM_TYPE_TEXT, ITEM_TYPE_YESNO, UiItem, UiMenu, WINDOW_STYLE_CVAR_SHADER,
     WINDOW_STYLE_FILLED, WINDOW_STYLE_SHADER,
 };
 
@@ -100,6 +100,7 @@ impl Ui {
         };
         for &m in self.painted() {
             let menu = &self.menus[m];
+            menu_window(&p, menu, &mut out);
             for (i, item) in menu.items.iter().enumerate() {
                 if !self.shown(m, i, shell) {
                     continue;
@@ -606,6 +607,25 @@ fn text_extents(item: &UiItem, kept: Option<[f32; 4]>, widths: TextWidths) -> [f
     ]
 }
 
+/// `Menu_Paint` (ui_mp_x86.dll 1.1 0x40016cf0) paints the menu's own
+/// window over its rect before the items (0x40016d8d); `Window_Paint`
+/// draws nothing for style 0 with no border (0x4000f961..0x4000f96d).
+fn menu_window(p: &Painter, menu: &UiMenu, out: &mut Vec<HudQuad>) {
+    let w = &menu.window;
+    if w.style == 0 && w.border == 0 {
+        return;
+    }
+    let mut window = w.clone();
+    window.rect = menu.rect;
+    let st = ItemState {
+        visible: true,
+        back: w.back,
+        border_color: w.border_color,
+        edit: Default::default(),
+    };
+    p.window(&window, &st, None, out);
+}
+
 /// `Window_Paint`'s border shader for style 4 (`DC->Assets.gradientBar`,
 /// registered from `0x4002f48c` unless `assetGlobalDef` names another).
 const GRADIENT_BAR: &str = "ui/assets/gradientbar2.tga";
@@ -1074,6 +1094,25 @@ mod tests {
             ]
         );
         assert!(edges(4, false).is_empty() && edges(5, true).is_empty());
+    }
+
+    /// A popup's own window (`del_fav_popmenu`'s) paints under its items:
+    /// the fill inside the border, then the border.
+    #[test]
+    fn a_menus_own_window_paints_under_its_items() {
+        let mut ui = ui_with_menu(
+            r#"{ menuDef { name "main" rect 200 220 250 80 style 1
+            backcolor .1 .15 .1 1 border 1 bordercolor .5 .5 .5 .5
+            itemDef { visible 1 rect 0 0 10 10 style 1 backcolor 1 1 1 1 decoration } } }"#,
+        );
+        let shell = Shell::new();
+        ui.open_main(&shell, &mut Vec::new());
+        let quads = ui.build(640.0, 480.0, &Localized::default(), &shell);
+        let rgba: Vec<_> = quads.iter().map(|q| q.rgba).collect();
+        let (fill, edge) = ([0.1, 0.15, 0.1, 1.0], [0.5; 4]);
+        assert_eq!(rgba, [fill, edge, edge, edge, edge, [1.0; 4]]);
+        assert_eq!(quads[0].verts[0], [201.0, 221.0]);
+        assert_eq!(quads[0].verts[2], [449.0, 299.0]);
     }
 
     /// `Item_SetTextExtents`: int widths, a centred shift rounded toward

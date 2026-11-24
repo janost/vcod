@@ -220,6 +220,10 @@ pub struct UiMenu {
     pub align: [i32; 2],
     /// CoD2's `blurWorld`: the world blurred behind the menu, 0 for none.
     pub blur_world: f32,
+    /// The menu's own window, which `Menu_Paint` draws under its items:
+    /// `style`, `forecolor`, `backcolor`, `border`, `borderSize`,
+    /// `bordercolor` and `background`. Its rect is the menu's.
+    pub window: UiItem,
 }
 
 /// `text` as tokens after the precompiler (`crate::menu_precomp`):
@@ -566,6 +570,26 @@ fn parse_menu(body: &[String], game: Game, errors: &mut Vec<String>) -> UiMenu {
             "focuscolor" => {
                 menu.focus_color = nums::<4>(body, i);
                 i += 5;
+            }
+            "forecolor" | "backcolor" | "bordercolor" => {
+                let c = nums::<4>(body, i);
+                match key.as_str() {
+                    "forecolor" => menu.window.fore = c,
+                    "backcolor" => menu.window.back = c,
+                    _ => menu.window.border_color = c,
+                }
+                i += 5;
+            }
+            "style" | "border" | "bordersize" | "background" => {
+                let w = &mut menu.window;
+                let arg = body.get(i + 1);
+                match key.as_str() {
+                    "style" => w.style = num(arg) as i32,
+                    "border" => w.border = num(arg) as i32,
+                    "bordersize" => w.border_size = num(arg),
+                    _ => w.background = arg.cloned(),
+                }
+                i += 2;
             }
             "onopen" | "onclose" | "onesc" => {
                 i += 1;
@@ -1059,6 +1083,7 @@ mod tests {
     focusColor FOCUS
     onESC { uiScript closeJoin
       close joinserver ; open main }
+    style 1 backcolor .1 .15 .1 1 border 1 borderSize 2 bordercolor .5 .5 .5 .5
     #include "bg.menu"
     itemDef {
       name play
@@ -1105,6 +1130,9 @@ mod tests {
         let m = &menus[0];
         assert_eq!(m.name, "main");
         assert_eq!(m.focus_color, [0.98, 0.96, 0.39, 1.0]);
+        let w = &m.window;
+        assert_eq!((w.style, w.border, w.border_size), (1, 1, 2.0));
+        assert_eq!((w.back, w.border_color), ([0.1, 0.15, 0.1, 1.0], [0.5; 4]));
         assert_eq!(m.items.len(), 3);
         let bg = &m.items[0];
         assert_eq!(bg.style, WINDOW_STYLE_SHADER);

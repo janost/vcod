@@ -3323,6 +3323,27 @@ Sources: `ui_mp_x86.dll` 1.1 and `CoDMP.exe` 1.1, read with `objdump`
   4 on CoD1 only. A full border's sides now run the whole height as
   retail's do, where vcod drew them between the top and bottom.
 
+### 20.11 The menu's own window
+
+- `Menu_Paint` (`0x40016cf0`) paints a fullscreen menu's background
+  (`+0xb4`) over 640x480 when its `fullscreen` (`+0xbc`, handler
+  `0x40018270`) is set (`0x40016d40`..`0x40016d65`), then `Window_Paint`
+  on the menu's own window (`0x40016d8d`), then the items. VERIFIED (asm).
+  The menu keywords `style` (`0x400182b0`), `forecolor` (`0x400183e0`),
+  `backcolor` (`0x40018390`), `background` (`0x40018550`) and the border
+  ones (20.10) fill that window. VERIFIED (the table). CoD2's
+  `Menu_Paint` calls its `Window_Paint` (`0x539e40`) the same way
+  (`0x542660`, `0x542891`, `0x542b95`). VERIFIED (asm).
+- Stock windows that show: `joinserver.menu`'s `del_fav_popmenu` and
+  `fav_message_popmenu` (1.1, 1.5, CoD2: `backcolor .1 .15 .1 1`,
+  `border 1`, `bordercolor .5 .5 .5 .5`) and `vid_restart.menu`'s popups
+  (1.1, 1.5: `backcolor 0 0 0 0.5`, `bordercolor 1 1 1 .5`); every other
+  stock menu window has a zero alpha or style 0. VERIFIED (the paks).
+- vcod: `UiMenu::window` holds those keywords and `menu_window` paints it
+  under the items. The fullscreen background is not drawn: no stock
+  fullscreen menu names one, and the items' backdrops cover the default
+  shader handle 0 would draw. INFERRED (the stock files).
+
 ## 21. Video modes, fullscreen and wide windows
 
 Retail's:
