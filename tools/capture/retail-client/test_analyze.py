@@ -125,22 +125,27 @@ class Screenshots(unittest.TestCase):
         self.assertEqual(analyze.boxes_seen(p), {"level": True, "client": False})
 
     def test_a_wide_icon_reaches_left_of_a_narrow_one(self):
-        def shot(left):
+        # 1.1's floor: green grass that shifts between shots, with the item
+        # lying on it in the scan; the icons are grey.
+        def shot(left, shift, item):
             def pixel(x, y):
                 vx, vy = x * 640 / 320, y * 480 / 240
-                if left <= vx < 340 and 325 <= vy < 365:
-                    return (230, 230, 200)
-                return (60, 50, 40)
+                if left <= vx < 340 and 330 <= vy < 360:
+                    return (200, 200, 190)
+                if item and 256 <= vx < 262:
+                    return (150, 150, 140)
+                g = 40 + ((x + shift) * 37 + y * 11) % 90
+                return (g, g, g // 2)
             return pixel
-        base, narrow, wide = self.path("b.tga"), self.path("n.tga"), self.path("w.tga")
-        write_tga(base, 320, 240, shot(1000))
-        write_tga(narrow, 320, 240, shot(300))
-        write_tga(wide, 320, 240, shot(280))
-        b = analyze.read_tga(base)
-        self.assertEqual(analyze.icon_left(analyze.read_tga(narrow), b), 300)
-        self.assertEqual(analyze.icon_left(analyze.read_tga(wide), b), 280)
+        paths = {}
+        for name, left, shift, item in (("b", 1000, 0, False), ("n", 300, 3, True),
+                                        ("w", 280, 5, True)):
+            paths[name] = self.path(name + ".tga")
+            write_tga(paths[name], 320, 240, shot(left, shift, item))
+        b = analyze.read_tga(paths["b"])
+        self.assertEqual(analyze.icon_left(analyze.read_tga(paths["n"]), b), 300)
+        self.assertEqual(analyze.icon_left(analyze.read_tga(paths["w"]), b), 280)
         self.assertIsNone(analyze.icon_left(b, b))
-
 
 if __name__ == "__main__":
     unittest.main()

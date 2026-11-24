@@ -2519,6 +2519,75 @@ LANG_ENGLISH "Press USE [%s] to pickup health"
         assert!(free_slot(6, &full, true) && !free_slot(6, &full, false));
     }
 
+    /// Retail 1.1 and UO clients drew the weapon icon of an unowned
+    /// `wideListIcon` weapon 80 wide from 280, and every other hint 40 wide
+    /// from 300, the owned carbine's ammo icon too. The captured edge is
+    /// the first lit column, past the art's clear columns and dark outline.
+    #[test]
+    fn the_hint_capture_draws_wide_only_an_unowned_weapon() {
+        let fixture = include_str!("../../tests/fixtures/retail-client-hint.txt");
+        let font = test_font();
+        let cs = vec![String::new(); 2048];
+        let origin = |_: i32| None;
+        let loc = Localized::default();
+        let ammo = [0i16; 64];
+        let mut rows = 0;
+        for line in fixture.lines().filter(|l| !l.starts_with('#')) {
+            let [game, phase, hint, weapon, wide, edge] =
+                line.split_whitespace().collect::<Vec<_>>()[..]
+            else {
+                panic!("{line}")
+            };
+            let (hint, edge): (i32, f32) = (hint.parse().unwrap(), edge.parse().unwrap());
+            let uo = (game == "uo").then(Default::default);
+            let hints = if uo.is_some() { &uo::HINTS } else { &HINTS_V1 };
+            let w = hints.weapon(hint).or(hints.ammo(hint)).expect(line);
+            let mut weapons = vec![None; w + 1];
+            weapons[w] = Some(WeaponDef {
+                display_name: weapon.into(),
+                weapon_slot: if wide == "1" { "primary" } else { "pistol" }.into(),
+                wide_list_icon: wide == "1",
+                hud_icon: Some(format!("{weapon}_icon")),
+                ammo_icon: Some(format!("{weapon}_ammo")),
+                ..Default::default()
+            });
+            let cx = Context {
+                weapons: &weapons,
+                configstrings: &cs,
+                cs: &vcod_common::net::protocol::CS_LAYOUT_V1,
+                loc: &loc,
+                font: &font,
+                console_font: &font,
+                entity_origin: &origin,
+                bound_key: &|_| None,
+                draw: Default::default(),
+                scope: Default::default(),
+            };
+            let p = PlayerView {
+                cursor_hint: hint,
+                uo: uo.clone(),
+                ..view(&ammo, &[])
+            };
+            let mut out = Vec::new();
+            PlayerHud::default().build(&p, &cx, 0, &Virtual::new((640.0, 480.0)), &mut out);
+            let icon = out
+                .iter()
+                .find(|q| q.texture.starts_with(weapon))
+                .unwrap_or_else(|| panic!("{line}"));
+            let [left, top] = icon.verts[0];
+            let width = icon.verts[1][0] - left;
+            // 292 splits the edges analyze.py reads: wide from 280, narrow from 300.
+            let want = if edge < 292.0 { 80.0 } else { 40.0 };
+            assert_eq!((width, top), (want, 325.0), "{game} {phase}");
+            assert!(
+                (0.0..4.0).contains(&(edge - left)),
+                "{game} {phase}: {left} for {edge}"
+            );
+            rows += 1;
+        }
+        assert_eq!(rows, 8);
+    }
+
     /// Each game's health hint number names `hintHealth`.
     #[test]
     fn hint_layouts_number_the_health_hint() {

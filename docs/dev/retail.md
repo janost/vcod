@@ -184,7 +184,9 @@ draws either kind of hudelem.
 
 Fixture: the verdict per box with the `snap` lines that carried the
 elements (`hud=`), so a HUD test builds that frame and asserts the
-elements drawn or not; the shots stay in `tmp/`.
+elements drawn or not; the shots stay in `tmp/`. The 2026-11-24 capture's
+is `crates/client/tests/fixtures/retail-client-intermission.txt`: neither
+box at intermission (`cod11-hud-protocol.md` 9.1).
 
 ### Cursor hint width (1.1 and UO)
 
@@ -193,14 +195,18 @@ carbine (`wideListIcon` 1) and the colt (0) with no reserve ammo, and puts
 one hidden suspended weapon item there per phase: `none`,
 `unowned_wide` (kar98k), `owned_wide` (carbine), `unowned_narrow` (luger),
 `owned_narrow` (colt). The playerstate's hint (`snap ... hint=`) is what
-the client draws whatever it shows of the item. `analyze.py hint` diffs
-each phase's shots against `none` in a band under the hint text and left
-of where the gun reaches, and reads the icon's left edge: 300 narrow, 280
-wide (`cod11-hud-protocol.md` 9.12). Measures whether the owned (ammo
-icon) range draws wide too.
+the client draws whatever it shows of the item. `analyze.py hint` reads
+the icon's left edge in the icon's rows under the hint text, left of where
+the gun reaches: the first of 10 units of columns holding a lit grey pixel
+the `none` shot lacks. A plain diff against `none` reads 1.1's grass, which
+moves between shots, and the item lying in view. Narrow is 300, wide 280,
+each plus the art's clear edge (`cod11-hud-protocol.md` 9.12). Measures
+whether the owned (ammo icon) range draws wide too.
 
 Fixture: the hint value and the edge per phase; a HUD test asserts the
-icon rect for that hint and weapon table.
+icon rect for that hint and weapon table. The 2026-11-24 capture's is
+`crates/client/tests/fixtures/retail-client-hint.txt`: wide only for the
+unowned kar98k, on 1.1 and UO.
 
 ### fdc cadence (UO)
 

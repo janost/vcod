@@ -356,16 +356,25 @@ def report_intermission(log_path, game_log, shots_dir, standin):
 
 # The hint icon's rect on the 640x480 virtual screen (hud::player
 # cursor_hint): 40 by 40 at (300, 325); a wide one is 80 from 280. Its left
-# edge is read off the band below the hint text, left of where the gun
-# might reach.
-HINT_BAND = (330, 360)
+# edge is the first column of the scan, in the icon's rows under the hint
+# text, that starts ICON_RUN virtual units of columns each holding an icon
+# pixel the `none` shot lacks there. An icon pixel is lit and near grey (blue
+# at least 4/5 of red and green): the icons are grey art, 1.1's floor is
+# grass, UO's dark. A plain diff against `none` does not work on 1.1: the
+# grass moves between shots by a few pixels and differs everywhere, and the
+# item lying on the floor stands in the scan; the run rejects that one.
+HINT_BAND = (326, 364)
 HINT_SCAN = (250, 330)
-DIFF_MIN = 40
+ICON_RUN = 10
+
+
+def icon_pixel(row, px):
+    r, g, b = row[px * 3:px * 3 + 3]
+    return g >= 60 and 5 * b >= 4 * max(r, g)
 
 
 def icon_left(shot, base):
-    """The leftmost virtual x in the scan where `shot` differs from `base`
-    in the band, or None."""
+    """The icon's left edge, a virtual x in the scan, or None."""
     w, h, rows = shot
     bw, bh, brows = base
     if (w, h) != (bw, bh):
@@ -374,11 +383,15 @@ def icon_left(shot, base):
     _, y1 = to_pixels(w, h, 0, HINT_BAND[1])
     x0, _ = to_pixels(w, h, HINT_SCAN[0], 0)
     x1, _ = to_pixels(w, h, HINT_SCAN[1], 0)
+    start = None
     for px in range(x0, x1):
-        for py in range(y0, y1):
-            a, b = rows[py], brows[py]
-            if max(abs(a[px * 3 + c] - b[px * 3 + c]) for c in range(3)) > DIFF_MIN:
-                return px * 640.0 / w
+        if any(icon_pixel(rows[py], px) and not icon_pixel(brows[py], px)
+               for py in range(y0, y1)):
+            start = px if start is None else start
+            if (px + 1 - start) * 640.0 / w >= ICON_RUN:
+                return start * 640.0 / w
+        else:
+            start = None
     return None
 
 
@@ -414,8 +427,8 @@ def report_hint(log_path, game_log, shots_dir, standin):
             missing = True
             continue
         left = min(known)
-        print(f"{phase}: icon left edge x {left:.0f} -> {'WIDE' if left < 292 else 'narrow'} "
-              f"({len(files)} shots, edges {['-' if x is None else round(x) for x in lefts]})")
+        print(f"{phase}: icon left edge x {left:.1f} -> {'WIDE' if left < 292 else 'narrow'} "
+              f"({len(files)} shots, edges {['-' if x is None else round(x, 1) for x in lefts]})")
     if missing and not standin:
         return fail("a phase's icon was not found; check its shots by eye")
     return 0

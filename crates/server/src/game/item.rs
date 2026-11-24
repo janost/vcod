@@ -41,9 +41,9 @@ pub struct ItemState {
     /// `clipmask`: `LaunchItem`'s 0x81, or 0, which `G_RunItem` reads as
     /// 0x491.
     pub clipmask: u32,
-    /// `s.eFlags & 0x100`. `G_RunEntity` copies the pickup's hide
-    /// (`flags & 0x1000`) into it at the top of every frame (0x502e6), so
-    /// the frame a respawn runs still carries it (section 14).
+    /// `s.eFlags & 0x100`. `G_RunEntity` copies the pickup's or script's
+    /// hide (`flags & 0x1000`) into it at the top of every frame (0x502e6),
+    /// so the frame a respawn runs still carries it (section 14).
     pub nodraw: bool,
 }
 
@@ -332,7 +332,8 @@ pub fn run_item(host: &mut GameHost, cx: &mut Cx, id: EntId, now_ms: i32) -> boo
     let origin_atom = cx.intern_folded("origin");
     let angles_atom = cx.intern_folded("angles");
     {
-        st.nodraw = st.taken;
+        // `flags` 0x1000, which both the pickup and `ScrCmd_Hide` set (section 14.3).
+        st.nodraw = st.taken || host.ents.get(id).is_some_and(|e| e.hidden);
         if st.ground == ENTITYNUM_NONE as i32 && st.pos.is_none_or(|p| p.tr_type != TR_GRAVITY) {
             let base = st
                 .pos
@@ -1612,6 +1613,42 @@ mod tests {
             run(Vec3::new(0.0, 0.0, 60.0), Vec3::ZERO),
             Ran::Landed { .. }
         ));
+    }
+
+    /// A script `hide()` sets the `flags` 0x1000 a pickup sets, which
+    /// `G_RunEntity` mirrors into `eFlags` 0x100 on an item too; `show()`
+    /// clears it. A retail client skips drawing such an item.
+    #[test]
+    fn a_hidden_item_goes_out_with_nodraw() {
+        use crate::game::builtins::entity::{hide, show};
+        use vcod_gsc::Target;
+        let (mut vm, mut host) = fixture();
+        let p = &vcod_common::net::protocol::PROTOCOL_V1;
+        let id = vm.with_cx(|cx| {
+            let id = host.ents.spawn(cx).unwrap();
+            let f = cx.intern_folded("classname");
+            let v = Value::String(cx.intern_exact("mpweapon_kar98k"));
+            host.set_field(cx, id, f, v).unwrap();
+            let index = crate::items::classname_index(&crate::defs::V1, "mpweapon_kar98k").unwrap();
+            spawn_in_place(&mut host, cx, id, index, 1);
+            id
+        });
+        let mut sent = |shown: Option<bool>, now: i32| {
+            vm.with_cx(|cx| {
+                match shown {
+                    Some(false) => hide(&mut host, cx, Some(Target::Entity(id)), &[]).unwrap(),
+                    Some(true) => show(&mut host, cx, Some(Target::Entity(id)), &[]).unwrap(),
+                    None => Value::Undefined,
+                };
+                host.level_time_ms = now;
+                run_items(&mut host, cx, now);
+                let ents = crate::game::wire::packet_entities(&mut host, cx, p);
+                ents[&id.0].field_i32(p, "eFlags")
+            })
+        };
+        assert_eq!(sent(None, 1000), 16);
+        assert_eq!(sent(Some(false), 1050), 16 | EF_NODRAW);
+        assert_eq!(sent(Some(true), 1100), 16);
     }
 
     /// A spawnflags-8 weapon comes back `g_weaponrespawn` seconds after it is
