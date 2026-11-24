@@ -2569,7 +2569,29 @@ twice as wide, shifted left by half the rect. A hint string (configstring
 `1212 + serverCursorHintString`, `cod11-gsc-object-model.md`) is localized,
 its `[%s]` filled with the use key's binding, and printed at textscale .21
 centred on the rect, baseline one text height above it. VERIFIED:
-`0x300696d4` reads 0.0066667, `0x30063188` is `"[%s]"`. VERIFIED, the fill
+`0x300696d4` reads 0.0066667, `0x30063188` is `"[%s]"`. VERIFIED (the
+instructions): the only load of `wideListIcon` (`[edi+0x2d8]`,
+`0x30025347`) sits in the branch for hints 10..73 (`0x3002532b`..
+`0x30025337`); an ammo hint jumps past it to `0x300255e9`. VERIFIED (live
+capture, retail-client 2026-11-24 steps `3-hint` on 1.1 and `4-hint-uo` on
+UO: `client.log` and `rc_<phase>_{1,2,3}.tga`), the icon's first lit
+column on the virtual screen:
+
+| phase | weapon (`wideListIcon`) | 1.1 hint | UO hint | left edge, both |
+|---|---|---|---|---|
+| unowned_wide | kar98k (1) | 18 | 30 | 282.5 |
+| owned_wide | m1 carbine (1), ammo icon | 85 | 161 | 302.5 |
+| unowned_narrow | luger (0) | 20 | 32 | 303.1 |
+| owned_narrow | colt (0), ammo icon | 77 | 147 | 302.5 |
+
+So only a weapon hint of a `wideListIcon` weapon draws 80 wide from 280;
+the owned carbine's ammo icon draws 40 wide from 300. The edges sit a
+transparent margin and the dark outline inside the rect: the `.dds` art
+(`pak5`) is clear up to column 3 of 128 (`hud@kar98`), 2 of 64
+(`hud@ammo2`) and 4 of 64 (`hud@luger`) at alpha 0.5. UO's `hud.menu`
+(`pakuo03`) keeps the rect at 300, 325, 40x40. vcod's `cursor_hint` draws
+the same (test `the_hint_capture_draws_wide_only_an_unowned_weapon`,
+fixture `crates/client/tests/fixtures/retail-client-hint.txt`). VERIFIED, the fill
 (`0x30025792`..`0x30025899`): the string goes through the `[{command}]`
 pass with `"Hint String"`; a copy is case-folded (`0x3003e9b0`) and
 searched for `[%s]`; the original up to the `[`, `+activate`'s key text

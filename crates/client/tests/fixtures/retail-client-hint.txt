@@ -1,0 +1,17 @@
+# Retail CoD 1.1 CoDMP.exe (step 3-hint) and UO 1.51 CoDUOMP.exe (step
+# 4-hint-uo) on vcod-server, capture 2026-11-24 (probe_rc_hint.gsc,
+# docs/dev/retail.md "Retail client captures"). Per phase: the game, the
+# playerstate's serverCursorHint (client.log `snap ... hint=`, the same in
+# every snapshot of the phase), the weapon the probe put down and its
+# wideListIcon, and the icon's left edge on the 640x480 virtual screen, the
+# first lit grey column of rc_<phase>_{1,2,3}.tga (analyze.py hint; the
+# same on all three shots but 1.1 unowned_narrow's first, 306.9).
+# game phase hint weapon wideListIcon edge
+1.1 unowned_wide 18 kar98k_mp 1 282.5
+1.1 owned_wide 85 m1carbine_mp 1 302.5
+1.1 unowned_narrow 20 luger_mp 0 303.1
+1.1 owned_narrow 77 colt_mp 0 302.5
+uo unowned_wide 30 kar98k_mp 1 282.5
+uo owned_wide 161 m1carbine_mp 1 302.5
+uo unowned_narrow 32 luger_mp 0 303.1
+uo owned_narrow 147 colt_mp 0 302.5

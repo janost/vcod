@@ -18,3 +18,4 @@ in a `#` header.
 | File | Capture | Read by |
 |---|---|---|
 | `retail-client-intermission.txt` | 2026-11-24 `2-intermission` (1.1) | `src/hud/mod.rs`, `the_intermission_capture_draws_no_hudelems` |
+| `retail-client-hint.txt` | 2026-11-24 `3-hint` (1.1), `4-hint-uo` (UO) | `src/hud/player.rs`, `the_hint_capture_draws_wide_only_an_unowned_weapon` |
