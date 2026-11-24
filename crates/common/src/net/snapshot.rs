@@ -1583,7 +1583,9 @@ pub(crate) mod tests {
     /// view lands on 1.1's bit.
     #[test]
     fn protocol_6_capture_reencodes_and_maps_pm_flags() {
-        use crate::net::flags::{ET_PLAYER, ET_TURRET, PMF_OWN_VIEW, pm_flags_v6_to_v1};
+        use crate::net::flags::{
+            ET_PLAYER, ET_TURRET, PMF_MAY_CYCLE, PMF_OWN_VIEW, pm_flags_v6_to_v1,
+        };
         use crate::net::protocol::PROTOCOL_V6;
         let raw = Cod1Wire {
             pm_flags_to_v1: |f| f,
@@ -1628,7 +1630,7 @@ pub(crate) mod tests {
         );
         let expect: Vec<i32> = raw_flags.iter().map(|&f| pm_flags_v6_to_v1(f)).collect();
         assert_eq!(mapped, expect);
-        assert_eq!(mapped[spawn - 1], 0);
+        assert_eq!(mapped[spawn - 1], PMF_MAY_CYCLE);
         assert_eq!(mapped[spawn], PMF_OWN_VIEW);
     }
 
