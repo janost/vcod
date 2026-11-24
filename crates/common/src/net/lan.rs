@@ -29,6 +29,28 @@ pub fn is_lan_with(ip: Ipv4Addr, locals: &[Ipv4Addr]) -> bool {
     })
 }
 
+/// CoD2's and CoD4's `Sys_IsLANAddress` (cod2_lnxded 0x80d5638,
+/// cod4_lnxded 0x81d59c8, `iw3mp.exe` 0x578120 and 0x578180) against
+/// `locals`: 10/8, 127/8, 169.254/16, 172.16/12 and 192.168/16, or the
+/// first three octets of one of `locals`. IPv6 counts only as loopback.
+pub fn is_lan_cod2_with(ip: IpAddr, locals: &[Ipv4Addr]) -> bool {
+    let IpAddr::V4(v4) = ip else {
+        return ip.is_loopback();
+    };
+    let a = v4.octets();
+    a[0] == 10
+        || a[0] == 127
+        || (a[0] == 169 && a[1] == 254)
+        || (a[0] == 172 && a[1] & 0xf0 == 16)
+        || (a[0] == 192 && a[1] == 168)
+        || locals.iter().any(|l| l.octets()[..3] == a[..3])
+}
+
+/// [`is_lan_cod2_with`] against this host's addresses.
+pub fn is_lan_cod2(ip: IpAddr) -> bool {
+    is_lan_cod2_with(ip, local_addresses())
+}
+
 /// [`is_lan_with`] against this host's addresses. IPv6 counts only as
 /// loopback; retail has no IPv6.
 pub fn is_lan(ip: IpAddr) -> bool {
@@ -135,6 +157,22 @@ mod tests {
         assert!(!is_lan_with(ip("192.168.7.1"), &[ip("127.0.0.1")]));
         // 10/8 has no shortcut of its own; it is class A.
         assert!(!is_lan_with(ip("10.0.0.1"), &[ip("192.168.0.2")]));
+    }
+
+    #[test]
+    fn cod2_lan_is_the_private_blocks_and_the_hosts_slash_24() {
+        let lan = |s: &str| is_lan_cod2_with(s.parse().unwrap(), &[ip("198.51.100.7")]);
+        assert!(lan("127.0.0.1"));
+        assert!(lan("10.1.2.3"));
+        assert!(lan("172.31.0.1"));
+        assert!(!lan("172.32.0.1"));
+        assert!(lan("192.168.9.9"));
+        assert!(lan("169.254.1.1"));
+        assert!(!lan("169.253.1.1"));
+        assert!(lan("198.51.100.200"), "the host's /24");
+        assert!(!lan("198.51.101.7"));
+        assert!(lan("::1"));
+        assert!(!lan("2001:db8::1"));
     }
 
     #[test]

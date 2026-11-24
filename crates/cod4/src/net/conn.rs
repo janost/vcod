@@ -33,6 +33,10 @@ const KEPT_COMMANDS: usize = 128;
 /// each packet carries the cmds of this many packets before it again.
 pub const PACKET_DUP: u32 = 1;
 const PACKET_DUP_MAX: u32 = 5;
+/// `cl_maxpackets`' default and range (`iw3mp.exe` 0x46df21..0x46df3a):
+/// off the LAN a packet goes at most every `1000 / cl_maxpackets` ms.
+pub const MAX_PACKETS: i32 = 30;
+const MAX_PACKETS_RANGE: (i32, i32) = (15, 100);
 /// `PACKET_BACKUP` and `CMD_BACKUP`: the sent packets and the cmds kept.
 const PACKET_BACKUP: usize = 32;
 const CMD_BACKUP: usize = 128;
@@ -45,6 +49,8 @@ struct CmdRing {
     cmds: std::collections::VecDeque<UserCmd>,
     made: u32,
     sent_at: [u32; PACKET_BACKUP],
+    /// Each row's `p_realtime`: when that sequence went out.
+    sent_time: [Option<Instant>; PACKET_BACKUP],
 }
 
 impl CmdRing {
@@ -67,9 +73,40 @@ impl CmdRing {
         self.cmds.iter().skip(self.cmds.len() - n)
     }
 
-    /// Sequence `seq` went out.
-    fn sent(&mut self, seq: u32) {
+    /// Sequence `seq` went out at `at`.
+    fn sent(&mut self, seq: u32, at: Instant) {
         self.sent_at[seq as usize % PACKET_BACKUP] = self.made;
+        self.sent_time[seq as usize % PACKET_BACKUP] = Some(at);
+    }
+}
+
+/// What `CL_ReadyToSendPacket` (`iw3mp.exe` 0x463e60) reads, the times in
+/// ms (`u64::MAX` for never) (cod4-netfields.md 14.1).
+#[derive(Clone, Copy, Debug)]
+struct SendClock {
+    /// A gamestate is in and no `loadingnewmap` since: `CA_PRIMED` or
+    /// `CA_ACTIVE`.
+    in_world: bool,
+    downloading: bool,
+    /// Since any packet went (`clc.lastPacketSentTime`).
+    since_sent: u64,
+    /// Since the previous sequence went (its packet row's realtime).
+    since_row: u64,
+    /// The server's address passes `Sys_IsLANAddress`.
+    lan: bool,
+    /// `cl_maxpackets`, in its range.
+    max_packets: i32,
+}
+
+impl SendClock {
+    fn due(self) -> bool {
+        if self.downloading && self.since_sent < 50 {
+            return false;
+        }
+        if !self.in_world && !self.downloading && self.since_sent < 1000 {
+            return false;
+        }
+        self.lan || self.since_row >= (1000 / self.max_packets) as u64
     }
 }
 
@@ -269,6 +306,12 @@ pub struct Conn {
     cmd_ring: CmdRing,
     /// `cl_packetdup`.
     packet_dup: u32,
+    /// `cl_maxpackets`.
+    max_packets: i32,
+    /// The server's address passes `Sys_IsLANAddress`: every frame sends.
+    lan: bool,
+    /// `clc.lastPacketSentTime`; `None` where retail stores -9999.
+    last_sent: Option<Instant>,
     /// The checksum feed of the gamestate the last `cp` answered.
     cp_feed: Option<i32>,
     /// The newest server command applied to the gamestate's table.
@@ -337,6 +380,9 @@ impl Conn {
             last_cmd: UserCmd::default(),
             cmd_ring: CmdRing::default(),
             packet_dup: PACKET_DUP,
+            max_packets: MAX_PACKETS,
+            lan: vcod_common::net::lan::is_lan_cod2(server.ip()),
+            last_sent: None,
             cp_feed: None,
             applied: 0,
             loading: None,
@@ -505,6 +551,35 @@ impl Conn {
         self.packet_dup = n.clamp(0, PACKET_DUP_MAX as i32) as u32;
     }
 
+    /// `cl_maxpackets` from now on, clamped to its range 15..=100.
+    pub fn set_max_packets(&mut self, n: i32) {
+        self.max_packets = n.clamp(MAX_PACKETS_RANGE.0, MAX_PACKETS_RANGE.1);
+    }
+
+    /// `CL_ReadyToSendPacket` (`iw3mp.exe` 0x463e60): whether a packet
+    /// goes this frame. Before the gamestate or after `loadingnewmap`, one
+    /// a second; while `downloading`, none within 50 ms of the last; then
+    /// every frame to a LAN server, else `1000 / cl_maxpackets` ms after
+    /// the previous sequence (cod4-netfields.md 14.1).
+    pub fn ready_to_send(&self, downloading: bool) -> bool {
+        let now = now();
+        let since = |t: Option<Instant>| {
+            t.map_or(u64::MAX, |t| {
+                now.saturating_duration_since(t).as_millis() as u64
+            })
+        };
+        let row = self.cmd_ring.sent_time[self.seq.wrapping_sub(1) as usize % PACKET_BACKUP];
+        SendClock {
+            in_world: self.client.gamestate.is_some() && self.loading.is_none(),
+            downloading,
+            since_sent: since(self.last_sent),
+            since_row: since(row),
+            lan: self.lan,
+            max_packets: self.max_packets,
+        }
+        .due()
+    }
+
     /// One move message: the unacked commands and the cmds made since the
     /// sequence `cl_packetdup` + 1 back went out, `cmds` the new ones (the
     /// newest 32 at most), the first on the long branch with every field,
@@ -567,8 +642,16 @@ impl Conn {
                 }
                 if !wired.is_empty() && self.client.gamestate.is_some() {
                     let (at, time) = origin.map_or(([1.0e6; 3], 0), |a| (a.origin, a.server_time));
+                    // `cl.snap` is valid and came in the newest message
+                    // read (0x4640e1..0x46410b, cod4-netfields.md 14.2).
+                    let delta = !self.no_delta
+                        && self
+                            .client
+                            .snapshots
+                            .last()
+                            .is_some_and(|s| s.message_num == self.ack);
                     ops.push(ClOp::Move {
-                        delta: !self.client.snapshots.is_empty() && !self.no_delta,
+                        delta,
                         cmds: wired,
                         origin: at.map(f32::to_bits),
                         origin_time: time,
@@ -587,7 +670,9 @@ impl Conn {
                 pkt.extend_from_slice(&comp);
             }
         }
-        self.cmd_ring.sent(seq);
+        let at = now();
+        self.cmd_ring.sent(seq, at);
+        self.last_sent = Some(at);
         self.send_raw(&pkt)
     }
 
@@ -912,6 +997,8 @@ impl Conn {
                 }) =>
             {
                 self.stats_sent = Some(now());
+                // `CA_SENDINGSTATS` and -9999 (0x46bfcd, 0x46c007).
+                self.last_sent = None;
                 for idx in 0..STAT_PACKETS {
                     self.send_stat(idx)?;
                 }
@@ -922,6 +1009,8 @@ impl Conn {
             }
             l if l.starts_with("statResponse ") => {
                 let want: u32 = l["statResponse ".len()..].trim().parse().unwrap_or(0);
+                // Any `statResponse` stores -9999 (0x46ba43).
+                self.last_sent = None;
                 for idx in (0..STAT_PACKETS).filter(|i| want & (1 << i) != 0) {
                     self.send_stat(idx)?;
                 }
@@ -1288,6 +1377,9 @@ mod tests {
             last_cmd: UserCmd::default(),
             cmd_ring: CmdRing::default(),
             packet_dup: PACKET_DUP,
+            max_packets: MAX_PACKETS,
+            lan: true,
+            last_sent: None,
             cp_feed: None,
             applied: 0,
             loading: None,
@@ -1586,6 +1678,125 @@ mod tests {
             let many: Vec<i32> = (0..40).map(|i| 400 + i).collect();
             assert_eq!(move_times(&send(&mut c, &many, 1)), many[8..]);
             assert_eq!(c.last_cmd().server_time, 439);
+        }
+    }
+
+    /// `CL_ReadyToSendPacket` (cod4-netfields.md 14.1): in the world a LAN
+    /// server takes every frame's packet and one off it a packet
+    /// `1000 / cl_maxpackets` ms after the previous sequence; out of it one
+    /// a second, LAN or not; downloading, 50 ms and then the same test.
+    #[test]
+    fn a_lan_server_gets_every_frame_and_one_off_it_cl_maxpackets() {
+        let clock = |in_world, downloading, since_sent, since_row, lan, max_packets| {
+            SendClock {
+                in_world,
+                downloading,
+                since_sent,
+                since_row,
+                lan,
+                max_packets,
+            }
+            .due()
+        };
+        let world = |since, lan, max| clock(true, false, since, since, lan, max);
+        assert!(world(0, true, 30));
+        assert!(!world(32, false, 30));
+        assert!(world(33, false, 30));
+        assert!(!world(65, false, 15));
+        assert!(world(66, false, 15));
+        assert!(world(10, false, 100));
+        // A cleared row (a gamestate) is due at once.
+        assert!(clock(true, false, 5, u64::MAX, false, 30));
+        let out = |since, lan| clock(false, false, since, since, lan, 30);
+        assert!(!out(999, true));
+        assert!(out(1000, true));
+        assert!(!out(999, false));
+        assert!(out(u64::MAX, false));
+        let dl = |since_sent, since_row, lan| clock(false, true, since_sent, since_row, lan, 30);
+        assert!(!dl(49, 49, true));
+        assert!(dl(50, 50, true));
+        assert!(!dl(50, 20, false));
+        assert!(dl(50, 50, false));
+    }
+
+    /// The gate on a connection: the row a send leaves holds the next
+    /// packet back off the LAN; `loadingnewmap` puts it on the second's
+    /// wait, a `statResponse` clears that wait; `cl_maxpackets` clamps to
+    /// 15..=100.
+    #[test]
+    fn a_conn_paces_its_packets_by_the_server_and_its_state() {
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut c = moving(&server, Dialect::V17);
+        assert_eq!(c.max_packets, MAX_PACKETS);
+        c.set_max_packets(1);
+        assert_eq!(c.max_packets, 15);
+        c.set_max_packets(1000);
+        assert_eq!(c.max_packets, 100);
+        c.set_max_packets(30);
+        c.lan = false;
+        assert!(c.ready_to_send(false), "no packet yet");
+        c.send(&[], None).unwrap();
+        assert!(!c.ready_to_send(false), "33 ms off the LAN");
+        c.lan = true;
+        assert!(c.ready_to_send(false), "every frame on it");
+        c.loading = Some("mp_crash".into());
+        assert!(!c.ready_to_send(false), "a second while loading");
+        c.connectionless(b"statResponse 0").unwrap();
+        assert!(c.ready_to_send(false));
+        c.loading = None;
+        // A gamestate clears the rows.
+        c.lan = false;
+        c.send(&[], None).unwrap();
+        c.cmd_ring = CmdRing::default();
+        assert!(c.ready_to_send(false));
+    }
+
+    /// `clc_move` (op 0) only when the newest snapshot came in the newest
+    /// message read and no full frame is owed, else `clc_moveNoDelta`
+    /// (`CL_WritePacket` 0x4640e1..0x464117, cod4-netfields.md 14.2), on
+    /// both headers.
+    #[test]
+    fn the_delta_move_needs_the_snapshot_in_the_newest_message() {
+        let snap = |message_num| super::super::parse::Snapshot {
+            message_num,
+            server_time: vcod_common::net::Msec::from_raw(1000),
+            delta_num: 0,
+            base: None,
+            snap_flags: 0,
+            ps: super::super::delta::PlayerState::default(),
+            entities: Vec::new(),
+            clients: Vec::new(),
+            wire: Default::default(),
+        };
+        for dialect in [Dialect::V17, Dialect::X21] {
+            let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+            server
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut t = 100;
+            let mut delta = |c: &mut Conn| {
+                t += 10;
+                let cmd = UserCmd {
+                    server_time: t,
+                    ..UserCmd::default()
+                };
+                c.send(&[cmd], None).unwrap();
+                match sent_ops(&server, c).first() {
+                    Some(ClOp::Move { delta, .. }) => *delta,
+                    o => panic!("{o:?}"),
+                }
+            };
+            let mut c = moving(&server, dialect);
+            c.ack = 5;
+            assert!(!delta(&mut c), "no snapshot");
+            c.client.snapshots.push(snap(5));
+            assert!(delta(&mut c), "{dialect:?}");
+            c.ack = 6;
+            assert!(!delta(&mut c), "message 6 carried none");
+            c.client.snapshots.push(snap(6));
+            assert!(delta(&mut c));
+            c.no_delta = true;
+            assert!(!delta(&mut c), "demowaiting");
         }
     }
 
