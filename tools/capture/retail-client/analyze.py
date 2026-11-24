@@ -5,6 +5,7 @@ client's screenshots. Each subcommand prints what the step measured and
 exits 1 when the capture cannot answer its question.
 
   analyze.py kick CLIENT_LOG [--standin]
+  analyze.py kick-fixture CLIENT_LOG CAPTURE_NAME   (the client gate's fixture, to stdout)
   analyze.py intermission CLIENT_LOG GAME_LOG SHOTS_DIR [--standin]
   analyze.py hint CLIENT_LOG GAME_LOG SHOTS_DIR [--standin]
   analyze.py fdc CLIENT_LOG GAME_LOG [--standin]
@@ -133,6 +134,61 @@ def report_kick(log_path, standin):
         return fail("the view moved before most shots: keep the mouse still")
     if not standin and len(kicked) < len(clean) // 2:
         return fail("no view kick in the cmds: was it the carbine, fired from the hip?")
+    return 0
+
+
+def kick_fixture(log, slot, settle_ms=300, hold=20):
+    """The client kick gate's cut (docs/dev/retail.md, "Kick"): per clean
+    shot whose cmd angles come back to the ones before it within
+    `settle_ms` and stay there for `hold` cmds, its cmds from 3 before
+    the shot to the end of that hold, with the `ran` line after the
+    shot's cmd. A shot whose view does not come back had the mouse move
+    under it and is left out. Returns the blocks, one list of lines per
+    shot."""
+    cmds, shots = kick_shots(log, slot)
+    ran = {int(f["st"]): f["ev"] for k, f in log if k == "ran" and f["slot"] == str(slot)}
+    blocks = []
+    for s in shots:
+        i = s["i"]
+        if not s["still"] or i < 3:
+            continue
+        base = cmds[i - 1]["a"]
+        end = None
+        for j in range(i + 1, len(cmds) - hold):
+            if cmds[j]["st"] - cmds[i]["st"] > settle_ms:
+                break
+            if all(cmds[k]["a"] == base for k in range(j, j + hold)):
+                end = j + hold
+                break
+        if end is None:
+            continue
+        lines = []
+        for c in cmds[i - 3:end]:
+            lines.append(f"cmd st={c['st']} b={c['b']} a={','.join(map(str, c['a']))}")
+            if c["st"] == s["st"]:
+                lines.append(f"ran st={c['st']} ev={ran[c['st']]}")
+        blocks.append(lines)
+    return blocks
+
+
+def print_kick_fixture(log_path, capture):
+    log = read_log(log_path)
+    slots = human_slots(log)
+    if not slots:
+        return fail("no client entered the world")
+    blocks = kick_fixture(log, slots[0])
+    if not blocks:
+        return fail("no shot settled back to its view")
+    print(f"""# Retail CoD 1.1 CoDMP.exe's usercmds around its own m1carbine_mp hip
+# shots, mouse untouched, logged by vcod-server's --client-log.
+# Capture: {capture}.
+# Cut by `analyze.py kick-fixture`: the shots whose view came back, each
+# from 3 cmds before it to 20 cmds after it settled, packet duplicates
+# dropped; `cmd` keeps st, buttons and angles (shorts), `ran` the
+# server's events for the shot's cmd. Blocks are blank-line apart.""")
+    for b in blocks:
+        print()
+        print("\n".join(b))
     return 0
 
 
@@ -413,6 +469,8 @@ def main(argv):
     cmd, rest = args[0], args[1:]
     if cmd == "kick" and len(rest) == 1:
         return report_kick(rest[0], standin)
+    if cmd == "kick-fixture" and len(rest) == 2:
+        return print_kick_fixture(*rest)
     if cmd == "intermission" and len(rest) == 3:
         return report_intermission(*rest, standin)
     if cmd == "hint" and len(rest) == 3:

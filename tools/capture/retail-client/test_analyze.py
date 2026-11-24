@@ -58,6 +58,22 @@ cmd slot=0 st=120 b=1 wb=0 w=1 fl=0 a=0,0,0 mv=0,0,0
         self.assertEqual(s["kick"], 1)
         self.assertEqual(s["trail"][1]["d"], [-60, 0])
 
+    def test_the_fixture_keeps_only_shots_whose_view_comes_back(self):
+        def take(back):
+            lines = ["enter w=1 svs=1 slot=0 proto=1 addr=x name=a"]
+            for i in range(40):
+                p = 0 if i < 7 else (-8 if i < 12 else (0 if back else -10))
+                lines.append(f"move w={i} svs={i} slot=0 seq={i} ack=0 delta=1 n=1")
+                lines.append(f"cmd slot=0 st={1000 + i} b={int(i >= 6)} wb=0 w=1 fl=0 "
+                             f"a={p % 65536},5,0 mv=0,0,0")
+            lines.append("ran slot=0 st=1006 ev=159:0")
+            return analyze.kick_fixture(log_lines("\n".join(lines)), 0)
+        [block] = take(True)
+        self.assertEqual(block[0], "cmd st=1003 b=0 a=0,5,0")
+        self.assertEqual(block[4], "ran st=1006 ev=159:0")
+        self.assertEqual(block[-1], "cmd st=1031 b=1 a=0,5,0")
+        self.assertEqual(take(False), [])
+
     def test_angle_shorts_wrap(self):
         self.assertEqual(analyze.short_delta(65530, 4), 10)
         self.assertEqual(analyze.short_delta(4, 65530), -10)

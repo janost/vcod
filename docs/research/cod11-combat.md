@@ -9278,7 +9278,8 @@ speed and the same frame's `CG_KickAngles` steps it, and the kick that
 frame hands syscall `0x56` (`0x30033ec1`) rides the next frame's cmds.
 vcod handled the fire in the event pass after the view, which stepped the
 kick a frame late; the fire now runs in the event pass ahead of
-`OnlineView::step_recoil` (`crates/client/src/live_frame.rs`).
+`OnlineView::step_recoil` (`crates/client/src/live_frame.rs`). A retail
+client's cmds bear the frame out (15.7.1).
 
 **The reset.** VERIFIED, `0x30028a70` zeroes both vectors and the gun
 spring (`0x3020cb94`-`0x3020cba8`) and stamps the weapon name. Its callers:
@@ -9317,19 +9318,17 @@ VERIFIED, off `pak0.pk3`: `m1carbine_mp` reads `hipViewKickPitchMin/Max`
 -2..18, `adsGunKickPitch` -60..-60, `adsGunKickYaw` -40..40, `gunMaxPitch`
 and `gunMaxYaw` 5. INFERRED, worked: a hip carbine shot sets the pitch
 speed to -40 degrees a second; 800 a second squared stops it after 50 ms
-with the view about 1.1 degrees up, and the return at 6% of the speed
-brings it back to the centre about 0.2 s later.
+with the view about 1.0 degree up, and the return at 6% of the speed
+brings it back to the centre about 0.2 s later (15.7.1 measures 1.02
+degrees at 48 ms and the centre at 257 ms).
 
-Not measured against a running retail client: the kick is client-side and
-non-deterministic, and a capture of a retail client's cmd angles needs a
-retail client. A retail-client capture of `cmd.angles` around a shot is
-the open check.
+A retail client's cmds around its own shots are measured in 15.7.1.
 
 **As implemented.** `crates/client/src/play/recoil.rs` holds the view kick,
 the fire draw and the RNG, and steps both kicks, the spring being
 `vcod_common::pmove::aim::GunKick`, once per drawn frame from
 `OnlineView::step_recoil`, by the step of the cgame time (`cl.serverTime`,
-the clock the cmds carry, as `cg.frametime` is: cgame 0x300339dc); `PlayInput::cmd_angles` adds the kick to the cmd and
+the clock the cmds carry, as `cg.frametime` is: cgame 0x300339dc, 15.7.1); `PlayInput::cmd_angles` adds the kick to the cmd and
 the drawn view. VERIFIED, `CL_FinishMove` (CoDMP.exe 0x40b6b7..0x40b711):
 per axis two floats summed on the x87 stack (0x143a9a0..0x143a9a8 and
 0x143a994..0x143a99c), times 65536/360 (0x568f68), one `_ftol` (0x538be0)
@@ -9345,6 +9344,58 @@ predicted `viewangles[2]`; a mounted gun's view keeps roll 0.
 off the newest snapshot, `OnlineView::new_gamestate` at each map load, and
 a frame with no drawable playerstate (dead, or not in the world) clears it
 too, which retail does not; nothing is drawn or aimed in those frames.
+
+
+#### 15.7.1 Measured: a retail client's cmds around a hip shot
+
+**The capture.** VERIFIED (a live capture), `retail-client-2026-11-24/1-kick`
+(`client.log`, `analysis.txt`; `docs/dev/retail.md`, "Kick"): a retail 1.1
+`CoDMP.exe` under Wine fired 12 `m1carbine_mp` hip shots on mp_carentan
+under `probe_rc_kick`, mouse untouched, at uncapped frames: 21503 cmds,
+frame median 1 ms, one cmd a frame. Ten shots had the view still for the
+six cmds before; all ten kicked, and in each the first cmd whose angles
+moved is the one after the shot's own. Two of the ten (`st` 38781 and
+40192) had a mouse count (10 shorts, 0.055 degrees) land inside the kick;
+the other eight came back to the angles before the shot 257 ms later and
+make the fixture (`crates/client/tests/fixtures/kick-1.1-retail-client.txt`,
+cut by `analyze.py kick-fixture`).
+
+**What the eight show.** VERIFIED (a live capture), the fixture against
+15.7's model (`play::view::tests::the_retail_clients_kick_rides_its_cmds`):
+every one of its 2166 cmds, from three before each shot to 20 after it
+settled, lands on the captured short in pitch, yaw and roll when
+
+1. the kick's speed is set on the frame that predicts the cmd the server
+   ran the fire for (`ran ... ev=159`), and that frame steps it, so the next
+   cmd carries one frame of it;
+2. each frame steps the kick by the next cmd's `serverTime` less this
+   one's. The windows hold 33 steps of 2 ms and 7 of 5 to 10 ms among the
+   1 ms ones; stepping by the step before the cmd, or by a flat 1 ms, fits
+   none of the eight pitch trails;
+3. the pitch takes 15.7's numbers: speed -40, centring 800 a second
+   squared in 5 ms slices, the return at 0.06, the stop at the centre.
+   Every shot peaks 186 shorts (1.02 degrees) up at 48 to 49 ms and is
+   back at 257 ms;
+4. the yaw takes one draw in -15..15 per shot and the roll half its speed
+   the other way, which peaks at a quarter of the yaw's offset: the yaw
+   peaks from -15 to 18 shorts over the eight, the roll -4 to 4. The draws
+   cannot be replayed: the cgame's `rand` runs between shots for other
+   things, so the gate searches each shot's draw.
+
+The view's rest under a short never reaches the wire, so the gate fits it;
+the five shots fired from cmd angles (65386, 65526) agree on one pitch
+rest and the three from (65376, 65526) on another, as one view under no
+mouse motion should.
+
+**The frame time.** VERIFIED (the instructions), cgame `0x300339a1`-`0x300339f6`:
+`cg.frametime` (`0x30207144`) is `cg.time` (`0x30207148`, the time
+`vmMain` hands the frame) less the last frame's (`0x3020714c`), set to 0
+when negative; that time is `cl.serverTime`, the one `CL_FinishMove`
+stamps the cmds with (`docs/protocol-1.1.md`, "The client's clock").
+INFERRED: so point 2 is `CG_KickAngles` run on `cl.serverTime`'s step.
+vcod stepped the kick by the local clock, which parts from `cl.serverTime`
+at each 2 ms back-adjust and 1 ms gain of `CL_AdjustTimeDelta`; it now
+steps on the cgame time (`OnlineView::step_recoil` takes `render_time`).
 
 ---
 

@@ -644,6 +644,7 @@ fn view_to_world(
 mod tests {
     use super::*;
     use vcod_common::weapon::CG_FOV;
+    use vcod_common::x87::SHORT_PER_DEG;
 
     #[test]
     fn the_intermission_view_sits_at_the_origin() {
@@ -1005,5 +1006,181 @@ mod tests {
         // A team change swaps the hands and rebuilds.
         cs[CS_MODELS_V1 + 82] = "xmodel/viewmodel_hands_russian".to_string();
         assert!(view.sync_rig(&fs, &cs, &ps(1, 82)).is_some());
+    }
+
+    /// One retail shot of `tests/fixtures/kick-1.1-retail-client.txt`: its
+    /// cmds' `serverTime`s and angles (signed shorts), and which cmd fired.
+    struct Shot {
+        st: Vec<i32>,
+        angles: Vec<[i32; 3]>,
+        fired: usize,
+    }
+
+    fn retail_shots() -> Vec<Shot> {
+        let text = include_str!("../../tests/fixtures/kick-1.1-retail-client.txt");
+        let field = |line: &str, key: &str| {
+            line.split(' ')
+                .find_map(|t| t.strip_prefix(key))
+                .unwrap_or_else(|| panic!("{key} in {line}"))
+                .to_string()
+        };
+        let mut shots = Vec::new();
+        for block in text.split("\n\n").filter(|b| !b.starts_with('#')) {
+            let mut shot = Shot {
+                st: Vec::new(),
+                angles: Vec::new(),
+                fired: usize::MAX,
+            };
+            for line in block.lines() {
+                if line.starts_with("cmd ") {
+                    shot.st.push(field(line, "st=").parse().unwrap());
+                    let a: Vec<i32> = field(line, "a=")
+                        .split(',')
+                        .map(|v| i32::from(v.parse::<u16>().unwrap() as i16))
+                        .collect();
+                    shot.angles.push([a[0], a[1], a[2]]);
+                } else if line.starts_with("ran ") {
+                    assert_eq!(
+                        field(line, "st=").parse::<i32>().unwrap(),
+                        shot.st[shot.st.len() - 1]
+                    );
+                    shot.fired = shot.st.len() - 1;
+                }
+            }
+            assert_ne!(shot.fired, usize::MAX, "a shot without its ran line");
+            shots.push(shot);
+        }
+        shots
+    }
+
+    /// A CRT seed whose second `rand` (the view kick's yaw, after its
+    /// pitch) is `r`: the LCG run back two steps from a state holding `r`.
+    fn seed_drawing(r: u32) -> u32 {
+        const A: u32 = 214_013;
+        const C: u32 = 2_531_011;
+        let mut inv = A;
+        for _ in 0..5 {
+            inv = inv.wrapping_mul(2u32.wrapping_sub(A.wrapping_mul(inv)));
+        }
+        let back = |s: u32| s.wrapping_sub(C).wrapping_mul(inv);
+        back(back(r << 16))
+    }
+
+    /// Retail's frame per cmd: `CL_FinishMove` sends the cmd with last
+    /// frame's kick, then the cgame, at the next cmd's `serverTime`,
+    /// predicts the shot's cmd, fires and steps (combat doc 15.7, "The
+    /// frame a shot kicks"). `each` gets every cmd's index and kick, and
+    /// stops the run by returning false.
+    fn run_kick(
+        shot: &Shot,
+        weapons: &[Option<WeaponDef>],
+        view: &mut OnlineView,
+        mut each: impl FnMut(usize, [f32; 3]) -> bool,
+    ) {
+        let held = ps(12, 0);
+        let mut kick = [0.0; 3];
+        for k in 0..shot.st.len() {
+            if !each(k, kick) {
+                return;
+            }
+            if k == shot.fired {
+                view.fire(weapons, &held);
+            }
+            view.step_recoil(weapons, Some(&held), shot.st.get(k + 1).copied());
+            kick = view.view_kick();
+        }
+    }
+
+    /// The views (shorts, open range) under which `CL_FinishMove`'s one
+    /// truncation of view plus kick gives `m`.
+    fn view_range(m: i32, kick_deg: f32) -> (f64, f64) {
+        let (lo, hi) = match m.signum() {
+            1 => (m, m + 1),
+            -1 => (m - 1, m),
+            _ => (-1, 1),
+        };
+        let k = f64::from(kick_deg) * f64::from(SHORT_PER_DEG);
+        (f64::from(lo) - k, f64::from(hi) - k)
+    }
+
+    fn meet(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+        (a.0.max(b.0), a.1.min(b.1))
+    }
+
+    /// Backlog 4 and 15 against `1-kick` of the 2026-11-24 retail-client
+    /// capture: eight m1carbine hip shots by a retail 1.1 client at 1 ms
+    /// frames. The kick first rides the cmd after the shot's and every cmd
+    /// of its rise and return lands on the capture's short exactly. The
+    /// pitch speed is 40 whatever the draw; the yaw is one CRT draw in
+    /// -15..15 that the client's other `rand` calls between shots leave
+    /// unknown, so each shot searches the draw that explains its whole yaw
+    /// and roll trail. The view's sub-short rest never reaches the wire
+    /// either: it is fitted, and shots fired from the same cmd angles must
+    /// agree on it, as the mouse did not move between them.
+    #[test]
+    fn the_retail_clients_kick_rides_its_cmds() {
+        let shots = retail_shots();
+        assert_eq!(shots.len(), 8);
+        // The capture's `w=12`: m1carbine_mp.
+        let mut weapons = vec![None; 13];
+        weapons[12] = Some(crate::play::recoil::tests::carbine());
+        let mut rests: std::collections::HashMap<i32, (f64, f64)> = Default::default();
+        for shot in &shots {
+            let at = shot.st[shot.fired];
+            let mut pitch = (f64::MIN, f64::MAX);
+            run_kick(shot, &weapons, &mut OnlineView::default(), |k, kick| {
+                pitch = meet(pitch, view_range(shot.angles[k][0], kick[0]));
+                true
+            });
+            assert!(pitch.0 < pitch.1, "shot {at}: no view fits the pitch trail");
+            let base = shot.angles[shot.fired][0];
+            let rest = rests.entry(base).or_insert((f64::MIN, f64::MAX));
+            *rest = meet(*rest, pitch);
+            assert!(rest.0 < rest.1, "shot {at}: the pitch view moved");
+
+            let fits = |r: u32| {
+                let mut view = OnlineView {
+                    recoil: Recoil::seeded(seed_drawing(r)),
+                    ..OnlineView::default()
+                };
+                let mut yaw = (f64::MIN, f64::MAX);
+                let mut roll_ok = true;
+                run_kick(shot, &weapons, &mut view, |k, kick| {
+                    yaw = meet(yaw, view_range(shot.angles[k][1], kick[1]));
+                    roll_ok = (f64::from(kick[2]) * f64::from(SHORT_PER_DEG)).trunc() as i32
+                        == shot.angles[k][2];
+                    roll_ok && yaw.0 < yaw.1
+                });
+                (roll_ok && yaw.0 < yaw.1).then_some(yaw)
+            };
+            let draws: Vec<u32> = (0..32768).filter(|&r| fits(r).is_some()).collect();
+            assert!(
+                !draws.is_empty(),
+                "shot {at}: no yaw draw fits the yaw and roll trail"
+            );
+            let r = draws[draws.len() / 2];
+            let yaw = fits(r).unwrap();
+
+            // The same cmds again through `PlayInput`, the view put at the
+            // fitted rest.
+            let mut input = crate::play::input::PlayInput::default();
+            let mid = |(lo, hi): (f64, f64)| ((lo + hi) / 2.0) as f32 / SHORT_PER_DEG;
+            input.mouse([mid(pitch), mid(yaw)]);
+            let mut view = OnlineView {
+                recoil: Recoil::seeded(seed_drawing(r)),
+                ..OnlineView::default()
+            };
+            run_kick(shot, &weapons, &mut view, |k, kick| {
+                input.kick = kick;
+                assert_eq!(
+                    input.cmd_angles(),
+                    shot.angles[k],
+                    "shot {at}, cmd {} ({} ms on)",
+                    k as i64 - shot.fired as i64,
+                    shot.st[k] - at
+                );
+                true
+            });
+        }
     }
 }

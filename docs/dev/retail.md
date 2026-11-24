@@ -157,12 +157,17 @@ steps in the frame it predicts the shot rides the next frame's cmd, so
 offset 1). `analyze.py kick` prints each shot's cmd-by-cmd pitch and yaw
 change from the cmd before it and the first-change offsets.
 
-Fixture: per shot, the `cmd` lines from a few before the `ran` line's
-`st` (its `ev=159`) to 40 after, deduplicated as `analyze.cmd_stream`
-does (a packet repeats its predecessor's cmds). A client gate drives
-`play::input::PlayInput` and the recoil with the same frame times (the
-cmds' `st` steps) and the press on the shot's cmd, and compares pitch per
-cmd exactly and yaw within the weapon's random bounds.
+Fixture: `analyze.py kick-fixture client.log <capture name>` prints it,
+per shot whose view comes back (a mouse count inside the kick drops it)
+the `cmd` lines from 3 before the `ran` line's `st` (its `ev=159`) to 20
+after the angles settle, deduplicated as `analyze.cmd_stream` does (a
+packet repeats its predecessor's cmds). The 2026-11-24 take is
+`crates/client/tests/fixtures/kick-1.1-retail-client.txt`; its gate,
+`play::view::tests::the_retail_clients_kick_rides_its_cmds`, drives
+`play::input::PlayInput` and `OnlineView`'s recoil at the cmds' `st`
+steps and fires on the shot's cmd, and compares pitch, yaw and roll per
+cmd exactly, fitting the yaw draw and the view's rest under a short,
+which never reach the wire (`cod11-combat.md` 15.7.1).
 
 ### Intermission: hudelems at pm_type 5 (1.1)
 
