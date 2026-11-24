@@ -650,8 +650,12 @@ colour codes in names pass through.
   `+melee` hints), `0x30018710` (`"spectator follow string"`), `0x30015b40`
   (centre print), `0x30017880` and `0x30017940` (game and bold message
   windows, `cod11-chat.md` 3.3) and the trap `0x1c` and `0x1d` draws
-  (`0x300179f0`, `0x30017a80`). INFERRED: chat (trap `0x1e`) stays, drawn
-  at `LAB_30018913` outside both gates.
+  (`0x300179f0`, `0x30017a80`; the minicon and the subtitle window,
+  `cod11-chat.md` 3.3), and the trap `0x1e` call with 100
+  (`0x30018906`), the say field (`cod11-chat.md` 4). VERIFIED (the
+  instructions): the chat lines (`0x300150b0`, `0x30018877` and
+  `0x3001889b`) draw ahead of both calls, so the board leaves them up;
+  `0x30018913` is `0x30017120`, after both gates.
 
 **Frame.** VERIFIED, `0x30029ac0`: `black` at alpha `0.55 * a`
 (`0x300696f8`) over (120, 22, 400, 430) (`0x30069690`, `0x30069560`,
@@ -1597,6 +1601,19 @@ the other branches: their hudelem passes are `0x30020c10` and `0x3002a4a0`.
 So no build draws a hudelem at intermission; vcod's `Hud::build` skips them
 at `pm_type` 5 (test `the_intermission_capture_draws_no_hudelems`, fixture
 `crates/client/tests/fixtures/retail-client-intermission.txt`).
+
+VERIFIED (the instructions), the same `pm_type` 5 return: it comes ahead
+of the chat lines (1.1 `0x300150b0`, 1.5 `0x30016190`, UO `0x30018770`)
+and of everything from 1.1 `0x300188b8` (1.5 `0x30019a88`, UO
+`0x3001c091`) on: the spectator hints and follow string, the vote lines,
+the centre print, the game and bold message windows, the minicon, the
+subtitles and the say field (trap `0x1e`, 1.1 `0x30018906`, 1.5
+`0x30019adb`, UO `0x3001c0e4`). So at intermission retail draws the board
+alone, whether or not a `b` reply has come and, on 1.5 and UO, while
+`timescale` 0 keeps the board itself off. vcod's `Hud::build` skips the
+chat lines, the message windows and the say field there too, and draws the
+say field only while the board is down (test
+`intermission_draws_no_chat_messages_or_say_field`).
 
 VERIFIED, the cvar rows: `cg_drawStatus` at `0x30074a44` binds
 `0x301d9ec0`, `cg_drawCrosshair` at `0x30074aa4` binds `0x301d9020`, both

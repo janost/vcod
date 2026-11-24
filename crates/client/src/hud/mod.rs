@@ -537,14 +537,16 @@ impl Hud {
         }
         let now_ms = (f.now * 1000.0) as i32;
         let clocked = out.len();
-        // `CG_Draw2D` returns for intermission (pm_type 5) before both.
+        // `CG_Draw2D` returns for intermission (pm_type 5) after the board:
+        // no chat, votes, messages or say field (cod11-hud-protocol.md 9.1).
+        let intermission = f.ps.is_some_and(|ps| pm_type(ps) == 5);
         // 1.1 sends the vote's end as server time, 1.5 and UO the ms left.
         let relative = !f.protocol.is_v1();
         self.vote
             .update(f.configstrings, f.protocol.cs.vote, relative, now_ms);
         self.timeout
             .update(f.configstrings, f.protocol.cs.match_timeout, now_ms);
-        if f.ps.is_none_or(|ps| pm_type(ps) != 5) {
+        if !intermission {
             let voted =
                 f.ps.is_some_and(|ps| ps.field_i32(f.protocol, "eFlags") & EF_VOTED != 0);
             let clock = if relative { now_ms } else { f.server_time };
@@ -582,23 +584,24 @@ impl Hud {
                 .map_or(0, |c| c.field_i32(f.protocol, "team"))
         });
         let [r, g, b, _] = killfeed::team_color(team);
-        self.chat
-            .build(&self.fonts, [r, g, b], now_ms, &v.left(), &mut out);
+        if !intermission {
+            self.chat
+                .build(&self.fonts, [r, g, b], now_ms, &v.left(), &mut out);
+        }
         // The board goes over everything; while it is up the cgame skips
-        // the game and bold message windows (0x30018810) and the centre
-        // print (0x300188e4).
+        // the centre print, the game and bold message windows and the say
+        // field (0x300188e4).
         let mut board = Vec::new();
         let board_up = self.build_scoreboard(f, &v, &mut board);
-        if !board_up {
-            if f.ps.is_none_or(|ps| pm_type(ps) != 5) {
-                self.center_print.build(&self.fonts, now_ms, &v, &mut out);
-            }
+        let board_down = !board_up && !intermission;
+        if board_down {
+            self.center_print.build(&self.fonts, now_ms, &v, &mut out);
             self.game_messages
                 .build(&self.fonts, now_ms, &v.left(), &mut out);
             self.bold_messages.build(&self.fonts, now_ms, &v, &mut out);
         }
         crate::frame_digest::hud_clocked(clocked..out.len());
-        if let Some(field) = &self.chat_field {
+        if let Some(field) = self.chat_field.as_ref().filter(|_| board_down) {
             chat::field(field, &self.fonts, f.localized, &v.left(), &mut out);
         }
         // The scoreboard reuses the parsed gametype; its last `b` reply
@@ -1504,6 +1507,52 @@ mod tests {
             };
             assert_eq!((seen("level"), seen("client")), (level, client), "{phase}");
         }
+    }
+
+    /// The 2D pass draws only the board at pm_type 5 (0x3001885c): no chat
+    /// lines, message windows or say field, board reply or not; the say
+    /// field also goes under the board (0x300188e4).
+    #[test]
+    fn intermission_draws_no_chat_messages_or_say_field() {
+        let (loc, clients) = (Localized::default(), BTreeMap::new());
+        let pm_index = PlayerState::field_index(&PROTOCOL_V1, "pm_type").expect("pm_type");
+        let quads = |pm_type: i32, held: bool, talk: bool| {
+            let mut hud = bare_hud();
+            if talk {
+                hud.chat.push("chat line", 1000);
+                for cmd in ["e", "c"] {
+                    let ev = NetEvent::ServerCommand(vec![cmd.into(), "message".into()]);
+                    hud.on_net_event(&ev, 1.0, &loc, &|_| None);
+                }
+                hud.chat_field = Some(ChatField {
+                    team: false,
+                    text: "typing".into(),
+                });
+            }
+            if held {
+                hud.scoreboard.press(1.0);
+            }
+            let mut ps = PlayerState::null(&PROTOCOL_V1);
+            ps.fields[pm_index] = pm_type;
+            let f = HudFrame {
+                now: 2.0,
+                ..frame(&ps, None, &loc, &clients)
+            };
+            hud.build(&f).len()
+        };
+        assert!(quads(0, false, true) > quads(0, false, false));
+        assert_eq!(quads(5, false, true), quads(5, false, false));
+        // Under the held board only the chat lines are left.
+        let mut chat_only = bare_hud();
+        chat_only.chat.push("chat line", 1000);
+        let mut ps = PlayerState::null(&PROTOCOL_V1);
+        ps.fields[pm_index] = 0;
+        chat_only.scoreboard.press(1.0);
+        let f = HudFrame {
+            now: 2.0,
+            ..frame(&ps, None, &loc, &clients)
+        };
+        assert_eq!(quads(0, true, true), chat_only.build(&f).len());
     }
 
     #[test]

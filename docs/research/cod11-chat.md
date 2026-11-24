@@ -261,7 +261,7 @@ vcod: `messages::wrap`, with `^0`..`^9` on 1.5 and UO (`hud::font::is_colour_cod
 VERIFIED, CoDMP.exe:
 
 - `messagemode` (0x408440) and `messagemode2` open the field with team flag 0 or 1 (0x1430380), a width of 0x100 characters and 0x24c pixels, and a 16.0 character height.
-- The cgame's 2D pass (0x30018810) draws it through trap 0x1e at y 100, right after the game and bold message windows.
+- The cgame's 2D pass (0x30018810) draws it through trap 0x1e at y 100, right after the game and bold message windows. VERIFIED (the instructions): the call (0x30018906) sits behind the second scoreboard test (0x300188e4..0x300188eb), so the field is not drawn while the board is up, nor at intermission, whose return (0x30018867) comes first (`cod11-hud-protocol.md` 9.1).
 - 0x409d80 draws `EXE_SAY` or `EXE_SAYTEAM` localized plus `:` (0x568610) at x 8, y + 16, font 0, scale 1/3, and the field after the label's width plus 8.
 - Enter sends `say "` or `say_team "` (0x567988, 0x567994) with the buffer (0x40d40b).
 
