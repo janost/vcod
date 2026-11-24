@@ -821,9 +821,8 @@ server reads the repeats.
 - vcod departs: the first cmd still goes on the long branch with every
   field (`CmdWire::full`), not off the playerstate base, so its bits
   differ from 1.7's wherever the base matches a field; the server reads
-  the same cmd. The move op is 0 once a snapshot is in, without the
-  newest-message test. INFERRED (the code). The send rate follows 1.7
-  since 14.1.
+  the same cmd. INFERRED (the code). The send rate and the move op follow
+  1.7 since 14.1 and 14.2.
 
 ### 14.1 The send rate
 
@@ -901,3 +900,33 @@ server reads the repeats.
   join's download loop paces at the default `cl_maxpackets`; vcod's own
   frame asks, not the cgame's draw. CoD4x 21's client gate is taken as
   1.7's (its client binary was not read). INFERRED (the code).
+
+### 14.2 The move op
+
+- **The test.** Op 0 (`clc_move`) when 0x934e7c is 0, the bool dvar at
+  0x956cfc is clear, 0xc5f938 is non-zero and 0x914e1c equals 0xc5f944;
+  else op 1 (0x4640e1..0x464117). VERIFIED (the instructions).
+- **What it compares.** `CL_PacketEvent` stores each sequenced message's
+  sequence in 0x914e1c (0x46c4f1) and puts the old one back for an
+  overflowed message (0x46c550). The snapshot parse (0x473710) clears
+  the new snapshot at 0xd90bcf0 (0x473723), stores 0x914e1c as its
+  `+0xc` (0x47374c..0x473757), clears 0x934e7c and sets the new
+  snapshot's first word for a snapshot with no base
+  (0x4737d1..0x4737e5), and copies the 0x2f94 bytes over 0xc5f938 only
+  when that first word is set (`je` at 0x47399d, the copy at
+  0x4739d9..0x4739f2). VERIFIED (the instructions). That these are
+  `clc.serverMessageSequence`, `cl.snap.valid`, `cl.snap.messageNum`,
+  `clc.demowaiting` and `cl_nodelta` is INFERRED (Q3's shape).
+- So the delta op goes only when the newest message read carried a valid
+  snapshot; after a message without one (a gamestate, which also clears
+  `cl`) or with an invalid one, the next packet asks for a full frame.
+  VERIFIED (the instructions above).
+- vcod: `Conn::send` sends op 0 when the newest snapshot's `message_num`
+  is the newest message read (`ack`) and `no_delta` is clear, on both
+  headers. Test:
+  `the_delta_move_needs_the_snapshot_in_the_newest_message`. VERIFIED
+  (the test).
+- vcod departs: a snapshot off a base vcod no longer holds is an
+  illegible message (both acknowledges go back, `parse.rs`) where 1.7
+  keeps the message and its snapshot invalid; vcod has no `cl_nodelta`.
+  INFERRED (the code).

@@ -642,8 +642,16 @@ impl Conn {
                 }
                 if !wired.is_empty() && self.client.gamestate.is_some() {
                     let (at, time) = origin.map_or(([1.0e6; 3], 0), |a| (a.origin, a.server_time));
+                    // `cl.snap` is valid and came in the newest message
+                    // read (0x4640e1..0x46410b, cod4-netfields.md 14.2).
+                    let delta = !self.no_delta
+                        && self
+                            .client
+                            .snapshots
+                            .last()
+                            .is_some_and(|s| s.message_num == self.ack);
                     ops.push(ClOp::Move {
-                        delta: !self.client.snapshots.is_empty() && !self.no_delta,
+                        delta,
                         cmds: wired,
                         origin: at.map(f32::to_bits),
                         origin_time: time,
@@ -1741,6 +1749,55 @@ mod tests {
         c.send(&[], None).unwrap();
         c.cmd_ring = CmdRing::default();
         assert!(c.ready_to_send(false));
+    }
+
+    /// `clc_move` (op 0) only when the newest snapshot came in the newest
+    /// message read and no full frame is owed, else `clc_moveNoDelta`
+    /// (`CL_WritePacket` 0x4640e1..0x464117, cod4-netfields.md 14.2), on
+    /// both headers.
+    #[test]
+    fn the_delta_move_needs_the_snapshot_in_the_newest_message() {
+        let snap = |message_num| super::super::parse::Snapshot {
+            message_num,
+            server_time: vcod_common::net::Msec::from_raw(1000),
+            delta_num: 0,
+            base: None,
+            snap_flags: 0,
+            ps: super::super::delta::PlayerState::default(),
+            entities: Vec::new(),
+            clients: Vec::new(),
+            wire: Default::default(),
+        };
+        for dialect in [Dialect::V17, Dialect::X21] {
+            let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+            server
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut t = 100;
+            let mut delta = |c: &mut Conn| {
+                t += 10;
+                let cmd = UserCmd {
+                    server_time: t,
+                    ..UserCmd::default()
+                };
+                c.send(&[cmd], None).unwrap();
+                match sent_ops(&server, c).first() {
+                    Some(ClOp::Move { delta, .. }) => *delta,
+                    o => panic!("{o:?}"),
+                }
+            };
+            let mut c = moving(&server, dialect);
+            c.ack = 5;
+            assert!(!delta(&mut c), "no snapshot");
+            c.client.snapshots.push(snap(5));
+            assert!(delta(&mut c), "{dialect:?}");
+            c.ack = 6;
+            assert!(!delta(&mut c), "message 6 carried none");
+            c.client.snapshots.push(snap(6));
+            assert!(delta(&mut c));
+            c.no_delta = true;
+            assert!(!delta(&mut c), "demowaiting");
+        }
     }
 
     /// A side channel gamestate's table takes the `d` commands the
