@@ -6,13 +6,14 @@
 //! each chunk brakes by how far its stream's aim has turned, grows, sags
 //! while fast and climbs once slow, bounces off the world and the bodies
 //! in it ([`ChunkWorld`]) and plays through the 43 `flamethrowerFire`
-//! sprite frames, shedding smoke on the way. The sound runs
+//! sprite frames. The sound runs
 //! `flamethrower_start`, then `flamethrower_fire` held while firing, then
 //! `flamethrower_cooldown`.
 //!
 //! vcod moves the chunks by retail's rules (coduo-diff.md 19.3.2, which
-//! lists what it leaves out) but draws them without the chain merging,
-//! and sheds one smoke puff per chunk. A fire chunk's first bounce off the
+//! lists what it leaves out) but draws them without the chain merging.
+//! Each stream chunk's trail steps shed climbing trail flames and, by its
+//! speed, smoke (19.3.3). A fire chunk's first bounce off the
 //! world may leave a burning residue ([`Residue`]): a still emitter that
 //! sheds small drifting, rising flames for a second or two, which burn as
 //! the stream's do.
@@ -94,6 +95,11 @@ struct Owner {
     chain: u32,
     aim: Vec2,
     fired_frame: u64,
+    /// How long the stream has fired (0x300ab7a8, at most 1000 ms
+    /// counted), and the aim's turn rate, degrees a second on its faster
+    /// axis, at most 200 (0x3007bf44).
+    run_ms: f32,
+    turn_rate: f32,
 }
 
 /// A chunk's type (`+0x2c`).
@@ -104,6 +110,9 @@ enum Kind {
     /// Type 2 with `+0x14` -1: a residue's flame, tested by the report
     /// (0x300268e0).
     ResidueFlame,
+    /// Type 2 with `+0x14` 0 or 1: a stream chunk's trail flame, never
+    /// tested.
+    Trail,
     /// Type 5: smoke, `flameSmoke{n}`.
     Smoke(u8),
 }
@@ -124,8 +133,13 @@ struct Chunk {
     born: f64,
     life: f32,
     roll: f32,
-    /// A fire chunk sheds its smoke once.
-    shed: bool,
+    /// When it last moved.
+    moved: f64,
+    /// The owner is the view's own player (`cg.snap`'s `clientNum`).
+    own: bool,
+    /// A stream chunk's next trail step and its share of the life to the
+    /// one after (`+0x130`, `+0x138`; 0x30027f22..0x3002905e).
+    trail: Option<(f64, f64)>,
     /// A stream chunk may leave a residue on its first bounce (`+0x14` 1
     /// at the nozzle, 0x30024c04; `+0x124` the bounce, 0x30025da0).
     may_residue: bool,
@@ -281,20 +295,37 @@ impl ChunkWorld<'_> {
     }
 }
 
+/// A stream chunk's first trail share `+0x138` (0x30024db8..0x30025045):
+/// `0.35 / d` held to 0.06 (own view) or 0.04 and to 100, `d` the larger
+/// of `0.75 + 0.25 * (1 - run / 1000)` and the aim's turn rate times 0.25
+/// (own view, the rate held to 400) or 0.125 (held to 100), at most 20.
+fn trail_share(own: bool, run_ms: f32, turn_rate: f32) -> f64 {
+    let (k, cap, floor) = if own {
+        (0.25, 400.0, 0.06)
+    } else {
+        (0.125, 100.0, 0.04)
+    };
+    let held = 0.75 + 0.25 * (1.0 - f64::from(run_ms.min(1000.0)) * 0.001);
+    let turning = (k * f64::from(turn_rate.min(cap))).min(20.0);
+    (0.35 / held.max(turning)).clamp(floor, 100.0)
+}
+
 /// The streams fired this frame or the last, by owner: the stream, the
 /// nozzle's aim and its place (0x30025e1e..0x30025e3f).
 type Streams = HashMap<u32, (u32, Vec2, Vec3)>;
 
-/// One chunk's frame `dt_ms` on to `now`: it grows (0x30025c60), brakes,
-/// moves and clips as [`ChunkWorld`] does (0x30025da0). Returns the
-/// struck face's normal when the strike may leave a residue.
+/// One chunk's move from its last on to `now`: it grows (0x30025c60),
+/// brakes, moves and, unless smoke, clips as [`ChunkWorld`] does
+/// (0x30025da0; type 5 skips the trace at 0x3002603b). Returns the struck
+/// face's normal when the strike may leave a residue.
 fn move_chunk(
     c: &mut Chunk,
     now: f64,
-    dt_ms: f32,
     world: Option<&ChunkWorld>,
     streams: &Streams,
 ) -> Option<Vec3> {
+    let dt_ms = ((now - c.moved) as f32).max(0.0);
+    c.moved = now;
     // 0x30023b70: a stream chunk grows slower the faster it goes.
     let slow = match c.kind {
         Kind::Stream => {
@@ -308,13 +339,11 @@ fn move_chunk(
     }
     c.size = c.size.min(MAX_SIZE);
     if c.speed > 2.0 && c.friction != 0.0 {
-        let share = match (c.kind, c.chain) {
-            (Kind::Stream, Some((chain, aim, at))) => match streams.get(&c.owner) {
-                Some(&(now_chain, now_aim, now_at)) if now_chain == chain => {
-                    chain_brake((aim, at), (now_aim, now_at))
-                }
-                _ => LOOSE_FRICTION,
-            },
+        let share = match (c.chain, streams.get(&c.owner)) {
+            (Some((chain, aim, at)), Some(&(now_chain, now_aim, now_at))) if now_chain == chain => {
+                chain_brake((aim, at), (now_aim, now_at))
+            }
+            _ if c.kind == Kind::Stream => LOOSE_FRICTION,
             _ => 1.0,
         };
         c.speed = brake(c.speed, c.friction, share, dt_ms);
@@ -328,6 +357,10 @@ fn move_chunk(
     }
     let age = (now - c.born) as f32 / 500.0;
     let to = c.pos + c.dir * c.speed * dt_ms / 1000.0 - Vec3::Z * (lift(c) * dt_ms / 500.0 * age);
+    if let Kind::Smoke(_) = c.kind {
+        c.pos = to;
+        return None;
+    }
     match world.map(|w| (w.trace(c.pos, to, c.owner), w.max_clients)) {
         // 0x30025da0: stuck inside, the chunk loses its speed.
         Some(((tr, _), _)) if tr.allsolid => {
@@ -526,11 +559,18 @@ impl FlameSystem {
                         chain: self.chains,
                         aim: aim_of(n.dir),
                         fired_frame: self.frame,
+                        run_ms: -dt_ms,
+                        turn_rate: 0.0,
                     },
                 );
             }
             if let Some(o) = self.owners.get_mut(&n.owner) {
-                o.aim = aim_of(n.dir);
+                let aim = aim_of(n.dir);
+                let wrap = |a: f32| ((a + 180.0).rem_euclid(360.0) - 180.0).abs();
+                let turn = wrap(aim.x - o.aim.x).max(wrap(aim.y - o.aim.y));
+                o.turn_rate = (turn / (dt_ms.max(0.1) / 1000.0)).min(200.0);
+                o.run_ms = (o.run_ms + dt_ms).min(1000.0);
+                o.aim = aim;
                 o.pos = n.pos;
                 o.fired_frame = self.frame;
             }
@@ -552,7 +592,7 @@ impl FlameSystem {
             };
             let mut emitted = 0;
             while t <= now && emitted < MAX_PER_FRAME {
-                self.emit(n, t, now, world);
+                self.emit(n, t, world);
                 t += spacing;
                 emitted += 1;
             }
@@ -577,57 +617,137 @@ impl FlameSystem {
             keep
         });
 
-        self.shed_residue_flames(now, world);
-        let dt = dt_ms / 1000.0;
-        let mut smoke = Vec::new();
+        self.shed_residue_flames(now, dt_ms, world);
         let mut struck = Vec::new();
-        for (i, c) in self.chunks.iter_mut().enumerate() {
-            if let Kind::Smoke(_) = c.kind {
-                c.pos.z += 40.0 * dt;
-                c.size = (c.size + 30.0 * dt).min(c.size_max);
-                continue;
+        let mut born = Vec::new();
+        for i in 0..self.chunks.len() {
+            let mut c = self.chunks[i];
+            if now < c.born + f64::from(c.life) {
+                self.trail(&mut c, now, eye, world, &streams, &mut born);
             }
-            if let Some(normal) = move_chunk(c, now, dt_ms, world, &streams) {
+            if let Some(normal) = move_chunk(&mut c, now, world, &streams) {
                 struck.push((i, normal));
             }
-            let frac = (now - c.born) as f32 / c.life;
-            if !c.shed && frac >= 0.5 {
-                c.shed = true;
-                smoke.push((c.owner, c.pos, c.size));
-            }
+            self.chunks[i] = c;
         }
+        self.chunks.extend(born);
         for (i, normal) in struck {
             let c = self.chunks[i];
             self.leave_residue(&c, normal, now);
         }
-        for (owner, pos, size) in smoke {
-            if self.rand() < 0.3 {
-                let frame = (self.rand() * 6.0) as u8 + 1;
-                let life = 1600.0 + self.rand() * 2600.0;
-                let roll = self.rand() * 360.0;
-                self.chunks.push(Chunk {
-                    owner,
-                    kind: Kind::Smoke(frame.min(6)),
-                    pos,
-                    dir: Vec3::Z,
-                    speed: 0.0,
-                    size: size * 0.5,
-                    size_max: size * 1.5,
-                    size_rand: 0.0,
-                    born: now,
-                    life,
-                    roll,
-                    shed: true,
-                    may_residue: false,
-                    a8: 0.0,
-                    friction: 0.0,
-                    chain: None,
-                });
-            }
-        }
         self.chunks.retain(|c| ((now - c.born) as f32) < c.life);
         self.residues.retain(|r| now < r.death);
         sounds
+    }
+
+    /// A stream chunk's trail steps due by `now`, run before its own move
+    /// (0x30027f22..0x3002905e). Each sheds a trail flame and may shed a
+    /// smoke puff, both into `born`; the steps grow apart with the life
+    /// spent, and, for another body's stream, with the eye's nearness.
+    fn trail(
+        &mut self,
+        c: &mut Chunk,
+        now: f64,
+        eye: Vec3,
+        world: Option<&ChunkWorld>,
+        streams: &Streams,
+        born: &mut Vec<Chunk>,
+    ) {
+        let Some((mut next, mut share)) = c.trail else {
+            return;
+        };
+        let span = f64::from(c.life);
+        while share != 0.0 && next < now {
+            let frac = ((next - c.born) / span) as f32;
+            // A type 2 copy moved to the step (0x30027f8a..0x3002800c).
+            let mut flame = Chunk {
+                kind: Kind::Trail,
+                trail: None,
+                may_residue: false,
+                ..*c
+            };
+            move_chunk(&mut flame, next, world, streams);
+            flame.chain = None;
+            // It is older than its parent by a share of the life left
+            // (0x30028026..0x300288a8); the clamp draws anew per test.
+            let lag_share = |r: f32| ((2.0 * r - 1.0) * 0.15 + 1.5 * (1.0 - frac).powi(3)) * 0.3;
+            let lag_share = if lag_share(self.rand()) < 0.0 {
+                0.0
+            } else if lag_share(self.rand()) > 0.8 {
+                0.8
+            } else {
+                lag_share(self.rand())
+            };
+            let lag = (c.born + span - next) * f64::from(lag_share);
+            if c.own {
+                flame.born -= (f64::from(frac).sqrt() + 1.0) * lag;
+            } else {
+                flame.born -= lag;
+                flame.life -= lag as f32;
+            }
+            // 0x30028911..0x30028be7: it climbs, its cap opens, it brakes
+            // at 0.15 and slows.
+            flame.a8 = -2.25
+                * (c.a8 / STREAM_A8)
+                * (3.0 * self.rand() + 16.0 * (flame.size / MAX_SIZE).powi(2) + 10.0 * frac);
+            // A draw times 0 (0x30028a4b).
+            self.rand();
+            flame.size_rand =
+                ((0.25 * flame.size_rand + 105.0) * 0.75 * (0.5 * (1.0 - frac).powi(5) + 0.2))
+                    .clamp(0.0, MAX_SIZE);
+            if streams.contains_key(&c.owner) {
+                flame.size += (1.0 - (1.0 - frac).powi(4)) * 20.0;
+            }
+            flame.size_max = 140.0 - flame.size_rand;
+            flame.friction = 0.15;
+            flame.roll += (self.rand() * 15.0).floor();
+            flame.speed *= if c.own { frac * 0.2 + 0.1 } else { 0.25 };
+            if 0.02 < frac && frac < 0.8 {
+                self.smoke(c, &flame, frac, next, born);
+            }
+            move_chunk(&mut flame, now, world, streams);
+            born.push(flame);
+            share *= f64::from(2.0 * frac + 1.0);
+            let mut step = span * share;
+            let dist = eye.distance(c.pos).max(2.0);
+            if !c.own && dist < c.size * 4.0 {
+                step *= f64::from(c.size * 4.0 / dist);
+            }
+            next += step / 2.0 + f64::from(self.rand()) * step;
+        }
+        c.trail = Some((next, share));
+    }
+
+    /// A trail step's smoke (0x30028c32..0x30028eeb): with a chance of
+    /// the stream chunk's `(speed / 900)^2` halved, halved again for
+    /// another body's stream, a copy of the step's `flame` as type 5, born
+    /// at the step and living 800 to 2100 ms (1600 + rand * 2600 ticks),
+    /// its cap 3.5 times the flame's size plus 20 and its start a
+    /// twentieth of that, set 6 plus 0.19 of the stream chunk's size
+    /// above it and climbing at 2 to 15 (`+0xa8`). It is not moved again
+    /// until the next frame.
+    fn smoke(&mut self, c: &Chunk, flame: &Chunk, frac: f32, at: f64, born: &mut Vec<Chunk>) {
+        let v = c.speed / START_SPEED;
+        let own = if c.own { 1.0 } else { 0.5 };
+        if v * v * own * 0.5 <= self.rand() {
+            return;
+        }
+        let shade = (self.rand() * 6.0) as u8 + 1;
+        let size_max = (flame.size * 3.5 + 20.0).min(MAX_SIZE);
+        let roll = (2.0 * self.rand() - 1.0) * 25.0 + 180.0;
+        let life = (1600.0 + self.rand() * 2600.0) / 2.0;
+        born.push(Chunk {
+            kind: Kind::Smoke(shade.min(6)),
+            pos: flame.pos + Vec3::Z * (c.size * 0.19 + 6.0),
+            size: size_max / 20.0,
+            size_max,
+            born: at,
+            life,
+            roll,
+            moved: at,
+            a8: ((frac * 1.85 + 0.55) * flame.a8).clamp(-15.0, -2.0),
+            ..*flame
+        });
     }
 
     /// 0x30025da0's residue off a stream chunk's first bounce: unless its
@@ -668,7 +788,7 @@ impl FlameSystem {
     /// as well, and rises ever faster ([`Chunk::a8`]). Such a flame
     /// never trails a smoke (type 2, 0x30028bfb), and a residue whose face
     /// went dies ([`RESIDUE_FACE_MS`]).
-    fn shed_residue_flames(&mut self, now: f64, world: Option<&ChunkWorld>) {
+    fn shed_residue_flames(&mut self, now: f64, dt_ms: f32, world: Option<&ChunkWorld>) {
         for i in 0..self.residues.len() {
             while self.residues[i].next_emit < now.min(self.residues[i].death) {
                 // A wall's residue redraws its `+0xa8` each step (|z| of
@@ -715,7 +835,9 @@ impl FlameSystem {
                     born: r.next_emit - f64::from(lag),
                     life: RESIDUE_FLAME_LIFE_MS,
                     roll,
-                    shed: true,
+                    moved: now - f64::from(dt_ms),
+                    own: false,
+                    trail: None,
                     may_residue: false,
                     // The parent's less 20, less 5 times `1 - normal z`.
                     a8: (r.sink - 20.0) - (1.0 - n.z) * 5.0,
@@ -769,7 +891,7 @@ impl FlameSystem {
                     break;
                 }
                 let c = self.chunks[i];
-                if matches!(c.kind, Kind::Smoke(_)) || (self.rand() * 5.0) as u32 != 0 {
+                if c.kind == Kind::Trail || (self.rand() * 5.0) as u32 != 0 {
                     continue;
                 }
                 let frac = (now - c.born) as f32 / c.life;
@@ -846,7 +968,7 @@ impl FlameSystem {
     /// `+0xb8` 1): 1800 units a second, a cap of 140 less its size draw and
     /// a start of 16 less 0.9 (own view) or 0.6 of that draw's share of 140
     /// (0x30024b12..0x30024c1d).
-    fn emit(&mut self, n: &Nozzle, born: f64, now: f64, world: Option<&ChunkWorld>) {
+    fn emit(&mut self, n: &Nozzle, born: f64, world: Option<&ChunkWorld>) {
         let size_rand = self.size_rand(born);
         let k = if n.own_view { 0.9 } else { 0.6 };
         let roll = self.rand() * 360.0;
@@ -863,12 +985,12 @@ impl FlameSystem {
             _ => (START_SPEED, LIFE_MS),
         };
         let o = self.owners[&n.owner];
-        // Chunks due earlier in this frame start along their path.
-        let ahead = ((now - born) as f32).max(0.0) / 1000.0 * speed;
+        let step_k = trail_share(n.own_view, o.run_ms, o.turn_rate);
+        let first = born + f64::from(self.rand()) * f64::from(life) * step_k;
         self.chunks.push(Chunk {
             owner: n.owner,
             kind: Kind::Stream,
-            pos: n.pos + n.dir * ahead,
+            pos: n.pos,
             dir: n.dir.normalize_or_zero(),
             speed,
             size: (1.0 - k * size_rand / 140.0) * START_SIZE,
@@ -877,7 +999,9 @@ impl FlameSystem {
             born,
             life,
             roll,
-            shed: false,
+            moved: born,
+            own: n.own_view,
+            trail: Some((first, step_k)),
             may_residue: true,
             a8: STREAM_A8,
             friction: 1.0,
@@ -1018,7 +1142,9 @@ mod tests {
             born,
             life,
             roll: 0.0,
-            shed: false,
+            moved: born,
+            own: false,
+            trail: None,
             may_residue: false,
             a8: 0.0,
             friction: 0.0,
@@ -1173,23 +1299,32 @@ mod tests {
         assert_eq!(got, sent);
     }
 
-    /// Smoke never burns, nor a chunk at 0.9 of its life.
+    /// 0x3002693c..0x3002698c: a trail flame never burns, nor any chunk
+    /// at 0.9 of its life; smoke does.
     #[test]
-    fn smoke_and_spent_chunks_never_report() {
-        let mut f = FlameSystem::default();
-        let mut smoke = fire(7, Vec3::new(20.0, 0.0, 30.0), 100.0, 0.0, 1e9);
-        smoke.kind = Kind::Smoke(1);
-        f.chunks.push(smoke);
-        f.chunks
-            .push(fire(7, Vec3::new(20.0, 0.0, 30.0), 100.0, 0.0, 1000.0));
-        let mut now = 900.0;
-        while now < 3_000.0 {
-            assert_eq!(
-                f.report(now, Some(VICTIM), false, None),
-                FlameReport::default()
-            );
-            now += 16.0;
-        }
+    fn trail_flames_and_spent_chunks_never_report_but_smoke_does() {
+        let burns = |c: Chunk| {
+            let mut f = FlameSystem::default();
+            f.chunks.push(c);
+            (0..200).any(|i| {
+                f.report(900.0 + 16.0 * f64::from(i), Some(VICTIM), false, None)
+                    .in_flame
+            })
+        };
+        let near = fire(7, Vec3::new(20.0, 0.0, 30.0), 100.0, 0.0, 1e9);
+        assert!(burns(near));
+        assert!(burns(Chunk {
+            kind: Kind::Smoke(1),
+            ..near
+        }));
+        assert!(!burns(Chunk {
+            kind: Kind::Trail,
+            ..near
+        }));
+        assert!(!burns(Chunk {
+            life: 1000.0,
+            ..near
+        }));
     }
 
     #[test]
@@ -1243,15 +1378,18 @@ mod tests {
         f.step(1000.0, 10.0, &[nozzle(1)], Vec3::ZERO, None);
         let first = f.chunks[0];
         f.step(1200.0, 200.0, &[], Vec3::ZERO, None);
-        let c = f.chunks.iter().find(|c| c.born == first.born).unwrap();
+        let c = f
+            .chunks
+            .iter()
+            .find(|c| c.kind == Kind::Stream && c.born == first.born)
+            .unwrap();
         let share = chain_brake((Vec2::ZERO, Vec3::ZERO), (Vec2::ZERO, Vec3::ZERO));
         assert!((share - 0.182_305_6).abs() < 1e-6, "{share}");
-        // The emitting frame moved it 10 ms too; released last frame, its
-        // stream still holds.
-        let after_first = START_SPEED - FRICTION * share * 10.0;
-        assert_eq!(c.speed, after_first - FRICTION * share * 200.0);
+        // Born at the frame's end, it moves from the next; released last
+        // frame, its stream still holds.
+        assert_eq!(c.speed, START_SPEED - FRICTION * share * 200.0);
         assert!(c.size > first.size && c.size <= c.size_max);
-        let x = after_first * 0.01 + c.speed * 0.2;
+        let x = c.speed * 0.2;
         assert!((c.pos.x - x).abs() < 1e-2, "{} {x}", c.pos.x);
         assert!(c.pos.z < -1.0, "{}", c.pos.z);
         let q = f.quads(1200.0, Vec3::Y, Vec3::Z);
@@ -1288,7 +1426,7 @@ mod tests {
         };
         let slowed = |c: Chunk, streams: &Streams| {
             let mut c = c;
-            move_chunk(&mut c, 10.0, 10.0, None, streams);
+            move_chunk(&mut c, 10.0, None, streams);
             (1000.0 - c.speed) / (FRICTION * 10.0)
         };
         let firing = Streams::from([(7, (4, held.0, held.1))]);
@@ -1341,6 +1479,128 @@ mod tests {
             let k = if c.owner == 1 { 0.9 } else { 0.6 };
             assert_eq!(c.size, (1.0 - k * c.size_rand / 140.0) * START_SIZE);
         }
+    }
+
+    /// 0x30024db8..0x30025045: a steady stream's first trail share is
+    /// 0.35 over 1 at its start, 0.75 a second on; a fast turn spaces the
+    /// steps to their floor, 0.06 for the view's own stream, 0.04 for
+    /// another body's.
+    #[test]
+    fn a_stream_chunks_first_trail_share_follows_the_run_and_the_turn() {
+        assert_eq!(trail_share(true, 0.0, 0.0), 0.35);
+        assert!((trail_share(false, 1000.0, 0.0) - 0.35 / 0.75).abs() < 1e-12);
+        assert!((trail_share(false, 4000.0, 0.0) - 0.35 / 0.75).abs() < 1e-12);
+        assert!((trail_share(false, 0.0, 16.0) - 0.35 / 2.0).abs() < 1e-12);
+        assert_eq!(trail_share(true, 0.0, 200.0), 0.06);
+        assert_eq!(trail_share(false, 0.0, 200.0), 0.04);
+    }
+
+    /// A stream chunk at the nozzle's speed with its next trail step at
+    /// half its life.
+    fn trailing(own: bool, speed: f32, share: f64) -> Chunk {
+        Chunk {
+            speed,
+            own,
+            a8: STREAM_A8,
+            friction: 1.0,
+            size_rand: 80.0,
+            trail: Some((1000.0 + f64::from(LIFE_MS) * 0.5, share)),
+            ..fire(7, Vec3::ZERO, 50.0, 1000.0, LIFE_MS)
+        }
+    }
+
+    /// 0x30027f22..0x3002905e: a step sheds a trail flame older than its
+    /// stream chunk, slower and climbing, and the next step comes `step /
+    /// 2 + rand * step` on, `step` the life times the share grown by `2 *
+    /// frac + 1`.
+    #[test]
+    fn a_trail_step_sheds_an_older_climbing_flame_and_spaces_the_next() {
+        for seed in 1..50u32 {
+            let mut f = FlameSystem {
+                rng: seed.wrapping_mul(0x9e37_79b9),
+                ..FlameSystem::default()
+            };
+            let mut c = trailing(seed % 2 == 0, START_SPEED, 0.3);
+            let (at, share) = c.trail.unwrap();
+            let mut born = Vec::new();
+            let now = at + 1.0;
+            let eye = Vec3::X * 5000.0;
+            f.trail(&mut c, now, eye, None, &Streams::new(), &mut born);
+            let flame = born.iter().find(|b| b.kind == Kind::Trail).unwrap();
+            assert_eq!(born.iter().filter(|b| b.kind == Kind::Trail).count(), 1);
+            assert!(flame.born <= c.born && flame.born + f64::from(flame.life) <= at + 417.0);
+            assert!(flame.a8 < 0.0 && flame.friction == 0.15);
+            let slowed = if c.own { 0.5 * 0.2 + 0.1 } else { 0.25 };
+            assert!(flame.speed <= START_SPEED * slowed);
+            let (next, grown) = c.trail.unwrap();
+            assert!((grown - share * 2.0).abs() < 1e-9);
+            let step = f64::from(LIFE_MS) * grown;
+            assert!(
+                (at + step / 2.0..=at + step * 1.5).contains(&next),
+                "{next}"
+            );
+        }
+        // Another body's stream chunk within four of its sizes of the eye
+        // steps that much farther.
+        let mut f = FlameSystem::default();
+        let mut c = trailing(false, START_SPEED, 0.3);
+        let at = c.trail.unwrap().0;
+        f.trail(
+            &mut c,
+            at + 1.0,
+            Vec3::X * 20.0,
+            None,
+            &Streams::new(),
+            &mut Vec::new(),
+        );
+        let step = f64::from(LIFE_MS) * 0.6 * 10.0;
+        assert!((at + step / 2.0..=at + step * 1.5).contains(&c.trail.unwrap().0));
+    }
+
+    /// 0x30028bed..0x30028eeb: smoke comes off a trail step only between
+    /// 0.02 and 0.8 of the stream chunk's life, with a chance of
+    /// `(speed / 900)^2 / 2`, a half again for another body's stream; it
+    /// is born at the step, lives 800 to 2100 ms and starts at a
+    /// twentieth of its cap.
+    #[test]
+    fn a_trail_step_sheds_smoke_by_the_stream_chunks_speed() {
+        let run = |own: bool, speed: f32, at_frac: f64| {
+            let mut puffs = Vec::new();
+            for seed in 1..2001u32 {
+                let mut f = FlameSystem {
+                    rng: seed.wrapping_mul(0x9e37_79b9),
+                    ..FlameSystem::default()
+                };
+                let mut c = trailing(own, speed, 10.0);
+                let at = 1000.0 + f64::from(LIFE_MS) * at_frac;
+                c.trail = Some((at, 10.0));
+                let mut born = Vec::new();
+                f.trail(
+                    &mut c,
+                    at + 1.0,
+                    Vec3::ZERO,
+                    None,
+                    &Streams::new(),
+                    &mut born,
+                );
+                for b in born.iter().filter(|b| matches!(b.kind, Kind::Smoke(_))) {
+                    assert_eq!((b.born, b.moved), (at, at));
+                    assert!((800.0..=2100.0).contains(&b.life), "{}", b.life);
+                    assert_eq!(b.size, b.size_max / 20.0);
+                    assert!((-15.0..=-2.0).contains(&b.a8));
+                    puffs.push(*b);
+                }
+            }
+            puffs.len() as f32 / 2000.0
+        };
+        let own = run(true, START_SPEED, 0.5);
+        assert!((0.45..0.55).contains(&own), "{own}");
+        let remote = run(false, START_SPEED, 0.5);
+        assert!((0.2..0.3).contains(&remote), "{remote}");
+        let slow = run(true, START_SPEED / 2.0, 0.5);
+        assert!((0.1..0.15).contains(&slow), "{slow}");
+        assert_eq!(run(true, START_SPEED, 0.01), 0.0);
+        assert_eq!(run(true, START_SPEED, 0.85), 0.0);
     }
 
     /// A stream at a wall: its chunks' first bounces leave residues at the

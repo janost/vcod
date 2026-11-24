@@ -1467,10 +1467,14 @@ chunks against its own box and reports the burn (section 21,
   between (INFERRED, the order).
 - **Which chunks.** The sprite add (0x300268e0) returns for chunk type 3
   (`+0x2c`, the smoke `0x30027ad0` spawns) and 1, and for a negative alpha.
-  It tests a chunk of type 0, or type 2 with `+0x14` -1, when `rand() % 5 ==
-  0` and its life fraction (`+0xe8`) is under 0.9 (`0x3007c038`), passing
-  the owner (`+0x38`), the size (`+0xe4`) and the origin (`+0xd8`, in EDI)
-  (VERIFIED, disassembly 0x300268fa..0x3002698c).
+  It tests a chunk of any other type but type 2 with `+0x14` not -1 (a
+  stream's trail flame, 19.3.3), so the stream's type 0 chunks, a
+  residue's flames and the type 5 smoke, when `rand() % 5 == 0` and its
+  life fraction (`+0xe8`) is under 0.9 (`0x3007c038`), passing the owner
+  (`+0x38`), the size (`+0xe4`) and the origin (`+0xd8`, in EDI)
+  (VERIFIED, disassembly 0x300268fa..0x3002698c: `cmp eax,0x2` then `cmp
+  [ebp+0x14],-1` at 0x3002694c..0x30026955, no other type test; 0x300265c0
+  reads no type either).
 - **The test** (0x300265c0, VERIFIED disassembly):
   - it returns once the flag is up or the chunk sits at the world origin;
   - reach is `size * 0.4` (`0x3007162c`), halved (`0x3007bce8`) for the
@@ -1564,8 +1568,8 @@ chunks against its own box and reports the burn (section 21,
     skips a parent outside 0.02..0.8 of its life (0x3007c2b8, 0x3007c358).
     Past that, the smoke's chance scales with `(speed / 900)^2`
     (0x3007c0d8), which is 0 for a residue. The smoke itself is set up at
-    0x30028cca..0x30028d36. vcod's residue flames carry `shed` from birth,
-    so they never queue its puff.
+    0x30028cca..0x30028d36. vcod runs no trail step for a residue's flames
+    (19.3.3).
   - 0x30027d10 also makes a type 3 off a chunk whose `+0x140` lies between 0
     and the clock (`0x30027ad0(chunk, 3, 40)` at 0x30027e9d, VERIFIED
     disassembly), but nothing sets a time there ("`+0x140`" below).
@@ -1800,6 +1804,99 @@ ticks (500 ms), so vcod's units a second are twice them.
     rebase every 20 ticks (vcod moves and traces each frame);
   - the chain draw (0x300272b0), which skips a chunk near the last drawn
     and fades by a tent of its life.
+
+#### 19.3.3 The trail and its smoke
+
+0x30027d10 runs a chunk's trail steps before its own move each frame
+(0x30027f22..0x3002905e). Addresses are `uo_cgame_mp_x86.dll`; times are
+ticks (half ms).
+
+- **When.** A type 0 chunk's first step `+0x130` is its birth plus `rand *
+  life * +0x138` (stored at 0x30024f12 and 0x3002507c, the two branches),
+  plus a share of the owner's speed held to 0.07 of the life for a client
+  (0x300250a7..0x300250df). `+0x138` is
+  `0.35 / d` held to 0.06 for the view's own stream (0x3007c0d0) or 0.04
+  (0x3007c0b8) and to 100 (0x3007c0c8). `d` is the larger of `0.75 + 0.25
+  * (1 - n / 1000)`, `n` the stream's run in ms held to 1000 (0x300ab7a8),
+  and the aim's faster turn rate in degrees a second (held to 200,
+  0x3007bf44) times 0.25 held to 400 (own, 0x3007be30, 0x3007bf58) or
+  0.125 held to 100 (0x3007c0c0, 0x300715ec), at most 20 (0x3007c128)
+  (VERIFIED decompile, 0x30024db8..0x30025045). A step runs while
+  `+0x138` is not 0 and the step is before the clock (0x30027f40..
+  0x30027f72). After it `+0x138` grows by `2 * frac + 1` for type 0 and 1
+  (0x30028f32), the step is the life times that, scaled by `4 * size /
+  dist` for another body's type 0 chunk nearer the eye than four of its
+  sizes (0x30028fec..0x30029017, `dist` held to 2), and the next comes
+  `step / 2 + rand * step` on (0x3002901b..0x3002904c) (VERIFIED (the
+  instructions)). So a held stream's chunk takes its first step in its
+  first third and one or two more before it dies (INFERRED, the
+  arithmetic).
+- **The trail flame.** Each step copies the chunk as type 2 (0x30027fcb),
+  grows and moves the copy to the step (0x30027ff7, 0x3002800c), then for
+  a type 0 parent (VERIFIED (the instructions)):
+  - lags it by `(death - step) * L`, `L` the clamp to 0..0.8 of `((2 rand
+    - 1) * 0.15 + 1.5 (1 - frac)^3) * 0.3` (0x3007c018, 0x3007c278,
+    0x3007c3d8, 0x3007c3e0), the macro drawing a new `rand` for each of
+    its three reads (0x30028026..0x30028173). The view's own stream moves
+    the flame's birth and death back by `(frac^0.5 + 1) * lag`
+    (0x30028869..0x300288a8); another body's moves the birth back by the
+    lag and the death by twice it (0x30028857..0x30028865);
+  - sets its `+0x130` -1 and `+0x128` -1 (0x300288bf, 0x300288ec), so it
+    trails nothing and brakes as no stream's chunk;
+  - sets `+0xa8` to `-2.25 * (+0xa8 / 60) * (3 rand + 16 (size / 290)^2 +
+    10 frac)` (0x3002898f..0x30028a45; a fourth term is multiplied by 0
+    at 0x300289ba), so it climbs;
+  - sets `+0x60` to `(0.25 * +0x60 + 105) * 0.75 * (0.5 (1 - frac)^5 +
+    0.2)` (0x30028a4b..0x30028ab0; a `rand` times 0 opens it), adds `(1 -
+    (1 - frac)^4) * 20` to its size while the owner fired this frame or
+    the last (0x30028ab3..0x30028afe), and sets its cap to 140 less the
+    `+0x60` held to 0..290 (0x30028b0d..0x30028b54);
+  - sets `+0xbc` 0.15 (0x30028b4a), adds `rand % 15` to its roll
+    (0x30028b57) and an alpha `+0x148` of `(1 - frac)^2 * 0.65 + 0.35`
+    (0x30028b80..0x30028bab);
+  - scales its speed by `frac * 0.2 + 0.1` for the view's own stream and
+    0.25 for another's (0x30028bb1..0x30028be7).
+
+  The flame is then moved on to the clock (0x30028f18, 0x30028f22). It is
+  drawn and never tested (19.3, "Which chunks"), and a type 2 leaves no
+  residue (0x30025da0 tests type 0) (VERIFIED (the instructions)).
+- **The smoke.** After the flame, for a parent whose `+0x40` is 0, not of
+  type 2, and between 0.02 and 0.8 of its life (exclusive, 0x3007c2b8,
+  0x3007c358), smoke comes when `(speed / 900)^2 * own * kind` beats a
+  `rand`, `speed` the parent's, `own` 1 for the view's own stream and 0.5
+  otherwise, `kind` 1 for a residue and 0.5 otherwise (0x30028bed..
+  0x30028cb1) (VERIFIED (the instructions)). The puff (0x30028cb7..
+  0x30028eeb, VERIFIED (the instructions)):
+  - draws its shader `rand % 6` of `flameSmoke1..6` (0x300a86f8) first;
+  - copies the flame as type 5 with `+0x34` 0x3fe and `+0x128` -1;
+  - takes `+0xa8` as the clamp to -15..-2 of `(frac * 1.85 + 0.55)` times
+    the flame's (0x3007c350, 0x3007c1b0, 0x3007c34c, 0x3007c150);
+  - takes a cap of `size * 3.5 + 20` held to 290 (0x3007bef8) and a size
+    of a twentieth of it (0x3007be04);
+  - sits `0.19 * parent size + 6` above the flame (0x3007c348,
+    0x3007bddc);
+  - rolls `180 + 25 (2 rand - 1)` (0x3007bd50, 0x3007be98);
+  - is born at the step and dies `1600 + rand * 2600` ticks later
+    (0x3007c398, 0x3007c340), 800 to 2100 ms;
+  - is grown and moved to the step only, so it next moves the frame after.
+
+  A type 5 chunk moves without a trace (`cmp [ebp+0x2c],0x5` at
+  0x3002603b) and climbs by its `+0xa8` (0x30025990, type 5 takes no `p`
+  term). Its friction is 0.15 of the whole, as no stream's chunk
+  (VERIFIED (the instructions)). The report tests it (19.3, "Which
+  chunks").
+- **What a held stream sheds.** Roughly one puff for every two stream
+  chunks of the view's own, one in eight of another body's, the chance
+  falling with the chunk's speed (INFERRED, `fx::flame` stepped at 8 ms
+  frames: about 65 puffs a second either way, the other body's chunks
+  being 2.1 times as many).
+- **vcod.** `FlameSystem::trail` and `FlameSystem::smoke` run these steps
+  on the stream chunks with retail's draws, `trail_share` the first share;
+  `Kind::Trail` is the flame, `Kind::Smoke` the puff. The owner's turn
+  rate is the nozzle's aim between firing frames. Not done: the owner's
+  speed in the first step, the alpha and grey of the draw (the chain draw
+  0x300272b0 and 0x30026b08..0x30026c4f), and the merge of a chain's
+  chunks.
 
 ### 19.4 HUD
 
@@ -2078,7 +2175,8 @@ wire's, as `event_dump` prints them.
   (`fx::flame`, retail's constants; stream chunks brake, sag and climb as
   19.3.2 has it, chunks clip bodies and the local player, residue flames
   drift and rise and trail no smoke, a residue dies off a gone face; no
-  chain merging, one smoke puff per stream chunk), `CameraShake` and `F`
+  chain merging; trail flames and smoke off the trail steps, 19.3.3),
+  `CameraShake` and `F`
   (`fx::sim`), UO's earthquake fields
   (`play::quake`).
 - The HUD items above (`hud::uo`). Decoded `pm_flags` keep sprinting,
