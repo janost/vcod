@@ -137,7 +137,9 @@ HUD and menus:
   teammate typing or in a menu, the disconnected icon, the killcam marker
   (through walls, as retail draws it), a mod's quick-chat icon. In UO, a
   tank driver's head icon over the tank.
-- A spectator following someone sees their HUD, weapon and scope.
+- A spectator following someone sees their HUD, weapon and scope, and
+  retail's lines under the crosshair: the keys that cycle and stop the
+  follow (off with `cg_descriptiveText 0`) and `following: <name>`.
 - On 1.5, `^8` and `^9` draw in the server's `g_TeamColor_Allies` and
   `g_TeamColor_Axis`, as 1.5's team chat uses them, and keep the last
   server's colours in the front end.

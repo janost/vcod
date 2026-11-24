@@ -166,14 +166,24 @@ pub fn pm_flags_v1_to_v6(f: i32) -> i32 {
 /// "pm_flags"). 0x1..0x8000 keep their place, 0x2000 among them (1.5's jump
 /// penalty, unused by 1.1); the view bits above them were renumbered.
 /// `disableWeapon`'s 0x100000 lands on [`PMF_WEAPON_DISABLED`], which the
-/// predictor reads; the follow permissions drop.
+/// predictor reads. The follow permissions, which the spectator's key lines
+/// read, land on [`PMF_MAY_FREE`] and on [`PMF_MAY_CYCLE`] off a follow; on
+/// one, the cycle's is the absence of [`PMF_FORCED_FOLLOW`].
 pub fn pm_flags_v6_to_v1(f: i32) -> i32 {
     const V6_OWN_VIEW: i32 = 0x20000;
     const V6_MAY_CYCLE: i32 = 0x40000;
+    const V6_MAY_FREE: i32 = 0x80000;
     const V6_WEAPON_DISABLED: i32 = 0x100000;
     let mut out = f & 0xffff;
-    if f & V6_WEAPON_DISABLED != 0 {
-        out |= PMF_WEAPON_DISABLED;
+    let following = f & PMF_FOLLOW != 0;
+    for (v6, bit) in [
+        (V6_WEAPON_DISABLED, PMF_WEAPON_DISABLED),
+        (V6_MAY_CYCLE, if following { 0 } else { PMF_MAY_CYCLE }),
+        (V6_MAY_FREE, PMF_MAY_FREE),
+    ] {
+        if f & v6 != 0 {
+            out |= bit;
+        }
     }
     if f & PMF_FOLLOW != 0 {
         out |= PMF_FOLLOW;
@@ -215,6 +225,12 @@ pub fn pm_flags_v22_to_v1(f: i32) -> i32 {
     let mut out = f & 0xffff;
     if f & V22_WEAPON_DISABLED != 0 {
         out |= PMF_WEAPON_DISABLED;
+    }
+    if f & (FOLLOW | MAY_CYCLE) == MAY_CYCLE {
+        out |= PMF_MAY_CYCLE;
+    }
+    if f & V22_MAY_FREE != 0 {
+        out |= PMF_MAY_FREE;
     }
     if f & FOLLOW != 0 {
         out |= PMF_FOLLOW;
@@ -362,12 +378,15 @@ mod tests {
             map(0x20000 | 0x2000 | PMF_DUCKED),
             PMF_OWN_VIEW | PMF_JUMP_PENALTY | PMF_DUCKED
         );
-        // Following, free to cycle and to fly: plain follow.
-        assert_eq!(map(PMF_FOLLOW | 0x40000 | 0x80000), PMF_FOLLOW);
+        // Following, free to cycle and to fly: a follow that may leave.
+        assert_eq!(
+            map(PMF_FOLLOW | 0x40000 | 0x80000),
+            PMF_FOLLOW | PMF_MAY_FREE
+        );
         // Following where the script holds the view.
         assert_eq!(map(PMF_FOLLOW), PMF_FOLLOW | PMF_FORCED_FOLLOW);
-        // A free spectator's permissions drop; `disableWeapon` is kept.
-        assert_eq!(map(0x40000), 0);
+        // A free spectator keeps its permission; `disableWeapon` too.
+        assert_eq!(map(0x40000), PMF_MAY_CYCLE);
         assert_eq!(map(0x20000 | 0x100000), PMF_OWN_VIEW | PMF_WEAPON_DISABLED);
     }
 
@@ -386,6 +405,14 @@ mod tests {
         for f in [0x40000, 0x40003, 0x10000, 0x30000, 0x40800, 0x4c010, 0x8000] {
             assert_eq!(pm_flags_v6_to_v1(map(f)), f, "{f:#x}");
         }
+        // So do the permissions.
+        for f in [
+            PMF_MAY_CYCLE,
+            PMF_MAY_CYCLE | PMF_MAY_FREE,
+            PMF_FOLLOW | PMF_MAY_FREE,
+        ] {
+            assert_eq!(pm_flags_v6_to_v1(map(f)), f, "{f:#x}");
+        }
     }
 
     #[test]
@@ -398,7 +425,7 @@ mod tests {
     fn v22_flags_land_on_v1_bits() {
         // The live captures: a free spectator 0x100000, a spawned player's
         // own view 0x80000 (coduo-diff.md 11).
-        assert_eq!(pm_flags_v22_to_v1(0x100000), 0);
+        assert_eq!(pm_flags_v22_to_v1(0x100000), PMF_MAY_CYCLE);
         assert_eq!(
             pm_flags_v22_to_v1(0x80000 | PMF_DUCKED),
             PMF_OWN_VIEW | PMF_DUCKED
@@ -411,7 +438,10 @@ mod tests {
         );
         assert_eq!(pm_flags_v22_to_v1(0x40000), PMF_FOLLOW | PMF_FORCED_FOLLOW);
         assert_eq!(pm_flags_v22_to_v1(0x40000 | 0x100000), PMF_FOLLOW);
+        assert_eq!(pm_flags_v22_to_v1(0x300000), PMF_MAY_CYCLE | PMF_MAY_FREE);
         for f in [
+            PMF_MAY_CYCLE | PMF_MAY_FREE,
+            PMF_FOLLOW | PMF_MAY_FREE,
             PMF_FOLLOW,
             PMF_FOLLOW | PMF_FORCED_FOLLOW,
             PMF_OWN_VIEW | PMF_DUCKED,

@@ -422,6 +422,9 @@ const MENU_CVARS: &[(&str, &str)] = &[
     ("cg_marks", "1"),
     // The cgame's, archived (cgame 0x30075110).
     ("cg_scoreboardScrollStep", "3"),
+    // The cgame's, archived (1.1 0x30075120, 1.5 0x30077110, UO
+    // 0x300859b0): the spectator's follow key lines.
+    ("cg_descriptiveText", "1"),
     ("cg_brass", "1"),
     ("cg_blood", "1"),
     // United Offensive's cgame, archived (uo cgame 0x30085d60): the

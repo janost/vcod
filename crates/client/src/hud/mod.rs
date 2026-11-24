@@ -13,6 +13,7 @@ pub mod messages;
 pub mod player;
 pub mod scope;
 pub mod scoreboard;
+pub mod spectator;
 pub mod status;
 pub mod timeout;
 pub mod uo;
@@ -535,11 +536,39 @@ impl Hud {
                 &mut out,
             );
         }
-        let now_ms = (f.now * 1000.0) as i32;
-        let clocked = out.len();
         // `CG_Draw2D` returns for intermission (pm_type 5) after the board:
         // no chat, votes, messages or say field (cod11-hud-protocol.md 9.1).
         let intermission = f.ps.is_some_and(|ps| pm_type(ps) == 5);
+        // The board goes over everything; while it is up the cgame skips
+        // the spectator lines (0x300188b8), and the centre print, the game
+        // and bold message windows and the say field (0x300188e4).
+        let mut board = Vec::new();
+        let board_up = self.build_scoreboard(f, &v, &mut board);
+        let board_down = !board_up && !intermission;
+        if let Some(ps) = f.ps.filter(|_| board_down) {
+            let rules = match f.protocol.transport.version {
+                6 => spectator::Rules::V15,
+                22 => spectator::Rules::Uo,
+                _ => spectator::Rules::V1,
+            };
+            let descriptive = (f.cvar)("cg_descriptiveText")
+                .is_none_or(|c| vcod_common::text::atoi_msvc(&c) != 0);
+            let followed = u32::try_from(ps.field_i32(f.protocol, "clientNum")).ok();
+            let name = followed
+                .and_then(|n| f.clients.get(&n))
+                .map(|c| c.name(f.protocol));
+            let lines = spectator::lines(
+                rules,
+                ps.field_i32(f.protocol, "pm_flags"),
+                descriptive,
+                name.as_deref(),
+                f.localized,
+                f.bound_key,
+            );
+            spectator::build(&lines, &self.fonts, &v, &mut out);
+        }
+        let now_ms = (f.now * 1000.0) as i32;
+        let clocked = out.len();
         // 1.1 sends the vote's end as server time, 1.5 and UO the ms left.
         let relative = !f.protocol.is_v1();
         self.vote
@@ -588,12 +617,6 @@ impl Hud {
             self.chat
                 .build(&self.fonts, [r, g, b], now_ms, &v.left(), &mut out);
         }
-        // The board goes over everything; while it is up the cgame skips
-        // the centre print, the game and bold message windows and the say
-        // field (0x300188e4).
-        let mut board = Vec::new();
-        let board_up = self.build_scoreboard(f, &v, &mut board);
-        let board_down = !board_up && !intermission;
         if board_down {
             self.center_print.build(&self.fonts, now_ms, &v, &mut out);
             self.game_messages
@@ -1553,6 +1576,37 @@ mod tests {
             ..frame(&ps, None, &loc, &clients)
         };
         assert_eq!(quads(0, true, true), chat_only.build(&f).len());
+    }
+
+    /// The follow key lines start at x 240 while the board is down and
+    /// `cg_descriptiveText` is set (0x300188bf, 0x30018553).
+    #[test]
+    fn the_spectator_key_lines_draw_under_no_board() {
+        let (loc, clients) = (Localized::default(), BTreeMap::new());
+        let p = &PROTOCOL_V1;
+        let mut ps = PlayerState::null(p);
+        ps.fields[PlayerState::field_index(p, "pm_type").unwrap()] = 4;
+        let key_lines = |held: bool, descriptive: &str, pm_flags: i32| {
+            let mut ps = ps.clone();
+            ps.fields[PlayerState::field_index(p, "pm_flags").unwrap()] = pm_flags;
+            let mut hud = bare_hud();
+            if held {
+                hud.scoreboard.press(0.0);
+            }
+            let cvar = |c: &str| (c == "cg_descriptiveText").then(|| descriptive.to_string());
+            let f = HudFrame {
+                cvar: &cvar,
+                bound_key: &|c| (c == "toggle cl_run").then(|| "SHIFT".into()),
+                local_player: false,
+                ..frame(&ps, None, &loc, &clients)
+            };
+            let quads = hud.build(&f);
+            quads.iter().filter(|q| q.verts[0][0] == 240.0).count()
+        };
+        assert_eq!(key_lines(false, "1", 0), 2);
+        assert_eq!(key_lines(false, "1", PMF_FOLLOW), 3);
+        assert_eq!(key_lines(true, "1", PMF_FOLLOW), 0);
+        assert_eq!(key_lines(false, "0", PMF_FOLLOW), 0);
     }
 
     #[test]
