@@ -3227,7 +3227,7 @@ Sources: `ui_mp_x86.dll` 1.1 and `CoDMP.exe` 1.1, read with `objdump`
   `Ui::start_edit`, `options::Field`, `Ui::edit_cursor`): the cursor,
   paint offset and overstrike outlive an edit, the field paints from its
   offset, and the cursor blinks on the 256 ms steps of a clock started at
-  the first cursor drawn. The overstrike flag is the UI's own: vcod's
+  the first cursor drawn (the drawn `serverTime` under `VCOD_FRAME_DIGEST`). The overstrike flag is the UI's own: vcod's
   console has no overstrike mode, so Insert there changes nothing. CoD2
   keeps vcod's own edit, since its handler moves the cursor otherwise
   (cod2-fonts-menus.md 4.2).
@@ -3393,7 +3393,9 @@ Sources: `ui_mp_x86.dll` 1.1 and `CoDMP.exe` 1.1, read with `objdump`
 - vcod: `paint::pulse` over `Ui::real_time`, milliseconds since the UI's
   first frame (`Ui::frame`), for the label, the value, the slider's bar
   and thumb and the edit cursor; `options::State::bind_item` keeps
-  `g_bindItem`; `paint::text_color` blinks style 1. The phase differs from retail's
+  `g_bindItem`; `paint::text_color` blinks style 1. Under
+  `VCOD_FRAME_DIGEST` the clock is the drawn `serverTime`
+  (`Ui::set_digest_clock`), so a replay repeats it. The phase differs from retail's
   `realTime`, which counts from the engine's start. INFERRED.
 
 ## 21. Video modes, fullscreen and wide windows

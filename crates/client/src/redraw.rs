@@ -878,6 +878,9 @@ impl App {
         let Tick {
             now, dt, elapsed, ..
         } = *tick;
+        // Under the frame digest the menus' pulses and edit cursor run on the
+        // drawn serverTime, which a replay repeats.
+        let digest_clock = frame_digest::on().then(|| self.digest_time().unwrap_or(0));
         let Some(r) = &mut self.renderer else {
             unreachable!()
         };
@@ -947,6 +950,7 @@ impl App {
                 });
             }
             self.ui.frame(now, &self.shell);
+            self.ui.set_digest_clock(digest_clock);
             let dated = self.ui.date_refreshes(&self.localized);
             self.ui_pending.extend(dated);
             let (w, h) = r.screen_size();

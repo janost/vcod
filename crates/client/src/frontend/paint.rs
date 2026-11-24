@@ -261,7 +261,7 @@ impl Ui {
                     p.text(&v, x, y, item, value_color, style, &mut out);
                     if let Some((at, glyph)) = self.edit_cursor(m, i)
                         && at <= v.chars().count()
-                        && cursor_blink_on(blink_clock(), self.cod2.is_some())
+                        && cursor_blink_on(self.cursor_clock(), self.cod2.is_some())
                     {
                         let head: String = v.chars().take(at).collect();
                         let cx = x + p.width(&head, item);
@@ -281,6 +281,12 @@ impl Ui {
             p.quad([x - 16.0, y - 16.0, 32.0, 32.0], [1.0; 4], cursor, &mut out);
         }
         out
+    }
+
+    /// The edit cursor's blink clock: [`blink_clock`], or the digest's.
+    fn cursor_clock(&self) -> u128 {
+        self.digest_clock
+            .map_or_else(blink_clock, |ms| ms.max(0) as u128)
     }
 
     /// The selected server's `levelshots/<mapname>`, or
@@ -1259,6 +1265,35 @@ mod tests {
         let count = |c| quads.iter().filter(|q| q.rgba == c).count();
         assert_eq!(count(mid), 2, "the label blinks");
         assert!(count(fore) > 0, "the value holds");
+    }
+
+    /// Under the digest clock a menu frame draws the same quads whatever
+    /// the wall clock did: the focus pulse and the edit cursor read it.
+    #[test]
+    fn a_menu_frame_repeats_at_the_same_digest_clock() {
+        let mut ui = ui_with_menu(
+            r#"{ menuDef { name "main" rect 0 0 640 480 focuscolor 1 .5 0 1
+            itemDef { type 4 visible 1 rect 10 10 100 20 text "Name" cvar "name" } } }"#,
+        );
+        ui.fonts = Some(crate::hud::hudelem::tests::test_fonts());
+        let shell = Shell::new();
+        let loc = Localized::default();
+        ui.open_main(&shell, &mut Vec::new());
+        let m = ui.find("main").unwrap();
+        ui.focus.insert(m, 0);
+        ui.start_edit(m, 0, true);
+        let t0 = std::time::Instant::now();
+        let frame = |ui: &mut Ui, wall: u64, clock: i32| {
+            ui.frame(t0 + std::time::Duration::from_millis(wall), &shell);
+            ui.set_digest_clock(Some(clock));
+            (ui.build(640.0, 480.0, &loc, &shell).iter())
+                .map(|q| (q.verts, q.uvs, q.rgba, q.texture.clone()))
+                .collect::<Vec<_>>()
+        };
+        let a = frame(&mut ui, 0, 300);
+        assert_eq!(a, frame(&mut ui, 4321, 300));
+        // The cursor shows in the odd 256 ms steps of the digest clock.
+        assert_eq!(frame(&mut ui, 0, 0).len() + 1, a.len());
     }
 
     /// `Item_SetTextExtents`: int widths, a centred shift rounded toward

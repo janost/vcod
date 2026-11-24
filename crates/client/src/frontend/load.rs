@@ -202,6 +202,7 @@ impl Ui {
             text_rects: RefCell::default(),
             real_time: 0,
             clock: None,
+            digest_clock: None,
             list_menus: 0,
             active_type: UIMENU_NONE,
             server_cvars: HashMap::new(),

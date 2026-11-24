@@ -22,11 +22,22 @@ use crate::console::shell::Shell;
 use crate::hud::HudQuad;
 
 impl Ui {
+    /// Under the frame digest the pulses and the edit cursor's blink read
+    /// `ms`, a clock a replay repeats, in place of the wall clock; `None`
+    /// goes back to the wall clock at the next [`Self::frame`].
+    pub fn set_digest_clock(&mut self, ms: Option<i32>) {
+        self.digest_clock = ms;
+        if let Some(ms) = ms {
+            self.real_time = ms;
+        }
+    }
+
     /// Once a frame while a menu is up: reads the browser's cvars and runs
     /// the network queries.
     pub fn frame(&mut self, now: Instant, shell: &Shell) {
         let start = *self.clock.get_or_insert(now);
         self.real_time = now.duration_since(start).as_millis() as i32;
+        self.real_time = self.digest_clock.unwrap_or(self.real_time);
         self.cvars = UI_CVARS
             .iter()
             .map(|n| {

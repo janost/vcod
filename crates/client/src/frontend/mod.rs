@@ -300,6 +300,9 @@ pub struct Ui {
     /// focus pulse reads ([`paint::pulse`]); 0 until a frame runs.
     real_time: i32,
     clock: Option<Instant>,
+    /// The clock under `VCOD_FRAME_DIGEST`, which the pulses and the edit
+    /// cursor read in place of the wall clock ([`Self::set_digest_clock`]).
+    digest_clock: Option<i32>,
     /// The menus the lists loaded; the script menus the server precached
     /// follow them ([`Self::load_script_menus`]).
     list_menus: usize,
