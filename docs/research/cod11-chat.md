@@ -216,7 +216,7 @@ INFERRED, off 0x408be0 and 0x409920:
 - From the newest, each live line moves up a line height (12, or 16 for mode 3) and draws at that y plus 12, white, alpha fading in over its first 250 ms and out over its last 500.
 - Mode 2 draws at font 0, scale 0.25, left aligned; mode 3 at font 4, scale 1/3 (0x3eaaaaab), centred on x by its width (0x409870).
 
-INFERRED, not measured: the `y + 12` is the text baseline, as the other text traps take it.
+The line height, the `y + 12` and the font are VERIFIED in 3.3.1.
 
 VERIFIED, the wrap. Trap 2 (0x401e52) and trap 3 (0x401fc2) cut the message at each `\n` (0x401ed7: a `\n` ends a line, an empty one too; nothing follows a trailing one) and hand each part to 0x408f80 with window 1 or 2, the life, the cgame's width and the running colour, which the call returns for the next part. The width is the trap's second argument:
 
@@ -238,6 +238,21 @@ Each ended line takes a ring slot (0x408d00, 0x408be0) like a whole message. VER
 VERIFIED, the bold line's centring (0x409920, 0x409870): each line is the console's cell row (0x140ef44 plus the slot's line times the console width 0x142ef54), measured by refexport `+0xd8` (0x4df920) over that many cells at font 4, scale 1/3, and drawn at `x - width / 2` (the int width, `cdq; sub; sar`) by `+0xdc` (0x4dfa60). Both read the row through 0x4df5b0, which copies a run of cells to text and cuts the spaces it ends on (0x4df6c2..0x4df6d6, the cut at 0x4df70d), so the padding and a trailing space count nothing; spaces before an icon cell stay. vcod measures the stored line, whose trailing blanks `messages::wrap` drops.
 
 VERIFIED, the third window (0x142f0d4): its record (0x408e78..0x408eb6) is the other two's, 8 slots, 3, 250, 250, 500. `CL_ConsolePrint` (0x409190, window in `ebx`) gives window 3 a life of 5000 ms (0x409263) where 0 is the minicon (`con_minicon`, `con_minicontime`), 1 the game window and 2 the bold one. Trap 0x1d (case at 0x402561, 0x409f10) draws it, and the cgame calls that at x 135, y 425, alpha `cg_hudAlpha`, mode 2 while `cg_subtitles` (default 1, archived; vmCvar 0x301daa00, table row 0x30075090) is set (0x30017a80). VERIFIED (decompile): 1.5's and UO's cgames make the same trap 0x1d call at 135, 425. Its only writer is `Com_PrintMessage` (0x435620) on print channel 3, and none of that function's six callers passes 3: `Com_Printf` passes 0 (0x4357f1), 0x439650 passes 4 (which no window takes), 0x43a3c0 its own argument, which its two callers set to 0 and 4. So on 1.1 MP the subtitle window stays empty. INFERRED for 1.5 and UO: the same record and draw; 1.5's added `Com_PrintMessage` callers are the `print` packet (channel 0, `edi` cleared at 0x411b17) and a script print taking its channel from a register, not traced. vcod keeps no third window.
+
+#### 3.3.1 The line draw
+
+VERIFIED (the instructions), CoDMP.exe 1.1. Trap 0x1a and 0x1b (0x409e70, 0x409e90) hand x, y, alpha and mode to 0x409ad0 with the game window (0x142efcc) or the bold one (0x142f050). Modes 2 and 3 jump through the table at 0x409d6c to 0x409d48, which calls 0x409920 with `mode == 3` as the centred flag. 0x409920 takes the line height `centred * 4 + 12` (0x40993c): 12 or 16. It pushes the stack down for a sliding line, then walks from the newest slot down, subtracting the line height from y before each line (0x409a71..0x409a75), and calls 0x409870 with that y. 0x409870:
+
+- colour (1, 1, 1, alpha), font 0 at 0.25 (0x40989c); centred, font 4 at 1/3 (`mov esi,4` at 0x4098ae, 0x3eaaaaab at 0x4098b5), x less the half width (`cdq; sub; sar`, 0x4098c7..0x4098d3);
+- draws through refexport `+0xdc` (`[0x143293c]`, 0x409905) at x and `y + 12` (`add eax,0xc` at 0x4098ea), style 3 (0x4098df).
+
+So the `y + 12` is the y that the text call takes, which is the baseline as for trap 0x36's text (`cod11-hud-protocol.md` 8.2).
+
+VERIFIED (the instructions): 1.5's CoDMP.exe (0x40a140) and UO's CoDUOMP.exe (0x40a780) build the same call: 0.25, font 4 at 1/3, `add eax,0xc`, style 3. Both take the line height `* 4 + 12` (1.5 0x40a211, UO 0x40a851).
+
+VERIFIED (the instructions), font handle 4 (the bold window's): the text call hands its handle to the UI module's font pick (`cod11-hud-protocol.md` 8.2). 1.1's `ui_mp_x86.dll` 0x400079e0 returns `bigFont` for handle 2, `smallFont` for 3 and `consoleFont` for 5. For handle 4 (`cmp eax,4` at 0x40007a01) it scales the size by `0x401c3dc0` and returns `smallFont` up to `ui_smallFont` 0.25 (`test ah,0x41; jnp`, 0x40007a12), `font` below `ui_bigFont` 0.4 (0x40007a17..0x40007a22), and `boldFont` from 0.4 (0x40007a24). 1.5's `ui_mp_x86.dll` 0x40007dd0 and UO's `uo_ui_mp_x86.dll` 0x40008930 make the same compares. At 480 lines the bold window's 1/3 picks `font` (`fontImage_16`), at 720 `boldFont` (`fontImage_30`).
+
+vcod draws both at `y + 12` (`messages::Window::build`) and takes font handle 4 as `font::Slot::BigFixed`, whose pick is the one above (`UiFonts::pick`); test `the_bold_window_draws_its_baseline_in_the_handle_4_font`.
 
 vcod: `messages::wrap`, with `^0`..`^9` on 1.5 and UO (`hud::font::is_colour_code`, cod11-hud-protocol.md 7). The client registers both width cvars with the cgame's defaults and flags and reads them each frame (`messages::line_width` holds the clamp).
 
