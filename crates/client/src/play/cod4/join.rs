@@ -110,7 +110,6 @@ impl Cod4Session {
             };
             let mut s = Self::new(Source::Live {
                 conn: Box::new(conn),
-                last_send: None,
                 last_msg: clock_now(),
             });
             s.menus = ScriptMenus::new(join);
@@ -146,7 +145,9 @@ impl Cod4Session {
             if clock_now() > deadline {
                 bail!("{addr}: no gamestate");
             }
-            conn.send(&[], None)?;
+            if conn.ready_to_send(false) {
+                conn.send(&[], None)?;
+            }
             conn.poll(clock_now() + Duration::from_millis(50))?;
         }
         Ok(conn)
@@ -308,7 +309,9 @@ fn download_round(
                 p.total
             );
         }
-        conn.send(&[], None)?;
+        if conn.ready_to_send(true) {
+            conn.send(&[], None)?;
+        }
         for got in conn.poll(clock_now() + Duration::from_millis(50))? {
             last_heard = clock_now();
             for op in &got.parsed.ops {

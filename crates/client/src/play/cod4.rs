@@ -184,7 +184,6 @@ enum Source {
     },
     Live {
         conn: Box<Conn>,
-        last_send: Option<Instant>,
         /// When the last sequenced message came (`clc.lastPacketTime`).
         last_msg: Instant,
     },
@@ -581,10 +580,12 @@ impl Cod4Session {
         matches!(self.source, Source::Live { .. })
     }
 
-    /// `cl_packetdup` for a live session's next packets.
-    pub fn set_packet_dup(&mut self, n: i32) {
+    /// `cl_packetdup` and `cl_maxpackets` for a live session's next
+    /// packets.
+    pub fn set_packet_rates(&mut self, dup: i32, max_packets: i32) {
         if let Source::Live { conn, .. } = &mut self.source {
-            conn.set_packet_dup(n);
+            conn.set_packet_dup(dup);
+            conn.set_max_packets(max_packets);
         }
     }
 

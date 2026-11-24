@@ -14,9 +14,8 @@ pub enum Lan {
     /// address shares its class's network part with one of the host's own
     /// (`vcod_common::net::lan`).
     Cod1,
-    /// cod2_lnxded 0x80d5638 (cod4_lnxded 0x81d59c8 the same): 10/8,
-    /// 127/8, 169.254/16, 172.16/12 and 192.168/16, or the first three
-    /// octets of one of the host's own addresses.
+    /// cod2_lnxded 0x80d5638 (cod4_lnxded 0x81d59c8 the same):
+    /// `vcod_common::net::lan::is_lan_cod2`.
     Cod2,
 }
 
@@ -24,20 +23,7 @@ impl Lan {
     pub fn is_lan(self, ip: IpAddr) -> bool {
         match self {
             Lan::Cod1 => vcod_common::net::lan::is_lan(ip),
-            Lan::Cod2 => {
-                let IpAddr::V4(v4) = ip else {
-                    return ip.is_loopback();
-                };
-                let a = v4.octets();
-                a[0] == 10
-                    || a[0] == 127
-                    || (a[0] == 169 && a[1] == 254)
-                    || (a[0] == 172 && a[1] & 0xf0 == 16)
-                    || (a[0] == 192 && a[1] == 168)
-                    || vcod_common::net::lan::local_addresses()
-                        .iter()
-                        .any(|l| l.octets()[..3] == a[..3])
-            }
+            Lan::Cod2 => vcod_common::net::lan::is_lan_cod2(ip),
         }
     }
 }
@@ -292,17 +278,5 @@ mod tests {
         assert_eq!(pace(1000, 1500, false, 1000, 50, false), at(2548, true));
         assert_eq!(pace(1000, 24, false, 25000, 50, true), at(2000, false));
         assert_eq!(pace(1000, 24, true, 25000, 50, true), Pace::Lan);
-    }
-
-    #[test]
-    fn lan_is_the_private_blocks_and_the_hosts_slash_24() {
-        let lan = |s: &str| Lan::Cod2.is_lan(s.parse().unwrap());
-        assert!(lan("127.0.0.1"));
-        assert!(lan("10.1.2.3"));
-        assert!(lan("172.31.0.1"));
-        assert!(!lan("172.32.0.1"));
-        assert!(lan("192.168.9.9"));
-        assert!(lan("169.254.1.1"));
-        assert!(!lan("198.51.100.2"));
     }
 }

@@ -115,10 +115,10 @@ The weapon byte is the client's own pick
   switches and footsteps play the frame the predicted move raises them,
   and not again from the snapshot. Item pickups stay the snapshot's (5).
 - A lean moves the eye sideways as 1.7's does (7).
-- 30 packets a second, each repeating the last packet's cmds
+- A packet every frame to a LAN or loopback server, `cl_maxpackets` a
+  second (30) to any other, each repeating the last packet's cmds
   (`cl_packetdup` 1, [cod4-netfields.md](../research/cod4-netfields.md)
-  14), so one lost packet loses no press. 1.7 sends one a frame to a LAN
-  server; vcod keeps 30 there too.
+  14, 14.1), so one lost packet loses no press.
 
 **Bodies and entities**
 ([cod4-player-anims.md](../research/cod4-player-anims.md)):

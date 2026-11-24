@@ -821,6 +821,83 @@ server reads the repeats.
 - vcod departs: the first cmd still goes on the long branch with every
   field (`CmdWire::full`), not off the playerstate base, so its bits
   differ from 1.7's wherever the base matches a field; the server reads
-  the same cmd. Packets go every 33 ms on a LAN too, and the move op
-  is 0 once a snapshot is in, without the newest-message test. INFERRED
-  (the code).
+  the same cmd. The move op is 0 once a snapshot is in, without the
+  newest-message test. INFERRED (the code). The send rate follows 1.7
+  since 14.1.
+
+### 14.1 The send rate
+
+- **The gate.** `CL_ReadyToSendPacket` (0x463e60) returns 0 while
+  0x934e74 is set or the state (0xc5f900) is 1 or 2
+  (0x463e60..0x463e80); with the byte at 0xc5b088 set, under 50 ms past
+  0x8f4ce8 (0x463e86..0x463ea3); in a state other than 8 or 9 without
+  that byte, under 1000 ms past 0x8f4ce8 (0x463ea9..0x463ec0). Past
+  those it returns 1 when the server's address type (0x934eac) is 2
+  (0x463ec2..0x463ed4) or 0x578180 returns non-zero for the 20-byte
+  address at 0x934eac (0x463ed5..0x463f0a); else the realtime
+  (0x956e98) less the `+8` word of packet row `(0x934e9c - 1) & 0x1f`
+  (12-byte rows from 0xcc9000) at least `1000 / cl_maxpackets` (`idiv`
+  of 0x3e8 by +0xc of 0xc5f8e0, `setge`, 0x463f0c..0x463f37). VERIFIED
+  (the instructions). That these are `clc.demoplaying`,
+  `clc.downloadName`, `clc.lastPacketSentTime`, `CA_PRIMED` and
+  `CA_ACTIVE`, `NA_LOOPBACK` and `Sys_IsLANAddress` is INFERRED.
+- **No other gate.** The bool dvar at 0x8f4cd8 only prints the count as
+  `(%i)` (0x6cf6cc) before the op (0x4640c6..0x4640de). VERIFIED (the
+  instructions). That it is `cl_showSend` is INFERRED.
+- **Who asks.** The frame's tail (0x46c9a0) asks and calls
+  `CL_WritePacket` when the state at the frame's start is 5 to 8 (`add
+  edi,-5; cmp edi,3; ja` at 0x46ca11..0x46ca17, the calls at
+  0x46ca19..0x46ca22); in state 9 the function at 0x474da0 asks after
+  0x452780 returns 0 (0x474e07..0x474e10); 0x447b3e..0x447b47 asks too.
+  `CL_WritePacket` itself sends nothing while 0x934e74 is set or in
+  state 1, 2 or 6 (0x463f6a..0x463fa0). Once the cgame is up, 0x46a8d0
+  calls `CL_WritePacket` three times with no gate (0x46aae5..0x46aaef).
+  VERIFIED (the instructions).
+- **The LAN.** 0x578180 passes the address to 0x578120, which answers 1
+  for type 0, 2 or 5, and for type 4 when the first octet is 10 or 127,
+  169 with 254 next, 172 with the second's high nibble 1, or 192 with
+  168 next (0x578120..0x57817a); else 0x578180 compares the first three
+  octets with each of the 0xcc17a9c 4-byte entries at 0xcc17aa0
+  (0x5781bb..0x5781f2). VERIFIED (the instructions). 0x578850 fills that
+  table: WSOCK32 ordinals 57 and 52, `Hostname: %s` (0x6f58c8), `Alias:
+  %s` (0x6f58d8), then for an address type 2 list at most 16 entries
+  (`cmp eax,0x10` at 0x5788f0), each printed `IP: %i.%i.%i.%i`
+  (0x6f55f4). VERIFIED (the instructions and the strings). That the
+  ordinals are `gethostname` and `gethostbyname` is INFERRED (Winsock's
+  numbering). vcod-server already ran the same test for cod2_lnxded
+  0x80d5638 and cod4_lnxded 0x81d59c8 (`engine::link::Lan::Cod2`), which
+  now calls the shared `is_lan_cod2`. INFERRED (the code).
+- **The clock it reads.** 0x8f4ce8 takes the realtime with each packet
+  `CL_WritePacket` sends (0x46432e) and each stats packet (0x46b013;
+  stats go 100 ms apart, `cmp edx,0x64` at 0x46aeed), and -9999
+  (0xffffd8f1) on any `statResponse` (the name 0x6d0c1c compared at
+  0x46b9b5, the store at 0x46ba43; a mask of 0 sets state 5 first at
+  0x46ba21), on `requeststats` (0x6d0d48 at 0x46bf9a; state 6 at
+  0x46bfcd, the store at 0x46c007), after state 6 at 0x46b98a (0x46b9a1)
+  and at 0x4695c5. `loadingnewmap` (0x6d0d28 at 0x46bea6) sets state 5
+  (0x46bf74). A gamestate clears the packet rows (section 14). VERIFIED
+  (the instructions).
+- So in the world a LAN or loopback server gets a packet every frame and
+  one off the LAN at most `cl_maxpackets` a second (30 at the default:
+  33 ms); before the gamestate, and from `loadingnewmap` to the next
+  one, a packet goes a second after the last, the first at once after
+  the stats; while downloading 50 ms after the last and the LAN test
+  besides. VERIFIED (the instructions above).
+- vcod: `Conn::ready_to_send` (`SendClock`): in the world is a gamestate
+  with no `loadingnewmap` since; `requeststats` and `statResponse` clear
+  `last_sent`; the rows' times sit in `CmdRing`, which a gamestate
+  clears; the LAN test is `vcod_common::net::lan::is_lan_cod2` on the
+  server's address at the join, against the host's interfaces rather
+  than its hostname's addresses (`lan.rs`). The live frame
+  (`play::cod4::cmd`), the gamestate wait and the download loop
+  (`play::cod4::join`) send only when it says so, on 1.7 and CoD4x 21;
+  `cl_maxpackets` comes from the console each frame, clamped to 15..100.
+  Tests: `a_lan_server_gets_every_frame_and_one_off_it_cl_maxpackets`,
+  `a_conn_paces_its_packets_by_the_server_and_its_state`,
+  `cod2_lan_is_the_private_blocks_and_the_hosts_slash_24`. VERIFIED (the
+  tests).
+- vcod departs: no three packets once the cgame is up; a map change's
+  stats go in one burst and moves still go while they do (state 6); the
+  join's download loop paces at the default `cl_maxpackets`; vcod's own
+  frame asks, not the cgame's draw. CoD4x 21's client gate is taken as
+  1.7's (its client binary was not read). INFERRED (the code).

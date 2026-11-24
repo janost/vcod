@@ -1,8 +1,6 @@
 //! Our own cmds on a live server: the frame's send, the weapon picks, the
 //! location selector and the melee charge.
 
-use std::time::Duration;
-
 use anyhow::Result;
 use glam::Vec3;
 use vcod_cod4::net::clmsg::UserCmd;
@@ -15,15 +13,11 @@ use vcod_cod4::pmove::{self as pm, Cmd};
 use super::events::{origin_of, source_client};
 use super::scene::weapon_name;
 use super::{
-    Cod4Session, Dry, ET_PLAYER, INVENTORY_ALT_MODE, Source, client_team, clock_now, ent_f32,
-    ent_u32, ps_f32, weapon_list,
+    Cod4Session, Dry, ET_PLAYER, INVENTORY_ALT_MODE, Source, client_team, ent_f32, ent_u32, ps_f32,
+    weapon_list,
 };
 use crate::play::cod4_input::Cod4Input;
 use crate::play::cod4_predict;
-
-/// Live cmd packets go out at most this often, carrying every cmd built
-/// since the last and `cl_packetdup`'s again (`cl_maxpackets` 30).
-const SEND_MS: u64 = 33;
 
 /// `cg.selectedLocation` and `locSelInputState`: where the location
 /// selector's cursor is over the full map (0..1 east and south), and a
@@ -121,12 +115,8 @@ impl Cod4Session {
         if self.packet_due {
             self.send_packet(None)?;
         }
-        let now = clock_now();
         let time = self.cmd_time();
-        let Source::Live {
-            conn, last_send, ..
-        } = &mut self.source
-        else {
+        let Source::Live { conn, .. } = &mut self.source else {
             return Ok(());
         };
         if conn.client.gamestate.is_some() {
@@ -171,10 +161,9 @@ impl Cod4Session {
                 self.sent_cmds.push_back(Cmd::from(&c));
             }
         }
-        let due = last_send
-            .is_none_or(|t| now.saturating_duration_since(t) >= Duration::from_millis(SEND_MS));
-        if due {
-            *last_send = Some(now);
+        // A packet carries every cmd built since the last and
+        // `cl_packetdup`'s again.
+        if conn.ready_to_send(false) {
             // The scene sends it once its prediction has run this cmd, as
             // the cgame's frame does; a step with no scene to come (no
             // gamestate or clock yet) sends it now.
