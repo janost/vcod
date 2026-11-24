@@ -265,7 +265,7 @@ impl Row {
             text,
             self.x + 4.0 + col_pos + item.text_align_x,
             self.y + self.eh + item.text_align_y,
-            item.text_scale,
+            item,
             item.fore,
             item.text_style,
             out,

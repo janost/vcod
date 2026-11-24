@@ -3236,6 +3236,46 @@ Sources: `ui_mp_x86.dll` 1.1 and `CoDMP.exe` 1.1, read with `objdump`
   browser (unless the focused item's handler takes Enter), and an arrow
   with nothing selected picking the first row, are vcod's own.
 
+### 20.9 `textfont`
+
+- `textfont` is an item keyword in every CoD1-family UI and in CoD2: the
+  item table's record pairs the string with a handler that reads one
+  integer into the item (1.1 `ui_mp_x86.dll`: record `0x40036790`, string
+  `0x4002d4bc`, handler `0x40017750`, item `+0xd0`; 1.5 record
+  `0x40037790`, handler `0x400184f0`; UO `uo_ui_mp_x86.dll` record
+  `0x40040d88`, handler `0x4001b410`; CoD2 `CoD2MP_s.exe` record
+  `0x5dd4b8`, handler `0x544c50`). VERIFIED (the tables, 1.1's handler).
+- Every 1.1 text call of an item passes `+0xd0` as the font: the width
+  (display context `+0x14`) and height (`+0x18`) in `Item_SetTextExtents`
+  (`0x40013c3b`..`0x40013d55`), the draw (`+0x10`) in `Item_Text_Paint`
+  (`0x400141d9`), the autowrap measure (`0x40014012`), the field, yes/no,
+  multi and bind values (`0x400145af`..`0x400153cb`), the list rows
+  (`0x40015f32`, `0x40015fb5`) and the owner draw call (`0x400163c1`).
+  VERIFIED (asm). Whether each UI owner draw uses its font argument is
+  INFERRED.
+- The renderer asks the UI for the font by handle and scale (`vmMain` case
+  `0x10`, cod11-hud-protocol.md 8.2). `0x400079e0` answers: handle 2
+  `bigFont`, 3 `smallFont`, 5 `consoleFont` whatever the scale; for the
+  rest `s` is the scale times the display context's `yscale`
+  (`0x401c3dc0`), and handle 4 gives `smallFont` for `s <= ui_smallFont`,
+  `font` below `ui_bigFont`, `boldFont` from it, any other handle
+  `smallFont`, `font`, `bigFont` from `ui_bigFont` and `extraBigFont`
+  from `ui_extraBigFont`. VERIFIED (asm). CoD2's `0x532410` is the same
+  picker over its registered `$bigfont` (`0x1979110`), `$smallfont`
+  (`0x1979114`), `$consolefont` (`0x1979118`), `$boldfont` (`0x197911c`),
+  `$font` (`0x1979120`) and `$extrabigfont` (`0x1979124`), stored in that
+  order at `0x531fb6`..`0x53202a`, against the same three dvars' values
+  and a placement scale (`0xc94c0c`). VERIFIED (asm).
+- `menudef.h` names the handles `UI_FONT_DEFAULT` 0, `NORMAL` 1, `BIG` 2,
+  `SMALL` 3, `BOLD` 4, `CONSOLE` 5 (1.1 `pak0.pk3`, 1.5, UO, CoD2's
+  `ui/menudefinition.h`). Every stock CoD1-family front-end item says
+  `UI_FONT_NORMAL` or nothing, so the stock menus draw as before; CoD2's
+  `ui_mp` front end too. UO's `hud.menu` uses 1 and 2 (the cgame's
+  vehicle keys, coduo-diff.md). VERIFIED (the paks).
+- vcod: `UiItem::text_font`; the front end's `Painter` measures and draws
+  an item's text in the font `ui_font` picks for its handle and scale
+  (`Size::from(&UiItem)`), in both games.
+
 ## 21. Video modes, fullscreen and wide windows
 
 Retail's:

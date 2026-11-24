@@ -192,11 +192,11 @@ impl Ui {
                 };
                 // An owner draw or a multi's value follows 8 units after
                 // the label.
-                let label_w = p.width(&label, item.text_scale);
+                let label_w = p.width(&label, item);
                 let value_w = value
                     .as_ref()
                     .filter(|_| item.kind == ITEM_TYPE_OWNERDRAW)
-                    .map_or(0.0, |v| p.width(v, item.text_scale));
+                    .map_or(0.0, |v| p.width(v, item));
                 let (mut left, mut y) = Self::text_origin(item, label_w, value_w, label.is_empty());
                 // Where the label's width ends, which a value follows.
                 let mut label_end = label_w;
@@ -206,7 +206,7 @@ impl Ui {
                     let mut rects = self.text_rects.borrow_mut();
                     let cvar_w = match item.cvar.as_ref() {
                         Some(c) if takes_cvar_width(item) => {
-                            p.width(&self.cvar(c, shell).unwrap_or_default(), item.text_scale)
+                            p.width(&self.cvar(c, shell).unwrap_or_default(), item)
                         }
                         _ => 0.0,
                     };
@@ -214,7 +214,7 @@ impl Ui {
                         label: label_w,
                         value: value_w,
                         cvar: cvar_w,
-                        height: p.height(item.text_scale),
+                        height: p.height(item),
                     };
                     let rect = text_extents(item, rects.get(&(m, i)).copied(), widths);
                     [left, y, label_end] = [rect[0], rect[1], rect[2]];
@@ -231,13 +231,13 @@ impl Ui {
                 if item.autowrap {
                     for (line, x, ly) in p.wrap_lines(&label, item) {
                         let style = item.text_style;
-                        p.text(&line, x, ly, item.text_scale, color, style, &mut out);
+                        p.text(&line, x, ly, item, color, style, &mut out);
                     }
                     continue;
                 }
                 if !label.is_empty() {
                     let style = item.text_style;
-                    p.text(&label, left, y, item.text_scale, color, style, &mut out);
+                    p.text(&label, left, y, item, color, style, &mut out);
                 }
                 if item.kind == ITEM_TYPE_SLIDER {
                     let end = (!label.is_empty()).then_some(left + label_end);
@@ -247,18 +247,18 @@ impl Ui {
                     let gap = if label.is_empty() { 0.0 } else { 8.0 };
                     let x = left + label_end + gap;
                     let style = item.text_style;
-                    p.text(&v, x, y, item.text_scale, color, style, &mut out);
+                    p.text(&v, x, y, item, color, style, &mut out);
                     if let Some((at, glyph)) = self.edit_cursor(m, i)
                         && at <= v.chars().count()
                         && cursor_blink_on(blink_clock(), self.cod2.is_some())
                     {
                         let head: String = v.chars().take(at).collect();
-                        let cx = x + p.width(&head, item.text_scale);
+                        let cx = x + p.width(&head, item);
                         let glyph = glyph.to_string();
                         // CoD2 draws the cursor glyph once, unshadowed
                         // (`gfx_d3d_mp_x86_s.dll` 0x10032877..0x100328e5).
                         let style = if self.cod2.is_some() { 0 } else { style };
-                        p.text(&glyph, cx, y, item.text_scale, color, style, &mut out);
+                        p.text(&glyph, cx, y, item, color, style, &mut out);
                     }
                 }
             }
@@ -427,7 +427,7 @@ fn gl_info_lines(info: &GpuInfo, r: [f32; 4]) -> Vec<(String, f32, f32)> {
 fn gl_info(p: &Painter, r: [f32; 4], item: &UiItem, color: [f32; 4], out: &mut Vec<HudQuad>) {
     let info = GPU_INFO.get().cloned().unwrap_or_default();
     for (line, x, y) in gl_info_lines(&info, r) {
-        p.text(&line, x, y, item.text_scale, color, item.text_style, out);
+        p.text(&line, x, y, item, color, item.text_style, out);
     }
 }
 
@@ -616,6 +616,44 @@ fn quad_px([l, t, r, b]: [f32; 4], rgba: [f32; 4], texture: &str, out: &mut Vec<
     });
 }
 
+/// A text draw's font handle and scale: an item's `textfont` and
+/// `textscale`, or a bare scale in the default handle.
+#[derive(Clone, Copy)]
+pub(crate) struct Size {
+    font: i32,
+    scale: f32,
+}
+
+impl From<f32> for Size {
+    fn from(scale: f32) -> Size {
+        Size { font: 0, scale }
+    }
+}
+
+impl From<&UiItem> for Size {
+    fn from(item: &UiItem) -> Size {
+        Size {
+            font: item.text_font,
+            scale: item.text_scale,
+        }
+    }
+}
+
+/// The font a `textfont` handle draws in at `scale` on a screen `screen_h`
+/// tall (ui_mp_x86.dll 1.1 0x400079e0, CoD2MP_s.exe 0x532410;
+/// cod11-front-end.md 20.9): 2 `bigFont`, 3 `smallFont` and 5 `consoleFont`
+/// at any size, 4 small, normal or bold by drawn size (the hudelems'
+/// `bigfixed` pick), any other the default pick.
+fn ui_font(fonts: &UiFonts, font: i32, scale: f32, screen_h: f32) -> &font::Font {
+    match font {
+        2 => &fonts.big,
+        3 => &fonts.small,
+        4 => fonts.pick(Slot::BigFixed, scale, screen_h),
+        5 => &fonts.console,
+        _ => fonts.pick(Slot::Default, scale, screen_h),
+    }
+}
+
 /// Paints menu items on the 640 grid, drawn in the window's centred 4:3
 /// box ([`Virtual`]); a rect that spans the whole grid width or height
 /// (a backdrop, a fade) spans the window's.
@@ -721,7 +759,7 @@ impl Painter<'_> {
     /// word's end, as retail's lagging measure does, and lines sit the
     /// text height plus 5 apart; `\r` reads as a space.
     fn wrap_lines(&self, text: &str, item: &UiItem) -> Vec<(String, f32, f32)> {
-        let scale = item.text_scale;
+        let scale = Size::from(item);
         let rect_w = item.rect[2];
         let total = self.width(text, scale);
         let aim = if total > rect_w {
@@ -771,16 +809,19 @@ impl Painter<'_> {
         }
     }
 
-    /// The font the UI picks for `scale` on this window.
-    pub(super) fn font(&self, scale: f32) -> Option<&font::Font> {
+    /// The font the UI picks for `size` on this window.
+    pub(super) fn font(&self, size: impl Into<Size>) -> Option<&font::Font> {
+        let Size { font, scale } = size.into();
         self.fonts
-            .map(|f| f.pick(Slot::Default, scale, 480.0 * self.v.scale))
+            .map(|f| ui_font(f, font, scale, 480.0 * self.v.scale))
     }
 
     /// Width on the 640 grid: on CoD1 the DC's `textWidth`, syscall 0x43's
     /// int ([`font::trap_width`]); CoD2's unrounded.
-    pub(crate) fn width(&self, text: &str, scale: f32) -> f32 {
-        self.font(scale).map_or(0.0, |f| match self.exact {
+    pub(crate) fn width(&self, text: &str, size: impl Into<Size>) -> f32 {
+        let size = size.into();
+        let scale = size.scale;
+        self.font(size).map_or(0.0, |f| match self.exact {
             false => font::trap_width(f, text, scale),
             true => font::measure(f, text, scale / f.unit_scale()),
         })
@@ -790,8 +831,10 @@ impl Painter<'_> {
     /// syscall 0x44's int ([`font::trap_height`]); on CoD2 the font's
     /// tallest glyph at `scale`, as far above the baseline as
     /// [`Self::text`] puts the top.
-    pub(crate) fn height(&self, scale: f32) -> f32 {
-        self.font(scale).map_or(0.0, |f| match self.exact {
+    pub(crate) fn height(&self, size: impl Into<Size>) -> f32 {
+        let size = size.into();
+        let scale = size.scale;
+        self.font(size).map_or(0.0, |f| match self.exact {
             false => font::trap_height(f, scale),
             true => f.max_height as f32 * f.glyph_scale * scale,
         })
@@ -805,12 +848,14 @@ impl Painter<'_> {
         text: &str,
         x: f32,
         y: f32,
-        scale: f32,
+        size: impl Into<Size>,
         color: [f32; 4],
         style: i32,
         out: &mut Vec<HudQuad>,
     ) {
-        let Some(f) = self.font(scale) else { return };
+        let size = size.into();
+        let scale = size.scale;
+        let Some(f) = self.font(size) else { return };
         let top = y - f.max_height as f32 * f.glyph_scale * scale;
         let [px, py] = self.v.point(x, top);
         let px_scale = scale * self.v.scale / f.unit_scale();
@@ -863,6 +908,45 @@ mod tests {
         assert_eq!(draw(true, 0).len(), 1);
         let q = draw(true, 6);
         assert_eq!((offset(&q), q[0].rgba[3]), (2.0, 1.0));
+    }
+
+    /// `textfont` picks the atlas as `0x400079e0` does: 2, 3 and 5 at any
+    /// size, 4 small, normal or bold by drawn size, the rest by drawn size.
+    #[test]
+    fn textfont_picks_the_retail_font() {
+        let font = |size| font::Font {
+            size,
+            ..crate::hud::hudelem::tests::test_font()
+        };
+        let fonts = UiFonts {
+            small: font(12),
+            normal: font(16),
+            console: font(18),
+            big: font(24),
+            bold: font(30),
+            extra_big: font(32),
+        };
+        let size = |handle, scale| ui_font(&fonts, handle, scale, 480.0).size;
+        for scale in [0.2, 0.6] {
+            assert_eq!([2, 3, 5].map(|h| size(h, scale)), [24, 12, 18]);
+        }
+        assert_eq!([0.25, 0.3, 0.6].map(|s| size(4, s)), [12, 16, 30]);
+        for h in [0, 1, 6] {
+            assert_eq!([0.25, 0.3, 0.45, 0.6].map(|s| size(h, s)), [12, 16, 24, 32]);
+        }
+        // The item's handle reaches the painter.
+        let p = Painter {
+            v: Virtual::new((640.0, 480.0)),
+            fonts: Some(&fonts),
+            exact: false,
+        };
+        let item = |text_font| UiItem {
+            text_font,
+            text_scale: 0.3,
+            ..UiItem::default()
+        };
+        assert_eq!(p.font(&item(1)).map(|f| f.size), Some(16));
+        assert_eq!(p.font(&item(2)).map(|f| f.size), Some(24));
     }
 
     /// `Window_Paint` style 3 draws its handle whatever it is: no
