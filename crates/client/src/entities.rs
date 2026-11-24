@@ -207,7 +207,9 @@ pub fn resolve_visual(
         }
         ET_ITEM => {
             let mi = ent.field_i32(p, "index");
-            if mi <= 0 {
+            // `EF_NODRAW`: a taken item's respawn frame, or a script `hide()`
+            // (cgame 0x3001ade9; 1.5 0x3001bf89, UO 0x3001e6b8).
+            if mi <= 0 || ent.field_i32(p, "eFlags") & EF_NODRAW != 0 {
                 return EntityVisual::None;
             }
             EntityVisual::Item(mi as usize)
@@ -3666,6 +3668,9 @@ mod tests {
             resolve_visual(&ent(ET_ITEM, 0, 0), &none, &cs, p),
             EntityVisual::None
         );
+        let mut hidden = ent(ET_ITEM, 0, 9);
+        hidden.fields[EntityState::field_index(p, "eFlags").unwrap()] = 16 | EF_NODRAW;
+        assert_eq!(resolve_visual(&hidden, &none, &cs, p), EntityVisual::None);
     }
 
     #[test]

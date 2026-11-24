@@ -1487,6 +1487,19 @@ dropped item's free at +100 overwrites the think; a value above 0 arms
 `RespawnItem` at `level.time + value * 1000`. VERIFIED, `G_RunEntity`
 (0x502dd..0x502f5): an entity with no client takes `eFlags` 0x100 when
 `flags & 0x1000` is set and loses it otherwise, at the top of each frame.
+INFERRED, off that and `ScrCmd_Hide` writing the same bit (`cod11-combat.md`,
+0x5dcdf): a script `hide()` on an item sends it with `eFlags` 0x100 while it
+stays touchable and in the snapshot. VERIFIED (the instructions): the
+cgame's item draw (`0x3001adb0`, the `eType` 3 arm of the switch at
+`0x3001d602`) returns on `eFlags & 0x100` (`0x3001ade6`..`0x3001adec`); 1.5's
+does at `0x3001bf89` and UO's on its 0x80 at `0x3001e6b8`, each right after
+the `"Bad item index %i on entity"` check. VERIFIED (live capture,
+retail-client 2026-11-24 steps `3-hint` and `4-hint-uo`, the `rc_*.tga`
+shots): both retail clients drew the item `probe_rc_hint.gsc` had hidden,
+which vcod-server then sent without the bit (its item arm mirrored only the
+pickup's hide). vcod-server now mirrors a script hide into an item's
+`eFlags` (`item::run_item`), and vcod's client skips an item with it
+(`entities::resolve_visual`).
 
 VERIFIED, the console of a run of the probe: `h.wait = 3;` is a
 `script compile error`, `bad syntax`, at the `wait`. INFERRED: `wait` is a
