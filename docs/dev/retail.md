@@ -128,6 +128,9 @@ COD_DIR=<1.1 install> COD_UO_DIR=<stock 1.5 main/ + uo/ tree> \
   (`--addr` defaults to 127.0.0.1) or on a LAN PC. No cfg or binds: each
   step joins with `/connect <addr>:<port>` in the console (port 28963),
   and the probes answer the team and weapon menus for the client.
+- Move third-party pk3s out of the client's `main/` and `uo/` for the
+  session: on 2026-11-23 a client holding them failed the `--vanilla`
+  server's `cp` check and was dropped with `EXE_UNPURECLIENTDETECTED`.
 - Screenshots: the probe puts `screenshot rc_<phase>_1; wait 25; ...` in
   the client's `rc_shot` cvar (a server `v`, cod11-hud-protocol.md 0), so
   every phase's console line is the same, `toggleconsole; wait 60; vstr
@@ -209,8 +212,13 @@ arrival (`w=`) and whether the flood window dropped them (`ok=0`), and the
 `wbuttons` 0x1 flag on every `cmd` (`coduo-diff.md` 19.3, "The flame
 report"). `analyze.py fdc` prints the arrival gaps.
 
-Fixture: the `ccmd` fdc lines and the victim's `cmd` lines' `wb`, against
-which a client test runs `FlameSystem::report` on the same chunk exposure.
+Fixture: `analyze.py fdc-fixture CLIENT_LOG` cuts the victim's frames from
+the first raised flag to the last `fdc`: each cmd's `serverTime` step, its
+`wb` 0x1 and the frames whose packet carried an `fdc`
+(`crates/client/tests/fixtures/uo_fdc_retail.txt`). The client test
+`the_report_replays_a_retail_clients_flag_and_fdc_frames` runs
+`FlameSystem::report` on that clock with fire in reach on the flagged
+frames and expects the same flag and `fdc` frames (`coduo-diff.md` 19.3.1).
 
 ## Public servers and the master
 

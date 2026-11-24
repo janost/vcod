@@ -44,10 +44,12 @@ pub(super) fn write_download(
 /// `SV_WriteSnapshotToClient` (0x808dee0) deltas only for an active client,
 /// so the snapshot is the playerstate of 32 messages back, written from
 /// null, with no entities and no clients (handshake doc, "Zombie slots").
+/// With `fresh`, that playerstate instead, filed in the ring slot.
 fn zombie_message(
     c: &mut Client,
     sv_time_ms: i32,
     snap_flags: u32,
+    fresh: Option<msg::PlayerState>,
     proto: &'static Cod1Wire,
     huff: &Huffman,
 ) -> Vec<Vec<u8>> {
@@ -55,9 +57,11 @@ fn zombie_message(
     write_pending_commands(&mut w, &c.link.netchan, c.link.reliable_ack);
     c.link.reliable_sent = c.link.netchan.reliable_sequence as i32;
     let message_num = c.link.netchan.outgoing_sequence;
-    let ps = c.link.frames[message_num as usize % crate::client::SV_PACKET_BACKUP]
-        .as_ref()
-        .map_or_else(|| msg::PlayerState::null(proto), |f| f.ps.clone());
+    let ps = fresh.clone().unwrap_or_else(|| {
+        c.link.frames[message_num as usize % crate::client::SV_PACKET_BACKUP]
+            .as_ref()
+            .map_or_else(|| msg::PlayerState::null(proto), |f| f.ps.clone())
+    });
     let frame = snapshot::SentSnapshot {
         server_time: Msec::from_raw(sv_time_ms),
         message_num,
@@ -69,6 +73,9 @@ fn zombie_message(
         valid: true,
     };
     proto.write_snapshot(&mut w, None, &frame, frame.head(None), &HashMap::new());
+    if fresh.is_some() {
+        c.record_frame(frame);
+    }
     c.link.unsent.clear();
     c.link
         .netchan
@@ -393,13 +400,43 @@ impl Server {
             SNAPFLAG_NOT_ACTIVE
         };
         let flags = snap_flags | u32::from(z.link.rate_delayed) | not_active;
-        let sent = zombie_message(z, game_ms, flags, self.game.proto, &self.core.huff);
+        let sent = zombie_message(z, game_ms, flags, None, self.game.proto, &self.core.huff);
         let rate = z.send_rate(dedicated, max_rate);
         let msec = z.snapshot_msec();
         z.pace(now, sent.iter().map(Vec::len).sum(), rate, msec);
         self.core
             .outbox
             .extend(sent.into_iter().map(|p| (z.link.addr, p)));
+    }
+
+    /// `SV_ExecuteClientMessage`'s unpure drop (cod_lnxded 0x80874a8, 1.5b
+    /// 0x808cfd8, UO 0x808dda9): the client goes `CS_ACTIVE` and is sent a
+    /// snapshot at once, before [`Self::drop_client`], so a client still
+    /// loading leaves `CA_PRIMED` and runs its zombie's `w` (handshake doc,
+    /// "The unpure drop"). vcod's snapshot is a null playerstate with no
+    /// entities.
+    pub(super) fn send_forced_snapshot(&mut self, slot: usize) {
+        let (dedicated, now, game_ms) = (
+            self.game.dedicated,
+            self.svs_time_ms(),
+            self.core.sv_time_ms,
+        );
+        let max_rate = self.live_int_cvar("sv_maxRate");
+        let (flags, proto) = (self.game.snap_flag_server_bit, self.game.proto);
+        let Some(c) = self.core.clients[slot].as_mut().filter(|c| !c.is_bot) else {
+            return;
+        };
+        c.state = ClientState::Active;
+        c.link.was_active = true;
+        c.stamp_sent(c.link.netchan.outgoing_sequence, now);
+        let flags = flags | u32::from(c.link.rate_delayed);
+        let null = msg::PlayerState::null(proto);
+        let sent = zombie_message(c, game_ms, flags, Some(null), proto, &self.core.huff);
+        let rate = c.send_rate(dedicated, max_rate);
+        let msec = c.snapshot_msec();
+        c.pace(now, sent.iter().map(Vec::len).sum(), rate, msec);
+        let addr = c.link.addr;
+        self.core.outbox.extend(sent.into_iter().map(|p| (addr, p)));
     }
 
     /// `SV_FinalMessage` (0x808ad8c), which `SV_Shutdown` runs before the
@@ -913,7 +950,7 @@ mod tests {
             });
         }
         c.link.netchan.outgoing_sequence = 41;
-        let pkts = zombie_message(&mut c, 2050, 4, p, &huff);
+        let pkts = zombie_message(&mut c, 2050, 4, None, p, &huff);
         let mut nc = Netchan::new(1, 7);
         nc.incoming_sequence = 40;
         let msgbytes = nc.process_in(&pkts[0], &huff).unwrap().unwrap();

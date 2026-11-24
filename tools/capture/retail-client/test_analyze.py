@@ -43,6 +43,22 @@ cmd slot=0 st=120 b=1 wb=0 w=1 fl=0 a=0,0,0 mv=0,0,0
         self.assertEqual([c["st"] for c in analyze.cmd_stream(log, 0)], [100, 110, 120])
         self.assertEqual(log[0][1]["name"], "a b")
 
+    def test_an_fdc_marks_the_newest_cmd_of_the_packet_after_it(self):
+        log = log_lines("""
+enter w=1 svs=1 slot=0 proto=22 addr=x name=a
+move w=1 svs=1 slot=0 seq=1 ack=0 delta=1 n=2
+cmd slot=0 st=100 b=0 wb=0 w=1 fl=0 a=0,0,0 mv=0,0,0
+cmd slot=0 st=108 b=0 wb=0 w=1 fl=0 a=0,0,0 mv=0,0,0
+ccmd w=2 svs=2 slot=0 seq=5 ok=1 text=fdc 1
+move w=2 svs=2 slot=0 seq=2 ack=0 delta=1 n=2
+cmd slot=0 st=108 b=0 wb=0 w=1 fl=0 a=0,0,0 mv=0,0,0
+cmd slot=0 st=116 b=0 wb=1 w=1 fl=0 a=0,0,0 mv=0,0,0
+move w=3 svs=3 slot=0 seq=3 ack=0 delta=1 n=2
+cmd slot=0 st=116 b=0 wb=1 w=1 fl=0 a=0,0,0 mv=0,0,0
+cmd slot=0 st=124 b=0 wb=1 w=1 fl=0 a=0,0,0 mv=0,0,0
+""")
+        self.assertEqual(analyze.fdc_frames(log), [(116, 1, True)])
+
     def test_a_shot_s_kick_is_counted_from_its_own_cmd(self):
         lines = ["enter w=1 svs=1 slot=0 proto=1 addr=x name=a"]
         pitch = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: -60, 8: -100, 9: -90}

@@ -9,6 +9,7 @@ exits 1 when the capture cannot answer its question.
   analyze.py intermission CLIENT_LOG GAME_LOG SHOTS_DIR [--standin]
   analyze.py hint CLIENT_LOG GAME_LOG SHOTS_DIR [--standin]
   analyze.py fdc CLIENT_LOG GAME_LOG [--standin]
+  analyze.py fdc-fixture CLIENT_LOG   (the fdc gate's fixture, on stdout)
   analyze.py shot TGA X Y W H       (mean colour of a 640x480 virtual rect)
 
 --standin is the dry run's: vcod's probe client stands in for the retail
@@ -446,6 +447,45 @@ def report_fdc(log_path, game_log, standin):
     return 0
 
 
+def fdc_frames(log):
+    """The victim's frames from its first raised flag to its last fdc, as
+    (serverTime, wbuttons 0x1, carried an fdc). A cmd's serverTime is the
+    cg.time of the draw before it, the one whose report set the flag, and
+    an fdc that draw sends rides the same packet."""
+    victim = human_slots(log)[0]
+    # The newest cmd of the packet after each fdc command.
+    sent, pending, carrier, newest = set(), False, False, None
+    for kind, f in log + [("move", {"slot": str(victim)})]:
+        if f.get("slot") != str(victim):
+            continue
+        if kind == "ccmd" and f.get("text", "").split(" ")[0] == "fdc":
+            pending = True
+        elif kind == "move":
+            if carrier and newest is not None:
+                sent.add(newest)
+            carrier, pending, newest = pending, False, None
+        elif kind == "cmd":
+            newest = int(f["st"])
+    frames = [(c["st"], c["wb"] & 1) for c in cmd_stream(log, victim)]
+    first = next(i for i, (_, wb) in enumerate(frames) if wb)
+    last = max(i for i, (st, _) in enumerate(frames) if st in sent)
+    return [(st, wb, st in sent) for st, wb in frames[first:last + 1]]
+
+
+def report_fdc_fixture(log_path):
+    frames = fdc_frames(read_log(log_path))
+    steps = [b[0] - a[0] for a, b in zip(frames, frames[1:])]
+    if any(not 0 < s < 10 for s in steps):
+        return fail(f"a frame step outside 1..9 ms: {sorted(set(steps))}")
+    print(f"start {frames[0][0]}")
+    for i in range(0, len(steps), 100):
+        print("steps " + "".join(str(s) for s in steps[i:i + 100]))
+    for i in range(0, len(frames), 100):
+        print("flags " + "".join(str(wb) for _, wb, _ in frames[i:i + 100]))
+    print("fdc " + " ".join(str(st) for st, _, fdc in frames if fdc))
+    return 0
+
+
 # --- main -----------------------------------------------------------------
 
 
@@ -477,6 +517,8 @@ def main(argv):
         return report_hint(*rest, standin)
     if cmd == "fdc" and len(rest) == 2:
         return report_fdc(*rest, standin)
+    if cmd == "fdc-fixture" and len(rest) == 1:
+        return report_fdc_fixture(rest[0])
     if cmd == "shot" and len(rest) == 5:
         return report_shot(*rest)
     print(__doc__)

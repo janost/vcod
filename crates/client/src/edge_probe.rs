@@ -22,6 +22,10 @@ pub enum EdgeMode {
     Zombie,
     /// Fly 5 s, then `disconnect` and keep decoding: a zombie that was.
     ZombieActive,
+    /// Send a `cp` that cannot verify in the first message after the
+    /// gamestate, no usercmd, and keep decoding: a pure server's
+    /// `EXE_UNPURECLIENTDETECTED` drop of a client still loading.
+    Unpure,
     /// Fly 5 s, then connect again from the same socket and qport with no
     /// `disconnect`: a crashed client coming back into the slot it still
     /// holds (`client-probes/probe_reconnect`).
@@ -88,6 +92,12 @@ pub fn run(addr: &str, mode: EdgeMode, secs: u64, cmd_ms: u64) -> anyhow::Result
                         disconnect_and_listen(&mut client);
                         disconnected = true;
                         println!("EDGE disconnect t={} entered=no", ms(now));
+                    }
+                    if mode == EdgeMode::Unpure && !disconnected {
+                        client.send_reliable("cp 1 2 @ 3 4");
+                        client.send_cmds(&[]);
+                        disconnected = true;
+                        println!("EDGE cp t={}", ms(now));
                     }
                 }
                 NetEvent::OutOfBand(text) => println!("EDGE oob t={} {text:?}", ms(now)),

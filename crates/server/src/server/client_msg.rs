@@ -600,6 +600,7 @@ impl Server {
                 .as_ref()
                 .is_some_and(|c| c.pure == crate::client::Pure::Unpure);
         if unpure {
+            self.send_forced_snapshot(slot);
             self.drop_client(slot, "EXE_UNPURECLIENTDETECTED");
         }
         !unpure
@@ -958,6 +959,65 @@ mod tests {
             ]
         };
         assert_eq!(pure_server_after(reset).client_count(), 0);
+    }
+
+    /// `SV_ExecuteClientMessage`'s unpure drop (cod_lnxded 0x80874a8): a
+    /// client still loading is sent an active snapshot at once, so it
+    /// leaves `CA_PRIMED` (`CL_FirstSnapshot` skips `SNAPFLAG_NOT_ACTIVE`),
+    /// and its zombie's `w` follows in active snapshots too. Retail, on
+    /// `--probe-edge unpure` (handshake doc, "The unpure drop").
+    #[test]
+    fn an_unpure_client_still_loading_is_sent_an_active_snapshot_before_its_w() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.game.paks.pure = true;
+        sv.game.pure_check = Some(PureCheck {
+            cgame: Some(11),
+            ui: Some(22),
+            loaded: vec![5, 6],
+            feed: sv.core.checksum_feed,
+        });
+        let mut nc = active(&mut sv, now);
+        let mut ring = SnapshotRing::new();
+        // Each message's server commands and snapshot flags.
+        fn read(
+            sv: &mut Server,
+            nc: &mut Netchan,
+            ring: &mut SnapshotRing,
+        ) -> Vec<(Vec<String>, Option<u32>)> {
+            let huff = Huffman::new();
+            let p = sv.game.proto;
+            let mut out = Vec::new();
+            for (_, pkt) in sv.take_outgoing() {
+                let msg = nc.process_in(&pkt, &huff).unwrap().unwrap();
+                let num = nc.incoming_sequence;
+                let mut r = MsgReader::new(&msg[4..], &huff);
+                let (mut cmds, mut flags) = (Vec::new(), None);
+                while !r.is_overflowed() {
+                    match r.read_byte() {
+                        msg::SVC_SERVER_COMMAND => {
+                            r.read_long();
+                            cmds.push(r.read_big_string());
+                        }
+                        SVC_SNAPSHOT => {
+                            flags = Some(ring.parse_into(&mut r, p, num).unwrap().snap_flags);
+                            break;
+                        }
+                        _ => break,
+                    }
+                }
+                out.push((cmds, flags));
+            }
+            out
+        }
+        pipelined(&mut sv, &mut nc, &["cp 1 2 @ 3 4"], now);
+        assert_eq!(sv.client_count(), 0);
+        assert_eq!(read(&mut sv, &mut nc, &mut ring), vec![(vec![], Some(4))]);
+        sv.tick(now + std::time::Duration::from_millis(50));
+        assert_eq!(
+            read(&mut sv, &mut nc, &mut ring),
+            vec![(vec!["w \"EXE_UNPURECLIENTDETECTED\"".into()], Some(4))]
+        );
     }
 
     /// One client command per sequence, all in one message.
