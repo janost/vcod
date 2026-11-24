@@ -1689,6 +1689,46 @@ so and the nozzle sits 16 units ahead of the eye. The same pair on vcod-server
 (`--gametype-script` the probe) burns the victim the same way, 8 with
 `MOD_FLAME` a frame while the bit rides, and no bullet hit (section 21).
 
+#### 19.3.1 The fdc cadence of a retail client
+
+Capture `retail-client-2026-11-24`, step `5-fdc` (`client.log`, slot 0): a
+retail `CoDUOMP.exe` 1.51 under Wine stood in vcod's stand-in shooter's
+pulses on `mp_cassino` (`probe_rc_flame`, docs/dev/retail.md).
+
+- **What it sent.** 23 `fdc 1`, none inside the flood window, arriving
+  2016 ms apart but for one gap of 2015, one of 2017, three of 2071 to
+  2073 and one of 2129 (VERIFIED (a live capture), `analyze.py fdc`).
+- **The clock.** A cmd's `serverTime` is the `cg.time` of the draw before
+  it, and the draw's flag and `fdc` ride the next packet (INFERRED, Q3's
+  `CL_Frame` order). Measured on that clock, from the `cmd` whose packet
+  followed each `fdc`, the gaps are 2014 to 2018, 2072 to 2075 and 2127
+  ms. They match the arrival gaps to 3 ms (VERIFIED (a live capture)).
+- **The check grid.** From the first rise of the flag to the last `fdc`
+  the client's 5580 cmds stepped 8 ms, with a 9 or a 6 every few frames
+  (4686, 594 and 299 steps). Its flag changed 325 times, only on frames 54
+  to 58 ms apart or a multiple of that: the first frame past the 50 ms mark
+  (VERIFIED (a live capture)). The compare is the
+  `jge` at 0x3002918b: a check time at or past the clock skips; one behind
+  it moves to the clock plus 100 ticks (VERIFIED (the instructions)).
+  `fdc` goes when the last is at most `cg.time - 2000` (`lea esi,[edx-0x7d0]`
+  at 0x300291d4, the `jg` skip at 0x300291de) (VERIFIED (the
+  instructions)).
+- **2016, 2072, 2129.** At 8 ms frames a check comes every 56 ms, and 36
+  checks are 2016 ms. A check where no tested chunk reached the box (one
+  in five is tested, "Which chunks" above) moves the `fdc` to the next
+  check: 37 are 2072, 38 are 2128 (INFERRED, the arithmetic and the flag
+  record). So the cadence depends on the frame rate: at 16 ms frames a
+  check comes every 64 ms and 32 checks are 2048 ms (INFERRED).
+- **vcod.** Fed the retail frame clock, with fire in reach on the frames
+  whose cmd carried the flag, `FlameSystem::report` changes the flag on
+  the same 325 frames and sends `fdc` on the same 23. A `<=` in place of
+  the `<` at the check fails it
+  (`the_report_replays_a_retail_clients_flag_and_fdc_frames`, fixture
+  `crates/client/tests/fixtures/uo_fdc_retail.txt`, cut by
+  `tools/capture/retail-client/analyze.py fdc-fixture`). vcod runs the
+  report on its wall clock where retail runs `cg.time`. Over a 2 s gap the
+  two differ by the 3 ms above, so the clock stays.
+
 ### 19.4 HUD
 
 `CG_OwnerDraw` 0x300320e0 returns at once under `cg_drawStatus 0` and

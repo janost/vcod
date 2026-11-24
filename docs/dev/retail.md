@@ -204,8 +204,13 @@ arrival (`w=`) and whether the flood window dropped them (`ok=0`), and the
 `wbuttons` 0x1 flag on every `cmd` (`coduo-diff.md` 19.3, "The flame
 report"). `analyze.py fdc` prints the arrival gaps.
 
-Fixture: the `ccmd` fdc lines and the victim's `cmd` lines' `wb`, against
-which a client test runs `FlameSystem::report` on the same chunk exposure.
+Fixture: `analyze.py fdc-fixture CLIENT_LOG` cuts the victim's frames from
+the first raised flag to the last `fdc`: each cmd's `serverTime` step, its
+`wb` 0x1 and the frames whose packet carried an `fdc`
+(`crates/client/tests/fixtures/uo_fdc_retail.txt`). The client test
+`the_report_replays_a_retail_clients_flag_and_fdc_frames` runs
+`FlameSystem::report` on that clock with fire in reach on the flagged
+frames and expects the same flag and `fdc` frames (`coduo-diff.md` 19.3.1).
 
 ## Public servers and the master
 

@@ -995,6 +995,43 @@ mod tests {
         assert_eq!(fdc, Some(7));
     }
 
+    /// A retail UO client's frames in a flame stream (coduo-diff.md 19.3.1):
+    /// with fire in reach on the frames whose cmd carried the flag, the
+    /// report raises it on the same frames and sends `fdc` on the same ones,
+    /// 2014 to 2127 ms apart on the 56 ms check grid of 8 ms frames.
+    #[test]
+    fn the_report_replays_a_retail_clients_flag_and_fdc_frames() {
+        let text = include_str!("../../tests/fixtures/uo_fdc_retail.txt");
+        let rows =
+            |key: &str| -> String { text.lines().filter_map(|l| l.strip_prefix(key)).collect() };
+        let start: f64 = rows("start ").trim().parse().unwrap();
+        let mut times = vec![start];
+        for c in rows("steps ").chars() {
+            times.push(times.last().unwrap() + f64::from(c.to_digit(10).unwrap()));
+        }
+        let flags: Vec<bool> = rows("flags ").chars().map(|c| c == '1').collect();
+        let sent: Vec<f64> = rows("fdc ")
+            .split(' ')
+            .map(|t| t.parse().unwrap())
+            .collect();
+        assert_eq!(times.len(), flags.len());
+        let mut f = FlameSystem::default();
+        let mut got = Vec::new();
+        for (&now, &flag) in times.iter().zip(&flags) {
+            f.chunks.clear();
+            if flag {
+                f.chunks
+                    .extend((0..64).map(|_| fire(7, Vec3::new(30.0, 0.0, 30.0), 100.0, 0.0, 1e9)));
+            }
+            let r = f.report(now, Some(VICTIM), false, None);
+            assert_eq!(r.in_flame, flag, "flag at {now}");
+            if r.fdc.is_some() {
+                got.push(now);
+            }
+        }
+        assert_eq!(got, sent);
+    }
+
     /// Smoke never burns, nor a chunk at 0.9 of its life.
     #[test]
     fn smoke_and_spent_chunks_never_report() {
