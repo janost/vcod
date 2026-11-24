@@ -284,11 +284,11 @@ impl Kicker {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// `m1carbine_mp`'s kick keys as `pak0.pk3` spells them.
-    fn carbine() -> WeaponDef {
+    pub(crate) fn carbine() -> WeaponDef {
         let mut m = vcod_common::xmodel::WeaponKeys::default();
         for (k, v) in [
             ("aimDownSight", "1"),
