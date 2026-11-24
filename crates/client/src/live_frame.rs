@@ -864,7 +864,7 @@ impl LiveCx<'_> {
         predicted: &Option<play::predict::PredictedView>,
         view_ps: &Option<play::view::ViewPs>,
     ) -> (f32, play::shock::ShockFrame) {
-        let Tick { dt, local_ms, .. } = *tick;
+        let Tick { dt, .. } = *tick;
         let Viewer {
             p,
             pm_type,
@@ -872,7 +872,7 @@ impl LiveCx<'_> {
             ..
         } = viewer;
         prof.next(frame_prof::Stage::Vm);
-        view.step_recoil(weapons, view_ps.as_ref(), local_ms);
+        view.step_recoil(weapons, view_ps.as_ref(), render_time);
         // Next frame's cmds carry this kick, as
         // `CL_FinishMove` reads last frame's syscall 0x56.
         input.kick = view.view_kick();

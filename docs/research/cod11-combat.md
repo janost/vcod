@@ -9326,9 +9326,10 @@ retail client. A retail-client capture of `cmd.angles` around a shot is
 the open check.
 
 **As implemented.** `crates/client/src/play/recoil.rs` holds the view kick,
-the fire draw and the RNG, and steps the spring
-(`vcod_common::pmove::aim::GunKick`) once per drawn frame from
-`OnlineView::frame`; `PlayInput::cmd_angles` adds the kick to the cmd and
+the fire draw and the RNG, and steps both kicks, the spring being
+`vcod_common::pmove::aim::GunKick`, once per drawn frame from
+`OnlineView::step_recoil`, by the step of the cgame time (`cl.serverTime`,
+the clock the cmds carry, as `cg.frametime` is: cgame 0x300339dc); `PlayInput::cmd_angles` adds the kick to the cmd and
 the drawn view. VERIFIED, `CL_FinishMove` (CoDMP.exe 0x40b6b7..0x40b711):
 per axis two floats summed on the x87 stack (0x143a9a0..0x143a9a8 and
 0x143a994..0x143a99c), times 65536/360 (0x568f68), one `_ftol` (0x538be0)

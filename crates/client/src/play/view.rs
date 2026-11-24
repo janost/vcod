@@ -261,8 +261,8 @@ pub struct OnlineView {
     recoil: Recoil,
     /// The newest snapshot's `(clientNum, stats[5])`.
     spawn: Option<(i32, i32)>,
-    /// `now_ms` of the last frame, whole milliseconds.
-    last_ms: Option<i64>,
+    /// The cgame time of the last [`Self::step_recoil`].
+    last_cg_time: Option<i32>,
     quakes: Quakes,
     land: Land,
     /// The connection's `CS_MODELS` (`Cod1Wire::cs`), 1.1's until set.
@@ -457,15 +457,22 @@ impl OnlineView {
         self.scoped
     }
 
-    /// Steps both kicks to `now_ms` for `ps`, ahead of the view that reads
-    /// them; `None`, dead or not in the world, clears them.
-    pub fn step_recoil(&mut self, weapons: &[Option<WeaponDef>], ps: Option<&ViewPs>, now_ms: f64) {
+    /// Steps both kicks to the cgame time `cg_time` (`cl.serverTime`, the
+    /// clock the cmds carry) for `ps`, ahead of the view that reads them:
+    /// `cg.frametime` is that time's step, never below 0 (cgame
+    /// 0x300339dc). `ps` `None`, dead or not in the world, clears them.
+    pub fn step_recoil(
+        &mut self,
+        weapons: &[Option<WeaponDef>],
+        ps: Option<&ViewPs>,
+        cg_time: Option<i32>,
+    ) {
         let held = ps.and_then(|ps| weapons.get(usize::from(ps.weapon))?.as_ref());
-        let ms = now_ms as i64;
-        let frametime = self
-            .last_ms
-            .map_or(0, |last| (ms - last).clamp(0, 1000) as i32);
-        self.last_ms = Some(ms);
+        let frametime = match (self.last_cg_time, cg_time) {
+            (Some(last), Some(now)) => now.wrapping_sub(last).clamp(0, 1000),
+            _ => 0,
+        };
+        self.last_cg_time = cg_time;
         match ps {
             Some(ps) => self.recoil.step(
                 frametime,
