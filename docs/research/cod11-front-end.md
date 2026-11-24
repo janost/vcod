@@ -3276,6 +3276,53 @@ Sources: `ui_mp_x86.dll` 1.1 and `CoDMP.exe` 1.1, read with `objdump`
   an item's text in the font `ui_font` picks for its handle and scale
   (`Size::from(&UiItem)`), in both games.
 
+### 20.10 Borders
+
+- `border`, `bordersize` and `bordercolor` are item keywords (1.1
+  `ui_mp_x86.dll` records `0x40036718`, `0x40036724`, `0x400367b4`,
+  handlers `0x400175f0` to item `+0x38`, `0x40017610` to `+0x44`,
+  `0x40017820` four floats to `+0x94`) and menu keywords (`0x40036994`,
+  `0x400369a0` spelled `borderSize`, `0x400369c4`, handlers `0x40018350`,
+  `0x40018370`, `0x40018440`, the same offsets of the menu's window).
+  VERIFIED (the tables, the handlers). 1.5, UO and CoD2 have the same
+  pairs (1.5 `0x40037718`.., UO `0x40040d10`.., CoD2 `0x5dd440`..).
+  VERIFIED (the tables).
+- `Window_Paint` (`0x4000f8f0`) with a border insets the window's fill or
+  shader by the size at the left and top and by the size plus 1 at the
+  right and bottom (`0x4000f97a`..`0x4000f9b9`), then draws the border in
+  `bordercolor` by its type (`0x4000fb64`..`0x4000fcf2`). VERIFIED (asm):
+  - 1, full: the display context's `drawRect` (`+0x38`, `0x40007990`),
+    which runs `drawTopBottom` (`0x40007910`) then `drawSides`
+    (`0x40007890`). A style 4 (team colour) window takes a fixed colour
+    instead (`0x4000fb70`).
+  - 2, horizontal: `drawTopBottom` alone (`+0x40`), between its own set
+    colour calls.
+  - 3, vertical: `drawSides` alone (`+0x3c`).
+  - 4, `WINDOW_BORDER_KCGRADIENT`: `GradientBar_Paint` (`0x4000f810`)
+    twice over the window's width, `bordersize` tall, at the top and at
+    `y + h - 1`: the display context's gradient bar shader (`+0x1e2c0`,
+    `0x401e1fa0`, registered from `ui/assets/gradientbar2.tga`,
+    `0x4002f48c`, at `0x400077f0` and replaced by `assetGlobalDef`'s
+    `gradientBar`, `0x40007f66`) in `bordercolor`.
+- `drawTopBottom` scales the size by `yscale` (`0x401c3dc0`) and draws
+  `(x, y, w, size)` and `(x, y + h - size, w, size)`; `drawSides` by
+  `xscale` (`0x401c3dc4`), `(x, y, size, h)` and `(x + w - size, y, size,
+  h)`, both through `0x400192f0` with the white shader (`0x401e20b0`).
+  VERIFIED (asm). So a full border's sides run the whole height and its
+  corners draw twice. INFERRED (the arithmetic).
+- 1.5 (`0x40010387`..) and UO (`0x400128c5`..) have the same four types.
+  CoD2's `Window_Paint` (`0x539e40`) has 1 (`0x532200`, running
+  `0x532120` then `0x532040`), 2 (`0x532120`) and 3 (`0x532040`), and no
+  4 (`0x53a2df`..`0x53a316`). VERIFIED (asm). That `0x532120` is the top
+  and bottom and `0x532040` the sides is INFERRED (the call order matching
+  1.1's `drawRect`).
+- Stock menus use types 0 and 1 (1.1 `pak0.pk3`; `UI_BUTTON_BORDER` is 1);
+  the one `border 4` sits in `ui_mp/multi.menu` inside a comment. 1.5 and
+  UO add `UI_TAB_BORDER`, also 1. VERIFIED (the paks).
+- vcod: `Painter::window` draws `border_pieces`: types 1 to 3 as above,
+  4 on CoD1 only. A full border's sides now run the whole height as
+  retail's do, where vcod drew them between the top and bottom.
+
 ## 21. Video modes, fullscreen and wide windows
 
 Retail's:

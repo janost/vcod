@@ -606,6 +606,40 @@ fn text_extents(item: &UiItem, kept: Option<[f32; 4]>, widths: TextWidths) -> [f
     ]
 }
 
+/// `Window_Paint`'s border shader for style 4 (`DC->Assets.gradientBar`,
+/// registered from `0x4002f48c` unless `assetGlobalDef` names another).
+const GRADIENT_BAR: &str = "ui/assets/gradientbar2.tga";
+
+/// `Window_Paint`'s border (ui_mp_x86.dll 1.1 0x4000fb64..0x4000fcf2,
+/// cod11-front-end.md 20.10) over the rect's edges `[left, top, right,
+/// bottom]`, `bs` its size and `one` one unit, as edges and a shader: 1
+/// (full) the top and bottom across the width and then the sides down the
+/// whole height, so the corners draw twice; 2 (horizontal) the top and
+/// bottom; 3 (vertical) the sides; 4 the gradient bar `bs` tall across the
+/// top and again from one unit above the bottom, when `gradient` (CoD1).
+fn border_pieces(
+    border: i32,
+    [l, t, r, b]: [f32; 4],
+    bs: f32,
+    one: f32,
+    gradient: bool,
+) -> Vec<([f32; 4], &'static str)> {
+    let top = ([l, t, r, t + bs], "white");
+    let bottom = ([l, b - bs, r, b], "white");
+    let left = ([l, t, l + bs, b], "white");
+    let right = ([r - bs, t, r, b], "white");
+    match border {
+        1 => vec![top, bottom, left, right],
+        2 => vec![top, bottom],
+        3 => vec![left, right],
+        4 if gradient => vec![
+            ([l, t, r, t + bs], GRADIENT_BAR),
+            ([l, b - one, r, b - one + bs], GRADIENT_BAR),
+        ],
+        _ => Vec::new(),
+    }
+}
+
 /// An upright quad over window px `[left, top, right, bottom]`.
 fn quad_px([l, t, r, b]: [f32; 4], rgba: [f32; 4], texture: &str, out: &mut Vec<HudQuad>) {
     out.push(HudQuad {
@@ -688,8 +722,8 @@ impl Painter<'_> {
         }
     }
 
-    /// `Window_Paint`: the fill or shader inside the border, then a full
-    /// border of `border_size`. `cvar_shader` is a
+    /// `Window_Paint`: the fill or shader inside the border, then the
+    /// border ([`border_pieces`]) in `bordercolor`. `cvar_shader` is a
     /// `WINDOW_STYLE_CVAR_SHADER` item's shader; an empty one draws nothing.
     /// A bordered rect spanning the grid stretches with its border: its
     /// pieces are cut out of the stretched rect in window px.
@@ -717,6 +751,9 @@ impl Painter<'_> {
         let [x, y, w, h] = item.rect;
         let b = item.border_size;
         let spans = full_width(x, w) || (y <= 0.0 && y + h >= 480.0);
+        let c = st.border_color;
+        // CoD2's `Window_Paint` has no gradient border (0x53a2df).
+        let gradient = !self.exact;
         if item.border != 0 && spans && !self.exact {
             let q = self.v.quad_fill(x, y, w, h, [0.0; 4], "");
             let [l, t] = q.verts[0];
@@ -725,12 +762,10 @@ impl Painter<'_> {
             if let Some((rgba, tex)) = face {
                 quad_px([l + bs, t + bs, r - one, bot - one], rgba, &tex, out);
             }
-            if item.border == 1 && st.border_color[3] > 0.0 {
-                let c = st.border_color;
-                quad_px([l, t, r, t + bs], c, "white", out);
-                quad_px([l, bot - bs, r, bot], c, "white", out);
-                quad_px([l, t + bs, l + bs, bot - bs], c, "white", out);
-                quad_px([r - bs, t + bs, r, bot - bs], c, "white", out);
+            if c[3] > 0.0 {
+                for (e, tex) in border_pieces(item.border, [l, t, r, bot], bs, one, gradient) {
+                    quad_px(e, c, tex, out);
+                }
             }
             return;
         }
@@ -741,12 +776,12 @@ impl Painter<'_> {
         if let Some((rgba, tex)) = face {
             self.quad(inner, rgba, &tex, out);
         }
-        if item.border == 1 {
-            let c = st.border_color;
-            self.fill([x, y, w, b], c, out);
-            self.fill([x, y + h - b, w, b], c, out);
-            self.fill([x, y + b, b, h - 2.0 * b], c, out);
-            self.fill([x + w - b, y + b, b, h - 2.0 * b], c, out);
+        if c[3] > 0.0 {
+            for ([l, t, r, bot], tex) in
+                border_pieces(item.border, [x, y, x + w, y + h], b, 1.0, gradient)
+            {
+                self.quad([l, t, r - l, bot - t], c, tex, out);
+            }
         }
     }
 
@@ -1009,6 +1044,36 @@ mod tests {
         assert_eq!(span(&out[0]), (2.0, 1279.0), "the fill");
         assert_eq!(span(&out[3]), (0.0, 2.0), "the left side");
         assert_eq!(span(&out[4]), (1278.0, 1280.0), "the right side");
+    }
+
+    /// `Window_Paint`'s borders: full sides down the whole height over the
+    /// top and bottom, the horizontal and vertical pairs alone, and on CoD1
+    /// the gradient bar `bordersize` tall at the top and one unit above the
+    /// bottom.
+    #[test]
+    fn borders_follow_window_paint() {
+        let r = [10.0, 20.0, 110.0, 70.0];
+        let edges = |border, gradient| {
+            border_pieces(border, r, 2.0, 1.0, gradient)
+                .into_iter()
+                .map(|(e, tex)| (e, tex == GRADIENT_BAR))
+                .collect::<Vec<_>>()
+        };
+        let top = ([10.0, 20.0, 110.0, 22.0], false);
+        let bottom = ([10.0, 68.0, 110.0, 70.0], false);
+        let left = ([10.0, 20.0, 12.0, 70.0], false);
+        let right = ([108.0, 20.0, 110.0, 70.0], false);
+        assert_eq!(edges(1, true), [top, bottom, left, right]);
+        assert_eq!(edges(2, true), [top, bottom]);
+        assert_eq!(edges(3, true), [left, right]);
+        assert_eq!(
+            edges(4, true),
+            [
+                ([10.0, 20.0, 110.0, 22.0], true),
+                ([10.0, 69.0, 110.0, 71.0], true)
+            ]
+        );
+        assert!(edges(4, false).is_empty() && edges(5, true).is_empty());
     }
 
     /// `Item_SetTextExtents`: int widths, a centred shift rounded toward
