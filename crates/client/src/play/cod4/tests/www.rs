@@ -7,18 +7,20 @@ use vcod_cod4::net::download::DownloadProgress;
 use super::*;
 use crate::play::cod4_menus::Join as MenuJoin;
 
-/// A loopback HTTP server over `root`: each GET's path logged, the
-/// file sent (a byte longer for one under `pad`), or 404 for one under
-/// `deny` or not there, each answer `slow` in coming. It runs on the wall, so [`live_www`] holds
-/// its sim clock on [`HttpServer::busy`] while an exchange is open.
-fn http_server(
+/// A loopback HTTP server over `root` on `port` (0: any): each GET's path
+/// logged, the file sent (a byte longer for one under `pad`), or 404 for
+/// one under `deny` or not there, each answer `slow` in coming. It runs on
+/// the wall, so [`live_www`] holds its sim clock on [`HttpServer::busy`]
+/// while an exchange is open.
+pub(super) fn http_server(
+    port: u16,
     root: std::path::PathBuf,
     deny: &'static [&'static str],
     pad: &'static [&'static str],
     slow: Duration,
 ) -> HttpServer {
     use std::io::{BufRead, Write};
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let l = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
     l.set_nonblocking(true).unwrap();
     let port = l.local_addr().unwrap().port();
     let log = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -72,8 +74,8 @@ fn http_server(
 }
 
 /// [`http_server`]'s handles.
-struct HttpServer {
-    port: u16,
+pub(super) struct HttpServer {
+    pub(super) port: u16,
     /// The paths asked for.
     pub(super) asked: Arc<std::sync::Mutex<Vec<String>>>,
     pub(super) stop: Arc<std::sync::atomic::AtomicBool>,
@@ -138,7 +140,7 @@ fn live_www(
         asked,
         stop,
         busy,
-    } = http_server(base.path().to_path_buf(), deny, pad, slow);
+    } = http_server(0, base.path().to_path_buf(), deny, pad, slow);
     let _live = live_slot();
     let mut sv = Cod4Server::new(
         Cod4Config {

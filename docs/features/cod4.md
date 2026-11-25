@@ -62,7 +62,8 @@ with its `mouse_over`, `mouse_click` and `music_mainmenu_mp` sounds.
 - A map missing from `zone/<language>/` loads from `usermaps/<map>/`.
   `<map>_load.ff` gives the connect screen its levelshot.
 - Missing mod or usermap iwds and fastfiles download before the map
-  loads (`cl_allowDownload`, on by default), over UDP or a www redirect's
+  loads (`cl_allowDownload`, on by default), over UDP (on CoD4x its side
+  channel) or a www redirect's
   `http://` under `cl_wwwDownload`; a failed fetch falls back to UDP. A
   file still different on the next gamestate ends the join, as on 1.7.
 
@@ -483,8 +484,9 @@ Ranked by how much a player notices. The research-side lists are
    not support.` The browser lists CoD4x servers, their names marked
    `[CoD4x]`, but cannot tell which ones authenticate: only a join shows
    it. `ui_browserShowCoD4x 0` hides them. A CoD4x server's mod files
-   do not download. Details:
-   [cod4x-protocol.md](../research/cod4x-protocol.md) 18.3, 18.4.
+   download as a stock server's do, over its www redirect or its own
+   side channel, which runs at about 16 KB/s. Details:
+   [cod4x-protocol.md](../research/cod4x-protocol.md) 18.3 to 18.5.
 2. **Ranks start fresh.** vcod keeps its own stats file per profile
    (`vcod_mpdata`) and never reads retail's `mpdata`: your retail rank
    and custom classes are safe, and no use here. Create a Class opens at
