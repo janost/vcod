@@ -926,7 +926,53 @@ server reads the repeats.
   headers. Test:
   `the_delta_move_needs_the_snapshot_in_the_newest_message`. VERIFIED
   (the test).
-- vcod departs: a snapshot off a base vcod no longer holds is an
-  illegible message (both acknowledges go back, `parse.rs`) where 1.7
-  keeps the message and its snapshot invalid; vcod has no `cl_nodelta`.
-  INFERRED (the code).
+- **`cl_nodelta`.** 0x4643f0 (called from `CL_Init` at 0x46d501)
+  registers `cl_nodelta` (0x6cf9f0) through 0x56c350 as type 0 with flags
+  0, the default byte 0, limits 0 and 0, described `The server does not
+  send snapshot deltas` (0x6cf9c4), and stores it at 0x956cfc
+  (0x465b95..0x465bd0). VERIFIED (the instructions and the strings). The
+  test above reads its `+0xc` as a byte (0x4640f0). VERIFIED (the
+  instructions). That type 0 is a bool is INFERRED (the byte read;
+  `cl_stanceHoldTime` beside it passes 5 with the int 300).
+- vcod: the console registers `cl_nodelta` "0" with no flags on a CoD4
+  install (`COD4_OPTION_DVARS`) and `Cod4Session::set_packet_rates`
+  hands it to `Conn::set_nodelta` each frame; set, every move is
+  `clc_moveNoDelta`. Test:
+  `the_delta_move_needs_the_snapshot_in_the_newest_message`. VERIFIED (the
+  test).
+
+### 14.3 A snapshot off a base the client no longer holds
+
+- **The refusals.** For a base above 0, `CL_ParseSnapshot` (0x473710)
+  stops the message when ring slot `base & 0x1f` (0x2f94-byte rows from
+  0xcc9180) is not valid (`Delta from invalid frame (not supposed to
+  happen!).` 0x6d2710, 0x473842), holds another message (`Delta frame
+  too old.` 0x6d2748, 0x47386a), or when 0xc84f58 less the slot's +0x2f88
+  is over 0x780 (`Delta parseEntitiesNum too old.` 0x6d2760, 0x47389f) or
+  0xc84f5c less its +0x2f8c is (`Delta parseClientsNum too old.`
+  0x6d2784, 0x4738c1). Each returns before the playerstate, with the
+  message's +0x1c over its +0x14 and its first word set (cod4-demos.md 4).
+  VERIFIED (the instructions and the strings).
+- **The counters.** 0x472e00 stores `cl` +0x25628 (0xc84f58) in the new
+  snapshot's +0x2f88 and adds 1 to both for each entity it puts in the
+  snapshot (0x472e0c..0x472e12, 0x472fb8..0x472fbe), the ring masked with
+  0x7ff in 0xf4-byte rows (0x472e53); 0x4732c0 does the same for the
+  clients with +0x2562c (0xc84f5c) and +0x2f8c, 0x7ff in 0x64-byte rows
+  (0x4732d5..0x4732db, 0x47343b, 0x473319). VERIFIED (the instructions).
+  So 0x780 is the 2048-row rings less 128. A gamestate clears both with
+  `cl` (section 14).
+- **What follows.** `CL_PacketEvent` then rolls `serverMessageSequence`
+  and `reliableAcknowledge` back (cod4-handshake.md 10, "An illegible
+  message rolls back"). `cl.snap` is not touched: the copy over 0xc5f938
+  comes after the refusals (0x4739d9..0x4739f2). VERIFIED (the
+  instructions). So the next move acknowledges the message before, and
+  goes as `clc_move` when that one carried `cl.snap` (14.2); nothing sets
+  `demowaiting`. VERIFIED (the instructions above).
+- vcod: `Client::parse_snapshot` fails with `Illegible` for a base its
+  ring lacks or whose entities or clients sit more than 0x780 behind its
+  counts (`RingSlot`, which a gamestate clears), and `Conn::poll` rolls
+  both acknowledges back; the newest snapshot stays the last one read.
+  Test: `a_base_past_the_parse_rings_reach_is_illegible`. VERIFIED (the
+  test). vcod counts a snapshot's entities and clients once it is read
+  whole; retail counts each as it goes, so a message that overflows
+  mid-list moves retail's counts and not vcod's. INFERRED (the code).
