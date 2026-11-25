@@ -1250,6 +1250,9 @@ impl Cod4Level {
             clock_ms: now,
             snapshot_ms: now,
         };
+        // The updater reads the `MOVETYPE` the frame's cmds wrote
+        // (cod4-player-anims.md 8.1).
+        bodies[slot].script_movetype(&set.anims, &f);
         bodies[slot].animate(
             &set.anims,
             &f,

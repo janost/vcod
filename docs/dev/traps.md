@@ -947,6 +947,10 @@ otherwise.
   captures sends each frame's packets in the order retail got them
   (`cod4::capture_ab`); a fixed order read as damage applied a frame late
   (cod4-combat.md 15).
+- The end frame's swing reads the `MOVETYPE` the frame's cmds wrote, as on
+  CoD2: call `PlayerBody::script_movetype` ahead of `animate`. Without it
+  a strafe's legs swing a frame late and the head reads 0.05 units off
+  (cod4-player-anims.md 8.1).
 - Inline: `cod4-combat.md` 3.2 (the eye and gun angle bytes), 5 (the
   corpse's bit, `suicide`, the end-frame draw), 7.1 (the last-cmd word),
   10.2, 10.3, 10.8, 10.10 (missiles, the burst, flash and concussion,

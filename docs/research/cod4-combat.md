@@ -1044,8 +1044,8 @@ prone and killcam runs. VERIFIED (the gates).
   prints each living player's `j_head` and, the frame after each
   `weapon_fired`, the shooter's `tag_weapon_right` and its angles, in
   tenths. The reads also find each goal weight the last end frame set a
-  step on (cod4-player-anims.md 3). Ours matches every frame but 2.
-  VERIFIED (the gate). The strafe's eight rows were the torso's share of
+  step on (cod4-player-anims.md 3). Ours matches every frame. VERIFIED
+  (the gate). The strafe's eight rows were the torso's share of
   the move, 0 on 1.7 (`player_move_factor_on_torso`), which closed three
   of the five tenth rows too, and the spawn's four the spawn's own end
   frame swinging the angles once more (cod4-player-anims.md 8). VERIFIED
@@ -1058,10 +1058,20 @@ prone and killcam runs. VERIFIED (the gates).
   0x80a484d and the tag read's return 0x80c0053) replayed on ours then
   matched 932 of 940 `j_head` origins and 906 axes word for word, where
   the quaternion had matched 918 origins and no axis; the rest sit a few
-  ulps off where the skeleton is. VERIFIED (gdb, ours). The
-  gate's `GAPS` hold the other two tenth rows (48350, 49850, the target's
-  head under 0.1 units off), which fit those ulps across the truncation.
-  INFERRED. Open.
+  ulps off where the skeleton is. VERIFIED (gdb, ours). The gate's last
+  two tenth rows (48350, 49850) were not ulps: a second gdb run of the
+  recipe (breaks at 0x804cf90, 0x80a484d, `BG_SwingAngles` 0x804b3ba and
+  its five returns, 0x80cc7f6 and 0x80c0053;
+  `tools/re/cod4_tagread_gdb.py`), replayed on ours, read the
+  target's `j_head` 0.049 and 0.034 units off on the frame the strafe
+  started and the frame the back-off started, and every other frame
+  within 4e-6. On each, retail's legs had swung a frame before ours: the
+  updater read the `MOVETYPE` the frame's cmds wrote, ours the one the
+  last end frame wrote (cod4-player-anims.md 8.1). VERIFIED (gdb, ours).
+  With that, ours matches the run's swings on 706 of 716 frames and the
+  target's eased controls on every frame; the 10 are the two spawns'
+  frames, whose joins under gdb ours does not replay exactly (the
+  shooter's spawn rows differ too). VERIFIED (gdb, ours).
 - `LaunchItem` (0x80910ec): angles (0, the body's yaw plus the offset,
   0); `G_Spawn`; `eType` 3, `index` the item, mins -1 and maxs 1 on every
   axis (0x809141b..0x8091453), +0x120 0x407c0108, `clientNum` the dropper;

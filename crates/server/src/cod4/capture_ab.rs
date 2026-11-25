@@ -722,15 +722,7 @@ const TAG_READ: Pair = Pair {
     cvars: &[("fs_game", "mods/vcodtag")],
 };
 
-/// A coordinate's tenth one off, the target's head under 0.1 units from
-/// retail's across the truncation: the skeleton a few ulps off retail's
-/// (cod4-combat.md 6.1).
-const TENTH: &str = "a tenth across the truncation";
-
-const TAG_READ_GAPS: &[(&str, &str)] = &[
-    ("* command * ours Some((48350,", TENTH),
-    ("* command * ours Some((49850,", TENTH),
-];
+const TAG_READ_GAPS: &[(&str, &str)] = &[];
 
 /// A thread's `getTagOrigin` and `getTagAngles` on a player place the
 /// frame's pose where the cmds since the last end frame moved and turned
