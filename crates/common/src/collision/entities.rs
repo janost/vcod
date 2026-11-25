@@ -17,10 +17,10 @@ use std::sync::atomic::Ordering;
 /// trace's mask must meet before the brushes are clipped.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct ModelInstance {
-    entity: u32,
-    model: usize,
-    pose: ModelPose,
-    contents: u32,
+    pub(super) entity: u32,
+    pub(super) model: usize,
+    pub(super) pose: ModelPose,
+    pub(super) contents: u32,
 }
 
 /// A submodel copy out of the traces for a while
@@ -84,9 +84,9 @@ pub(super) struct ModelSpan {
 /// that leaves them in.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct ModelPose {
-    origin: Vec3,
+    pub(super) origin: Vec3,
     /// `AnglesToAxis`: forward, left, up, the columns of local to world.
-    axis: [Vec3; 3],
+    pub(super) axis: [Vec3; 3],
     /// Any angle non-zero: `CM_TransformedBoxTrace` then turns the sweep
     /// into the model's frame instead of moving the brushes.
     turned: bool,
@@ -316,6 +316,7 @@ impl CollisionWorld {
         maxs: Vec3,
         mask: u32,
     ) -> Trace {
+        super::reach::sweep(start, end, mins, maxs);
         let mut trace = Trace::clear(end);
         if model < self.model_span.len() && model != 0 && self.model_linked(model) {
             let pose = self
@@ -355,6 +356,7 @@ impl CollisionWorld {
         maxs: Vec3,
         mask: u32,
     ) -> Trace {
+        super::reach::sweep(start, end, mins, maxs);
         let entity = match pusher {
             Pusher::Model(m) => return self.model_box_trace(m, start, end, mins, maxs, mask),
             Pusher::Copy(e) => e,

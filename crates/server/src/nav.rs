@@ -21,6 +21,7 @@ mod build;
 mod cache;
 mod follower;
 mod graph;
+mod memo;
 mod probe;
 mod search;
 mod walk;
@@ -43,6 +44,7 @@ pub use follower::{
 };
 use graph::seed_bounds;
 pub use graph::{Edge, NavGraph};
+use memo::WalkMemo;
 pub(crate) use probe::{CreaseCache, CreaseRead, drop_ahead, hazard, wall_ahead};
 pub use probe::{Creases, UNPIN_SPEED, UNPIN_TICKS, lip_ahead, push_off, unpin_yaw};
 use probe::{jump_clear, straight_floor, under_ground};

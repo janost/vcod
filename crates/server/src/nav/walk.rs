@@ -158,18 +158,21 @@ pub(super) fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync)
     let rules = RULES.get();
     let falls = FALLS.get();
     let step = own_step();
+    let memo = memo::current();
     std::thread::scope(|s| {
         let handles: Vec<_> = (0..threads.min(items.len()))
             .map(|_| {
-                let (step, next, f) = (step.clone(), &next, &f);
+                let (step, memo, next, f) = (step.clone(), memo.clone(), &next, &f);
                 s.spawn(move || {
                     RULES.set(rules);
                     FALLS.set(falls);
                     STEP.set(step);
+                    memo::enter(memo);
                     let mut done = Vec::new();
                     loop {
                         let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         let Some(item) = items.get(i) else {
+                            memo::enter(None);
                             return done;
                         };
                         done.push((i, f(item)));
@@ -191,6 +194,10 @@ pub(super) fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync)
 /// Idle cmds until a body dropped at `p` stands on something; `None` when it
 /// falls out of the world or never lands.
 pub(super) fn settle(world: &CollisionWorld, p: Vec3, yaw: f32) -> Option<Vec3> {
+    memo::spot(p, yaw, memo::Probe::Settle, || settle_here(world, p, yaw))
+}
+
+fn settle_here(world: &CollisionWorld, p: Vec3, yaw: f32) -> Option<Vec3> {
     let mut ps = body(p + Vec3::Z, yaw);
     let idle = UserCmd {
         angles: [0, (yaw * ANGLE2SHORT) as i32, 0],
@@ -309,6 +316,7 @@ pub(super) enum Gait {
 }
 
 /// What a walk came to.
+#[derive(Clone, Copy)]
 pub(super) enum Walked {
     /// Where it came to rest, and whether it took a jump to get there.
     Arrived(Vec3, bool),
@@ -386,6 +394,12 @@ pub(super) fn creep_takes_a_turn(
 /// octants has nothing under it within `bg_fallDamageMinHeight`
 /// ([`falls`]).
 pub(super) fn beside_a_fall_that_hurts(world: &CollisionWorld, q: Vec3) -> bool {
+    memo::flag(q, memo::Probe::BesideAFall, || {
+        beside_a_fall_that_hurts_here(world, q)
+    })
+}
+
+fn beside_a_fall_that_hurts_here(world: &CollisionWorld, q: Vec3) -> bool {
     let hurts = falls().min;
     (0..8).any(|i| {
         let a = (i as f32 * 45.0).to_radians();
@@ -486,6 +500,21 @@ pub(super) fn walk_as(
 /// it carries, not its keys, says where it goes (mp_hurtgen's crease,
 /// bot-navigation.md section 3).
 pub(super) fn walk_with(
+    world: &CollisionWorld,
+    from: Vec3,
+    pace: Option<Vec3>,
+    target: glam::Vec2,
+    floor: Option<f32>,
+    gait: Gait,
+) -> Walked {
+    memo::walked(
+        || memo::Key::walk(from, pace, target, floor, gait, BOB.get(), ROOMLESS.get()),
+        || walk_with_here(world, from, pace, target, floor, gait),
+    )
+}
+
+/// [`walk_with`] walked.
+fn walk_with_here(
     world: &CollisionWorld,
     from: Vec3,
     pace: Option<Vec3>,

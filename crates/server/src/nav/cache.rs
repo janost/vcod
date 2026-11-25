@@ -24,11 +24,15 @@ pub(super) struct Cache {
     graphs: Vec<(CacheKey, Arc<NavGraph>)>,
     /// The keys a thread is building now, outside the lock.
     building: Vec<CacheKey>,
+    /// The last build's walks per map ([`memo_base`]), oldest first: a
+    /// rebuild over other links or placements walks only what changed.
+    memos: Vec<(CacheKey, Arc<WalkMemo>)>,
 }
 
 static CACHE: std::sync::Mutex<Cache> = std::sync::Mutex::new(Cache {
     graphs: Vec::new(),
     building: Vec::new(),
+    memos: Vec::new(),
 });
 
 /// Signalled each time a build under [`Cache::building`] ends.
@@ -79,6 +83,51 @@ fn cache_key(
         (0..c.model_count()).map(|m| c.model_linked(m)).collect(),
         c.placements(),
     )
+}
+
+/// The heap [`Cache::memos`] keeps at most, the newest always: mp_foy's
+/// memo is 37 MB, mp_rhinevalley's, the largest stock one, 142 MB.
+const MEMO_BYTES: usize = 256 << 20;
+
+/// `key` without the links and placements, and with the map file's
+/// checksum: the graphs one memo serves.
+fn memo_base(key: &CacheKey, source: u64) -> CacheKey {
+    let mut base = key.clone();
+    base.0.push_str(&format!(" #{source:016x}"));
+    base.9.clear();
+    base.10.clear();
+    base
+}
+
+/// `build`'s graph (a build over `collision` moving by `rules`, by a game's
+/// own step when `stepped`), its walks taken from the last memo kept for
+/// `key`'s map where they still hold ([`memo::build_reusing`]); keeps the
+/// memo it leaves.
+fn build_memoized(
+    key: &CacheKey,
+    collision: &CollisionWorld,
+    rules: MoveRules,
+    stepped: bool,
+    build: impl FnOnce() -> NavGraph,
+) -> NavGraph {
+    let base = memo_base(key, collision.source());
+    let prev = cache()
+        .memos
+        .iter()
+        .find(|(k, _)| *k == base)
+        .map(|(_, m)| m.clone());
+    let (g, memo) = memo::build_reusing(prev, collision, rules, stepped, build);
+    if let Some(m) = memo {
+        let mut c = cache();
+        c.memos.retain(|(k, _)| *k != base);
+        c.memos.push((base, Arc::new(m)));
+        while c.memos.len() > 1
+            && c.memos.iter().map(|(_, m)| m.bytes()).sum::<usize>() > MEMO_BYTES
+        {
+            c.memos.remove(0);
+        }
+    }
+    g
 }
 
 /// The cached graph under `key`, else `build`'s, cached: the graph and
@@ -135,7 +184,8 @@ fn cached(key: CacheKey, build: impl FnOnce() -> (NavGraph, &'static str)) -> Ar
 const CACHE_GRAPHS: usize = 24;
 
 /// Test hook: forgets every cached graph, so a gate can run a match as a
-/// fresh process would after another match filled the cache.
+/// fresh process would after another match filled the cache. The walk
+/// memos stay: a graph built over one is the graph a full build makes.
 #[doc(hidden)]
 pub fn clear_cache() {
     cache().graphs.clear();
@@ -145,14 +195,17 @@ pub fn clear_cache() {
 /// first use on the calling thread.
 pub fn graph_for(map: &str, world: &crate::world::World) -> Arc<NavGraph> {
     let rules = RULES.get();
-    cached(cache_key(map, &world.collision, world, rules), || {
-        let g = NavGraph::build(
-            &world.collision,
-            &world.spawn_points,
-            &world.nav_cover,
-            &world.hazards,
-            rules,
-        );
+    let key = cache_key(map, &world.collision, world, rules);
+    cached(key.clone(), || {
+        let g = build_memoized(&key, &world.collision, rules, false, || {
+            NavGraph::build(
+                &world.collision,
+                &world.spawn_points,
+                &world.nav_cover,
+                &world.hazards,
+                rules,
+            )
+        });
         (g, "built")
     })
 }
@@ -249,23 +302,26 @@ impl NavJob {
             CANCEL.set(Some(cancelled));
             FALLS.set(falls);
             let disk = disk::key(&key, collision.source());
-            cached(key, || {
+            cached(key.clone(), || {
                 if let Some(g) = disk
                     .as_ref()
                     .and_then(|d| disk::load(d, rules, step.clone()))
                 {
                     return (g, "loaded");
                 }
-                let g = NavGraph::build_opts(
-                    &collision,
-                    &seeds,
-                    &cover,
-                    &hazards,
-                    rules,
-                    mantle.as_ref(),
-                    step,
-                    lip,
-                );
+                let stepped = step.is_some();
+                let g = build_memoized(&key, &collision, rules, stepped, || {
+                    NavGraph::build_opts(
+                        &collision,
+                        &seeds,
+                        &cover,
+                        &hazards,
+                        rules,
+                        mantle.as_ref(),
+                        step,
+                        lip,
+                    )
+                });
                 if let Some(d) = &disk {
                     disk::store(d, &g);
                 }

@@ -19,6 +19,7 @@ mod clip;
 mod entities;
 mod masks;
 mod query;
+mod reach;
 mod walk;
 
 pub use build::brush_side_planes;
@@ -32,6 +33,7 @@ pub use masks::{
     MASK_BLAST, MASK_MISSILE, MASK_MISSILE_MOVE, MASK_PLAYERSOLID, MASK_SHOT, SURF_LADDER,
     SURF_SLICK,
 };
+pub use reach::{ClipState, Reach, reach, recorded};
 
 /// A brush as clip planes: point p is inside iff n·p <= d for every plane.
 #[derive(Clone)]

@@ -234,6 +234,7 @@ ignored_tests_named` fails on one that is not.
 | Touching | Run | Cost |
 |---|---|---|
 | pmove, collision or nav | `cargo test -p vcod-server --test server -- --ignored nav_census::` | ~15 s at 1.1; ~150 s at UO |
+| the nav rebuild's walk memo, or a collision query entry point | `cargo test -p vcod-server --lib -- --ignored nav::memo::` (UO install) | ~30 s |
 | bots | `cargo test -p vcod-server --test server -- --ignored bots::` | ~10 s at 1.1; ~6.5 min at UO |
 | the bots' driver or its threads | `cargo test -p vcod-server --test server -- bot_threads::` (not ignored; each install it finds; `tdm` and `sd`, UO `ctf`) | ~15 s with the 1.1, CoD2 and CoD4 installs |
 | UO bot vehicles | `-- --ignored bot_vehicles::` at a UO install | ~16 s |

@@ -1193,6 +1193,62 @@ fn two_model_world(classname: &str) -> MapWorld {
     }
 }
 
+/// A recording takes the box each query swept, a nested one's too, and
+/// a snapshot's changes name where an unlinked or instanced submodel
+/// clipped: what the nav build's walk memo reuses walks by.
+#[test]
+fn a_recording_covers_each_query_and_a_change_names_its_boxes() {
+    let world = CollisionWorld::build(&two_model_world("script_brushmodel"), &[]);
+    let (mins, maxs) = (Vec3::new(-15.0, -15.0, 0.0), Vec3::new(15.0, 15.0, 70.0));
+    let p = Vec3::new(-50.0, 30.0, 5.0);
+    let ((), outer) = recorded(|| {
+        world.box_trace(
+            Vec3::new(0.0, 0.0, 10.0),
+            Vec3::new(100.0, 0.0, 10.0),
+            mins,
+            maxs,
+        );
+        let (_, inner) = recorded(|| world.point_contents(p));
+        assert_eq!(inner, Reach { lo: p, hi: p });
+    });
+    assert_eq!(
+        outer,
+        Reach {
+            lo: Vec3::new(-50.0, -15.0, 5.0),
+            hi: Vec3::new(115.0, 30.0, 80.0)
+        }
+    );
+    assert!(recorded(|| ()).1.is_empty());
+
+    let brush = Reach {
+        lo: Vec3::new(192.0, -8.0, 0.0),
+        hi: Vec3::new(208.0, 8.0, 64.0),
+    };
+    let far = Reach {
+        lo: Vec3::new(260.0, -8.0, 0.0),
+        hi: Vec3::new(300.0, 8.0, 64.0),
+    };
+    let before = world.clip_state();
+    assert!(before.changed(&world.clip_state()).is_empty());
+    world.set_model_linked(1, false);
+    let changed = before.changed(&world.clip_state());
+    assert!(!changed.is_empty());
+    assert!(
+        changed
+            .iter()
+            .all(|b| b.meets(&brush, 0.0) && !b.meets(&far, 0.0))
+    );
+    world.set_model_linked(1, true);
+    let parked = Reach {
+        lo: brush.lo + Vec3::new(-200.0, 300.0, 0.0),
+        hi: brush.hi + Vec3::new(-200.0, 300.0, 0.0),
+    };
+    world.set_model_instance(7, 1, Some((Vec3::new(0.0, 300.0, 0.0), Vec3::ZERO, 1)));
+    let changed = before.changed(&world.clip_state());
+    assert_eq!(changed.len(), 1);
+    assert!(changed[0].meets(&parked, 0.0) && !changed[0].meets(&brush, 0.0));
+}
+
 #[test]
 fn submodel_brush_collides_at_its_entity_origin() {
     let world = CollisionWorld::build(&two_model_world("script_brushmodel"), &[]);
