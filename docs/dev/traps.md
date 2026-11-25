@@ -198,6 +198,15 @@ by doc and section. Grep `Trap:` in the subsystem doc you were sent to.
   once the script's brush links (`GameHost::brush_links`) hold still 2 s
   (`Server::relink_nav`). A test that runs two gametypes on one map builds
   two graphs, and one that deletes a brush mid-level waits on a build.
+- A rebuild takes each walk, `settle` and `beside_a_fall_that_hurts` of
+  the map's last build whose recorded box no changed submodel, instance or
+  world copy meets (`nav::memo`, `CollisionWorld::clip_state`;
+  bot-navigation.md 2.5.1). That is a full build's graph only while a
+  memoized call reads nothing but its key (its arguments, `BOB`,
+  `ROOMLESS`) and the collision through the query entry points that call
+  `collision::reach::sweep`. A new input to one of them goes in its
+  `memo::Key`, a new query entry point calls `sweep`, a new movable kind
+  of clip goes in `clip_state`; `nav::memo::tests` (UO) fails on a leak.
 - `vcod-server` keeps each graph it builds on disk (`nav::disk`), keyed by
   the map file's checksum (`CollisionWorld::source`), the binary's own hash
   and the in-memory key. A world with no source (every test world,

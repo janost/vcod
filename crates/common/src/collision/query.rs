@@ -8,6 +8,7 @@ use super::clip::{Capsule, Shape, clip_segment};
 use super::masks::{
     CONTENTS_NODROP, CONTENTS_WATER, MASK_MISSILE_MOVE, TRACE_MASK_MOVE, TRACE_MASK_SHOT,
 };
+use super::reach::sweep;
 use super::walk::TraceInput;
 use super::{CollisionWorld, Prim, Pusher, Trace, cm_endpos, sv_trace_endpos};
 use crate::patch::Arith;
@@ -53,6 +54,7 @@ impl CollisionWorld {
     /// (docs/research/cod11-combat.md 12.1). A start inside water reads
     /// fraction 0.
     pub fn water_hit(&self, start: Vec3, end: Vec3) -> Option<Trace> {
+        sweep(start, end, Vec3::ZERO, Vec3::ZERO);
         let mut trace = Trace::clear(end);
         for v in &self.water {
             if !(start.min(end).cmple(v.hi).all() && start.max(end).cmpge(v.lo).all()) {
@@ -81,6 +83,7 @@ impl CollisionWorld {
     /// flags of any solid brush containing it (Q3 `CM_PointContents` over the
     /// brushes that made it into the world).
     pub fn point_contents(&self, p: Vec3) -> u32 {
+        sweep(p, p, Vec3::ZERO, Vec3::ZERO);
         let inside = |v: &Volume| {
             p.cmple(v.hi).all()
                 && p.cmpge(v.lo).all()
@@ -168,6 +171,7 @@ impl CollisionWorld {
     }
 
     fn position_walk(&self, p: Vec3, mins: Vec3, maxs: Vec3, mask: u32, world_only: bool) -> Trace {
+        sweep(p, p, mins, maxs);
         let mut trace = Trace::clear(p);
         let capsule = Capsule::of(mins, maxs);
         self.trace_world_clip(p, p, mins, maxs, mask, &mut trace);
@@ -287,6 +291,7 @@ impl CollisionWorld {
     /// `CM_BoxTrace` with model 0, which walks the world's tree from node 0
     /// (CoDMP.exe 0x424961) where any other model walks its own leaf.
     pub fn world_point_trace(&self, start: Vec3, end: Vec3, mask: u32) -> Trace {
+        sweep(start, end, Vec3::ZERO, Vec3::ZERO);
         let mut trace = Trace::clear(end);
         self.trace_world_clip(start, end, Vec3::ZERO, Vec3::ZERO, mask, &mut trace);
         self.walk_tree(
@@ -399,6 +404,14 @@ impl CollisionWorld {
             Some(Pusher::Copy(e)) => (None, Some(e)),
             None => (None, None),
         };
+        if boxed {
+            // A wide capsule's spheres can reach past the box's top and
+            // floor ([`Capsule::wide`]).
+            let (c, h) = ((mins + maxs) * 0.5, ((maxs - mins) * 0.5).max_element());
+            sweep(start, end, c - 2.0 * h, c + 2.0 * h);
+        } else {
+            sweep(start, end, mins, maxs);
+        }
         let mut trace = Trace::clear(end);
 
         let mut scratch = Vec::new();

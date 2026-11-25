@@ -26,8 +26,9 @@ Grep the module header comments for more; each one names its research doc.
   always-compiled test worlds; `collision/` holds `masks` (contents and
   mask bits), `clip` (the primitive clips, no world state), `build`
   (`CollisionWorld::build`, the BVH), `entities` (model instances, poses,
-  world copies, links), `query` (the trace and contents entry points) and
-  `walk` (the BVH walk and the leaf-order replay).
+  world copies, links), `query` (the trace and contents entry points),
+  `reach` (the boxes a thread's queries swept, and `ClipState`) and `walk`
+  (the BVH walk and the leaf-order replay).
 - `dobjanim`: `DObjCalcAnim`'s tree walk and folds, CoD2's and CoD4's;
   each game brings its arithmetic and leaf sampler (`dobj.rs`,
   `xanimcalc.rs`).
@@ -256,7 +257,8 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
   (`bots::vehicle`).
   - `nav.rs` + `nav/`: `graph.rs` the graph (nodes, edges, components,
     lookups, paths), `build.rs` its build passes and ladders, `cache.rs`
-    the per-map cache and `NavJob`, `disk.rs` the disk cache, `search.rs`
+    the per-map cache and `NavJob`, `memo.rs` the walks a rebuild reuses,
+    `disk.rs` the disk cache, `search.rs`
     A*, `follower.rs` the path follower (`follower/reprove.rs` whether the
     edge under way holds, `follower/yields.rs` giving way), `walk.rs` the
     pmove walks with their thread-locals and `par_map`, `probe.rs` the

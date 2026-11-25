@@ -766,7 +766,9 @@ The server:
   link) has held still 2 s, a new build starts over the collision as it
   stands and replaces the graph when it lands, the bots' paths and zone
   stands dropped (`Server::relink_nav`; bot-objectives.md 7). `bas`
-  deletes a breached base's walls, the only way to its charge.
+  deletes a breached base's walls, the only way to its charge. The
+  rebuild takes the last build's walks where nothing changed (section
+  2.5.1).
 - The copy keeps the mover poses, world copies and vehicles' collmap
   instances where they stand, so a rebuild walks round a parked tank. The
   cache keys on those too (`CollisionWorld::placements`) and keeps the
@@ -835,6 +837,79 @@ Spawn gaps, explained:
   `under_ground`'s rays from 18 units up catch ("The flood").
   `Server::test_ground_under` traces down outside the wall too; the graph
   is right to leave it out. The other maps' gaps were not investigated.
+
+### 2.5.1 Rebuilds over the last build's walks
+
+A rebuild's cache key is new every time (the links and placements are in
+it), so before 2026-11-25 every rebuild was a full build: about 10 a UO
+`bas` round on mp_foy, 72-85% of the three `bas` gates' run. VERIFIED
+(measured, the gates' `bots/nav tick` share).
+
+- A walk's answer rides only its inputs, the thread switches it reads
+  (`BOB`, `ROOMLESS`; the rules and fall heights are the build's) and the
+  collision its queries swept. INFERRED (the code: `walk_with` reads
+  nothing else). While `vcod_common::collision::recorded` runs, every
+  trace, position test, contents and water query grows a box by the
+  volume it swept (start and end grown by the box; a wide capsule's by
+  twice its largest half extent); off, a query reads one thread-local.
+  The entry points are `trace_shape`, `position_walk`, `world_point_trace`,
+  `point_contents`, `water_hit`, `model_box_trace` and `pusher_box_trace`.
+  INFERRED (the code).
+- `NavJob` and `graph_for` build through `nav::memo`: each `walk_with`
+  (every gait of `walk`, `walk_to` and `walk_as`), `settle` and
+  `beside_a_fall_that_hurts` takes the last memo's answer for its key (its
+  inputs' bits) when no changed box, padded 2 units, meets the box it
+  recorded, and runs and records otherwise. A memo serves the cache key
+  without its links and placements, plus the map file's checksum, under
+  the same rules and fall heights; a build under a game's own step
+  (`with_step`) keeps none. The changed boxes come from
+  `CollisionWorld::clip_state` then and now: per submodel its link, pose,
+  entity number and contents, boxed where its prims spawned and where its
+  pose has them; per instance its pose's box; the arithmetic and any world
+  copy change everything. The graph code runs as in a full build. INFERRED
+  (the code).
+- VERIFIED (measured, test profile, 30 threads,
+  `nav::memo::tests::a_rebuild_over_the_last_builds_walks_is_a_full_build`,
+  2026-11-25): mp_foy's UO graph as a `bas` server builds it (the other
+  gametypes' brushes and the rubble out), each rebuild equal to a
+  from-scratch build in nodes, edges, perches, seeds and components. The
+  first build: 4920 ms, 547 898 calls.
+
+| change | nodes | rebuild ms | full build ms | calls reused / run |
+|---|---|---|---|---|
+| one base's walls deleted | 62409 | 548 | 4791 | 653 544 / 16 459 |
+| a second base's walls deleted | 62372 | 619 | 4830 | 649 915 / 19 825 |
+| that base's rubble parked as a vehicle's collmap | 62404 | 830 | 5475 | 662 799 / 36 545 |
+| that vehicle moved 24 units | 62406 | 678 | 5468 | 682 986 / 16 410 |
+
+  A call made twice in one build counts twice.
+- Where a rebuild's half second goes, VERIFIED (measured, timers per pass,
+  the first breach): the flood 276 ms, `link_leaps` 77 (its three-hop
+  searches), `mark_risky` 65, `link_pockets` 38, `index_components` 21,
+  the rest under 20 each. With walks alone memoized, `mark_risky` took
+  654 ms (its `settle` and `beside_a_fall_that_hurts`) and the rebuild
+  1.2 s. `perched` memoized as well left the flood at 276 ms against 277,
+  so it is not.
+- Memory, VERIFIED (measured): 68 bytes a call, sorted by key: mp_foy 37
+  MB; UO mp_rhinevalley (146 186 nodes), the most, 2.09 million calls,
+  142 MB; 1.1 mp_hurtgen 330 000, 22 MB. The cache keeps memos up to 256
+  MB, the newest always (`MEMO_BYTES`). Rejected, measured on mp_foy: a
+  hash table (63 MB, its slots grow by powers of two); keeping only calls
+  of 32 queries or more (485 000 kept, rebuilds 0.83-0.98 s) or 128 or
+  more (36 000 kept, 2.9-3.4 s).
+- The gates, VERIFIED (measured, 2026-11-25, each alone, `heavy.sh`):
+  `uo_bots_breach_bases_until_a_bas_round_ends` 81 s to 30 s,
+  `four_shooting_uo_bots_end_a_bas_round` 87 to 38,
+  `four_uo_bots_end_a_bas_round_without_shooting` 91 to 28; UO's `bots::
+  bot_vehicles::` step 360-420 s to 120 s. `nav_census` at 1.1 and UO
+  printed the same lines as on master 5ba0ed55e.
+- The disk cache's graphs (`nav::disk` `encode`, the census's graphs: UO
+  under `tdm`), VERIFIED (measured): mp_foy 3.88 MB, UO's largest
+  mp_rhinevalley 9.16 MB, 1.1's largest mp_hurtgen 1.74 MB; all twelve
+  1.1 maps 9.17 MB, all nineteen UO maps 38.35 MB, 47.5 MB together, each
+  file a header carrying its key besides. One map keeps a file per
+  gametype and per link and placement state it was built in, up to
+  `MAX_FILES`.
 
 ### 2.6 Other rules: 1.5 and United Offensive
 
