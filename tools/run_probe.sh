@@ -33,6 +33,9 @@
 #                    PRE_MAP_ARGS='+set sv_pure 1 +set sv_hostname "two words"'
 #   SECS             how long to let the server run (default 25)
 #   PROBE_SECS       alias for SECS, so a recipe can name either
+#   PROBE_UNTIL      ERE: stop the server as soon as games_mp.log has a line
+#                    matching it (e.g. 'PROBE div_by_zero'), instead of waiting
+#                    out SECS. SECS stays the upper bound.
 #
 #   tools/run_probe.sh <probe-name> [map] [+set cvar value ...]
 #     probe-name may carry a subdirectory (client-probes/probe_trigger); the
@@ -90,7 +93,20 @@ timeout "${PROBE_SECS:-${SECS:-25}}" "${RUN[@]}" "$BIN" \
     +set g_gametype "$NAME" \
     "${PRE_ARGS[@]}" \
     +map "$MAP" \
-    "${ENGINE_ARGS[@]}" > "$CONSOLE" 2>&1 || true
+    "${ENGINE_ARGS[@]}" > "$CONSOLE" 2>&1 &
+SERVER=$!
+if [ -n "${PROBE_UNTIL:-}" ]; then
+    # g_logSync 1 flushes each line, so the match is seen within the poll.
+    while kill -0 "$SERVER" 2>/dev/null; do
+        if [ -f "$LOG" ] && grep -qaE -- "$PROBE_UNTIL" "$LOG"; then
+            sleep 0.3 # let the rest of that frame's lines land
+            kill "$SERVER" 2>/dev/null || true
+            break
+        fi
+        sleep 0.2
+    done
+fi
+wait "$SERVER" || true
 
 # The engine stamps each log line with an elapsed "m:ss ".
 sed -n 's/^[[:space:]]*[0-9]*:[0-9]* \(PROBE .*\)$/\1/p' "$LOG" 2>/dev/null || true

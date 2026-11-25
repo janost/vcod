@@ -42,7 +42,10 @@ them on vcod.
   `crates/gsc/tests/fixtures/semantics/probe_*.gsc` (or
   `client-probes/probe_*`) installed as the gametype and prints its `PROBE`
   lines. `COD_VERSION` picks the server as `run_server.sh` does (UO's
-  gametypes and log live under the homepath's `uo/`).
+  gametypes and log live under the homepath's `uo/`). The server runs for
+  `SECS` (25) unless `PROBE_UNTIL` names an ERE for the probe's last line
+  (`PROBE_UNTIL='late_survived'`): the run then ends when `games_mp.log`
+  matches, about a second for most probes, and `SECS` stays the upper bound.
 - The retail packages are not in the repo. `COD_LNXDED` names the server
   binary (`COD2_LNXDED` for CoD2); unset, the scripts look in the gitignored
   `private/retail/` (`cod-lnxded-1.1d/`, `cod-lnxded-1.5b/`,
