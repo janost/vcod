@@ -70,6 +70,7 @@ impl Cod4Session {
         let mut fetched = std::collections::HashSet::new();
         let cancel = downloads.as_ref().and_then(|d| d.cancel.clone());
         let notes = downloads.as_ref().and_then(|d| d.notes.clone());
+        let qport = new_qport();
         // A reconnect a disconnected fetch, each one landing a file.
         for _ in 0..16 {
             // The profile's stats under the server's `fs_game`, as 1.7
@@ -87,6 +88,7 @@ impl Cod4Session {
             let conn = Self::join_conn(
                 addr,
                 Join {
+                    qport,
                     name: name.into(),
                     password: password.into(),
                     cp: cp.clone(),
@@ -124,18 +126,11 @@ impl Cod4Session {
     }
 
     /// `connect` to `addr` as `join` says and its first gamestate (`cp`
-    /// answered), on a qport of its own, with voice.
+    /// answered), with voice.
     fn join_conn(addr: SocketAddr, join: Join) -> Result<Conn> {
-        // A qport of its own, as `Netchan_Init`'s random one, so two clients
-        // on one host are two clients; under 0x8000, as retail's stats
-        // lookup misses a larger one (it read none on a live server).
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.subsec_nanos());
         let mut conn = Conn::join(
             addr,
             Join {
-                qport: (nanos ^ std::process::id()) as u16 & 0x7fff,
                 voice: true,
                 ..join
             },
@@ -152,6 +147,18 @@ impl Cod4Session {
         }
         Ok(conn)
     }
+}
+
+/// A qport for one connect and its reconnects, as `Netchan_Init`'s random
+/// one is the process's: two clients on one host are two clients, and a
+/// CoD4x server takes a reconnect on it for the slot it dropped
+/// (cod4x-protocol.md 7.2.8). Under 0x8000, as retail's stats lookup misses
+/// a larger one (it read none on a live server).
+fn new_qport() -> u16 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    (nanos ^ std::process::id()) as u16 & 0x7fff
 }
 
 /// How [`Cod4Session::connect_with`] fetches what the install lacks.
@@ -195,12 +202,30 @@ impl Fetch<'_> {
 /// a file that still differs after its download again on every
 /// gamestate; vcod ends the join on the second ask (`fetched` holds what
 /// this connect landed, across the joins of a disconnected fetch). `None` when a disconnected HTTP fetch landed and
-/// the caller joins again.
+/// the caller joins again. A join that ends here sends `disconnect`, as
+/// `CL_Disconnect` does on a drop, so the server frees the slot.
 fn fetch_missing(
     mut conn: Conn,
     fetch: &mut Fetch,
     fetched: &mut std::collections::HashSet<String>,
 ) -> Result<Option<Conn>> {
+    match fetch_rounds(&mut conn, fetch, fetched) {
+        Ok(true) => Ok(Some(conn)),
+        Ok(false) => Ok(None),
+        Err(e) => {
+            let _ = conn.disconnect();
+            Err(e)
+        }
+    }
+}
+
+/// [`fetch_missing`]'s rounds: `false` when a disconnected HTTP fetch
+/// landed.
+fn fetch_rounds(
+    conn: &mut Conn,
+    fetch: &mut Fetch,
+    fetched: &mut std::collections::HashSet<String>,
+) -> Result<bool> {
     loop {
         let gs = conn.client.gamestate.as_ref().context("gamestate")?;
         let si = String::from_utf8_lossy(gs.configstring(1)).into_owned();
@@ -208,7 +233,7 @@ fn fetch_missing(
             .filter(|m| vcod_cod4::install::is_zone_name(m));
         let wanted = vcod_cod4::net::download::missing_in(fetch.root, &si, map.as_deref());
         if wanted.is_empty() {
-            return Ok(Some(conn));
+            return Ok(true);
         }
         let names: Vec<&str> = wanted.iter().map(|w| w.remote.as_str()).collect();
         log::info!("cod4: need files: {}", names.join(" "));
@@ -225,22 +250,21 @@ fn fetch_missing(
             ))
             .into());
         }
-        match download_round(conn, fetch, fetched, wanted)? {
-            Some(c) => conn = c,
-            None => return Ok(None),
+        if !download_round(conn, fetch, fetched, wanted)? {
+            return Ok(false);
         }
     }
 }
 
 /// `CL_NextDownload` through the list, then `donedl` and the gamestate it
 /// brings (or nothing asked for); each file that lands goes in `fetched`.
-/// `None` when a disconnected HTTP fetch landed: join again.
+/// `false` when a disconnected HTTP fetch landed: join again.
 fn download_round(
-    mut conn: Conn,
+    conn: &mut Conn,
     fetch: &mut Fetch,
     fetched: &mut std::collections::HashSet<String>,
     wanted: Vec<vcod_cod4::net::download::Wanted>,
-) -> Result<Option<Conn>> {
+) -> Result<bool> {
     use vcod_cod4::net::download::{DownloadEvent, Downloads, XAsk};
     let mut dls = Downloads::new(fetch.root, wanted)
         .with_www(fetch.www)
@@ -292,15 +316,24 @@ fn download_round(
                 }
                 DownloadEvent::Reconnect => {
                     fetch.report(None);
+                    // CoD4x: op 6 reaches the server, which drops the
+                    // client, before the `disconnect` (cod4x-protocol.md
+                    // 7.2.8).
+                    let until = clock_now() + Duration::from_secs(3);
+                    while !conn.side_idle() && clock_now() < until {
+                        if conn.poll(clock_now() + Duration::from_millis(10)).is_err() {
+                            break;
+                        }
+                    }
                     let _ = conn.disconnect();
-                    return Ok(None);
+                    return Ok(false);
                 }
             }
         }
         conn.set_downloading(dls.in_flight());
         if dls.is_done() && !waiting {
             fetch.report(None);
-            return Ok(Some(conn));
+            return Ok(true);
         }
         // A disconnected fetch hears nothing from the server it left.
         if clock_now().saturating_duration_since(last_heard) > Duration::from_secs(30)
@@ -342,7 +375,7 @@ fn download_round(
                     Op::Download(m) => events.extend(dls.on_message(m)),
                     Op::Gamestate if waiting => {
                         fetch.report(None);
-                        return Ok(Some(conn));
+                        return Ok(true);
                     }
                     Op::Gamestate => events.extend(dls.on_gamestate()),
                     _ => {}

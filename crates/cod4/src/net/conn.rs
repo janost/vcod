@@ -997,11 +997,11 @@ impl Conn {
         std::mem::take(&mut self.side_downloads)
     }
 
-    /// CoD4x 21: a download ask on the side channel. [`XAsk::Done`] and
-    /// [`XAsk::WwwFail`] bring the gamestate again, which needs its own
-    /// `cp`, as `donedl`'s does.
+    /// CoD4x 21: a download ask on the side channel. [`XAsk::Done`],
+    /// [`XAsk::WwwFail`] and [`XAsk::WwwChecksumFail`] bring the gamestate
+    /// again, which needs its own `cp`, as `donedl`'s does.
     pub fn side_download(&mut self, ask: &XAsk) -> Result<()> {
-        if matches!(ask, XAsk::Done | XAsk::WwwFail) {
+        if matches!(ask, XAsk::Done | XAsk::WwwFail | XAsk::WwwChecksumFail) {
             self.cp_feed = None;
         }
         self.side
@@ -1009,6 +1009,12 @@ impl Conn {
             .context("a download ask on a 1.7 connection")?
             .send(&ask.write());
         Ok(())
+    }
+
+    /// CoD4x 21: every side channel message sent was acknowledged; always
+    /// on 1.7.
+    pub fn side_idle(&self) -> bool {
+        self.side.as_ref().is_none_or(Link::is_idle)
     }
 
     /// The side channel packets due now ([`Link::frame`]).
