@@ -180,8 +180,8 @@ two menus sends them apart.
   unless already sending, and `fastrestart` by marking the server as
   restarting. INFERRED.
 - vcod's connection keeps `loadingnewmap`'s map until the gamestate,
-  sends the seven stats packets once a second at most on `requeststats`
-  and the missing ones on a non-zero `statResponse`, answers every new
+  sends the stats on `requeststats` one packet at a time and nothing else
+  until the last `statResponse` (cod4-netfields.md 14.3), answers every new
   gamestate with its own `cp`, and applies each `d <index> <string>`
   newer than the table to the gamestate (so a `fast_restart`'s `d 1`
   moves the next message's `serverId`). On retail the probe took the new
