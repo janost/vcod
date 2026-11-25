@@ -423,6 +423,7 @@ impl App {
         // 1.7's (cod4-handshake.md 11).
         let allow_download = self.shell.cvar("cl_allowDownload").is_none_or(|v| v != "0");
         let www_download = self.shell.cvar("cl_wwwDownload").is_none_or(|v| v != "0");
+        let max_packets = self.shell.cvar_f32("cl_maxpackets") as i32;
         let dir = game_dir.clone();
         self.cod4_loading = Some(Loader::start_named(addr.clone(), dir, move |at| JoinArgs {
             addr: at,
@@ -433,6 +434,7 @@ impl App {
             game_dir,
             allow_download,
             www_download,
+            max_packets,
         }));
     }
 
@@ -1827,6 +1829,7 @@ mod tests {
             game_dir: f.root.clone(),
             allow_download: false,
             www_download: false,
+            max_packets: vcod_cod4::net::conn::MAX_PACKETS,
         });
         // The join's worker moves the clock; this thread waits off it.
         let t0 = clk_now();

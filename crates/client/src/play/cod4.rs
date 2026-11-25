@@ -739,6 +739,9 @@ impl Cod4Session {
                 }
             }
             Source::Live { conn, last_msg, .. } => {
+                // The step after a gamestate runs once its level is loaded
+                // (`Cod4Client::start_map_load`).
+                conn.cgame_up()?;
                 let got = conn.poll(now)?;
                 if !got.is_empty() {
                     *last_msg = now;
@@ -798,7 +801,13 @@ impl Cod4Session {
                 for r in &got {
                     for op in &r.parsed.ops {
                         match op {
-                            Op::Gamestate => self.gamestates += 1,
+                            Op::Gamestate => {
+                                self.gamestates += 1;
+                                // `cl` is cleared: nothing goes until the
+                                // level is up.
+                                self.packet_due = false;
+                                self.pending.clear();
+                            }
                             Op::Snapshot(_) => self.snap_at_ms = now_ms,
                             Op::ServerCommand { text, .. } => {
                                 log::debug!(

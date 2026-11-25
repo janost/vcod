@@ -184,6 +184,7 @@ fn live_www(
                 progress: Some(&mut report),
                 cancel: None,
                 notes: None,
+                max_packets: vcod_cod4::net::conn::MAX_PACKETS,
             }),
         );
         let mut s = match joined {

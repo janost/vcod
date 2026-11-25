@@ -4,7 +4,7 @@
 use anyhow::Result;
 use glam::Vec3;
 use vcod_cod4::net::clmsg::UserCmd;
-use vcod_cod4::net::conn::{angle2short, cmd_angles};
+use vcod_cod4::net::conn::{ConnState, angle2short, cmd_angles};
 use vcod_cod4::net::delta::PlayerState;
 use vcod_cod4::net::parse::Client;
 use vcod_cod4::pmove::weapon::WeaponDef;
@@ -119,7 +119,9 @@ impl Cod4Session {
         let Source::Live { conn, .. } = &mut self.source else {
             return Ok(());
         };
-        if conn.client.gamestate.is_some() {
+        // `CL_CreateNewCommands` makes none before the cgame is up
+        // (`iw3mp.exe` 0x463e09).
+        if conn.state() == ConnState::Active {
             let floor = self.pending.last().unwrap_or(conn.last_cmd()).server_time;
             // One cmd a frame, never two on one millisecond. Before the
             // first snapshot there is no clock: each frame's takes the next
@@ -163,7 +165,7 @@ impl Cod4Session {
         }
         // A packet carries every cmd built since the last and
         // `cl_packetdup`'s again.
-        if conn.ready_to_send(false) {
+        if conn.ready_to_send() {
             // The scene sends it once its prediction has run this cmd, as
             // the cgame's frame does; a step with no scene to come (no
             // gamestate or clock yet) sends it now.

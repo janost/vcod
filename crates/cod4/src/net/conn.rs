@@ -37,6 +37,32 @@ const PACKET_DUP_MAX: u32 = 5;
 /// off the LAN a packet goes at most every `1000 / cl_maxpackets` ms.
 pub const MAX_PACKETS: i32 = 30;
 const MAX_PACKETS_RANGE: (i32, i32) = (15, 100);
+/// `CL_CheckForResend`'s gap between stats packets (`cmp edx,0x64`,
+/// `iw3mp.exe` 0x46aeed).
+const STAT_RESEND: Duration = Duration::from_millis(100);
+/// How often the join's own loops look again: vcod's stand-in for a
+/// client frame.
+const FRAME: Duration = Duration::from_millis(10);
+
+/// The stats packet `CL_CheckForResend` sends next (`iw3mp.exe` 0x46ae60):
+/// the first one `mask` wants that never went, else the one wanted that
+/// went longest ago, before `now`.
+fn next_stat(mask: u8, sent: &[Option<Instant>; STAT_PACKETS], now: Instant) -> Option<usize> {
+    let mut pick = None;
+    let mut oldest = now;
+    for (i, at) in sent
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| mask & (1 << i) != 0)
+    {
+        match at {
+            None => return Some(i),
+            Some(t) if *t < oldest => (pick, oldest) = (Some(i), *t),
+            Some(_) => {}
+        }
+    }
+    pick
+}
 /// `PACKET_BACKUP` and `CMD_BACKUP`: the sent packets and the cmds kept.
 const PACKET_BACKUP: usize = 32;
 const CMD_BACKUP: usize = 128;
@@ -80,12 +106,29 @@ impl CmdRing {
     }
 }
 
+/// `clc.state` (`iw3mp.exe` 0xc5f900) once connected (cod4-netfields.md
+/// 14.3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConnState {
+    /// `CA_CONNECTED` (5): before the gamestate, from `loadingnewmap` to
+    /// the next one, and while a download runs.
+    Connected,
+    /// `CA_SENDINGSTATS` (6): a stats packet each 100 ms, no netchan
+    /// packet at all.
+    SendingStats,
+    /// `CA_LOADING` (7): a gamestate is in and the level loads; 1.7 loads
+    /// inside the parse, so nothing goes until [`Conn::cgame_up`].
+    Loading,
+    /// `CA_PRIMED` and `CA_ACTIVE` (8, 9): the cgame is up and cmds are
+    /// made.
+    Active,
+}
+
 /// What `CL_ReadyToSendPacket` (`iw3mp.exe` 0x463e60) reads, the times in
 /// ms (`u64::MAX` for never) (cod4-netfields.md 14.1).
 #[derive(Clone, Copy, Debug)]
 struct SendClock {
-    /// A gamestate is in and no `loadingnewmap` since: `CA_PRIMED` or
-    /// `CA_ACTIVE`.
+    /// `CA_PRIMED` or `CA_ACTIVE`.
     in_world: bool,
     downloading: bool,
     /// Since any packet went (`clc.lastPacketSentTime`).
@@ -318,8 +361,14 @@ pub struct Conn {
     applied: i32,
     /// `loadingnewmap`'s map, until its gamestate comes.
     pub loading: Option<String>,
-    /// When `requeststats` last sent the seven packets.
-    stats_sent: Option<Instant>,
+    state: ConnState,
+    /// A download is in flight: `loadingnewmap` and `requeststats` are
+    /// ignored and the send gate takes its 50 ms arm.
+    downloading: bool,
+    /// The stats packets the server still wants (`CA_SENDINGSTATS`), and
+    /// when each last went.
+    stat_mask: u8,
+    stat_sent: [Option<Instant>; STAT_PACKETS],
     /// An out-of-band `disconnect` from the server and its reason (empty
     /// for none), until the session takes it ([`Conn::take_disconnect`]).
     disconnect: Option<String>,
@@ -386,7 +435,10 @@ impl Conn {
             cp_feed: None,
             applied: 0,
             loading: None,
-            stats_sent: None,
+            state: ConnState::Connected,
+            downloading: false,
+            stat_mask: 0,
+            stat_sent: [None; STAT_PACKETS],
             stats: opts.stats.unwrap_or_else(Stats::fresh),
             disconnect: None,
             cancel: opts.cancel,
@@ -453,23 +505,21 @@ impl Conn {
             return Ok(c);
         }
 
-        // Stats: the lowest index the server still wants, until its mask is 0.
-        let mut want = (1u32 << STAT_PACKETS) - 1;
+        // `connectResponse` starts `CA_SENDINGSTATS` (0x46b98a); a frame
+        // runs `CL_CheckForResend` until a `statResponse 0` ends it.
+        c.begin_stats();
         let deadline = now() + Duration::from_secs(15);
-        while want != 0 && now() < deadline {
-            let idx = want.trailing_zeros() as usize;
-            c.send_stat(idx)?;
-            let stop = now() + Duration::from_millis(500);
+        while c.state == ConnState::SendingStats {
+            if now() >= deadline {
+                bail!("stats not accepted (mask {})", c.stat_mask);
+            }
+            c.check_for_resend()?;
+            let stop = now() + FRAME;
             while let Some(r) = c.recv(stop)? {
-                if let Some(rest) = r.get(4..).and_then(|b| b.strip_prefix(b"statResponse ")) {
-                    let mask: u32 = String::from_utf8_lossy(rest).trim().parse()?;
-                    want = mask & ((1u32 << STAT_PACKETS) - 1);
-                    break;
+                if let Some(text) = r.strip_prefix(&[0xff; 4]) {
+                    c.connectionless(text)?;
                 }
             }
-        }
-        if want != 0 {
-            bail!("stats not accepted (mask {want})");
         }
         Ok(c)
     }
@@ -556,12 +606,31 @@ impl Conn {
         self.max_packets = n.clamp(MAX_PACKETS_RANGE.0, MAX_PACKETS_RANGE.1);
     }
 
+    /// The connection's `clc.state`.
+    pub fn state(&self) -> ConnState {
+        self.state
+    }
+
+    /// A download is in flight (`clc.downloadName` set). Starting one puts
+    /// the connection in `CA_CONNECTED`, as `CL_InitDownloads` does
+    /// (0x46ad95).
+    pub fn set_downloading(&mut self, on: bool) {
+        self.downloading = on;
+        if on {
+            self.state = ConnState::Connected;
+        }
+    }
+
     /// `CL_ReadyToSendPacket` (`iw3mp.exe` 0x463e60): whether a packet
-    /// goes this frame. Before the gamestate or after `loadingnewmap`, one
-    /// a second; while `downloading`, none within 50 ms of the last; then
-    /// every frame to a LAN server, else `1000 / cl_maxpackets` ms after
-    /// the previous sequence (cod4-netfields.md 14.1).
-    pub fn ready_to_send(&self, downloading: bool) -> bool {
+    /// goes this frame. None while stats go or the level loads; before the
+    /// gamestate or after `loadingnewmap`, one a second; while downloading,
+    /// none within 50 ms of the last; then every frame to a LAN server,
+    /// else `1000 / cl_maxpackets` ms after the previous sequence
+    /// (cod4-netfields.md 14.1, 14.3).
+    pub fn ready_to_send(&self) -> bool {
+        if matches!(self.state, ConnState::SendingStats | ConnState::Loading) {
+            return false;
+        }
         let now = now();
         let since = |t: Option<Instant>| {
             t.map_or(u64::MAX, |t| {
@@ -570,8 +639,8 @@ impl Conn {
         };
         let row = self.cmd_ring.sent_time[self.seq.wrapping_sub(1) as usize % PACKET_BACKUP];
         SendClock {
-            in_world: self.client.gamestate.is_some() && self.loading.is_none(),
-            downloading,
+            in_world: self.state == ConnState::Active,
+            downloading: self.downloading,
             since_sent: since(self.last_sent),
             since_row: since(row),
             lan: self.lan,
@@ -592,6 +661,10 @@ impl Conn {
     /// always sends origin and velocity (cod4-netfields.md 13).
     pub fn send(&mut self, cmds: &[UserCmd], origin: Option<Archive>) -> Result<()> {
         self.check_overflow()?;
+        // `CL_WritePacket` returns in `CA_SENDINGSTATS` (0x463f9d).
+        if self.state == ConnState::SendingStats {
+            return Ok(());
+        }
         let dialect = self.client.dialect;
         let mut head = ClientHeader {
             sequence: self.seq,
@@ -674,6 +747,21 @@ impl Conn {
         self.cmd_ring.sent(seq, at);
         self.last_sent = Some(at);
         self.send_raw(&pkt)
+    }
+
+    /// `CL_DownloadsComplete` past `CL_InitCGame` (`iw3mp.exe`
+    /// 0x46aad8..0x46aaef): the level is loaded, cmds are made from here on,
+    /// and three packets go at once past the gate, the `cp` in them
+    /// (cod4-netfields.md 14.3). Only in `CA_LOADING`.
+    pub fn cgame_up(&mut self) -> Result<()> {
+        if self.state != ConnState::Loading {
+            return Ok(());
+        }
+        self.state = ConnState::Active;
+        for _ in 0..3 {
+            self.send(&[], None)?;
+        }
+        Ok(())
     }
 
     /// `disconnect` as a reliable command, sent in three moves as
@@ -764,6 +852,7 @@ impl Conn {
             self.apply_configstrings(&parsed);
             if parsed.ops.iter().any(|o| matches!(o, Op::Gamestate)) {
                 self.cmd_ring = CmdRing::default();
+                self.state = ConnState::Loading;
                 self.answer_gamestate()?;
             }
             out.push(Received {
@@ -773,6 +862,7 @@ impl Conn {
             });
         }
         self.side_frame()?;
+        self.check_for_resend()?;
         if self.client.gamestate.is_none()
             && self
                 .side_stats
@@ -831,6 +921,7 @@ impl Conn {
                     self.client.take_side_gamestate(&body)?;
                     self.side_gamestate();
                     self.cmd_ring = CmdRing::default();
+                    self.state = ConnState::Loading;
                     self.answer_gamestate()?;
                     got = Some(Received {
                         sequence: self.ack as u32,
@@ -969,11 +1060,43 @@ impl Conn {
         self.oob(&p)
     }
 
+    /// `CA_SENDINGSTATS` from the start: every packet wanted, none sent,
+    /// the next at once (0x46b98a..0x46b9a1, 0x46bfcd..0x46c007).
+    fn begin_stats(&mut self) {
+        self.state = ConnState::SendingStats;
+        self.stat_mask = (1 << STAT_PACKETS) - 1;
+        self.stat_sent = [None; STAT_PACKETS];
+        self.last_sent = None;
+    }
+
+    /// `CL_CheckForResend`'s `CA_SENDINGSTATS` arm (`iw3mp.exe`
+    /// 0x46aedf..0x46b043), once a frame: 100 ms past the last packet, the
+    /// next stats packet ([`next_stat`]).
+    fn check_for_resend(&mut self) -> Result<()> {
+        if self.state != ConnState::SendingStats {
+            return Ok(());
+        }
+        let now = now();
+        if self
+            .last_sent
+            .is_some_and(|t| now.saturating_duration_since(t) < STAT_RESEND)
+        {
+            return Ok(());
+        }
+        let Some(idx) = next_stat(self.stat_mask, &self.stat_sent, now) else {
+            return Ok(());
+        };
+        self.send_stat(idx)?;
+        self.stat_sent[idx] = Some(now);
+        self.last_sent = Some(now);
+        Ok(())
+    }
+
     /// The server's out-of-band lines once joined: `loadingnewmap` (a map
-    /// change, its map kept until the gamestate), `requeststats` (the
-    /// seven stats packets again, as `CL_ConnectionlessPacket`
-    /// starts `CA_SENDINGSTATS`), `statResponse` (the packets its mask
-    /// still wants).
+    /// change, `CA_CONNECTED` with its map kept until the gamestate),
+    /// `requeststats` (`CA_SENDINGSTATS`), `statResponse` (the packets its
+    /// mask still wants; 0 ends the stats). A download in flight ignores
+    /// the first two (cod4-netfields.md 14.3).
     fn connectionless(&mut self, text: &[u8]) -> Result<()> {
         let line = String::from_utf8_lossy(text);
         if let Some(body) = line.strip_prefix("print\n") {
@@ -983,37 +1106,30 @@ impl Conn {
         }
         let mut lines = line.split('\n');
         match lines.next().unwrap_or("").trim_end_matches('\0') {
-            "loadingnewmap" => {
+            // 0x46bf2f, 0x46bfb2: not while a download runs.
+            "loadingnewmap" if !self.downloading => {
                 self.loading = lines.next().map(str::to_string);
+                self.state = ConnState::Connected;
                 log::info!("cod4: server loading {:?}", self.loading);
             }
-            // The server asks once a message until the stats are in
-            // (nine times on retail's map change, VERIFIED live); one
-            // asking while the last burst is under a second old is that
-            // burst's, as `CA_SENDINGSTATS` ignores it.
-            "requeststats"
-                if self.stats_sent.is_none_or(|t| {
-                    now().saturating_duration_since(t) > Duration::from_secs(1)
-                }) =>
-            {
-                self.stats_sent = Some(now());
-                // `CA_SENDINGSTATS` and -9999 (0x46bfcd, 0x46c007).
-                self.last_sent = None;
-                for idx in 0..STAT_PACKETS {
-                    self.send_stat(idx)?;
-                }
+            // The server asks once a message until the stats are in; one
+            // while they go is ignored (0x46bfbe).
+            "requeststats" if !self.downloading && self.state != ConnState::SendingStats => {
+                self.begin_stats();
             }
             "fastrestart" => log::debug!("cod4: server fast restart"),
             l if l == "disconnect" || l.starts_with("disconnect ") => {
                 self.disconnect = Some(l["disconnect".len()..].trim().to_string());
             }
-            l if l.starts_with("statResponse ") => {
-                let want: u32 = l["statResponse ".len()..].trim().parse().unwrap_or(0);
-                // Any `statResponse` stores -9999 (0x46ba43).
-                self.last_sent = None;
-                for idx in (0..STAT_PACKETS).filter(|i| want & (1 << i) != 0) {
-                    self.send_stat(idx)?;
+            // Read only while the stats go (0x46b9d1..0x46b9ef); it sends
+            // the next at once (-9999 at 0x46ba43).
+            l if l.starts_with("statResponse ") && self.state == ConnState::SendingStats => {
+                let want: i32 = l["statResponse ".len()..].trim().parse().unwrap_or(0);
+                if want == 0 {
+                    self.state = ConnState::Connected;
                 }
+                self.stat_mask = want as u8 & 0x7f;
+                self.last_sent = None;
             }
             _ => {}
         }
@@ -1383,7 +1499,10 @@ mod tests {
             cp_feed: None,
             applied: 0,
             loading: None,
-            stats_sent: None,
+            state: ConnState::Connected,
+            downloading: false,
+            stat_mask: 0,
+            stat_sent: [None; STAT_PACKETS],
             disconnect: None,
             cancel: None,
             notes: None,
@@ -1594,6 +1713,7 @@ mod tests {
         let mut gs = Gamestate::from_table(0, &table, &BTreeMap::new(), 0, 0x1234);
         gs.dialect = dialect;
         c.client.gamestate = Some(gs);
+        c.state = ConnState::Active;
         c
     }
 
@@ -1721,8 +1841,9 @@ mod tests {
 
     /// The gate on a connection: the row a send leaves holds the next
     /// packet back off the LAN; `loadingnewmap` puts it on the second's
-    /// wait, a `statResponse` clears that wait; `cl_maxpackets` clamps to
-    /// 15..=100.
+    /// wait, the stats hold every packet, their last `statResponse` ends
+    /// that wait; a download takes the 50 ms arm; `cl_maxpackets` clamps
+    /// to 15..=100.
     #[test]
     fn a_conn_paces_its_packets_by_the_server_and_its_state() {
         let server = UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -1734,21 +1855,132 @@ mod tests {
         assert_eq!(c.max_packets, 100);
         c.set_max_packets(30);
         c.lan = false;
-        assert!(c.ready_to_send(false), "no packet yet");
+        assert!(c.ready_to_send(), "no packet yet");
         c.send(&[], None).unwrap();
-        assert!(!c.ready_to_send(false), "33 ms off the LAN");
+        assert!(!c.ready_to_send(), "33 ms off the LAN");
         c.lan = true;
-        assert!(c.ready_to_send(false), "every frame on it");
-        c.loading = Some("mp_crash".into());
-        assert!(!c.ready_to_send(false), "a second while loading");
+        assert!(c.ready_to_send(), "every frame on it");
+        c.connectionless(b"loadingnewmap\nmp_crash\nwar").unwrap();
+        assert_eq!(c.state(), ConnState::Connected);
+        assert!(!c.ready_to_send(), "a second while loading");
+        c.connectionless(b"requeststats\n").unwrap();
+        assert!(!c.ready_to_send(), "nothing while the stats go");
         c.connectionless(b"statResponse 0").unwrap();
-        assert!(c.ready_to_send(false));
-        c.loading = None;
+        assert!(c.ready_to_send());
+        c.set_downloading(true);
+        c.send(&[], None).unwrap();
+        assert!(!c.ready_to_send(), "50 ms while downloading");
+        c.last_sent = Some(now() - Duration::from_millis(50));
+        assert!(c.ready_to_send());
         // A gamestate clears the rows.
+        c.set_downloading(false);
+        c.state = ConnState::Active;
         c.lan = false;
         c.send(&[], None).unwrap();
         c.cmd_ring = CmdRing::default();
-        assert!(c.ready_to_send(false));
+        assert!(c.ready_to_send());
+    }
+
+    /// The datagrams waiting at `server`.
+    fn queued(server: &UdpSocket) -> usize {
+        server.set_nonblocking(true).unwrap();
+        let mut buf = [0u8; 2048];
+        let n = std::iter::from_fn(|| server.recv(&mut buf).ok()).count();
+        server.set_nonblocking(false).unwrap();
+        n
+    }
+
+    /// The stats packet out of a sent packet, read off `server`; `None` for
+    /// a netchan packet.
+    fn stat_index(server: &UdpSocket) -> Option<u8> {
+        let mut buf = [0u8; 2048];
+        let n = server.recv(&mut buf).unwrap();
+        buf[..n]
+            .strip_prefix(b"\xff\xff\xff\xffstats\0")
+            .map(|b| b[2])
+    }
+
+    /// A map change's stats (cod4-netfields.md 14.3): `requeststats` starts
+    /// `CA_SENDINGSTATS`; one packet goes a frame, the next 100 ms on or at
+    /// once on a `statResponse`, never-sent ones first; no netchan packet
+    /// goes meanwhile, a move included; a second `requeststats` changes
+    /// nothing; `statResponse 0` ends it, and the next packet goes at once.
+    #[test]
+    fn a_map_change_sends_one_stats_packet_at_a_time_and_nothing_else() {
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        server
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
+        let mut c = moving(&server, Dialect::V17);
+        c.connectionless(b"loadingnewmap\nmp_crash\nwar").unwrap();
+        c.connectionless(b"requeststats\n").unwrap();
+        assert_eq!(c.state(), ConnState::SendingStats);
+        c.check_for_resend().unwrap();
+        assert_eq!(stat_index(&server), Some(0));
+        c.check_for_resend().unwrap();
+        c.send(&[UserCmd::default()], None).unwrap();
+        assert_eq!(queued(&server), 0);
+        c.connectionless(b"requeststats\n").unwrap();
+        c.connectionless(b"statResponse 124").unwrap();
+        c.check_for_resend().unwrap();
+        assert_eq!(stat_index(&server), Some(2));
+        c.last_sent = Some(now() - STAT_RESEND);
+        c.check_for_resend().unwrap();
+        assert_eq!(stat_index(&server), Some(3));
+        c.connectionless(b"statResponse 0").unwrap();
+        assert_eq!(c.state(), ConnState::Connected);
+        c.check_for_resend().unwrap();
+        assert!(c.ready_to_send());
+        c.send(&[], None).unwrap();
+        assert_eq!(stat_index(&server), None);
+        // Outside the stats a `statResponse` is ignored.
+        c.connectionless(b"statResponse 1").unwrap();
+        c.check_for_resend().unwrap();
+        assert_eq!(c.state(), ConnState::Connected);
+    }
+
+    /// `CL_CheckForResend`'s pick (0x46ae60): the first wanted packet that
+    /// never went, else the wanted one that went longest ago.
+    #[test]
+    fn the_next_stats_packet_is_a_new_one_then_the_oldest() {
+        let t = Instant::now();
+        let at = |ms: u64| Some(t + Duration::from_millis(ms));
+        let now = t + Duration::from_secs(1);
+        let mut sent = [at(0), at(5), None, at(1), None, at(2), at(3)];
+        assert_eq!(next_stat(0x7f, &sent, now), Some(2));
+        assert_eq!(next_stat(0x6b, &sent, now), Some(0));
+        assert_eq!(next_stat(0x6a, &sent, now), Some(3));
+        assert_eq!(next_stat(0, &sent, now), None);
+        sent[1] = Some(now);
+        assert_eq!(next_stat(0x02, &sent, now), None);
+    }
+
+    /// The level up (`CL_DownloadsComplete`, cod4-netfields.md 14.3):
+    /// nothing goes while it loads; then three packets at once, each with
+    /// the `cp` and no move, and cmds from then on.
+    #[test]
+    fn the_cgame_up_sends_three_packets_with_the_cp() {
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        server
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
+        let mut c = moving(&server, Dialect::V17);
+        c.state = ConnState::Loading;
+        c.cp_feed = None;
+        c.answer_gamestate().unwrap();
+        assert!(!c.ready_to_send());
+        c.cgame_up().unwrap();
+        assert_eq!(c.state(), ConnState::Active);
+        for _ in 0..3 {
+            let ops = sent_ops(&server, &c);
+            assert!(
+                matches!(&ops[..], [ClOp::Command { sequence: 1, text }, ClOp::Eof] if text.starts_with(b"cp ")),
+                "{ops:?}"
+            );
+        }
+        assert_eq!(queued(&server), 0);
+        c.cgame_up().unwrap();
+        assert_eq!(queued(&server), 0, "once a level");
     }
 
     /// `clc_move` (op 0) only when the newest snapshot came in the newest

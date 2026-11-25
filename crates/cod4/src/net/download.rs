@@ -269,6 +269,10 @@ pub enum DownloadEvent {
     /// A reliable command to queue (`download`, `nextdl`, `retransdl`,
     /// `stopdl`, `donedl`, `wwwdl ...`).
     Command(String),
+    /// A file's empty block came: two packets go at once, past the send
+    /// gate, before the next file is asked for (`CL_ParseDownload`,
+    /// iw3mp.exe 0x47462e, 0x474633).
+    Flush,
     /// A file, by its referenced name, landed at this path; its size as
     /// the server gave it, for the connect screen's last look.
     Finished(String, PathBuf, u64),
@@ -342,6 +346,11 @@ impl Downloads {
 
     pub fn is_done(&self) -> bool {
         self.queue.is_empty() && self.current.is_none()
+    }
+
+    /// A file is in flight (`clc.downloadName` set, 0xc5b088).
+    pub fn in_flight(&self) -> bool {
+        self.current.is_some()
     }
 
     /// The file in flight, for the connect screen.
@@ -514,6 +523,7 @@ impl Downloads {
                 let mut out = vec![DownloadEvent::Command(format!("nextdl {block}"))];
                 if eof {
                     let cur = self.current.take().unwrap();
+                    out.push(DownloadEvent::Flush);
                     out.extend(self.land(cur));
                 }
                 out
@@ -898,11 +908,18 @@ mod tests {
         };
         dls.on_message(&block(0, Some(3), b"zip"));
         let evs = dls.on_message(&block(1, None, b""));
+        assert_eq!(
+            evs[..2],
+            [
+                DownloadEvent::Command("nextdl 1".into()),
+                DownloadEvent::Flush
+            ]
+        );
         assert!(
-            matches!(&evs[1], DownloadEvent::Failed(w) if w.contains("checksum 1234")),
+            matches!(&evs[2], DownloadEvent::Failed(w) if w.contains("checksum 1234")),
             "{evs:?}"
         );
-        assert_eq!(evs.len(), 2);
+        assert_eq!(evs.len(), 3);
         assert!(!root.join("mods/m/z.iwd.tmp").exists());
         assert!(!root.join("mods/m/z.iwd").exists());
     }

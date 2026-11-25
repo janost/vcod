@@ -145,7 +145,7 @@ impl Cod4Session {
             if clock_now() > deadline {
                 bail!("{addr}: no gamestate");
             }
-            if conn.ready_to_send(false) {
+            if conn.ready_to_send() {
                 conn.send(&[], None)?;
             }
             conn.poll(clock_now() + Duration::from_millis(50))?;
@@ -172,6 +172,8 @@ pub struct Fetch<'a> {
     /// The connect screen's `print` lines and stages
     /// (`vcod_cod4::net::conn::JoinNote`).
     pub notes: Option<vcod_cod4::net::conn::Notes>,
+    /// `cl_maxpackets`, which paces a download off the LAN.
+    pub max_packets: i32,
 }
 
 impl Fetch<'_> {
@@ -240,6 +242,7 @@ fn download_round(
 ) -> Result<Option<Conn>> {
     use vcod_cod4::net::download::{DownloadEvent, Downloads};
     let mut dls = Downloads::new(fetch.root, wanted).with_www(fetch.www);
+    conn.set_max_packets(fetch.max_packets);
     let mut events = dls.next_download();
     let mut waiting = false;
     let mut last_heard = clock_now();
@@ -258,6 +261,10 @@ fn download_round(
                 }
                 DownloadEvent::Command(c) => {
                     conn.command(c);
+                }
+                DownloadEvent::Flush => {
+                    conn.send(&[], None)?;
+                    conn.send(&[], None)?;
                 }
                 DownloadEvent::Finished(name, p, size) => {
                     log::info!("cod4: downloaded {}", p.display());
@@ -283,6 +290,7 @@ fn download_round(
                 }
             }
         }
+        conn.set_downloading(dls.in_flight());
         if dls.is_done() && !waiting {
             fetch.report(None);
             return Ok(Some(conn));
@@ -309,10 +317,11 @@ fn download_round(
                 p.total
             );
         }
-        if conn.ready_to_send(true) {
+        if conn.ready_to_send() {
             conn.send(&[], None)?;
         }
-        for got in conn.poll(clock_now() + Duration::from_millis(50))? {
+        // A look each 10 ms, as retail's gate is asked each frame.
+        for got in conn.poll(clock_now() + Duration::from_millis(10))? {
             last_heard = clock_now();
             for op in &got.parsed.ops {
                 match op {
@@ -351,6 +360,7 @@ pub fn probe(
         progress: None,
         cancel: None,
         notes: None,
+        max_packets: vcod_cod4::net::conn::MAX_PACKETS,
     });
     let mut s = Cod4Session::connect_with(addr, name, cp, join, fetch)?;
     println!(

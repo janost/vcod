@@ -169,6 +169,7 @@ fn connect(a: &JoinArgs, p: &LoadProgress, cancel: &Arc<AtomicBool>) -> Result<C
                 let p = p.clone();
                 Arc::new(move |n| p.note(n))
             }),
+            max_packets: a.max_packets,
         }),
     )
     .map_err(|e| crate::play::cod4::localize_refusal(e, &a.game_dir))?;
@@ -221,6 +222,8 @@ pub(crate) struct JoinArgs {
     /// `cl_allowDownload` and `cl_wwwDownload`.
     pub allow_download: bool,
     pub www_download: bool,
+    /// `cl_maxpackets`.
+    pub max_packets: i32,
 }
 
 impl Loader {
@@ -533,6 +536,7 @@ mod tests {
                 game_dir,
                 allow_download: false,
                 www_download: false,
+                max_packets: vcod_cod4::net::conn::MAX_PACKETS,
             });
             let t0 = clk_now();
             let (mut stages, mut fills, mut shot) = (Vec::new(), Vec::new(), false);
@@ -647,6 +651,7 @@ mod tests {
             game_dir,
             allow_download: false,
             www_download: false,
+            max_packets: vcod_cod4::net::conn::MAX_PACKETS,
         }
     }
 
