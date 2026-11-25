@@ -185,8 +185,9 @@ impl Fetch<'_> {
 /// `CL_InitDownloads` (iw3mp.exe 0x46ac60) on each gamestate of a live
 /// join, as `CL_ParseGamestate` runs it (0x47423e): the referenced files
 /// `fetch.root` lacks (`net::download::missing_in`), each fetched over
-/// `svc_download` or the HTTP redirect with no usercmds sent meanwhile,
-/// then `donedl` and the compare again on the gamestate it brings. A
+/// `svc_download` (CoD4x: the side channel) or the HTTP redirect with no
+/// usercmds sent meanwhile, then `donedl` and the compare again on the
+/// gamestate it brings. A
 /// refusal ends the join with its reason; with `allow` off a missing file
 /// ends it as retail's `EXE_...`-less text does (0x6d0910). Retail fetches
 /// a file that still differs after its download again on every
@@ -238,8 +239,10 @@ fn download_round(
     fetched: &mut std::collections::HashSet<String>,
     wanted: Vec<vcod_cod4::net::download::Wanted>,
 ) -> Result<Option<Conn>> {
-    use vcod_cod4::net::download::{DownloadEvent, Downloads};
-    let mut dls = Downloads::new(fetch.root, wanted).with_www(fetch.www);
+    use vcod_cod4::net::download::{DownloadEvent, Downloads, XAsk};
+    let mut dls = Downloads::new(fetch.root, wanted)
+        .with_www(fetch.www)
+        .with_dialect(conn.client.dialect);
     let mut events = dls.next_download();
     let mut waiting = false;
     let mut last_heard = clock_now();
@@ -258,6 +261,10 @@ fn download_round(
                 }
                 DownloadEvent::Command(c) => {
                     conn.command(c);
+                }
+                DownloadEvent::Side(ask) => {
+                    waiting |= ask == XAsk::Done;
+                    conn.side_download(&ask)?;
                 }
                 DownloadEvent::Finished(name, p, size) => {
                     log::info!("cod4: downloaded {}", p.display());
@@ -312,7 +319,14 @@ fn download_round(
         if conn.ready_to_send(true) {
             conn.send(&[], None)?;
         }
-        for got in conn.poll(clock_now() + Duration::from_millis(50))? {
+        let got = conn.poll(clock_now() + Duration::from_millis(50))?;
+        // CoD4x's come on the side channel, ahead of the gamestate they
+        // lead to.
+        for m in conn.take_side_downloads() {
+            last_heard = clock_now();
+            events.extend(dls.on_side(&m));
+        }
+        for got in got {
             last_heard = clock_now();
             for op in &got.parsed.ops {
                 match op {

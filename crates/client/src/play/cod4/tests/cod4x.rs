@@ -1,5 +1,5 @@
-//! Live joins of the CoD4x 21.3 release server (cod4x-protocol.md 18.3,
-//! 18.4): each test runs `tools/cod4x_capture.sh` on `$COD4X_DEDRUN` and
+//! Live joins of the CoD4x 21.3 release server (cod4x-protocol.md 18.3 to
+//! 18.5): each test runs `tools/cod4x_capture.sh` on `$COD4X_DEDRUN` and
 //! itself again inside its namespace, where the second run joins.
 
 use std::net::SocketAddr;
@@ -236,11 +236,13 @@ fn join_inside(addr: SocketAddr) {
 }
 
 /// Runs `tools/cod4x_capture.sh` on the CoD4x release (`$COD4X_DEDRUN`,
-/// `sv_noauth 1`, mp_crash, the 1.7 data `$COD4_DIR`'s) with this binary's
-/// test `test` run again inside as the client; returns the server's log
-/// once the inside run passed. `$COD4X_OUT` keeps the capture (`lo.txt`,
-/// `server.log`, `client.log`), else a temporary directory does.
-fn run_in_capture(test: &str) -> String {
+/// `sv_noauth 1` and `sets`, mp_crash, the 1.7 data `$COD4_DIR`'s) with
+/// this binary's test `test` run again inside as the client, its
+/// `COD4X_INNER_OUT` the capture's directory, which `prepare` gets first;
+/// returns the server's log once the inside run passed. `$COD4X_OUT` keeps
+/// the capture (`lo.txt`, `server.log`, `client.log`), else a temporary
+/// directory does.
+fn run_in_capture(test: &str, sets: &str, prepare: impl FnOnce(&std::path::Path)) -> String {
     let bin =
         std::env::var("COD4X_DEDRUN").expect("set COD4X_DEDRUN to the release's cod4x18_dedrun");
     assert!(vcod_cod4::testing::cod4_install().is_some(), "set COD4_DIR");
@@ -250,13 +252,16 @@ fn run_in_capture(test: &str) -> String {
     let name = format!("{}::{test}", module_path!());
     let name = name.split_once("::").unwrap().1;
     let exe = std::env::current_exe().unwrap();
+    prepare(&out);
     let inner = format!(
-        "COD4X_INNER_ADDR=$ADDR '{}' --exact {name} --ignored --nocapture --test-threads 1",
+        "COD4X_INNER_ADDR=$ADDR COD4X_INNER_OUT='{}' '{}' --exact {name} --ignored --nocapture \
+         --test-threads 1",
+        out.display(),
         exe.display()
     );
     let st = std::process::Command::new("bash")
         .args([script, &bin, out.to_str().unwrap(), &inner])
-        .env("SERVER_SETS", "+set sv_noauth 1")
+        .env("SERVER_SETS", format!("+set sv_noauth 1 {sets}"))
         .status()
         .unwrap();
     assert!(st.success(), "{st}");
@@ -289,7 +294,7 @@ fn cod4x_live_join_spawns_and_leaves() {
         join_inside(addr.parse().unwrap());
         return;
     }
-    let server = run_in_capture("cod4x_live_join_spawns_and_leaves");
+    let server = run_in_capture("cod4x_live_join_spawns_and_leaves", "", |_| {});
     for bad in ["reliable acknowledge", "Unknown clientcommand", "kicked"] {
         assert!(!server.contains(bad), "server.log: {bad}");
     }
@@ -382,6 +387,146 @@ fn cod4x_live_withheld_gamestate_times_out() {
         withheld_inside(addr.parse().unwrap());
         return;
     }
-    let server = run_in_capture("cod4x_live_withheld_gamestate_times_out");
+    let server = run_in_capture("cod4x_live_withheld_gamestate_times_out", "", |_| {});
     assert!(connected_and_left(&server, "vcodxw"), "{server}");
+}
+
+/// The download gate's mod, under the server's homepath.
+const X_MOD: &str = "mods/vcodx";
+/// The loopback HTTP server's port inside the capture's namespace.
+const X_WWW_PORT: u16 = 28991;
+
+/// The mod's files by name: a generated iwd, and a stock fastfile as its
+/// `mod.ff`, since the release with a mod and no `mod.ff` stops on its
+/// missing `cod4x_patchv2` zone (cod4x-protocol.md 7.2.4).
+fn x_mod_files() -> Vec<(&'static str, Vec<u8>)> {
+    let install = vcod_cod4::testing::cod4_install().expect("set COD4_DIR");
+    let filler: Vec<u8> = (0..30000u32)
+        .map(|i| (i.wrapping_mul(2654435761) >> 24) as u8)
+        .collect();
+    let iwd = vcod_common::testing::pk3_with(&[
+        ("vcodx/readme.txt", b"vcod CoD4x download gate\n"),
+        ("vcodx/filler.bin", &filler),
+    ]);
+    let ff = std::fs::read(install.zone_dir("english").join("code_post_gfx_mp.ff")).unwrap();
+    vec![("z_vcodx.iwd", iwd), ("mod.ff", ff)]
+}
+
+/// One client of [`download_inside`]: joins `addr` with an empty install
+/// and `www`, fetching the mod's files, and spawns; returns the session,
+/// the spawn and the files as they landed.
+fn fetch_and_spawn(
+    addr: SocketAddr,
+    name: &str,
+    www: bool,
+) -> (Cod4Session, Option<String>, Vec<Vec<u8>>) {
+    let root = tempfile::tempdir().unwrap();
+    let join = MenuJoin {
+        team: Some("allies".into()),
+        class: Some("assault_mp,0".into()),
+    };
+    let fetch = Fetch {
+        root: root.path(),
+        allow: true,
+        www,
+        progress: None,
+        cancel: None,
+        notes: None,
+    };
+    let t0 = Instant::now();
+    let mut s = Cod4Session::connect_with(addr, name, Cp::Bare, join, Some(fetch)).unwrap();
+    println!("cod4x: {name} joined in {:?}", t0.elapsed());
+    let t1 = Instant::now();
+    let mut spawned = None;
+    while t1.elapsed() < Duration::from_secs(30) && spawned.is_none() {
+        s.step(t1.elapsed().as_secs_f64() * 1000.0).unwrap();
+        spawned = s.spawn();
+        std::thread::sleep(Duration::from_millis(16));
+    }
+    let landed = x_mod_files()
+        .iter()
+        .map(|(f, _)| std::fs::read(root.path().join(X_MOD).join(f)).unwrap_or_default())
+        .collect();
+    (s, spawned, landed)
+}
+
+/// The inside half of [`cod4x_live_download_fetches_the_mods_files`]: a
+/// client with `cl_wwwDownload` fetches the files over HTTP, then one
+/// without it answers the redirect with `www fail` and takes them over
+/// the side channel; each lands them byte for byte and spawns. The first
+/// stays in until the second is done: the server refuses a connect from
+/// an address one of whose clients is still connecting or a zombie
+/// (cod4x-protocol.md 7.2.4).
+fn download_inside(addr: SocketAddr, out: &std::path::Path) {
+    let home = out.join("home");
+    let http = super::www::http_server(X_WWW_PORT, home, &[], &[], Duration::ZERO);
+    let want: Vec<Vec<u8>> = x_mod_files().into_iter().map(|(_, b)| b).collect();
+    let mut joined = Vec::new();
+    for (name, www) in [("vcodxh", true), ("vcodxs", false)] {
+        let (s, spawned, landed) = fetch_and_spawn(addr, name, www);
+        joined.push(s);
+        println!("cod4x: {name} spawned: {spawned:?}");
+        assert!(spawned.is_some(), "{name} never spawned");
+        for (got, want) in landed.iter().zip(&want) {
+            assert!(got == want, "{name}: a file did not land whole");
+        }
+        if www {
+            let asked = std::mem::take(&mut *http.asked.lock().unwrap());
+            assert_eq!(
+                asked,
+                ["/mods/vcodx/z_vcodx.iwd", "/mods/vcodx/mod.ff"],
+                "{name}"
+            );
+        }
+    }
+    assert!(http.asked.lock().unwrap().is_empty(), "the side channel's");
+    http.stop.store(true, Ordering::Relaxed);
+    for mut s in joined {
+        s.disconnect();
+    }
+}
+
+/// The CoD4x release under `tools/cod4x_capture.sh` ([`run_in_capture`])
+/// running `fs_game mods/vcodx` with `sv_wwwDownload` on: one client fetches
+/// the mod's iwd and `mod.ff` over the www redirect, one over the side
+/// channel after `www fail`, each byte for byte against the server's files,
+/// then spawns (cod4x-protocol.md 7.2, 18.5).
+#[test]
+#[ignore = "live: the CoD4x release under tools/cod4x_capture.sh; set COD4X_DEDRUN and COD4_DIR, ~40 s"]
+fn cod4x_live_download_fetches_the_mods_files() {
+    if let Ok(addr) = std::env::var("COD4X_INNER_ADDR") {
+        let out = std::env::var("COD4X_INNER_OUT").unwrap();
+        download_inside(addr.parse().unwrap(), out.as_ref());
+        return;
+    }
+    // Quoted: the engine's command line reads `//` as a comment.
+    let sets = format!(
+        "+set fs_game {X_MOD} +set sv_wwwDownload 1 \
+         +set sv_wwwBaseURL \"http://127.0.0.1:{X_WWW_PORT}\""
+    );
+    let server = run_in_capture("cod4x_live_download_fetches_the_mods_files", &sets, |out| {
+        let dir = out.join("home").join(X_MOD);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (f, b) in x_mod_files() {
+            std::fs::write(dir.join(f), b).unwrap();
+        }
+    });
+    for bad in ["illegal download request", "Unexpected www", "kicked"] {
+        assert!(!server.contains(bad), "server.log: {bad}");
+    }
+    for f in ["z_vcodx.iwd", "mod.ff"] {
+        let file = format!("{X_MOD}/{f}");
+        for who in ["vcodxh", "vcodxs"] {
+            let to = format!("Redirecting client '{who}' to http://127.0.0.1:{X_WWW_PORT}/{file}");
+            assert!(server.contains(&to), "server.log: no {to:?}");
+        }
+        let fell = format!("Client 'vcodxs' reported that the http download of '{file}' failed");
+        assert!(server.contains(&fell), "server.log: no {fell:?}");
+    }
+    for who in ["vcodxh", "vcodxs"] {
+        assert!(
+            connected_and_left(&server, who),
+            "{who} never connected and left"
+        );
+    }
 }

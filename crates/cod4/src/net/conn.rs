@@ -10,6 +10,7 @@
 
 use super::clmsg::{self, ClOp, ClientHeader, CmdWire, UserCmd};
 use super::demo::Archive;
+use super::download::{XAsk, XDownloadMsg};
 use super::parse::{Client, Illegible, Op, Parsed};
 use super::pure;
 use super::reliable::{self, Link, Packet, StatsMsg};
@@ -343,6 +344,9 @@ pub struct Conn {
     /// CoD4x 21: when the side channel's stats went, for
     /// [`GAMESTATE_WAIT`].
     side_stats: Option<Instant>,
+    /// CoD4x 21: the side channel's download messages since the last
+    /// [`Conn::take_side_downloads`].
+    side_downloads: Vec<XDownloadMsg>,
     /// What the side channel's millisecond clock counts from.
     born: Instant,
 }
@@ -397,6 +401,7 @@ impl Conn {
             userinfo: String::new(),
             side: None,
             side_stats: None,
+            side_downloads: Vec::new(),
             born: now(),
         };
         c.note(JoinNote::Challenging);
@@ -798,8 +803,8 @@ impl Conn {
     /// and comes back as a [`Received`] holding [`Op::Gamestate`] alone,
     /// with no message for a demo. The authentication library's message
     /// ahead of the stats request ends the join with [`AUTH_REFUSAL`]
-    /// (cod4x-protocol.md 19.2). Other messages (downloads) are logged and
-    /// left.
+    /// (cod4x-protocol.md 19.2). A download message waits for
+    /// [`Conn::take_side_downloads`]; any other is logged and left.
     fn side_packet(&mut self, d: &[u8]) -> Result<Option<Received>> {
         let p = match Packet::read(d) {
             Ok(p) => p,
@@ -842,6 +847,10 @@ impl Conn {
                         msg: Vec::new(),
                     });
                 }
+                reliable::CMD_DOWNLOAD => match XDownloadMsg::read(&body) {
+                    Ok(m) => self.side_downloads.push(m),
+                    Err(e) => log::warn!("cod4x: ignoring download message: {e:#}"),
+                },
                 cmd => log::info!(
                     "cod4x: side channel message cmd {cmd}, {} bytes, left",
                     body.len()
@@ -879,6 +888,26 @@ impl Conn {
             exact: true,
         };
         self.apply_configstrings(&newer);
+    }
+
+    /// CoD4x 21: the server's download messages read since the last call
+    /// (cod4x-protocol.md 7.2).
+    pub fn take_side_downloads(&mut self) -> Vec<XDownloadMsg> {
+        std::mem::take(&mut self.side_downloads)
+    }
+
+    /// CoD4x 21: a download ask on the side channel. [`XAsk::Done`] and
+    /// [`XAsk::WwwFail`] bring the gamestate again, which needs its own
+    /// `cp`, as `donedl`'s does.
+    pub fn side_download(&mut self, ask: &XAsk) -> Result<()> {
+        if matches!(ask, XAsk::Done | XAsk::WwwFail) {
+            self.cp_feed = None;
+        }
+        self.side
+            .as_mut()
+            .context("a download ask on a 1.7 connection")?
+            .send(&ask.write());
+        Ok(())
     }
 
     /// The side channel packets due now ([`Link::frame`]).
@@ -1393,6 +1422,7 @@ mod tests {
             userinfo: String::new(),
             side: None,
             side_stats: None,
+            side_downloads: Vec::new(),
             born: Instant::now(),
         }
     }
