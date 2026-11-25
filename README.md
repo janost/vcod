@@ -238,9 +238,10 @@ closely, I had it audited function by function and rewritten from the retail
   the CoD4 1.8 multiplayer executable. Used for function names and as a
   cross-check of behaviour. 1.7 is the target: the research docs cite 1.7
   addresses, and a claim not yet confirmed on 1.7 says so.
-- [CoD4x Server](https://github.com/callofduty4x/CoD4x_Server), AGPLv3, for
-  how CoD4x servers differ on the wire, so vcod can recognise and refuse
-  them.
+- [CoD4x Server](https://github.com/callofduty4x/CoD4x_Server), AGPLv3,
+  read once to learn how CoD4x servers authenticate clients. vcod's CoD4x
+  support (protocol 21, joining servers without client authentication) is
+  built from the release server binary and local captures, not this source.
 - [COD4iOS-COD4NS](https://github.com/DevZer0D4Y/COD4iOS-COD4NS), GPLv3, as a
   cross-check of the fastfile layout.
 
