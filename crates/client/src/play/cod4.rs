@@ -580,12 +580,13 @@ impl Cod4Session {
         matches!(self.source, Source::Live { .. })
     }
 
-    /// `cl_packetdup` and `cl_maxpackets` for a live session's next
-    /// packets.
-    pub fn set_packet_rates(&mut self, dup: i32, max_packets: i32) {
+    /// `cl_packetdup`, `cl_maxpackets` and `cl_nodelta` for a live
+    /// session's next packets.
+    pub fn set_packet_rates(&mut self, dup: i32, max_packets: i32, nodelta: bool) {
         if let Source::Live { conn, .. } = &mut self.source {
             conn.set_packet_dup(dup);
             conn.set_max_packets(max_packets);
+            conn.set_nodelta(nodelta);
         }
     }
 

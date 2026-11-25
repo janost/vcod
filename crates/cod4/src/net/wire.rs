@@ -623,6 +623,56 @@ mod tests {
         }
     }
 
+    /// A base whose entities the 2048-row parse ring wrote over is one
+    /// retail no longer holds: more than 0x780 entities parsed since it
+    /// and the message is illegible (`iw3mp.exe` 0x47389f), 0x780 itself
+    /// still reads.
+    #[test]
+    fn a_base_past_the_parse_rings_reach_is_illegible() {
+        let gs = Gamestate::from_table(3, &table(), &BTreeMap::new(), 1, 77);
+        let huff = Huffman::new();
+        let mut client = Client::new();
+        let mut w = MsgWriter::new(&crate::net::parse::UNUSED_HUFF);
+        PROTOCOL_17.write_gamestate(&mut w, &gs);
+        w.write_byte(EOF);
+        client.parse(1, &huff.compress(&w.into_ops())).unwrap();
+        let f = Frame4 {
+            server_time: Msec::from_raw(1000),
+            map_center: gs.map_center,
+            ps: PlayerState::default(),
+            entities: (0..960)
+                .map(|n| {
+                    let mut e = EntityState::default();
+                    e.0[0] = n;
+                    e
+                })
+                .collect(),
+            clients: Vec::new(),
+        };
+        let mut parse = |n: u32, back: u8| {
+            let mut w = MsgWriter::new(&crate::net::parse::UNUSED_HUFF);
+            let head = SnapshotHead {
+                delta_num: back,
+                snap_flags: 4,
+            };
+            let base = (back > 0).then_some(&f);
+            PROTOCOL_17.write_snapshot(&mut w, base, &f, head, &BTreeMap::new());
+            w.write_byte(EOF);
+            client.parse(n, &huff.compress(&w.into_ops()))
+        };
+        // Message 2 starts the ring at 0; 3 and 4 bring it to 1920, 2880.
+        for (n, back) in [(2, 0), (3, 1), (4, 2)] {
+            parse(n, back).unwrap();
+        }
+        let e = parse(5, 3).unwrap_err();
+        assert!(
+            e.downcast_ref::<crate::net::parse::Illegible>().is_some(),
+            "{e:#}"
+        );
+        parse(5, 1).unwrap();
+        assert_eq!(client.snapshots.last().unwrap().entities.len(), 960);
+    }
+
     /// Frames at `i32::MAX` and, one delta on, `i32::MIN`: the parser
     /// reads both times back and re-encodes each message byte for byte.
     #[test]

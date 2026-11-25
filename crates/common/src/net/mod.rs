@@ -40,7 +40,7 @@ use msg::{
 use netchan::Netchan;
 use protocol::{Cod1Wire, PROTOCOL_V1};
 use snapshot::SnapshotRing;
-use std::net::UdpSocket;
+use std::net::{IpAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
 /// Largest download block: retail's `CL_ParseDownload` checks no size and
@@ -100,12 +100,14 @@ impl UdpTransport {
             master::parse_address(addr).ok_or_else(|| anyhow::anyhow!("cannot resolve {addr}"))?;
         let sock = UdpSocket::bind("0.0.0.0:0")?;
         sock.connect(to)?;
-        Self::from_socket(sock)
+        Self::from_socket(sock, lan::is_lan)
     }
 
     /// A transport over a socket already bound (and connected, or it counts
     /// as on the LAN): what a CoD2 session hands over after its handshake.
-    pub fn from_socket(sock: UdpSocket) -> anyhow::Result<Self> {
+    /// `is_lan` is the game's `Sys_IsLANAddress` (CoDMP.exe 0x464be0,
+    /// CoD2MP_s.exe 0x467100).
+    pub fn from_socket(sock: UdpSocket, is_lan: fn(IpAddr) -> bool) -> anyhow::Result<Self> {
         sock.set_nonblocking(true)?;
         let sim = netsim::NetSimConfig::from_env().map(|cfg| {
             log::info!("VCOD_NETSIM: {cfg:?}");
@@ -114,9 +116,9 @@ impl UdpTransport {
                 .map_or(1, |d| d.as_nanos() as u64);
             netsim::NetSim::new(cfg, seed)
         });
-        // Retail's `Sys_IsLANAddress` (CoDMP.exe 0x464be0), which lets every
-        // frame send a packet. A simulated network is never one.
-        let lan = sim.is_none() && sock.peer_addr().ok().is_none_or(|a| lan::is_lan(a.ip()));
+        // A LAN server gets a packet every frame. A simulated network is
+        // never one.
+        let lan = sim.is_none() && sock.peer_addr().ok().is_none_or(|a| is_lan(a.ip()));
         Ok(UdpTransport {
             sock: Some(sock),
             sim,

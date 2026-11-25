@@ -372,7 +372,9 @@ impl Cod2Session {
     fn new(sock: Option<UdpSocket>, client: Client) -> Self {
         let now = clock_now();
         Cod2Session {
-            sock: sock.and_then(|s| UdpTransport::from_socket(s).ok()),
+            sock: sock.and_then(|s| {
+                UdpTransport::from_socket(s, vcod_common::net::lan::is_lan_cod2).ok()
+            }),
             demo: None,
             client,
             view: NetView::default(),

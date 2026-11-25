@@ -379,6 +379,9 @@ pub struct Conn {
     /// `clc.demowaiting`: moves go as `clc_moveNoDelta` (`CL_WritePacket`,
     /// `iw3mp.exe` 0x4640e1), so the server sends a full frame.
     pub no_delta: bool,
+    /// `cl_nodelta` (`iw3mp.exe` 0x465bc3): every move goes as
+    /// `clc_moveNoDelta`.
+    nodelta_dvar: bool,
     /// The server's voice packets read since the last [`Conn::take_voice`].
     voice_in: voice::Talked,
     /// The server's out-of-band `print`s once joined (rcon's answers),
@@ -444,6 +447,7 @@ impl Conn {
             cancel: opts.cancel,
             notes: opts.notes,
             no_delta: false,
+            nodelta_dvar: false,
             voice_in: Vec::new(),
             prints: Vec::new(),
             userinfo: String::new(),
@@ -601,6 +605,11 @@ impl Conn {
         self.packet_dup = n.clamp(0, PACKET_DUP_MAX as i32) as u32;
     }
 
+    /// `cl_nodelta` from now on.
+    pub fn set_nodelta(&mut self, on: bool) {
+        self.nodelta_dvar = on;
+    }
+
     /// `cl_maxpackets` from now on, clamped to its range 15..=100.
     pub fn set_max_packets(&mut self, n: i32) {
         self.max_packets = n.clamp(MAX_PACKETS_RANGE.0, MAX_PACKETS_RANGE.1);
@@ -718,6 +727,7 @@ impl Conn {
                     // `cl.snap` is valid and came in the newest message
                     // read (0x4640e1..0x46410b, cod4-netfields.md 14.2).
                     let delta = !self.no_delta
+                        && !self.nodelta_dvar
                         && self
                             .client
                             .snapshots
@@ -1507,6 +1517,7 @@ mod tests {
             cancel: None,
             notes: None,
             no_delta: false,
+            nodelta_dvar: false,
             voice_in: Vec::new(),
             prints: Vec::new(),
             userinfo: String::new(),
@@ -1984,7 +1995,8 @@ mod tests {
     }
 
     /// `clc_move` (op 0) only when the newest snapshot came in the newest
-    /// message read and no full frame is owed, else `clc_moveNoDelta`
+    /// message read, no full frame is owed and `cl_nodelta` is 0, else
+    /// `clc_moveNoDelta`
     /// (`CL_WritePacket` 0x4640e1..0x464117, cod4-netfields.md 14.2), on
     /// both headers.
     #[test]
@@ -2029,6 +2041,9 @@ mod tests {
             assert!(delta(&mut c));
             c.no_delta = true;
             assert!(!delta(&mut c), "demowaiting");
+            c.no_delta = false;
+            c.set_nodelta(true);
+            assert!(!delta(&mut c), "cl_nodelta");
         }
     }
 

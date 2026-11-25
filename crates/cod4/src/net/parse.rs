@@ -44,6 +44,10 @@ pub const CS_SYSTEMINFO: u16 = 1;
 pub const CS_MAPCENTER: u16 = 12;
 /// Snapshots a delta can reach back over.
 const PACKET_BACKUP: usize = 32;
+/// How far `cl.parseEntitiesNum` and `cl.parseClientsNum` may run past a
+/// base's before its entities or clients count as overwritten: their
+/// 2048-row rings less 128 (`iw3mp.exe` 0x47389f, 0x4738c1).
+const PARSE_RING_REACH: i32 = 0x780;
 /// Server commands [`Client::server_commands`] keeps below the newest: twice
 /// the 128-command reliable ring.
 const KEPT_SERVER_COMMANDS: i32 = 256;
@@ -227,6 +231,18 @@ pub struct Parsed {
     pub exact: bool,
 }
 
+/// A snapshot in [`Client`]'s delta ring.
+#[derive(Clone, Copy, Debug)]
+struct RingSlot {
+    message_num: i32,
+    /// Index into [`Client::snapshots`].
+    index: usize,
+    /// [`Client::parse_entities`] and [`Client::parse_clients`] as its
+    /// entities and clients began.
+    entities_at: i32,
+    clients_at: i32,
+}
+
 /// The client side's state across messages.
 #[derive(Default)]
 pub struct Client {
@@ -237,8 +253,12 @@ pub struct Client {
     pub snapshots: Vec<Snapshot>,
     /// How many of the oldest snapshots [`Self::shed`] dropped.
     pub shed_count: usize,
-    /// Message number to index in `snapshots`, for deltas.
-    ring: [Option<(i32, usize)>; PACKET_BACKUP],
+    /// Each snapshot a delta can reach, by message number.
+    ring: [Option<RingSlot>; PACKET_BACKUP],
+    /// `cl.parseEntitiesNum` and `cl.parseClientsNum`: the entities and
+    /// clients every snapshot since the gamestate carried.
+    parse_entities: i32,
+    parse_clients: i32,
     /// The newest server command and its text (keys the client's messages).
     pub server_command_sequence: i32,
     pub server_commands: BTreeMap<i32, Vec<u8>>,
@@ -281,6 +301,8 @@ impl Client {
         }
         self.gamestate = Some(gs);
         self.ring = [None; PACKET_BACKUP];
+        self.parse_entities = 0;
+        self.parse_clients = 0;
     }
 
     /// CoD4x 21's gamestate, one side channel message (`cmd 1`, the
@@ -340,7 +362,12 @@ impl Client {
             s.base = s.base.and_then(|b| b.checked_sub(n));
         }
         for r in &mut self.ring {
-            *r = r.and_then(|(num, i)| Some((num, i.checked_sub(n)?)));
+            *r = r.and_then(|s| {
+                Some(RingSlot {
+                    index: s.index.checked_sub(n)?,
+                    ..s
+                })
+            });
         }
         self.shed_count += n;
         n
@@ -431,9 +458,17 @@ impl Client {
                 }
                 SVC_SNAPSHOT => {
                     let snap = self.parse_snapshot(r, sequence as i32)?;
-                    let i = self.snapshots.len();
-                    self.ring[snap.message_num as usize % PACKET_BACKUP] =
-                        Some((snap.message_num, i));
+                    let slot = RingSlot {
+                        message_num: snap.message_num,
+                        index: self.snapshots.len(),
+                        entities_at: self.parse_entities,
+                        clients_at: self.parse_clients,
+                    };
+                    self.ring[snap.message_num as usize % PACKET_BACKUP] = Some(slot);
+                    self.parse_entities =
+                        self.parse_entities.wrapping_add(snap.entities.len() as i32);
+                    self.parse_clients = self.parse_clients.wrapping_add(snap.clients.len() as i32);
+                    let i = slot.index;
                     self.snapshots.push(snap);
                     ops.push(Op::Snapshot(i));
                 }
@@ -461,11 +496,19 @@ impl Client {
         } else {
             message_num.wrapping_sub(delta)
         };
+        // A base not in the ring, or whose entities or clients the parse
+        // rings wrote over, stops the message (0x473842..0x4738e8).
         let base = if num <= 0 {
             None
         } else {
             match self.ring[num.rem_euclid(PACKET_BACKUP as i32) as usize] {
-                Some((n, i)) if n == num => Some(i),
+                Some(s)
+                    if s.message_num == num
+                        && self.parse_entities.wrapping_sub(s.entities_at) <= PARSE_RING_REACH
+                        && self.parse_clients.wrapping_sub(s.clients_at) <= PARSE_RING_REACH =>
+                {
+                    Some(s.index)
+                }
                 _ => {
                     return Err(anyhow!(
                         "snapshot {message_num} deltas from {num}, which I don't hold"

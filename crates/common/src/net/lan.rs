@@ -30,7 +30,8 @@ pub fn is_lan_with(ip: Ipv4Addr, locals: &[Ipv4Addr]) -> bool {
 }
 
 /// CoD2's and CoD4's `Sys_IsLANAddress` (cod2_lnxded 0x80d5638,
-/// cod4_lnxded 0x81d59c8, `iw3mp.exe` 0x578120 and 0x578180) against
+/// CoD2MP_s.exe 0x467100, cod4_lnxded 0x81d59c8, `iw3mp.exe` 0x578120 and
+/// 0x578180) against
 /// `locals`: 10/8, 127/8, 169.254/16, 172.16/12 and 192.168/16, or the
 /// first three octets of one of `locals`. IPv6 counts only as loopback.
 pub fn is_lan_cod2_with(ip: IpAddr, locals: &[Ipv4Addr]) -> bool {
