@@ -15,8 +15,8 @@ use super::{CS_SERVERINFO, Cod4Session, ET_PLAYER, Source, clock_now, info_value
 use crate::play::cod4_menus::{Join as MenuJoin, ScriptMenus};
 
 impl Cod4Session {
-    /// Joins `addr` and waits for its gamestate (`cp` answered), up to
-    /// 30 s; `join` answers the team and class menus on their own.
+    /// Joins `addr` and waits for its gamestate, up to 30 s (the `cp` goes
+    /// once the cgame is up, `Conn::cgame_up`); `join` answers the team and class menus on their own.
     #[cfg(test)]
     pub fn connect(addr: SocketAddr, name: &str, cp: Cp, join: MenuJoin) -> Result<Cod4Session> {
         Self::connect_with(addr, name, cp, join, None)
@@ -125,8 +125,9 @@ impl Cod4Session {
         bail!("{addr}: still missing files after 16 reconnects")
     }
 
-    /// `connect` to `addr` as `join` says and its first gamestate (`cp`
-    /// answered), with voice.
+    /// `connect` to `addr` as `join` says and its first gamestate, with
+    /// voice. No `cp` goes here: a join a disconnected fetch leaves sends
+    /// none.
     fn join_conn(addr: SocketAddr, join: Join) -> Result<Conn> {
         let mut conn = Conn::join(
             addr,
@@ -387,9 +388,10 @@ fn download_round(
 
 /// `vcod --game cod4 --net-probe ADDR [--team T [--class C]]`: joins a
 /// server headless for `secs` through the same session steps as the
-/// window (join, `cp`, the menus answered, a cmd a frame, events, the
-/// scene), a line a second, and the menus opened and the spawn as they
-/// come.
+/// window, in its order (`App::cod4_level`, then `Cod4Client::pump`): the
+/// map change, the step (`cp`, the menus answered, a cmd a frame, events),
+/// then the scene, which sends the frame's packet. A line a second, and
+/// the menus opened, the map changes and the spawn as they come.
 /// With `install`, the files the server references that it lacks are
 /// downloaded into it first.
 pub fn probe(
@@ -419,7 +421,12 @@ pub fn probe(
     let (mut menus, mut spawned) = (0, false);
     while t0.elapsed() < Duration::from_secs(secs) {
         let ms = t0.elapsed().as_secs_f64() * 1000.0;
+        // Headless, the new level has nothing to load.
+        if let Some(map) = s.take_map_change() {
+            println!("{ms:.0} map change {map}");
+        }
         s.step(ms)?;
+        let scene = s.scene();
         for m in &s.menus.opened[menus..] {
             println!("{ms:.0} menu {m}");
         }
@@ -436,7 +443,7 @@ pub fn probe(
         }
         if t0.elapsed().as_secs() >= next {
             next = t0.elapsed().as_secs() + 1;
-            if let Some(sc) = s.scene() {
+            if let Some(sc) = &scene {
                 let kinds: Vec<u32> = sc.entities.iter().map(|d| d.etype).collect();
                 let players: Vec<String> = sc
                     .entities

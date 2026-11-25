@@ -356,8 +356,6 @@ pub struct Conn {
     lan: bool,
     /// `clc.lastPacketSentTime`; `None` where retail stores -9999.
     last_sent: Option<Instant>,
-    /// The checksum feed of the gamestate the last `cp` answered.
-    cp_feed: Option<i32>,
     /// The newest server command applied to the gamestate's table.
     applied: i32,
     /// `loadingnewmap`'s map, until its gamestate comes.
@@ -439,7 +437,6 @@ impl Conn {
             max_packets: MAX_PACKETS,
             lan: vcod_common::net::lan::is_lan_cod2(server.ip()),
             last_sent: None,
-            cp_feed: None,
             applied: 0,
             loading: None,
             state: ConnState::Connected,
@@ -766,13 +763,15 @@ impl Conn {
 
     /// `CL_DownloadsComplete` past `CL_InitCGame` (`iw3mp.exe`
     /// 0x46aad8..0x46aaef): the level is loaded, cmds are made from here on,
-    /// and three packets go at once past the gate, the `cp` in them
-    /// (cod4-netfields.md 14.3). Only in `CA_LOADING`.
+    /// the `cp` is queued (`CL_SendPureChecksums` 0x46a0f0) and three
+    /// packets go at once past the gate (cod4-netfields.md 14.3). Only in
+    /// `CA_LOADING`, so a gamestate whose files download sends no `cp`.
     pub fn cgame_up(&mut self) -> Result<()> {
         if self.state != ConnState::Loading {
             return Ok(());
         }
         self.state = ConnState::Active;
+        self.send_pure_checksums()?;
         for _ in 0..3 {
             self.send(&[], None)?;
         }
@@ -795,8 +794,8 @@ impl Conn {
     }
 
     /// The server messages read until `until` (at least everything already
-    /// queued). A gamestate queues the `cp` ahead of any move, as the client
-    /// sends it once the level is loaded, before its first usercmd.
+    /// queued). A gamestate puts the connection in `CA_LOADING` until
+    /// [`Conn::cgame_up`].
     pub fn poll(&mut self, until: Instant) -> Result<Vec<Received>> {
         self.poll_at_most(until, vcod_common::net::MAX_PACKETS_PER_PUMP)
     }
@@ -866,9 +865,7 @@ impl Conn {
             self.drop_acked_commands();
             self.apply_configstrings(&parsed);
             if parsed.ops.iter().any(|o| matches!(o, Op::Gamestate)) {
-                self.cmd_ring = CmdRing::default();
-                self.state = ConnState::Loading;
-                self.answer_gamestate()?;
+                self.new_gamestate();
             }
             out.push(Received {
                 sequence: s,
@@ -935,9 +932,7 @@ impl Conn {
                 reliable::CMD_GAMESTATE => {
                     self.client.take_side_gamestate(&body)?;
                     self.side_gamestate();
-                    self.cmd_ring = CmdRing::default();
-                    self.state = ConnState::Loading;
-                    self.answer_gamestate()?;
+                    self.new_gamestate();
                     got = Some(Received {
                         sequence: self.ack as u32,
                         parsed: Parsed {
@@ -999,11 +994,8 @@ impl Conn {
 
     /// CoD4x 21: a download ask on the side channel. [`XAsk::Done`],
     /// [`XAsk::WwwFail`] and [`XAsk::WwwChecksumFail`] bring the gamestate
-    /// again, which needs its own `cp`, as `donedl`'s does.
+    /// again, as `donedl` does.
     pub fn side_download(&mut self, ask: &XAsk) -> Result<()> {
-        if matches!(ask, XAsk::Done | XAsk::WwwFail | XAsk::WwwChecksumFail) {
-            self.cp_feed = None;
-        }
         self.side
             .as_mut()
             .context("a download ask on a 1.7 connection")?
@@ -1185,30 +1177,32 @@ impl Conn {
         apply_configstrings(&mut self.client, &mut self.applied, parsed);
     }
 
-    /// `donedl`: the server sends the gamestate again, and that one is
-    /// answered with its own `cp` though the feed is the same.
+    /// `donedl`: the server sends the gamestate again, and its cgame's
+    /// start sends the `cp`.
     pub fn done_downloading(&mut self) -> usize {
-        self.cp_feed = None;
         self.command("donedl")
     }
 
     /// `wwwdl fail`: the server answers with the gamestate again
-    /// (cod4-handshake.md 11), which, like `donedl`'s, needs its own `cp`.
+    /// (cod4-handshake.md 11), as for `donedl`.
     pub fn www_failed(&mut self) -> usize {
-        self.cp_feed = None;
         self.command("wwwdl fail")
     }
 
-    fn answer_gamestate(&mut self) -> Result<()> {
-        let gs = self.client.gamestate.as_ref().context("gamestate")?;
-        if self.cp_feed == Some(gs.checksum_feed) {
-            return Ok(());
-        }
-        self.cp_feed = Some(gs.checksum_feed);
+    /// A gamestate came: `cl` is cleared and the level loads.
+    fn new_gamestate(&mut self) {
+        self.cmd_ring = CmdRing::default();
+        self.state = ConnState::Loading;
         self.loading = None;
         // The first move's writer builds it otherwise, in the first frame
         // after the load (cod4-client-perf.md 17).
         std::sync::LazyLock::force(&super::parse::UNUSED_HUFF);
+    }
+
+    /// `CL_SendPureChecksums` (`iw3mp.exe` 0x46a0f0): the gamestate's `cp`
+    /// queued as a reliable command.
+    fn send_pure_checksums(&mut self) -> Result<()> {
+        let gs = self.client.gamestate.as_ref().context("gamestate")?;
         let si = String::from_utf8_lossy(gs.configstring(1)).into_owned();
         let cp = match &self.cp {
             Cp::None => return Ok(()),
@@ -1541,7 +1535,6 @@ mod tests {
             max_packets: MAX_PACKETS,
             lan: true,
             last_sent: None,
-            cp_feed: None,
             applied: 0,
             loading: None,
             state: ConnState::Connected,
@@ -2013,8 +2006,6 @@ mod tests {
             .unwrap();
         let mut c = moving(&server, Dialect::V17);
         c.state = ConnState::Loading;
-        c.cp_feed = None;
-        c.answer_gamestate().unwrap();
         assert!(!c.ready_to_send());
         c.cgame_up().unwrap();
         assert_eq!(c.state(), ConnState::Active);
@@ -2028,6 +2019,27 @@ mod tests {
         assert_eq!(queued(&server), 0);
         c.cgame_up().unwrap();
         assert_eq!(queued(&server), 0, "once a level");
+    }
+
+    /// A gamestate whose files then download queues no `cp`: the download
+    /// starts before `CL_DownloadsComplete` (cod4-netfields.md 14.3.1). The
+    /// gamestate `donedl` brings does, once its cgame is up.
+    #[test]
+    fn a_gamestate_whose_files_download_sends_no_cp() {
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut c = moving(&server, Dialect::V17);
+        let seq = c.reliable_sequence();
+        c.new_gamestate();
+        c.set_downloading(true);
+        c.cgame_up().unwrap();
+        c.set_downloading(false);
+        c.done_downloading();
+        assert_eq!(c.reliable_sequence(), seq + 1);
+        assert_eq!(c.command_text(seq + 1), b"donedl");
+        c.new_gamestate();
+        assert_eq!(c.reliable_sequence(), seq + 1, "not at the gamestate");
+        c.cgame_up().unwrap();
+        assert!(c.command_text(seq + 2).starts_with(b"cp "));
     }
 
     /// `clc_move` (op 0) only when the newest snapshot came in the newest

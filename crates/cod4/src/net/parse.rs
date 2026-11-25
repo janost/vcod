@@ -22,7 +22,7 @@ use vcod_common::net::huffman::Huffman as Cod1Huffman;
 /// `MsgWriter` wants a CoD1 tree for `finish`, which these writers never
 /// call (1.7's code is [`Huffman`]); built once, as it costs tens of
 /// milliseconds, so a client builds it with the gamestate (`Conn`'s
-/// `answer_gamestate`), not in the first frame's send.
+/// `new_gamestate`), not in the first frame's send.
 pub static UNUSED_HUFF: std::sync::LazyLock<Cod1Huffman> =
     std::sync::LazyLock::new(Cod1Huffman::new);
 

@@ -411,9 +411,12 @@ Each bullet VERIFIED (the instructions at the addresses named):
   the server ignores (7.2.1). A file fetched over HTTP that fails those
   checks gets op 7 in place of op 5 (7.2.6).
 - `Conn` keeps the server's download messages for `take_side_downloads`
-  and sends an ask through `side_download`, which clears the `cp` feed on
-  `Done`, `WwwFail` and `WwwChecksumFail` as `donedl` and `wwwdl fail` do
-  on 1.7.
+  and sends an ask through `side_download`. The gamestate `Done`,
+  `WwwFail` and `WwwChecksumFail` bring gets no `cp` of its own: the
+  `cp` goes once, when the cgame is up (`Conn::cgame_up`,
+  cod4-netfields.md 14.3.1). Under `sv_wwwDlDisconnected` the joins the
+  fetches leave send none; only the last join's cgame sends one
+  (`cap-wwwdis-cp`, a run with the `cp` printed). VERIFIED live.
 - The netchan's send gate while a file is in flight (`set_downloading`,
   `CA_CONNECTED`, none within 50 ms of the last packet, then
   `cl_maxpackets`; `cod4-netfields.md` 14.1, 14.3) is 1.7's client's and
@@ -832,7 +835,7 @@ for its own client were not looked for; open (section 17).
   | `cap-withheld1` | `+set sv_noauth 1` | the test `cod4x_live_withheld_gamestate_times_out` run inside (18.4) |
   | `cap-dl1`, `cap-dl2`, `cap-dl3`, `cap-dl4` | `+set sv_noauth 1 +set fs_game mods/vcodx +set sv_wwwDownload 1 +set sv_wwwBaseURL "http://127.0.0.1:28991"` (`cap-dl1` unquoted, 7.2.4) | the test `cod4x_live_download_fetches_the_mods_files` run inside (18.5; `cap-dl4` with the op 7 client, 7.2.6) |
   | `cap-refused0`, `cap-refused1` | `+set sv_noauth 1 +set fs_game mods/vcodx +set sv_allowDownload 0` | the test `cod4x_live_download_refused_ends_the_join` run inside (7.2.7; `cap-refused0` before the `disconnect`) |
-  | `cap-wwwdis0`, `cap-wwwdis1` | as `cap-dl2` with `+set sv_wwwDlDisconnected 1` | the test `cod4x_live_www_disconnected_reconnects` run inside (7.2.8; `cap-wwwdis0` before the fix) |
+  | `cap-wwwdis0`, `cap-wwwdis1`, `cap-wwwdis-cp` | as `cap-dl2` with `+set sv_wwwDlDisconnected 1` | the test `cod4x_live_www_disconnected_reconnects` run inside (7.2.8; `cap-wwwdis0` before the fix, `cap-wwwdis-cp` with a print at each `cp`, not committed) |
   | `dl-try1` | `+set sv_noauth 1 +set fs_game mods/vcodx`, `CAP_SECS=3` | none: the boot with `mod.ff` (7.2.4) |
 
   `oob_walk.py` and `legacy_walk.py` are throwaway scripts beside the
