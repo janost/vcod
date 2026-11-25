@@ -43,7 +43,8 @@ past the challenge.
 - It looks for `steam_api.so` (0x2bb092) and for a zone
   `cod4x_patchv2` (0x2c8b9c, loaded by `R_Init` 0x12f4de beside
   `common_mp` unless the mod has its own `mod.ff`). The release ships
-  neither; the server logs both missing and runs on. VERIFIED live.
+  neither; the server logs both missing and runs on. VERIFIED live. Under
+  a `fs_game` with no `mod.ff` it stops on the zone instead (7.2.4).
 - `sv_pure` defaults to 0 (`getinfo`'s `pure\0`), where 1.7's is 1.
   VERIFIED live.
 - A server whose update host or Steam library is reachable may behave
@@ -251,8 +252,168 @@ The s2c 1 and 9 rows are VERIFIED live.
   `short` length, the bytes), 2 a www redirect (`SV_WWWRedirect`: the
   `%s/%s` URL string and two longs). VERIFIED (the writes in
   `SV_WriteDownloadToClient` 0x1102c0 and `SV_WWWRedirect`).
-- No download ran in the captures. 1.7's netchan download commands
-  (`cod4-handshake.md` 11) do not appear in this path. INFERRED.
+- No download ran in the stage 1 to 3 captures; `cap-dl1` and `cap-dl2`
+  hold two (7.2.3). 1.7's netchan download commands (`cod4-handshake.md`
+  11) do not appear in this path. INFERRED.
+
+### 7.2.1 The client's asks
+
+Each `cmd 5`, the op byte, then the fields. Each bullet VERIFIED (the
+instructions at the addresses named):
+
+- 0, begin: a string, read into client +0x20fc8, 64 bytes
+  (0x110c18..0x110c1e). `SV_FileStillActive` (0x1220f0) compares it
+  case-blind with each `sv_referencedIwdNames` entry plus `.iwd` and each
+  `sv_referencedFFNames` zone's `DB_GetQPathForZone` path. A match marks
+  the client downloading (+0x20fc4 = 1); a miss clears the name and sends
+  the gamestate again, with no refusal (0x110c26..0x110c53).
+- 1, done (`SV_DoneDownload_f` 0x110bc0): the file closed, the mark
+  cleared and `SV_SendClientGameState` (0x110bdf..0x110bf1).
+- 2, stop (`SV_StopDownload_f` 0x10e9d0): the file closed.
+- 3, the bytes wanted (`SV_SelectDownloadBlocksX_f` 0x10ea80): `long`
+  position, `long` length, the position held to the file's size and the
+  length to what is left past it, the file sought there and the server's
+  wait (+0x2102c) cleared (0x10ea98..0x10eb0e). With no file open it is
+  ignored, a developer print only (0x10ea8b, 0x10eb28).
+- 4, www failed, and 7, www checksum failed (0x110d50, 0x110e20): with
+  the redirect marks (+0x21138, +0x2113c) set, both cleared, +0x21140
+  set and `SV_SendClientGameState`; without them the client is dropped
+  with `Unexpected www download message.` (0x110d5a..0x110e0c,
+  0x110e2a..0x110ed4).
+- 5, www done (0x110cb0): the marks cleared and the file closed, nothing
+  sent (0x110cba..0x110cfb).
+- 6 (`SV_WWWDownload_BBL8R_f` 0x110c60): the client dropped with `Client
+  dropped to download files` (0x110c98).
+
+### 7.2.2 The server's messages
+
+`SV_WriteDownloadToClient` (0x1102c0) writes each as `long 0` (the length
+word `SV_SendReliableServerCommand` fills), `long 5`, the op, the fields.
+Each bullet VERIFIED (the instructions at the addresses named):
+
+- Its first call for a name: `FS_VerifyPak` (0xbb3e4) returning 0 drops
+  the client with `illegal download request` (0x110350..0x110411); what it
+  tests was not read. `sv_allowDownload` off refuses with op 3 and
+  `EXE_AUTODL_SERVERDISABLED_PURE\x15%s` under `sv_pure`, else
+  `EXE_AUTODL_SERVERDISABLED\x15%s` (0x11039e..0x1105d9); a file
+  `FS_SV_FOpenFileRead` opens at size 0 or less refuses with
+  `EXE_AUTODL_FILENOTONSERVER\x15%s` (0x110520..0x110567). Otherwise it
+  logs `clientDownload: %d : begining "%s"` and sends op 1; with
+  `sv_wwwDownload` set, the client's www mark (+0x21134) set and no www
+  failure since (+0x21140 clear) it sends op 2 after it in a second
+  message (0x11046d..0x110654). On the side channel path it clears
+  +0x21140 and waits for op 3 (0x110483..0x11050c).
+- Op 1, begin: `long` size, then `SV_WriteChecksumInfo` (0x1201b0): a
+  `long 0` and `FS_WriteChecksumInfo`'s (0xbeb82) 0x448-byte record for
+  the name, or nothing when it has none (0xbeba6..0xbec83).
+- The record, `FS_CalculateChecksumForFile`'s (0xbea14): the name, 64
+  bytes (0xbeb1f); the size at +0x40 (0xbeb02); at +0x44 a CRC of each
+  2 MiB read, at most 256 (`crc32_16bytes` from 0, 0xbead1..0xbeaf4); at
+  +0x444 the CRC run over the whole file (0xbeb0d).
+  `SV_CalculateChecksums` (0x120050) makes one at the map's start for
+  each `sv_referencedIwdNames` entry (`%s.iwd`) and `sv_referencedFFNames`
+  zone and logs `CRC32 for %s is %x Len %d`.
+- Op 0, a block: `long` position, `short` length, the bytes
+  (0x1107ed..0x110830). Op 3, a refusal: the string (0x110567..0x110583).
+  Op 2, the redirect (`SV_WWWRedirect` 0x10e8e0): `%s/%s` of
+  `sv_wwwBaseURL` and the name in 256 bytes (0x10e8ef..0x10e90f), `long`
+  size, `long` `sv_wwwDlDisconnected` (0x10e938..0x10e967); then the file
+  closes and the download mark clears.
+- `SV_UserinfoChanged` sets the www mark when `Info_ValueForKey` of
+  `cl_wwwDownload` is not null (0x10f990..0x10f9af), and that function
+  returns the empty string 0x2ea8d3 for a key the userinfo lacks
+  (0xfbc03, 0xfbc33). So every client is marked, and a `sv_wwwDownload`
+  server redirects a client whatever its `cl_wwwDownload`. Live in
+  `cap-dl2`: the second client's `connect` carried no `cl_wwwDownload` and
+  got the redirect. VERIFIED live.
+- The records' last word is zlib's CRC-32 of the file: `z_vcodx.iwd`'s
+  `1545e8a7` (size 30263) and `mod.ff`'s `b144581c` (89196), as the
+  console's `CRC32 for` lines and `zlib.crc32` of the files read, with the
+  first chunk's CRC the same (one chunk). VERIFIED live (`cap-dl2`,
+  `dl_walk.py`).
+
+### 7.2.3 The transfer
+
+- `SV_EndClientSnapshot` (0x1238b7) calls `SV_WriteDownloadToClient` for
+  a client whose state is not 1 once per message it sends it
+  (0x1238c6..0x1238f7). Each call sends at most one block: from the
+  position held, up to the block size, read off the file; past the bytes
+  asked for, or on a failed read, an empty block at the position reached
+  and the wait set again (0x110763..0x1107ca, 0x110894). VERIFIED (the
+  instructions).
+- No block goes while the side channel's unacknowledged fragments hold
+  more than twice the larger of the window's bytes (20 × 1200) and 10000,
+  48000 bytes (0x1106bc..0x1106eb). The block size is
+  `sv_maxDownloadRate` × 1024 over a count of clients and `sv_fps`, held
+  under that 48000 over `sv_fps`, at least 1200 and at most 0xffff
+  (0x1106a0..0x11075d). VERIFIED (the instructions). At `sv_fps` 20 the
+  blocks were 2400 bytes. VERIFIED live.
+- `cap-dl2`'s second client, `www` off, each row VERIFIED live:
+
+  | ms | Dir | What |
+  |---|---|---|
+  | 18350 | c2s | op 0 `mods/vcodx/z_vcodx.iwd` |
+  | 18420, 18469 | s2c | op 1 (30263 bytes and the record), op 2 |
+  | 19452, 19502 | c2s | op 3 (0, 30263), ignored; op 4 |
+  | 21719 | s2c | the gamestate again, no stats request before it |
+  | 22762, 22819 | both | op 0, op 1 with no op 2 |
+  | 23865 | c2s | op 3 (0, 30263) |
+  | 24020..25769 | s2c | 13 blocks, 12 of 2400 bytes and one of 1463, about 150 ms apart |
+  | 25819 | s2c | the empty block at 30263 |
+  | 26871..32331 | both | `mod.ff` the same way, redirected again |
+  | 32520..37970 | s2c | 38 blocks, 37 of 2400 and one of 396 |
+  | 38020 | s2c | the empty block at 89196 |
+  | 39049 | c2s | op 1 |
+  | 41270 | s2c | the gamestate, no stats request before it |
+
+- A 2400-byte block is a 2415-byte stream message, three fragments, so
+  about 16 KB a second at 20 fragments a second (7.4). VERIFIED live
+  (the arithmetic on the table's sizes and times).
+- Most of the rest is the side channel's laps (7.4): an ask or answer
+  queued behind the sender's cursor waits up to a lap, about a second, at
+  each end (op 0 at 22762 a second after the gamestate; op 3 at 23865 a
+  second after the begin). VERIFIED live. The first client, over HTTP,
+  took 10.0 s from `connect` to its session, the second 27.2 s. VERIFIED
+  live.
+
+### 7.2.4 A mod on the release
+
+- Under `fs_game mods/vcodx` with no `mod.ff` the release stopped on
+  `Could not find zone '<basepath>/usermaps/cod4x_patchv2/cod4x_patchv2.ff'`
+  after `common_mp`. With a stock fastfile copied in as `mod.ff` it
+  loaded `mod` and ran, and logged `CRC32 for` lines for
+  `mods/vcodx/z_vcodx.iwd` and `mods/vcodx/mod.ff` from the homepath's
+  mod directory: both are referenced at `sv_pure` 0. VERIFIED live
+  (`dl-try1`, which keeps the second boot; the first's log is not kept).
+- The command line reads `//` as a comment: `+set sv_wwwBaseURL
+  http://127.0.0.1:28991` set `http:`, and the redirect read
+  `http:/mods/vcodx/z_vcodx.iwd` (`cap-dl1`); quoted, the URL stayed whole
+  (`cap-dl2`). VERIFIED live.
+- `SV_DirectConnect` refuses a connect with `Connection refused: An
+  uncompleted connection from %s has been detected` (0x2c139c) when a
+  slot of the same address, with neither the same qport nor the same
+  port, is in state 1 or 2 (0x111690..0x1116d1). VERIFIED (the
+  instructions). A second client from 127.0.0.1 right after the first's
+  `disconnect` got it (a first run of the gate, not kept). VERIFIED live.
+
+### 7.2.5 vcod
+
+- `vcod_cod4::net::download` reads the server's messages
+  (`XDownloadMsg`, to the body's last byte) and writes ops 0 to 6
+  (`XAsk`). The 1.7 queue (`Downloads`) runs them under
+  `with_dialect(Dialect::X21)`: its file rules (`missing_in`, the paths,
+  the spool, the checks) as on 1.7, each ask on the side channel, and on
+  op 1 one op 3 for every byte of the file. A file whose begin carried a
+  record also has to match its CRC-32. A gamestate in place of op 1 ends
+  the queue with `The server does not serve <name>`. CoD4x has no ask for
+  1.7's `wwwdl ack`, so none goes; `www done` and `www failed` are ops 5
+  and 4. The client sends op 3 on a begin that a redirect follows, which
+  the server ignores (7.2.1).
+- `Conn` keeps the server's download messages for `take_side_downloads`
+  and sends an ask through `side_download`, which clears the `cp` feed on
+  `Done` and `WwwFail` as `donedl` and `wwwdl fail` do on 1.7.
+- The gate, `cod4x_live_download_fetches_the_mods_files` (capture
+  `cap-dl2`): see 18.5.
 
 ### 7.3 The packets in the captures
 
@@ -311,6 +472,10 @@ ports. Each bullet VERIFIED (the instructions at the addresses named):
   `cap-join1` the cursor started at 1 and the last of 44 fragments was
   acknowledged 2.7 s after the challenge. VERIFIED live. That the CoD4x
   client runs this same code, its limit of 4 included, is INFERRED.
+- Owner decision, 2026-11-25: vcod's receiver keeps the limit of 4
+  (`reliable::RECEIVE_AHEAD`), as the server's code has it, though after a
+  skipped fragment it drops the rest of that lap and so can slow a join
+  by a lap, about a second.
 
 ## 8. Netchan, scramble, Huffman, the client header
 
@@ -511,7 +676,8 @@ for its own client were not looked for; open (section 17).
 - `xbase_00.iwd`: the server reads its certificates from it
   (`InitCA Attempting to read certificates from file main/xbase_00.iwd`).
   Whether clients are asked for it is not known. INFERRED; open.
-- A mod server's assets come through the downloads of 7.2. INFERRED.
+- A mod server's assets come through the downloads of 7.2: the gate of
+  18.5 fetched a mod's iwd and `mod.ff` both ways. VERIFIED live.
 
 ## 16. Tools and captures
 
@@ -546,10 +712,13 @@ for its own client were not looked for; open (section 17).
   | `cap-join1`, `cap-join2` | `+set sv_noauth 1` | the test `cod4x_live_join_spawns_and_leaves` run inside, `COD4X_OUT` naming the directory (18.3) |
   | `cap-vcod-probe` | `+set sv_noauth 1` | `vcod --game cod4 --game-dir <1.7 install> --net-probe $ADDR --team allies --probe-secs 15` |
   | `cap-withheld1` | `+set sv_noauth 1` | the test `cod4x_live_withheld_gamestate_times_out` run inside (18.4) |
+  | `cap-dl1`, `cap-dl2` | `+set sv_noauth 1 +set fs_game mods/vcodx +set sv_wwwDownload 1 +set sv_wwwBaseURL "http://127.0.0.1:28991"` (`cap-dl1` unquoted, 7.2.4) | the test `cod4x_live_download_fetches_the_mods_files` run inside (18.5) |
+  | `dl-try1` | `+set sv_noauth 1 +set fs_game mods/vcodx`, `CAP_SECS=3` | none: the boot with `mod.ff` (7.2.4) |
 
   `oob_walk.py` and `legacy_walk.py` are throwaway scripts beside the
   captures (getchallenge and connect per protocol; a 1.7 join resending
-  `connect`).
+  `connect`). `dl_walk.py LO_TXT` prints each client's side channel `cmd 5`
+  messages both ways with their times, the begin's record decoded.
 
 ## 17. Still open
 
@@ -559,7 +728,7 @@ for its own client were not looked for; open (section 17).
 - The CoD4x-only server commands and side channel messages a stock server
   sends its own client during play, past the ones seen here.
 - `cod4x_patchv2.ff` and `xbase_00.iwd` on a real install (section 15).
-- A download through 7.2 and a `sv_pure 1` server's `cp` on protocol 21.
+- A `sv_pure 1` server's `cp` on protocol 21 (the download is 7.2.3).
 - What the configstrings past 2441 hold on a server that uses them.
 - A public server's gamestate: needs stats sent to one of section 19's
   two servers without the library.
@@ -704,7 +873,7 @@ Questions for the owner:
   s of 9-byte messages after its gamestate. VERIFIED live (a first run
   of the gate, not kept).
 - Messages other than the stats request and the gamestate (a download,
-  `cmd 8`) are logged and left.
+  `cmd 8`) are logged and left. Since 18.5 a download goes to the queue.
 
 The gate, `cod4x_live_join_spawns_and_leaves` (`tools/cod4x_capture.sh`
 on the release with `sv_noauth 1`, mp_crash; capture `cap-join1`), each
@@ -729,7 +898,7 @@ result VERIFIED live:
 Left for later stages: the browser and the authenticating server's
 refusal (stage 3: a server sending `cmd 8` is not told apart yet, the
 join waits for a gamestate that never comes and ends on the session's
-30 s `no gamestate`; done in 18.4), downloads over `cmd 5` (stage 4), a demo recorded
+30 s `no gamestate`; done in 18.4), downloads over `cmd 5` (stage 4, done in 18.5), a demo recorded
 on a CoD4x server (the writer is 1.7's), `Client::client_configs` in the
 scoreboard, and a map change on a CoD4x server, which no run made.
 
@@ -790,6 +959,39 @@ scoreboard, and a map change on a CoD4x server, which no run made.
   host` is drawn, the CoD4x row's killcam is 1, the killcam filter at 1
   keeps both and at 0 drops both, and `ui_browserShowCoD4x 0` drops the
   CoD4x row in Internet and in Local. VERIFIED (the test).
+
+### 18.5 Stage 4: downloads
+
+- A protocol 21 join runs 1.7's download queue over the side channel
+  (7.2.5): the files `download::missing_in` lists, each asked for with op
+  0 and fetched over the www redirect or as blocks, then op 1 and the
+  gamestate it brings, `cp` answered again. vcod's 1.7 rules stay: no
+  stock `main` iwd, nothing outside the install, the size, the listed
+  iwd checksum and, new here, the record's CRC-32 checked before the
+  rename.
+- The gate, `cod4x_live_download_fetches_the_mods_files`
+  (`tools/cod4x_capture.sh` on the release with `sv_noauth 1`, `fs_game
+  mods/vcodx`, `sv_wwwDownload 1` and a loopback HTTP server on the mod's
+  homepath; capture `cap-dl2`), each result VERIFIED live:
+  - The mod: a generated iwd of two files (30263 bytes) and a copy of the
+    stock `code_post_gfx_mp.ff` as `mod.ff` (89196), written under the
+    server's homepath before its boot (7.2.4).
+  - Client one, `cl_wwwDownload` on: both files redirected
+    (`Redirecting client 'vcodxh' to http://127.0.0.1:28991/...`),
+    fetched over HTTP, op 5 for each, op 1, the gamestate; in the world
+    10.0 s after `connect`.
+  - Client two, `cl_wwwDownload` off, while the first stays in (7.2.4):
+    each file redirected, op 4 (`reported that the http download of '...'
+    failed, falling back to a server download`), the gamestate, then the
+    file in blocks over the side channel (7.2.3); in the world 27.2 s
+    after `connect`.
+  - Both clients' files landed byte for byte the server's, both spawned
+    with `m16_gl_mp`, the HTTP server saw only the first client's two
+    GETs, and the server logged both leaving with `EXE_DISCONNECTED` and
+    no `illegal download request`, `Unexpected www` or kick.
+- Not run live: a refusal (`sv_allowDownload 0`), `sv_wwwDlDisconnected
+  1` and a CRC-32 mismatch (that one a unit test,
+  `a_cod4x_file_comes_in_the_bytes_asked_for`).
 
 ## 19. Public reach, 2026-11-23
 
