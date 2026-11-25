@@ -447,7 +447,7 @@ const WINVOICE_DVARS: [(&str, &str, u32); 4] = [
 
 /// [`Shell::register_cod4_options`]'s dvars: name, default, flags
 /// (`Dvar_RegisterNew` 0x56c350 calls, cod4-front-end.md 9).
-const COD4_OPTION_DVARS: [(&str, &str, u32); 56] = [
+const COD4_OPTION_DVARS: [(&str, &str, u32); 57] = [
     // the crosshair names' wait and fade, ints, cheat-protected
     // (`iw3mp.exe` 0x43d801..0x43d916, flags 0x80; cod4-hud.md 17)
     ("cg_friendlyNameFadeIn", "0", CHEAT),
@@ -523,6 +523,8 @@ const COD4_OPTION_DVARS: [(&str, &str, u32); 56] = [
     ("cg_ScoresPing_MedColor", "0.8 0.8 0 1", ARCHIVE),
     ("cg_ScoresPing_LowColor", "0 0.75 0 1", ARCHIVE),
     ("cg_ScoresPing_BgColor", "0.25 0.25 0.25 0.5", ARCHIVE),
+    // a bool, false, flags 0 (0x465b95..0x465bd0, cod4-netfields.md 14.2)
+    ("cl_nodelta", "0", 0),
 ];
 
 /// `r_aspectRatio`'s names (iw3mp.exe 0x71c5f0), its enum's order.
@@ -1223,7 +1225,8 @@ impl Shell {
     /// `r_lodScaleRigid`, `r_lodBiasRigid`, `r_drawWater`,
     /// `r_texFilterMipMode`, `monkeytoy`, the picmip and anisotropy dvars,
     /// `r_aspectRatio`, the third-person dvars, the scoreboard's ping graph
-    /// dvars and the custom class names at iw3mp.exe's defaults; then
+    /// dvars, the custom class names and `cl_nodelta` at iw3mp.exe's
+    /// defaults; then
     /// [`Shell::cod4_set_picmip`].
     pub fn register_cod4_options(&mut self) {
         // `timedemo` is a command beside `demo` on 1.7 too (`CL_Init`,

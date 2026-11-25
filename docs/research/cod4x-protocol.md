@@ -412,6 +412,16 @@ Each bullet VERIFIED (the instructions at the addresses named):
 - `Conn` keeps the server's download messages for `take_side_downloads`
   and sends an ask through `side_download`, which clears the `cp` feed on
   `Done` and `WwwFail` as `donedl` and `wwwdl fail` do on 1.7.
+- The netchan's send gate while a file is in flight (`set_downloading`,
+  `CA_CONNECTED`, none within 50 ms of the last packet, then
+  `cl_maxpackets`; `cod4-netfields.md` 14.1, 14.3) is 1.7's client's and
+  runs on a protocol 21 join as well, since the netchan is 1.7's (8). That
+  CoD4x's client paces its netchan the same is INFERRED: no CoD4x client
+  binary was read. 1.7's two packets at a file's empty block
+  (`DownloadEvent::Flush`) answer a block over the netchan; on CoD4x the
+  blocks and the asks ride the side channel, which the netchan's packets
+  do not hurry (7.4), so the queue sends none there. INFERRED (7.2.3 and
+  7.4).
 - The gate, `cod4x_live_download_fetches_the_mods_files` (capture
   `cap-dl2`): see 18.5.
 
@@ -712,7 +722,7 @@ for its own client were not looked for; open (section 17).
   | `cap-join1`, `cap-join2` | `+set sv_noauth 1` | the test `cod4x_live_join_spawns_and_leaves` run inside, `COD4X_OUT` naming the directory (18.3) |
   | `cap-vcod-probe` | `+set sv_noauth 1` | `vcod --game cod4 --game-dir <1.7 install> --net-probe $ADDR --team allies --probe-secs 15` |
   | `cap-withheld1` | `+set sv_noauth 1` | the test `cod4x_live_withheld_gamestate_times_out` run inside (18.4) |
-  | `cap-dl1`, `cap-dl2` | `+set sv_noauth 1 +set fs_game mods/vcodx +set sv_wwwDownload 1 +set sv_wwwBaseURL "http://127.0.0.1:28991"` (`cap-dl1` unquoted, 7.2.4) | the test `cod4x_live_download_fetches_the_mods_files` run inside (18.5) |
+  | `cap-dl1`, `cap-dl2`, `cap-dl3` | `+set sv_noauth 1 +set fs_game mods/vcodx +set sv_wwwDownload 1 +set sv_wwwBaseURL "http://127.0.0.1:28991"` (`cap-dl1` unquoted, 7.2.4) | the test `cod4x_live_download_fetches_the_mods_files` run inside (18.5) |
   | `dl-try1` | `+set sv_noauth 1 +set fs_game mods/vcodx`, `CAP_SECS=3` | none: the boot with `mod.ff` (7.2.4) |
 
   `oob_walk.py` and `legacy_walk.py` are throwaway scripts beside the
@@ -989,6 +999,9 @@ scoreboard, and a map change on a CoD4x server, which no run made.
     with `m16_gl_mp`, the HTTP server saw only the first client's two
     GETs, and the server logged both leaving with `EXE_DISCONNECTED` and
     no `illegal download request`, `Unexpected www` or kick.
+- With 1.7's send gate of `cod4-netfields.md` 14.1 and 14.3 on the
+  netchan (7.2.5) the gate passed again (capture `cap-dl3`): in the world
+  7.7 s and 26.7 s after `connect`. VERIFIED live.
 - Not run live: a refusal (`sv_allowDownload 0`), `sv_wwwDlDisconnected
   1` and a CRC-32 mismatch (that one a unit test,
   `a_cod4x_file_comes_in_the_bytes_asked_for`).

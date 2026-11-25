@@ -432,6 +432,7 @@ fn fetch_and_spawn(
         progress: None,
         cancel: None,
         notes: None,
+        max_packets: vcod_cod4::net::conn::MAX_PACKETS,
     };
     let t0 = Instant::now();
     let mut s = Cod4Session::connect_with(addr, name, Cp::Bare, join, Some(fetch)).unwrap();

@@ -850,8 +850,9 @@ server reads the repeats.
   0x452780 returns 0 (0x474e07..0x474e10); 0x447b3e..0x447b47 asks too.
   `CL_WritePacket` itself sends nothing while 0x934e74 is set or in
   state 1, 2 or 6 (0x463f6a..0x463fa0). Once the cgame is up, 0x46a8d0
-  calls `CL_WritePacket` three times with no gate (0x46aae5..0x46aaef).
-  VERIFIED (the instructions).
+  calls `CL_WritePacket` three times with no gate (0x46aae5..0x46aaef),
+  and a download's end twice (0x47462e, 0x474633; 14.3). VERIFIED (the
+  instructions).
 - **The LAN.** 0x578180 passes the address to 0x578120, which answers 1
   for type 0, 2 or 5, and for type 4 when the first octet is 10 or 127,
   169 with 254 next, 172 with the second's high nibble 1, or 192 with
@@ -869,9 +870,9 @@ server reads the repeats.
 - **The clock it reads.** 0x8f4ce8 takes the realtime with each packet
   `CL_WritePacket` sends (0x46432e) and each stats packet (0x46b013;
   stats go 100 ms apart, `cmp edx,0x64` at 0x46aeed), and -9999
-  (0xffffd8f1) on any `statResponse` (the name 0x6d0c1c compared at
+  (0xffffd8f1) on a `statResponse` in state 6 (the name 0x6d0c1c compared at
   0x46b9b5, the store at 0x46ba43; a mask of 0 sets state 5 first at
-  0x46ba21), on `requeststats` (0x6d0d48 at 0x46bf9a; state 6 at
+  0x46ba21; 14.3), on `requeststats` (0x6d0d48 at 0x46bf9a; state 6 at
   0x46bfcd, the store at 0x46c007), after state 6 at 0x46b98a (0x46b9a1)
   and at 0x4695c5. `loadingnewmap` (0x6d0d28 at 0x46bea6) sets state 5
   (0x46bf74). A gamestate clears the packet rows (section 14). VERIFIED
@@ -882,8 +883,8 @@ server reads the repeats.
   one, a packet goes a second after the last, the first at once after
   the stats; while downloading 50 ms after the last and the LAN test
   besides. VERIFIED (the instructions above).
-- vcod: `Conn::ready_to_send` (`SendClock`): in the world is a gamestate
-  with no `loadingnewmap` since; `requeststats` and `statResponse` clear
+- vcod: `Conn::ready_to_send` (`SendClock`): in the world is state 8
+  (`ConnState::Active`, 14.3); `requeststats` and `statResponse` clear
   `last_sent`; the rows' times sit in `CmdRing`, which a gamestate
   clears; the LAN test is `vcod_common::net::lan::is_lan_cod2` on the
   server's address at the join, against the host's interfaces rather
@@ -895,11 +896,10 @@ server reads the repeats.
   `a_conn_paces_its_packets_by_the_server_and_its_state`,
   `cod2_lan_is_the_private_blocks_and_the_hosts_slash_24`. VERIFIED (the
   tests).
-- vcod departs: no three packets once the cgame is up; a map change's
-  stats go in one burst and moves still go while they do (state 6); the
-  join's download loop paces at the default `cl_maxpackets`; vcod's own
-  frame asks, not the cgame's draw. CoD4x 21's client gate is taken as
-  1.7's (its client binary was not read). INFERRED (the code).
+- vcod departs: vcod's own frame asks, not the cgame's draw. CoD4x 21's
+  client gate is taken as 1.7's (its client binary was not read).
+  INFERRED (the code). The three packets, the stats and the download
+  follow 1.7 since 14.3.
 
 ### 14.2 The move op
 
@@ -926,7 +926,185 @@ server reads the repeats.
   headers. Test:
   `the_delta_move_needs_the_snapshot_in_the_newest_message`. VERIFIED
   (the test).
-- vcod departs: a snapshot off a base vcod no longer holds is an
-  illegible message (both acknowledges go back, `parse.rs`) where 1.7
-  keeps the message and its snapshot invalid; vcod has no `cl_nodelta`.
+- **`cl_nodelta`.** 0x4643f0 (called from `CL_Init` at 0x46d501)
+  registers `cl_nodelta` (0x6cf9f0) through 0x56c350 as type 0 with flags
+  0, the default byte 0, limits 0 and 0, described `The server does not
+  send snapshot deltas` (0x6cf9c4), and stores it at 0x956cfc
+  (0x465b95..0x465bd0). VERIFIED (the instructions and the strings). The
+  test above reads its `+0xc` as a byte (0x4640f0). VERIFIED (the
+  instructions). That type 0 is a bool is INFERRED (the byte read;
+  `cl_stanceHoldTime` beside it passes 5 with the int 300).
+- vcod: the console registers `cl_nodelta` "0" with no flags on a CoD4
+  install (`COD4_OPTION_DVARS`) and `Cod4Session::set_packet_rates`
+  hands it to `Conn::set_nodelta` each frame; set, every move is
+  `clc_moveNoDelta`. Test:
+  `the_delta_move_needs_the_snapshot_in_the_newest_message`. VERIFIED (the
+  test).
+
+### 14.3 The states: stats, the load, the cgame up
+
+What the 1.7 client sends from `CA_CONNECTED` to the world, read off
+`iw3mp.exe`.
+
+- **The state.** `clc.state` is the word at 0xc5f900 (cod4-demos.md 5).
+  `CL_DownloadsComplete` stores 7 behind `Setting state to CA_LOADING in
+  CL_DownloadsComplete` (0x46a9e7, 0x6d0858), `CL_InitCGame` 7 again
+  behind its own line (0x45bfda, 0x6ceee4) and 8 once the cgame is up
+  (0x45c023). VERIFIED (the stores and the strings). That 5 is
+  `CA_CONNECTED` and 6 `CA_SENDINGSTATS` is INFERRED (the stats lines
+  below read only in 6).
+- **`connectResponse`** stores 6 (0x46b98a) after clearing the seven
+  stats packets' send times (0x9562ac..0x9562c4, 0x46b967..0x46b985),
+  sets the wanted mask byte 0x9562a8 to 0x7f (0x46b994) and 0x8f4ce8
+  (`clc.lastPacketSentTime`, 14.1) to -9999 (0x46b9a1). VERIFIED (the
+  instructions).
+- **`requeststats`** (0x6d0d48, compared at 0x46bf9a) does nothing while
+  0xc5b188 holds a name (0x46bfb2, to the return at 0x46b62a) or in state
+  6 (0x46bfbe); else the same four stores (0x46bfcd..0x46c007). VERIFIED
+  (the instructions). That 0xc5b188 is the download in flight is
+  INFERRED (`CL_ParseDownload` clears it with 0xc5b088 at a file's end,
+  below).
+- **`loadingnewmap`** (0x6d0d28 at 0x46bea6) is read only from the
+  server's address (0x508830 at 0x46bf23) and not while 0xc5b188 holds a
+  name (0x46bf2f): it closes the menus (0x54b060), runs `uploadStats\n`
+  (0x6d0d38, 0x46bf46) and stores 5 (0x46bf74). VERIFIED (the
+  instructions and the strings).
+- **`statResponse`** (0x6d0c1c at 0x46b9b5) above state 6 prints `Dup
+  statResponse received.  Ignored.` (0x6d0c2c), below it `statResponse
+  packet while not syncing stats.  Ignored.` (0x6d0c54). In 6 its first
+  argument goes through 0x6707a7: 0 stores state 5 and mask 0
+  (0x46ba21..0x46ba2b), else the mask takes its low byte and 0x7f
+  (0x46ba32); then 0x8f4cec takes the realtime and 0x8f4ce8 -9999
+  (0x46ba39..0x46ba43). VERIFIED (the instructions and the strings). So
+  the -9999 of 14.1's `statResponse` is only in state 6.
+- **The stats packets.** The frame's tail calls `CL_CheckForResend`
+  (0x46aeb0, its `bad connstate` line at 0x6d0a04) every frame (0x46c9d2).
+  In state 6 it sends nothing under 100 ms past 0x8f4ce8 (`cmp edx,0x64`
+  at 0x46aeed, `jl` at 0x46af06); then 0x46ae60 picks the packet: of the
+  seven the mask wants, the first whose send time is 0, else the one
+  with the smallest time below the realtime, -1 when none
+  (0x46ae80..0x46aea2). The packet goes with the realtime stored as its
+  time (0x46affd) and in 0x8f4ce8 (0x46b013). VERIFIED (the
+  instructions). So at most one stats packet a frame: 100 ms apart while
+  the server is silent, the next on the frame after each `statResponse`.
+- **Nothing else in 6, no cmd before 8.** `CL_WritePacket` returns in
+  state 6 (0x463f9d..0x463fa0), and `CL_CreateNewCommands` (0x463e00)
+  makes a cmd only from state 8 (`cmp` and `jl` at 0x463e09..0x463e13);
+  its store at 0x463e1d is the only one to `cl.cmdNumber` (0xcc5ff8) in
+  the binary besides the gamestate's clear (14). VERIFIED (the
+  instructions). So from `requeststats` to the last `statResponse` no
+  netchan packet goes, `CL_Disconnect`'s three included, and from
+  `loadingnewmap` until the cgame is up no cmd is made: a state 5 packet
+  carries only the cmds `cl_packetdup` repeats (14). VERIFIED (the
+  instructions above).
+- **The load.** `CL_ParseGamestate` ends in `CL_InitDownloads` (0x46ac60,
+  called at 0x47423e), whose arms that start no download reach
+  0x46a8d0 (cod4-demos.md 5). With the bool at +0xc of the dvar at
+  0x1435d60 (described `Server is running`, 0x6e1bbc) clear (0x46a9ff),
+  it stores 7, loads the level (0x46aa08..0x46aab7, reading `mapname`
+  0x6c6810 and `g_gametype` 0x6cd6e0), then calls `CL_InitCGame`
+  (0x45bef0 at 0x46aad8), `CL_SendPureChecksums` (0x46a0f0 at 0x46aae0,
+  cod4-handshake.md 8) and `CL_WritePacket` three times
+  (0x46aae5..0x46aaef), none through `CL_ReadyToSendPacket`. With the
+  bool set it skips the three calls and the packets while 0xc5f8f6 is
+  set, which `CL_InitCGame` sets (0x45c010). VERIFIED (the instructions
+  and the strings). That the load and the cgame's start run inside the
+  gamestate's parse, with no frame between, is INFERRED (direct calls
+  from 0x46a9e7 to 0x46aaef; no callee read for an event pump).
+- **The three packets.** They go in state 8, past `CL_WritePacket`'s test;
+  the gamestate cleared `cl` (14) and no cmd is made before 8, so each
+  writes the unacknowledged reliable commands, the `cp` the newest, and
+  no move (a count under 1, 0x4640bd). VERIFIED (the instructions
+  above). Then the frame asks the gate as before (14.1).
+- **The download.** `CL_InitDownloads` stores 5 when it starts a file
+  (0x46ad95). `CL_ParseDownload` (0x474440) queues `nextdl %d` (0x6d2a28)
+  for each block, the empty one included (0x4745c3..0x4745ce, before the
+  size test at 0x4745e4). At a file's empty block it closes and renames
+  the file (0x4745ff, 0x474614), clears 0xc5b188 and 0xc5b088
+  (0x47461c, 0x474622), calls `CL_WritePacket` twice past the gate
+  (0x47462e, 0x474633) and jumps to the next file (0x46aba0 at
+  0x474640). VERIFIED (the instructions and the string). After the last
+  one 0x46a8d0 (0x46ac49) finds 0xc5b698 set (stored 1 as a file starts,
+  0x46ac1b), queues `donedl` (0x6d0850 at 0x46a963) when 0xc5b6a0 is
+  clear, clears both names (0x46a976, 0x46a97c) and returns in state 5.
+  VERIFIED (the instructions and the string).
+- So a file in flight sends 50 ms after the last packet and passes the
+  rest of the gate (14.1): at the default `cl_maxpackets` 30 its 33 ms
+  is under the 50, from 19 down `1000 / cl_maxpackets` paces it. Its end
+  sends two packets at once; `donedl` waits for the next, a second on,
+  since state 5 without a download takes the 1000 ms arm. VERIFIED (the
+  instructions above).
+- vcod: `Conn` holds `ConnState` (5, 6, 7, and 8 and 9 as one).
+  `connectResponse` and `requeststats` start 6 (`begin_stats`);
+  `check_for_resend` runs at the end of each `poll` and in the join's
+  stats loop (a look each 10 ms), one packet by 0x46ae60's pick; a
+  `statResponse` is read in 6 only; `send` writes nothing in 6. A
+  gamestate puts it in 7, where `ready_to_send` says no as in 6;
+  `Cod4Session::step` calls `Conn::cgame_up` first, which in 7 goes to 8
+  and sends the three packets, and the window loads the level between the
+  step that reads a gamestate and the next. That step drops its due
+  packet and cmds; cmds are made only from 8 (`live_frame`).
+  `loadingnewmap` and `requeststats` are ignored while
+  `Conn::set_downloading` holds; the join's download loop sets it while a
+  file is in flight (and with it state 5), sends two packets on
+  `DownloadEvent::Flush`, takes the console's `cl_maxpackets`
+  (`Fetch::max_packets`) and asks the gate every 10 ms. Tests:
+  `a_map_change_sends_one_stats_packet_at_a_time_and_nothing_else`,
+  `the_next_stats_packet_is_a_new_one_then_the_oldest`,
+  `the_cgame_up_sends_three_packets_with_the_cp`,
+  `a_conn_paces_its_packets_by_the_server_and_its_state`,
+  `an_iwd_off_its_listed_checksum_is_removed` (the `Flush`). VERIFIED
+  (the tests).
+- Live: vcod's `--net-probe` against `cod4_lnxded` on loopback
+  (`tools/cod4x_capture.sh` with `rcon_password` set, `map mp_backlot`
+  over rcon 15 s into the join). After `requeststats` the stats went one
+  at a time, each on the step after the last `statResponse` (16 ms), and
+  no netchan packet went until `statResponse 0`; then one at once
+  carrying the repeated move, then 16-byte packets with no move a second
+  apart until the gamestate; three packets left in the same millisecond
+  on the step after its last fragment, a fourth with a move beside them.
+  The join did the same: the stats 10 ms apart, three packets at once
+  after the gamestate. The server sent `requeststats` twice, where the
+  cycle run's probe, which sent its stats in a burst and kept moving,
+  drew nine (cod4-map-cycle.md 1). VERIFIED live.
+- vcod departs: the `cp` goes in the first packet after any gamestate,
+  queued at the gamestate; 1.7 queues it once the cgame is up, so it
+  sends none on a gamestate whose files it then downloads. A look every
+  10 ms stands in for a frame, and the join's stats wait 15 s at most.
   INFERRED (the code).
+
+### 14.4 A snapshot off a base the client no longer holds
+
+- **The refusals.** For a base above 0, `CL_ParseSnapshot` (0x473710)
+  stops the message when ring slot `base & 0x1f` (0x2f94-byte rows from
+  0xcc9180) is not valid (`Delta from invalid frame (not supposed to
+  happen!).` 0x6d2710, 0x473842), holds another message (`Delta frame
+  too old.` 0x6d2748, 0x47386a), or when 0xc84f58 less the slot's +0x2f88
+  is over 0x780 (`Delta parseEntitiesNum too old.` 0x6d2760, 0x47389f) or
+  0xc84f5c less its +0x2f8c is (`Delta parseClientsNum too old.`
+  0x6d2784, 0x4738c1). Each returns before the playerstate, with the
+  message's +0x1c over its +0x14 and its first word set (cod4-demos.md 4).
+  VERIFIED (the instructions and the strings).
+- **The counters.** 0x472e00 stores `cl` +0x25628 (0xc84f58) in the new
+  snapshot's +0x2f88 and adds 1 to both for each entity it puts in the
+  snapshot (0x472e0c..0x472e12, 0x472fb8..0x472fbe), the ring masked with
+  0x7ff in 0xf4-byte rows (0x472e53); 0x4732c0 does the same for the
+  clients with +0x2562c (0xc84f5c) and +0x2f8c, 0x7ff in 0x64-byte rows
+  (0x4732d5..0x4732db, 0x47343b, 0x473319). VERIFIED (the instructions).
+  So 0x780 is the 2048-row rings less 128. A gamestate clears both with
+  `cl` (section 14).
+- **What follows.** `CL_PacketEvent` then rolls `serverMessageSequence`
+  and `reliableAcknowledge` back (cod4-handshake.md 10, "An illegible
+  message rolls back"). `cl.snap` is not touched: the copy over 0xc5f938
+  comes after the refusals (0x4739d9..0x4739f2). VERIFIED (the
+  instructions). So the next move acknowledges the message before, and
+  goes as `clc_move` when that one carried `cl.snap` (14.2); nothing sets
+  `demowaiting`. VERIFIED (the instructions above).
+- vcod: `Client::parse_snapshot` fails with `Illegible` for a base its
+  ring lacks or whose entities or clients sit more than 0x780 behind its
+  counts (`RingSlot`, which a gamestate clears), and `Conn::poll` rolls
+  both acknowledges back; the newest snapshot stays the last one read.
+  Test: `a_base_past_the_parse_rings_reach_is_illegible`. VERIFIED (the
+  test). vcod counts a snapshot's entities and clients once it is read
+  whole; retail counts each as it goes, so a message that overflows
+  mid-list moves retail's counts and not vcod's. INFERRED (the code).

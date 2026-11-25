@@ -1875,6 +1875,7 @@ fn run() -> Result<()> {
                 game_dir: args.game_dir.clone(),
                 allow_download: allow,
                 www_download: www,
+                max_packets: shell.cvar_f32("cl_maxpackets") as i32,
             }));
             None
         }

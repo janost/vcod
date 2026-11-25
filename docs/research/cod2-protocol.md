@@ -4048,6 +4048,48 @@ as `link`. `VCOD_NETSIM` applies to a CoD2 session
 wire at once (`UdpTransport::drain`), so the three `disconnect`s are not left
 in its queue when the session ends.
 
+#### 18.4.1 The client's LAN test
+
+- **The gate.** `CoD2MP_s.exe` 0x408c10 sends nothing while 0x64a170 is set
+  or the state (0x609fe0) is 1 or 2; with the byte at 0x966eb0 set, nothing
+  under 50 ms past 0x609fec; in a state other than 7 or 8 without that
+  byte, nothing under 1000 ms (0x408c10..0x408c70). Then it returns 1 when
+  the server's address type (0x64a1a8) is 2 or 0x467100 returns non-zero
+  for the 20-byte address there (0x408c72..0x408cb8); else when the
+  realtime (0x68a520) is at least `1000 / cl_maxpackets` (`idiv` by +0x8 of
+  0x96b5fc) past the `+0` word of packet row `(0x64a198 - 1) & 0x1f`
+  (12-byte rows from 0x9d0c38; 0x408cb9..0x408ce8). VERIFIED (the
+  instructions). That it is the Windows build of the Mac
+  `CL_SendCmdInternal` gate above, and that the words are a demo playing,
+  a download, `CA_PRIMED`/`CA_ACTIVE` and `NA_LOOPBACK`, is INFERRED.
+- **`Sys_IsLANAddress`.** 0x467100 answers 1 for address type 0, 2 or 5,
+  and for type 4 when the first octet is 10 or 127, 169 with 254 next, 172
+  with the second's high nibble 1, or 192 with 168 next; else when the
+  first three octets equal one of the 0xd75938 4-byte entries at 0xd758f8
+  (0x467100..0x4671a0). VERIFIED (the instructions). 0x4677ea..0x4678ae
+  fills that table, `Hostname: %s` (0x5aea58) and at most 16 entries
+  (`cmp eax,0x10` at 0x467838), each printed `IP: %i.%i.%i.%i` (0x5aed28).
+  VERIFIED (the instructions and the strings). It is `cod2_lnxded`'s rule
+  (0x80d5638, 17.1) and `iw3mp.exe`'s (cod4-netfields.md 14.1, "The
+  LAN"). VERIFIED (the instructions of each).
+- **Its other callers.** The challenge (0x40e316..0x40e360, before
+  `getchallenge` 0x5a38b8) and a check 0x493e0 ms past 0xb013e8
+  (0x40d319..0x40d372) call
+  `CL_RequestAuthorization` (0x40d130, which writes `getKeyAuthorize`
+  0x5a3c04) unless `net_lanauthorize` (0xc8fb14, registered off 0x5aaa44
+  at 0x447d39) is clear and 0x467100 calls the server LAN. VERIFIED (the
+  instructions and the strings). `iw3mp.exe` does the same at
+  0x46b1d7..0x46b229 and, in state 9 0x493e0 ms past 0xe1150c, at
+  0x469d60..0x469dc9, with 0x578180 and
+  `net_lanauthorize` at 0x14e88b0 (registered off 0x6e2e48 at 0x507d8c).
+  VERIFIED (the instructions and the strings).
+- vcod: the CoD2 session's transport takes `lan::is_lan_cod2`
+  (`UdpTransport::from_socket`), and `cdkey::authorizes` takes it for CoD2
+  and CoD4 and CoD1's `lan::is_lan` for CoD1 and UO. Test:
+  `lan_servers_are_not_authorized` (10.9.9.9 is LAN to CoD2's and CoD4's
+  rule only). VERIFIED (the test). vcod lists the host's interfaces where
+  retail resolves its hostname (`lan.rs`). INFERRED (the code).
+
 ### 18.5 The snapshots a frame draws between
 
 The cgame keeps two snapshot buffers, `cg` +0x28 and +0x12de8, with `cg.snap`

@@ -6,7 +6,7 @@
 //! The key never reaches a log: [`CdKey`]'s `Debug` hides it, and nothing
 //! here prints the packet.
 
-use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
@@ -248,16 +248,18 @@ pub fn warn_no_key() {
 
 /// Whether retail asks the authorize server before challenging `server`:
 /// not for a LAN address (`net_lanauthorize` 0, `Sys_IsLANAddress`).
-pub fn authorizes(server: SocketAddr) -> bool {
-    !super::lan::is_lan(server.ip())
+pub fn authorizes(game: KeyGame, server: SocketAddr) -> bool {
+    !is_lan_with(game, server.ip(), super::lan::local_addresses())
 }
 
-/// [`authorizes`] against a fixed address list instead of this host's.
-#[cfg(test)]
-fn authorizes_with(server: SocketAddr, locals: &[std::net::Ipv4Addr]) -> bool {
-    match server.ip() {
-        std::net::IpAddr::V4(v4) => !super::lan::is_lan_with(v4, locals),
-        std::net::IpAddr::V6(v6) => !v6.is_loopback(),
+/// `game`'s client `Sys_IsLANAddress` against `locals`: CoD1's for CoD1
+/// and UO; CoD2's for CoD2 and CoD4, whose challenges ask 0x467100
+/// (CoD2MP_s.exe 0x40e354) and 0x578180 (iw3mp.exe 0x46b214).
+fn is_lan_with(game: KeyGame, ip: IpAddr, locals: &[Ipv4Addr]) -> bool {
+    match (game, ip) {
+        (KeyGame::Cod2 | KeyGame::Cod4, ip) => super::lan::is_lan_cod2_with(ip, locals),
+        (_, IpAddr::V4(v4)) => super::lan::is_lan_with(v4, locals),
+        (_, IpAddr::V6(v6)) => v6.is_loopback(),
     }
 }
 
@@ -265,7 +267,7 @@ fn authorizes_with(server: SocketAddr, locals: &[std::net::Ipv4Addr]) -> bool {
 /// thread so the name lookup never holds up the join. Nothing for a LAN
 /// `server`.
 pub fn request_authorization(game: KeyGame, key: &CdKey, server: SocketAddr) {
-    if !authorizes(server) {
+    if !authorizes(game, server) {
         return;
     }
     let packet = key.key_authorize(game);
@@ -399,19 +401,20 @@ mod tests {
         assert_eq!(&k.key_authorize(KeyGame::Cod1)[..4], &[0xff; 4]);
     }
 
+    /// Each game's client rule: CoD1's compares a local address's class
+    /// network, CoD2's and CoD4's take the private blocks whole.
     #[test]
     fn lan_servers_are_not_authorized() {
         // A host on 192.168.1.5: its block is the LAN, wherever the test runs.
         let locals = ["127.0.0.1".parse().unwrap(), "192.168.1.5".parse().unwrap()];
-        assert!(!authorizes("127.0.0.1:28960".parse().unwrap()));
-        assert!(!authorizes_with(
-            "192.168.1.20:28960".parse().unwrap(),
-            &locals
-        ));
-        assert!(authorizes_with(
-            "203.0.113.7:28960".parse().unwrap(),
-            &locals
-        ));
+        let lan = |game, ip: &str| is_lan_with(game, ip.parse().unwrap(), &locals);
+        for game in [KeyGame::Cod1, KeyGame::Uo, KeyGame::Cod2, KeyGame::Cod4] {
+            assert!(!authorizes(game, "127.0.0.1:28960".parse().unwrap()));
+            assert!(lan(game, "192.168.1.20"), "{game:?}");
+            assert!(!lan(game, "203.0.113.7"), "{game:?}");
+            let cod2 = matches!(game, KeyGame::Cod2 | KeyGame::Cod4);
+            assert_eq!(lan(game, "10.9.9.9"), cod2, "{game:?}");
+        }
     }
 
     #[test]
