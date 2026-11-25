@@ -759,23 +759,7 @@ const TRACE_READ: Pair = Pair {
     ],
 };
 
-/// The swaying target's `aimSpreadScale` a float ulp off retail's on
-/// eleven frames (cod4-gsc.md 3.3).
-const SPREAD_ULP: &str = "the sway's spread scale an ulp off";
-
-const TRACE_READ_GAPS: &[(&str, &str)] = &[
-    ("target ps aimSpreadScale 47800:", SPREAD_ULP),
-    ("target ps aimSpreadScale 54950:", SPREAD_ULP),
-    ("target ps aimSpreadScale 55000:", SPREAD_ULP),
-    ("target ps aimSpreadScale 55050:", SPREAD_ULP),
-    ("target ps aimSpreadScale 55100:", SPREAD_ULP),
-    ("target ps aimSpreadScale 60500:", SPREAD_ULP),
-    ("target ps aimSpreadScale 60550:", SPREAD_ULP),
-    ("target ps aimSpreadScale 60600:", SPREAD_ULP),
-    ("target ps aimSpreadScale 60650:", SPREAD_ULP),
-    ("target ps aimSpreadScale 60700:", SPREAD_ULP),
-    ("target ps aimSpreadScale 62650:", SPREAD_ULP),
-];
+const TRACE_READ_GAPS: &[(&str, &str)] = &[];
 
 /// A script's `bulletTrace` meets a player as its capsule where its last
 /// cmd linked it, under CoD4's capsule dispatch, and poses no body

@@ -187,6 +187,49 @@ INFERRED) runs when a reload's `weaponDelay` runs out.
   (0x80624e4..0x806255d, 0x806260a..0x806265d). VERIFIED (the
   instructions). vcod: `pmove::weapon::reload_delay_out`.
 
+### 2.3 The hip spread's step
+
+`PM_AdjustAimSpreadScale` is `cod4_lnxded` 0x8060688 (`pm`, `pml`;
+`ps.aimSpreadScale` at ps+0x628). INFERRED (the name). Its arithmetic,
+VERIFIED (the instructions 0x8060688..0x80609dc):
+
+- The rate is the def's `hipSpreadDecayRate` (+0x468); 0 drops the scale
+  by 255 (-255 at 0x820e268). On the ground (`groundEntityNum` not 0x3ff,
+  or `pm_type` 1) a prone body (`eFlags` 8) multiplies it by
+  `hipSpreadProneDecay` (+0x47c), a crouched one (4) by
+  `hipSpreadDuckedDecay` (+0x478); in the air it halves (0.5 at
+  0x8209628). The product stays on the stack.
+- Not under the override: `rate * frametime` is stored as a float
+  (0x8060715..0x8060718) before it is taken 255 times off the scale.
+- The growth, unless `fWeaponPosFrac` is 1: for pitch then yaw, the cmd's
+  and the old cmd's angle ints (pm+0xc, +0x2c; +0x10, +0x30) times
+  360/65536 (0x820deb0), their difference times the float 1/360
+  (0x8209630), less `floor` of it plus 0.5 under round-down (stored as a
+  double, then a float), times 360, `fabs`, stored as a float. The yaw's
+  turns are stored as a float (0x80608c4) before the subtraction, the
+  pitch's stay on the stack. Each turn times 0.01 (0x8209644), times
+  `hipSpreadTurnAdd` (+0x470), over `frametime`. A move key down
+  (pm+0x1a, both bytes) with `hipSpreadMoveAdd` (+0x474) set adds it times
+  `fsqrt` of `vx^2 + vy^2` on the stack over `ps.speed` (`fidivl`), when
+  that sum passes the dvar at 0x827afbc squared. The air adds 1.28
+  (0x820e26c) twice. Times `frametime`, when above 0 it opens the scale
+  by 255 times it; else the decay above runs.
+- The override (`spreadOverrideState` 1, ps+0x100) divides the decay by
+  the override's place in the stance's min..max, both kept, and clears
+  the state once the scale times that place falls under 255, storing
+  that product. The clamp to 0..255 comes last.
+
+vcod: `pmove::weapon::adjust_aim_spread` on `x87::F80`. It had kept each
+sum in a double, the stance's rate stored as a float, the flat speed
+squared stored and its root a float's, which put the swaying target's
+`aimSpreadScale` one or two ulps off retail's on eleven snapshots of
+`cod4_trace_read_ab`; ported, it matches every snapshot. VERIFIED (the
+gate). Every weapon the capture gates fire has `hipSpreadTurnAdd` 0,
+so the turn's arm rests on the instructions alone, and that the cmd's
+angle ints run 0..65535, not signed shorts, is INFERRED (the wire's 16
+bits read unsigned). The override arm runs on doubles; no capture holds
+it.
+
 ## 3. The shot
 
 INFERRED: `ClientEvents` after each cmd reads its events; a fire event

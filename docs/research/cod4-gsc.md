@@ -1128,8 +1128,9 @@ checks keys and both arms. VERIFIED (the test).
   (`--script sway --aim-z 150`), and every frame three `bulletTrace`s
   from the idle shooter's eye run past the target's origin at 64, 56 and
   44 up, printing the entity, the point in tenths and the normal in
-  thousandths. Ours matches every print. VERIFIED (the gate). Its `GAPS`
-  hold eleven frames of the target's `aimSpreadScale` an ulp off. Open.
+  thousandths. Ours matches every print and every playerstate word,
+  the target's `aimSpreadScale` with 1.7's spread step on the x87 stack
+  (cod4-combat.md 2.3); its `GAPS` are empty. VERIFIED (the gate).
 
 vcod, INFERRED (the code):
 

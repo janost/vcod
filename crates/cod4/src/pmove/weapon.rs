@@ -21,6 +21,7 @@
 //! reload), `pmove::tests::weapon_pins` pins vcod's own output.
 
 use super::{Pml, Pmove, button, ef, pm_type, pmf};
+use vcod_common::x87::F80;
 
 /// `ps.weaponstate` (ps+0xec), vcod's names. `PM_Weapon`'s timer switch
 /// at 0x80636c4 jumps through 27 slots (rodata 0x820e524). What each value
@@ -529,16 +530,11 @@ fn is_melee(s: i32) -> bool {
     matches!(s, state::MELEE_SWING..=state::MELEE_RECOVER)
 }
 
-/// The hip spread's step (`PM_AdjustAimSpreadScale`, cod4-combat.md 2):
-/// the scale (0..255) eases back by the weapon's decay rate, scaled by the
-/// stance on the ground and halved in the air, and opens up with the
-/// view's turn, a run past `bg_aimSpreadMoveSpeedThreshold` and the air;
-/// through the sight it only eases back. The products stay on the x87
-/// stack; the stance's rate, its range place and the scale are stored
-/// floats. The shooter rows replay `aimSpreadScale` exact (cod4-combat.md
-/// 2). A script's spread override (state 1) eases back by the rate over
-/// the override's place in the stance's range and ends once the scale
-/// times that place drops under 255: unverified on 1.7, no capture runs it.
+/// The hip spread's step (`PM_AdjustAimSpreadScale`, 0x8060688,
+/// cod4-combat.md 2.3): the scale (0..255) eases back by the stance's decay
+/// rate and opens up with the view's turn, a run and the air, on the x87
+/// stack ([`F80`]); through the sight it only eases back. The script's
+/// spread override arm (state 1) runs on doubles: no capture holds it.
 pub(super) fn adjust_aim_spread(pm: &mut Pmove, pml: &Pml) {
     let Some(d) = held(pm) else {
         // The empty hand's def has no decay rate: the scale drops a whole
@@ -549,99 +545,121 @@ pub(super) fn adjust_aim_spread(pm: &mut Pmove, pml: &Pml) {
         }
         return;
     };
-    let ft = f64::from(pml.frametime);
+    let f = F80::from_f32;
+    let ft = f(pml.frametime);
     let grounded =
         pm.ps.ground_entity_num != super::ENTITYNUM_NONE || pm.ps.pm_type == pm_type::NORMAL_LINKED;
-    let overriding = pm.ps.spread_override_state == 1;
-    let (rate, place) = spread_decay(pm.ps, d, grounded);
-    // The change this step, in 255ths of the scale.
-    let change = if rate == 0.0 {
-        -1.0
-    } else if overriding {
-        -(rate * ft / f64::from(place))
+    let scale = f(pm.ps.aim_spread_scale);
+    let scale = if d.hip_spread_decay_rate == 0.0 {
+        (f(-255.0) + scale).to_f32()
+    } else if pm.ps.spread_override_state == 1 {
+        // The rate is two floats' product, exact in a double.
+        let rate = spread_rate(pm.ps, d, grounded).to_f64();
+        let place = spread_place(pm.ps, d, grounded);
+        let mut scale = (f64::from(pm.ps.aim_spread_scale)
+            - rate * f64::from(pml.frametime) / place * 255.0) as f32;
+        let placed = f64::from(scale) * place;
+        if placed < 255.0 {
+            pm.ps.spread_override_state = 0;
+            scale = placed as f32;
+        }
+        scale
     } else {
-        let opened = if pm.ps.weapon_pos_frac == 1.0 {
-            0.0
+        // A frame of 0 ms opens nothing: the turn over it reads infinite or
+        // not a number, and either times 0 fails the test.
+        let grown = if pm.ps.weapon_pos_frac == 1.0 || pml.frametime == 0.0 {
+            Some(f(0.0))
         } else {
-            spread_growth(pm, d, ft, grounded) * ft
+            spread_growth(pm, d, ft, grounded).map(|g| g * ft)
         };
-        if opened > 0.0 { opened } else { -(rate * ft) }
+        match grown {
+            None => 255.0,
+            Some(g) if g > f(0.0) => (g * f(255.0) + scale).to_f32(),
+            Some(_) => {
+                let eased = (spread_rate(pm.ps, d, grounded) * ft).to_f32();
+                (f(eased) * f(-255.0) + scale).to_f32()
+            }
+        }
     };
-    let ps = &mut *pm.ps;
-    let mut scale = (f64::from(ps.aim_spread_scale) + change * 255.0) as f32;
-    if overriding && scale * place < 255.0 {
-        ps.spread_override_state = 0;
-        scale *= place;
-    }
-    ps.aim_spread_scale = scale.clamp(0.0, 255.0);
+    pm.ps.aim_spread_scale = scale.clamp(0.0, 255.0);
 }
 
-/// The hip spread's decay rate a second for the body's stance, stored to
-/// a float, and where the spread override sits in that stance's
-/// min..max (1 for a weapon that never decays). On the ground the prone
-/// and crouched stances take their own decay and range; in the air the
-/// standing range at half the rate.
-fn spread_decay(ps: &super::PlayerState, d: &WeaponDef, grounded: bool) -> (f64, f32) {
-    let base = f64::from(d.hip_spread_decay_rate);
-    if base == 0.0 {
-        return (0.0, 1.0);
+/// The stance's hip spread decay rate a second, kept: on the ground the
+/// prone and crouched stances scale the weapon's by their own decay, in
+/// the air it halves.
+fn spread_rate(ps: &super::PlayerState, d: &WeaponDef, grounded: bool) -> F80 {
+    let f = F80::from_f32;
+    let base = f(d.hip_spread_decay_rate);
+    match grounded {
+        false => base * f(0.5),
+        true if ps.e_flags & ef::PRONE != 0 => base * f(d.hip_spread_prone_decay),
+        true if ps.e_flags & ef::CROUCH != 0 => base * f(d.hip_spread_ducked_decay),
+        true => base,
     }
-    let (scale, min, max) = match grounded {
-        false => (0.5, d.hip_spread_stand_min, d.hip_spread_stand_max),
-        true if ps.e_flags & ef::PRONE != 0 => (
-            f64::from(d.hip_spread_prone_decay),
-            d.hip_spread_prone_min,
-            d.hip_spread_prone_max,
-        ),
-        true if ps.e_flags & ef::CROUCH != 0 => (
-            f64::from(d.hip_spread_ducked_decay),
-            d.hip_spread_ducked_min,
-            d.hip_spread_ducked_max,
-        ),
-        true => (1.0, d.hip_spread_stand_min, d.hip_spread_stand_max),
+}
+
+/// Where the spread override sits in the stance's min..max (the standing
+/// range in the air).
+fn spread_place(ps: &super::PlayerState, d: &WeaponDef, grounded: bool) -> f64 {
+    let (min, max) = match grounded {
+        true if ps.e_flags & ef::PRONE != 0 => (d.hip_spread_prone_min, d.hip_spread_prone_max),
+        true if ps.e_flags & ef::CROUCH != 0 => (d.hip_spread_ducked_min, d.hip_spread_ducked_max),
+        _ => (d.hip_spread_stand_min, d.hip_spread_stand_max),
     };
     let (min, max) = (f64::from(min), f64::from(max));
-    let place = (f64::from(ps.spread_override) - min) / (max - min);
-    (f64::from((base * scale) as f32), place as f32)
+    (f64::from(ps.spread_override) - min) / (max - min)
 }
 
 /// What opens the hip spread a second: the view's turn in pitch and yaw
 /// since the last cmd (`hipSpreadTurnAdd` a hundredth of a degree), the
 /// run with a move key down past the threshold (`hipSpreadMoveAdd` of the
-/// flat speed over `ps.speed`), and 2.56 in the air.
-fn spread_growth(pm: &Pmove, d: &WeaponDef, ft: f64, grounded: bool) -> f64 {
-    // A cmd angle's short in degrees.
-    let deg = |s: u16| (f64::from(s as i16) * 0.0054931640625) as f32;
-    let hundredth = f64::from(0.01f32);
-    let mut grow = 0.0f64;
+/// flat speed over `ps.speed`), and twice 1.28 in the air. `None` for a run
+/// at `ps.speed` 0, whose growth has no bound. `ft` is never 0.
+fn spread_growth(pm: &Pmove, d: &WeaponDef, ft: F80, grounded: bool) -> Option<F80> {
+    let f = F80::from_f32;
+    let int = |i: i32| F80::from_f64(f64::from(i));
+    let mut grow = f(0.0);
     if d.hip_spread_turn_add != 0.0 {
+        // The cmd's angles are 0..65535; the difference of their degrees,
+        // in turns, folds about the nearest whole turn (`floor` of it plus
+        // a half, under round-down). The yaw's turns go out stored before
+        // the fold's subtraction, the pitch's stay kept (0x8060840..0x8060911).
+        let per_short = F80::from_f64(super::fpu::DEG_PER_SHORT);
         for axis in 0..2 {
-            let turn = angle_delta(deg(pm.cmd.angles[axis]), deg(pm.oldcmd.angles[axis])).abs();
-            grow += f64::from(turn) * hundredth * f64::from(d.hip_spread_turn_add) / ft;
+            let a = per_short * int(i32::from(pm.cmd.angles[axis]));
+            let o = per_short * int(i32::from(pm.oldcmd.angles[axis]));
+            let turns = (a - o) * f(INV_360);
+            let whole = f((turns + f(0.5)).floor().to_f64() as f32);
+            let kept = if axis == 1 { f(turns.to_f32()) } else { turns };
+            let turn = ((kept - whole) * f(360.0)).to_f32().abs();
+            grow = grow + f(turn) * f(HUNDREDTH) * f(d.hip_spread_turn_add) / ft;
         }
     }
     let moving = pm.cmd.forward_move != 0 || pm.cmd.right_move != 0;
     if d.hip_spread_move_add != 0.0 && moving {
         let v = pm.ps.velocity;
-        let flat_sq = (f64::from(v.y) * f64::from(v.y) + f64::from(v.x) * f64::from(v.x)) as f32;
-        let floor = f64::from(pm.rules.aim_spread_move_speed_threshold);
-        if f64::from(flat_sq) > floor * floor {
-            grow += f64::from(d.hip_spread_move_add) * f64::from(flat_sq.sqrt())
-                / f64::from(pm.ps.speed);
+        let flat_sq = f(v.x) * f(v.x) + f(v.y) * f(v.y);
+        let floor = f(pm.rules.aim_spread_move_speed_threshold);
+        if flat_sq > floor * floor {
+            if pm.ps.speed == 0 {
+                return None;
+            }
+            grow = grow + f(d.hip_spread_move_add) * flat_sq.sqrt() / int(pm.ps.speed);
         }
     }
     if !grounded {
-        grow += 2.0 * (hundredth * 128.0);
+        // The float 1.28 at 0x820e26c, added twice.
+        let air = f(f32::from_bits(0x3fa3_d70a));
+        grow = grow + air + air;
     }
-    grow
+    Some(grow)
 }
 
-/// `AngleDelta`: `a1 - a2` into -180..180.
-fn angle_delta(a1: f32, a2: f32) -> f32 {
-    let d = f64::from(a1) - f64::from(a2);
-    let d = d - 360.0 * (d * (1.0 / 360.0) + 0.5).floor();
-    d as f32
-}
+/// The float 1 / 360 at 0x8209630.
+const INV_360: f32 = f32::from_bits(0x3b36_0b61);
+
+/// The float 0.01 at 0x8209644: a turn's hundredth of a degree.
+const HUNDREDTH: f32 = f32::from_bits(0x3c23_d70a);
 
 /// The weapon states the sight never shows in: the offhand, the melee,
 /// the raise and drop, and night vision going on or off.
