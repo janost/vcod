@@ -1,6 +1,7 @@
 //! The crate's integration tests as one binary: linked once, not once per file.
 
 mod anim_census;
+mod capsule_world;
 mod clip_census;
 mod cod4x_join;
 mod cull_census;
