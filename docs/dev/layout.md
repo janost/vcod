@@ -332,7 +332,12 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
   run on; `item_rules.rs` the item rules `Ui` and CoD4's `ScriptMenus`
   share.
 - `play/`: join, input, cmd clock, prediction, events, the replay and
-  loopback gates, the soaks and sweeps.
+  loopback gates, the client rigs the soaks and the sweep play through
+  (`cod4_sweep.rs`, `cod2_soak.rs`) and the live gates on them.
+- `tools/`: the CoD4 map sweep, the CoD4 and CoD2 soaks and the CoD2 map
+  census (`vcod::tools`, built under the `testing` feature outside
+  `cfg(test)`). `examples/client_tools.rs` runs them and
+  `renderer/hud_shot.rs`'s CoD2 shots by name.
 - `lib.rs`: the module list, the arguments, `main`, `App` and its
   commands; `main.rs` only calls its `main`. `window_event`
   hands keys, pointer and wheel to `input_events.rs` and a redraw to

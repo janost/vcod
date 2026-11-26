@@ -43,7 +43,7 @@ needs, and the soak, perf and off-LAN scripts stop on the first one missing
 | `COD_DIR` | CoD1 1.1 | the 1.1 tests and gates |
 | `COD_DIR` | CoD1 1.5 (`main/` with stock paks only: `--example stock_tree`, below) | `configstrings_15_ab`, `timeout_15_ab`, `legs_ab`'s 1.5 walks (the stop and go too), `turret_ab`'s 1.5 replay |
 | `COD_DIR` | UO (`uo/` beside 1.5's `main/`) | the UO tests and what reads only data 1.5 and UO share: `moves_ab`'s UO replays (sprint, mounts, cook), `configstrings_uo_ab`, `playerstate_uo_ab`, `playerstate_combat_ab`'s UO capture, `mount_uo_ab`, `uo_weapons_ab`, `legs_ab`'s UO walks, `turret_ab`'s UO replay |
-| `COD2_DIR` | CoD2 1.3 | the CoD2 tests, `cod2_map_census` |
+| `COD2_DIR` | CoD2 1.3 | the CoD2 tests, the `cod2_map_census` and `cod2_soak` tools |
 | `COD4_DIR` | CoD4 1.7 | the CoD4 tests, `cod4_live_*`, the `cod4_map_sweep` and `cod4_soak` tools |
 
 `cargo run -p vcod-common --example stock_tree -- <install> <out>` links
@@ -206,6 +206,23 @@ The scripts under `tools/` no other section names:
 `cod4_perf.sh` and `cod4_soak.sh` serve the other games too (`GAME=cod1`,
 `uo`, `cod2`), despite the names.
 
+## Client tools
+
+The client's tools are `vcod::tools`, built outside `cfg(test)` under the
+crate's `testing` feature, so an edit to one rebuilds no unit test. One
+example runs them by name:
+`cargo run -p vcod --example client_tools -- <tool>`.
+
+| Tool | Env | What | Where |
+|---|---|---|---|
+| `cod4_map_sweep` | `COD4_DIR` | every stock map under every gametype (CoD4 map sweep, below) | `tools/cod4_sweep.rs` |
+| `cod4_soak`, `cod2_soak` | `COD4_DIR`, `COD2_DIR` | the soaks; `tools/cod4_soak.sh` runs them a map a process (Soaks, below) | `tools/cod4_sweep.rs`, `tools/cod2_soak.rs` |
+| `cod2_map_census` | `COD2_DIR` | every stock CoD2 map (CoD2 map census, below) | `tools/cod2_census.rs` |
+
+The rigs a tool shares with the live gates (`play/cod4_sweep.rs`,
+`play/cod2_soak.rs`, the clock reads in `harness.rs`) stay in the crate
+under `cfg(any(test, feature = "testing"))`.
+
 ## Refactor checks
 
 `tools/move_check.sh <base> <head> <old-file>... [--into <path>]...`
@@ -244,7 +261,7 @@ ignored_tests_named` fails on one that is not.
 | CoD2 play: level effects, model pipelines, view weapons, muzzle flash and brass | `cargo test -p vcod --lib -- --ignored play::cod2_soak::cod2_live_` (`COD2_DIR`, a Vulkan adapter) | each plays 16 ms frames for its seconds after the spawn, client and server on one `sim` clock (`harness::run_held`), with a 120 to 180 s deadline on it |
 | 1.5 stuck seed | `--lib -- --ignored the_15_overlap_spectator_seed_is_the_only_fit` | ~2 s |
 | shaders or render layouts | `cargo test -p vcod --lib -- renderer::pipeline_check` (not ignored: it skips without a Vulkan adapter; lavapipe env below) | |
-| CoD2 maps, CoD2 load path | `cod2_map_census`, `cod2_load_profile` | |
+| CoD2 maps, CoD2 load path | `client_tools cod2_map_census`, `cod2_load_profile` | |
 | CoD4 maps, gametypes | `client_tools cod4_map_sweep` (below) | 6-8 min and ~3 GB a map |
 | the CoD4x join (`net::conn`'s 21 dialect, `net::reliable::Link`) | `COD4X_DEDRUN=<the release's cod4x18_dedrun> cargo test -p vcod --lib -- --ignored --exact play::cod4::tests::cod4x::cod4x_live_join_spawns_and_leaves` (`COD4_DIR`; `COD4X_OUT=<dir>` keeps the capture) | ~12 s past the build |
 | the CoD4x join's gamestate timeout (`conn::GAMESTATE_WAIT`) | the same with `--exact play::cod4::tests::cod4x::cod4x_live_withheld_gamestate_times_out` | ~22 s past the build |
@@ -281,10 +298,6 @@ and panics with that line when run without it.
 | Test | Var | What | Where |
 |---|---|---|---|
 | `cod4_browser_against_a_named_server` | `COD4_BROWSER_SERVER=ip:port` (and `COD4_BROWSER_BROADCAST`) | the CoD4 browser's Local and Server Info lists against one server, retail in its namespace | `play/cod4_menus/browser.rs` |
-| `cod2_main_menu_shot` | `VCOD_MENU_SHOT=<out>` | the CoD2 main menu as a picture (BC adapter) | `renderer/hud_shot.rs` |
-| `cod2_dumped_hud_shot` | `VCOD_HUD_QUADS=<files>` | dumped HUD quads drawn | `renderer/hud_shot.rs` |
-| `cod2_player_hud_shot` | `VCOD_HUD_SHOT=<out>` | a staged CoD2 HUD | `renderer/hud_shot.rs` |
-| `cod2_ui_shot` | `VCOD_UI_SHOT=<prefix>` | the CoD2 scoreboard and chat | `renderer/hud_shot.rs` |
 | `bench_the_pose` | `SKEL_BENCH=1` | the CoD2 skeleton walk and build times (`COD2_DIR`) | `cod2/tests/skel_ab.rs` |
 | `cull_census` | `CULL_CENSUS=<map>` (`CULL_OLD`, `CULL_TURN`) | CoD4 culled triangles over the spawn views | `cod4/tests/cull_census.rs` |
 | `cull_census_view` | `CULL_VIEW=<spec>` | the same for one view | `cod4/tests/cull_census.rs` |
@@ -373,12 +386,12 @@ What the frame checks see:
 
 ## CoD2 map census
 
-`COD2_DIR=... cargo test -p vcod --lib -- --ignored cod2_map_census` runs
+`COD2_DIR=... cargo run -p vcod --example client_tools -- cod2_map_census` runs
 every stock CoD2 map through vcod-server, a spectating client, a headless
 frame (lavapipe env and `nice` as for `pipeline_check`;
 `VCOD_CENSUS_FRAMES=0` skips it) and a walk from each spawn. It writes its
 table, frames and per-map warnings to `tmp/cod2-map-census/`
-(`play/cod2_census.rs` header).
+(`tools/cod2_census.rs` header).
 
 ## CoD4 map sweep
 

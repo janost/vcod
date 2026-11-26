@@ -126,10 +126,10 @@ are its `KNOBS` table's.
 | `VCOD_C1_SHOTS=<dir>` | `cod1_renderer_builds_and_draws_without_validation_errors`, `cod1_chateau_window_draws_through_its_blend` | Writes their frames (`mp_carentan.tga`, `mp_chateau_window.tga`) as TGAs ([testing.md](testing.md#headless-render-pipeline_check)). |
 | `VCOD_SWEEP_MAPS`, `VCOD_SWEEP_GAMETYPES`, `VCOD_SWEEP_JOBS`, `VCOD_SWEEP_LEVEL_SECS`, `VCOD_SWEEP_OUT` | `client_tools`' `cod4_map_sweep` and the soaks | Which maps and gametypes, how many at once, each level's length, the output directory (`tools/cod4_sweep.rs`). |
 | `VCOD_SOAK_MINUTES`, `VCOD_SOAK_RENDER_HZ`, `VCOD_SOAK_TICK_LOG_MS`, `VCOD_SOAK_CLIENT_LOG_MS`, `VCOD_SOAK_TICK_WATCH` | CoD4 and CoD2 soaks | `tools/cod4_soak.sh`'s header. |
-| `VCOD_CENSUS_MAPS`, `VCOD_CENSUS_SECS`, `VCOD_CENSUS_OUT`, `VCOD_CENSUS_FRAMES=0` | `cod2_map_census` | Its maps, time a map, output directory; no headless frame (`play/cod2_census.rs`). |
+| `VCOD_CENSUS_MAPS`, `VCOD_CENSUS_SECS`, `VCOD_CENSUS_OUT`, `VCOD_CENSUS_FRAMES=0` | `client_tools cod2_map_census` | Its maps, time a map, output directory; no headless frame (`tools/cod2_census.rs`). |
 | `VCOD_CENSUS_VIEWS` | `renderer/cod4_draws_live.rs` | The views the joined-draws test holds byte for byte. |
 | `VCOD_PROFILE_MAPS`, `VCOD_WALK_SPAWNS=<n>` | `cod2_cull_profile`, `cod2_cell_walks_draw_alike`, `cell_walks_side_by_side` | Maps to measure; spawns a map (default 8). |
-| `VCOD_HUD_SHOT`, `VCOD_MENU_SHOT`, `VCOD_MENU_SHOT_CLICKS`, `VCOD_MENU_SHOT_WAIT`, `VCOD_HUD_QUADS`, `VCOD_UI_SHOT` | `renderer/hud_shot.rs` | Write CoD2 HUD, menu and scoreboard frames to look at; each test's doc comment says what. |
+| `VCOD_HUD_SHOT`, `VCOD_MENU_SHOT`, `VCOD_MENU_SHOT_CLICKS`, `VCOD_MENU_SHOT_WAIT`, `VCOD_HUD_QUADS`, `VCOD_UI_SHOT` | `client_tools`' CoD2 shots (`renderer/hud_shot.rs`) | Write CoD2 HUD, menu and scoreboard frames to look at; each test's doc comment says what. |
 | `VCOD_FRONT_PPM=<path>` | `cod4_front` test | Saves the drawn Start New Server frame. |
 | `VCOD_BODY_TGA`, `VCOD_LIGHTGRID_TGA`, `VCOD_PROBE_STAGE_TGA` | `cod2_light.rs` tests | Save the lit body, the light grid and the probe stage images. |
 | `VCOD_VERSION`, `VCOD_GIT_SHA` | the build (`crates/version.rs`) | The version string; `VCOD_GIT_SHA` stands in for `git` where there is none. |

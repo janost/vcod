@@ -2269,7 +2269,7 @@ own from the gamestate to the first redraw, and again through any renderer
 build (`play::cod2::Pump`), reading snapshots and sending a cmd that holds the
 playerstate's view every 33 ms. The windowed client's whole frame is exercised
 by the CoD2 soak (`play::cod2_soak`, `tools/cod2_soak.sh`) and census
-(`play::cod2_census`); what it draws is a pending hand check.
+(`tools::cod2_census`); what it draws is a pending hand check.
 
 Each frame the session hands `Frame` to `cod2_scene::Cod2Draw`: `place`
 resolves the non-player entities (12.1) and `players` the bodies (every

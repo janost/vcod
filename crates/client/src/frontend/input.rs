@@ -260,7 +260,7 @@ impl Ui {
     }
 
     /// A left click at the last mouse position.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn click(&mut self, now: Instant, shell: &Shell) -> Vec<UiEffect> {
         self.mouse_button(K_MOUSE1, now, shell)
     }

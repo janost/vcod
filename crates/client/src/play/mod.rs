@@ -5,8 +5,6 @@ pub mod clock;
 pub mod cmds;
 pub mod cod1_soak;
 pub mod cod2;
-#[cfg(test)]
-mod cod2_census;
 pub mod cod2_events;
 pub mod cod2_fx;
 pub mod cod2_gun;
