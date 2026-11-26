@@ -14,7 +14,7 @@ path says otherwise.
 | Subdirectory | Recorded by | Read by |
 |---|---|---|
 | `chat` | 1.5b, `client-probes/probe_squad` with `--probe-say` clients | `squad_ab` |
-| `cod2` | CoD2 out-of-band answers and connects, in `unshare -rn` (`cod2-protocol.md` 17.1) | `src/cod2/tests.rs`, `src/cod2/house_tests.rs`, `src/game/cod2_combat_ab.rs`, `src/game/cod2_turret_ab.rs` |
+| `cod2` | CoD2 out-of-band answers and connects, in `unshare -rn` (`cod2-protocol.md` 17.1); `probe_math`, the math builtins' rounding, `tools/run_probe_cod2_gsc.sh` (`cod2-gsc-diff.md` 7) | `src/cod2/tests.rs`, `src/cod2/house_tests.rs`, `src/game/cod2_combat_ab.rs`, `src/game/cod2_turret_ab.rs`, `semantics_ents.rs` |
 | `cod2-wire` | CoD2: a spectator and a joiner per map and gametype, `crates/cod2/examples/spectate.rs --save`; binary, recipe in the gate's module comment | `src/cod2/wire_ab.rs` |
 | `configstrings` | 1.1d, 1.5b and UO configstring tables at gamestate, `--save-configstrings` | `configstrings_ab`, `configstrings_15_ab`, `configstrings_uo_ab` and the pmove gates that read the tables |
 | `doors` | 1.1d, 1.5b and UO, `client-probes/probe_doors`; `mp_carentan-doors.ent` is a hand-written entity block the recipe splices into mp_carentan | `doors_ab` |

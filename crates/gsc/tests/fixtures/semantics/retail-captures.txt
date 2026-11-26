@@ -300,6 +300,32 @@ PROBE entarray_number 4 299
 PROBE entarray_number 5 300
 PROBE entarray_number 6 301
 
+# probe_eq_tol
+PROBE eq_tiny_zero 1
+PROBE gt_tiny_zero 1
+PROBE eq_thresh_zero 0
+PROBE eq_zero_thresh 0
+PROBE eq_below_zero 1
+PROBE eq_neg_below_zero 1
+PROBE eq_neg_thresh_zero 0
+PROBE eq_above_zero 0
+PROBE eq_thresh_tiny 1
+PROBE eq_thresh_e24 1
+PROBE eq_thresh_e30 0
+PROBE eq_thresh_tie 0
+PROBE eq_thresh_past_tie 1
+PROBE ne_thresh_tiny 0
+PROBE eq_tiny_thresh 1
+PROBE eq_int_ulp 1
+PROBE ne_int_ulp 0
+PROBE eq_int_near 1
+PROBE eq_int_far 0
+PROBE eq_neg_ulp 1
+PROBE eq_large_float 0
+PROBE eq_large_int_float 1
+PROBE eq_large_int_int 0
+PROBE ne_large_int_int 1
+
 # probe_field_case
 PROBE field_read_same_case 7
 PROBE at field_read_other_case
