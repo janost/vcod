@@ -16,6 +16,11 @@
 //! event ring) are compared too, from the first snapshot after its
 //! `setviewpos` (cod4-pmove.md 16).
 //!
+//! What the server writes into the thinker's playerstate outside pmove
+//! the replay writes at the same point: `ClientEvents`' after each cmd
+//! ([`Replay::think`]), `G_TouchTriggers`' at the frame's start
+//! ([`Replay::frame_start`]).
+//!
 //! `MOVES_REPORT=1` prints every mismatching row; `MOVES_TRACE=walk:resync:120`
 //! prints that row's cmds and the state ours reached.
 //! Recipes: `play-1.7-walk.txt` is docs/research/cod4-netfields.md 8,
@@ -32,7 +37,7 @@ use vcod_cod4::collision::ClipMap;
 use vcod_cod4::map::Map;
 use vcod_cod4::net::capture::{self, Item, Session};
 use vcod_cod4::net::clmsg::ClOp;
-use vcod_cod4::net::delta;
+use vcod_cod4::net::delta::{self, EntityState};
 use vcod_cod4::net::fields::PLAYER_STATE;
 use vcod_cod4::net::parse::Op;
 use vcod_cod4::pmove::tape::Taped;
@@ -105,34 +110,23 @@ const CS_WEAPONS: u16 = 2258;
 /// The rows are exact: a fix that rights one fails the gate until the
 /// entry shrinks. Each reason names its section of
 /// docs/research/cod4-pmove.md.
-const GAPS: &[(&str, &str, usize, &str)] = &[
-    // The throw's cmd: the server's grenade timer init zeroes the fuse
-    // inside `ClientEvents` (cod4-combat.md 10.1), which pmove alone cannot.
-    (
-        "frag",
-        "grenadeTimeLeft",
-        1,
-        "cod4-combat.md 10.1, the server's fuse",
-    ),
-    // The charge swing's hit: the server's `EV_MELEE_BLOOD` (37) on the
-    // attacker, and the lunge carries him over the victim's dropped rifle,
-    // whose ammo the server's touch hands him (`EV_ITEM_PICKUP`, 9).
-    (
-        "lunge",
-        "eventSequence",
-        1,
-        "19 the server's melee and pickup",
-    ),
-    ("lunge", "events[0]", 1, "19 the server's melee and pickup"),
-    ("lunge", "events[3]", 1, "19 the server's melee and pickup"),
-    (
-        "lunge",
-        "eventParms[0]",
-        1,
-        "19 the server's melee and pickup",
-    ),
-    ("lunge", "ammo", 1, "19 the server's melee and pickup"),
+const GAPS: &[(&str, &str, usize, &str)] = &[];
+
+/// The dropped weapons a capture's thinker takes, which its own capture
+/// never shows (the item is freed before any snapshot): (file, the
+/// snapshot's serverTime, the weapon, the item's rounds). Taken at the
+/// frame's start ([`Replay::frame_start`], cod4-combat.md 6.2).
+const PICKUPS: &[(&str, i32, u32, i32)] = &[
+    // The lunge's kill drops the target's M16 (27) under the attacker, who
+    // holds one: its clip 30 and stock 60, the spawn rounds of the class
+    // both probes got, which the target never fired.
+    ("play-1.7-lunge.txt", 52450, 27, 90),
 ];
+
+/// `EV_MELEE_HIT`, the swing's contact as its temp entity carries it.
+const EV_MELEE_HIT: u32 = 35;
+/// Event entities' `eType` starts here: `ET_EVENTS` plus the event.
+const ET_EVENTS: u32 = 17;
 
 /// The playerstate words pmove writes, as the wire names them.
 const COMPARED: &[&str] = &[
@@ -212,13 +206,25 @@ struct Capture {
     weapons: Vec<String>,
     cmds: Vec<Cmd>,
     snaps: Vec<(i32, delta::PlayerState)>,
+    /// By snapshot: what the server wrote in its frame, as the capture
+    /// shows it.
+    server: Vec<ServerWrites>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ServerWrites {
+    /// The message carries an `EV_MELEE_HIT` on a client: the frame's
+    /// swing met a body.
+    melee_hit: bool,
+    /// [`PICKUPS`]' weapon and rounds.
+    pickup: Option<(u32, i32)>,
 }
 
 fn read(file: &str) -> Capture {
     let text = std::fs::read_to_string(format!("{FIXTURES}/{file}")).unwrap();
     let lines = capture::parse(&text).unwrap();
     let mut s = Session::new();
-    let (mut cmds, mut snaps) = (Vec::new(), Vec::new());
+    let (mut cmds, mut snaps, mut server) = (Vec::new(), Vec::new(), Vec::new());
     for l in &lines {
         match s.feed(l).unwrap() {
             Some(Item::Client { msg, .. }) => {
@@ -232,7 +238,25 @@ fn read(file: &str) -> Capture {
                 for op in &parsed.ops {
                     if let Op::Snapshot(i) = op {
                         let sn = &s.client.snapshots[*i];
-                        snaps.push((sn.server_time.raw(), sn.ps.clone()));
+                        let t = sn.server_time.raw();
+                        snaps.push((t, sn.ps.clone()));
+                        // Only the entities this message sent.
+                        let melee_hit = sn.wire.entities.iter().any(|(n, _)| {
+                            sn.entities.iter().any(|e| {
+                                let other = EntityState::table(e.etype())
+                                    .iter()
+                                    .find(|f| f.name == "otherEntityNum")
+                                    .map_or(u32::MAX, |f| e.0[f.word()]);
+                                e.number() == *n
+                                    && e.etype() == ET_EVENTS + EV_MELEE_HIT
+                                    && other < 64
+                            })
+                        });
+                        let pickup = PICKUPS
+                            .iter()
+                            .find(|p| p.0 == file && p.1 == t)
+                            .map(|p| (p.2, p.3));
+                        server.push(ServerWrites { melee_hit, pickup });
                     }
                 }
             }
@@ -248,6 +272,7 @@ fn read(file: &str) -> Capture {
         weapons,
         cmds,
         snaps,
+        server,
     }
 }
 
@@ -410,14 +435,16 @@ impl Replay<'_> {
         for (n, (_, retail)) in self.cap.snaps.iter().skip(start + 1).take(rows).enumerate() {
             let ct = word(retail, "commandTime") as i32;
             let from = ps.command_time;
+            let k = start + 1 + n;
             for c in self
                 .cap
                 .cmds
                 .iter()
                 .filter(|c| c.server_time > from && c.server_time <= ct)
             {
-                self.step(&mut ps, c, &mut old);
+                self.think(&mut ps, c, &mut old, k);
             }
+            self.frame_start(&mut ps, k);
             if !diff(
                 &ps.to_wire(retail),
                 retail,
@@ -502,6 +529,51 @@ impl Replay<'_> {
         }
     }
 
+    /// One cmd as `ClientThink_real` runs it: the step, then `ClientEvents`
+    /// on each event it raised (`cod4_lnxded` 0x80a62f4..0x80a6327) where
+    /// the server writes back into the thinker, for the cmd that ends in
+    /// snapshot `k`: `EV_USE_OFFHAND` throws the offhand and
+    /// `G_FireGrenade` zeroes the fuse (cod4-combat.md 10.1.1);
+    /// `EV_FIRE_MELEE` on a swing the capture shows meeting a body rings
+    /// `EV_MELEE_BLOOD` on the attacker (10.4.1).
+    fn think(&self, ps: &mut PlayerState, c: &Cmd, old: &mut Cmd, k: usize) {
+        let from = ps.event_sequence;
+        self.step(ps, c, old);
+        let Some(defs) = self.defs else {
+            return;
+        };
+        for seq in from..ps.event_sequence {
+            match ps.events[(seq & 3) as usize] {
+                pmove::weapon::ev::USE_OFFHAND => {
+                    if let Some(d) = defs.get(ps.off_hand_index as usize)
+                        && d.takes_fuse(d.fuse_time)
+                    {
+                        ps.grenade_time_left = 0;
+                    }
+                }
+                pmove::weapon::ev::FIRE_MELEE if self.cap.server[k].melee_hit => {
+                    ps.add_event(pmove::weapon::ev::MELEE_BLOOD, 0);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// `G_RunFrame`'s start (0x80b624b..0x80b6298), after the frame's cmds
+    /// and before snapshot `k`: `G_TouchTriggers` (0x80a5352) on each
+    /// client, here the [`PICKUPS`] a capture names
+    /// (`pmove::weapon::take_ammo`, cod4-combat.md 6.2).
+    fn frame_start(&self, ps: &mut PlayerState, k: usize) {
+        let (Some(defs), Some((weapon, rounds))) = (self.defs, self.cap.server[k].pickup) else {
+            return;
+        };
+        let d = &defs[weapon as usize];
+        assert!(
+            pmove::weapon::take_ammo(ps, d, weapon, rounds),
+            "nothing taken"
+        );
+    }
+
     /// The cmd `ClientThink` holds as `oldcmd` at `time`.
     fn old_cmd(&self, time: i32) -> Cmd {
         *self
@@ -540,9 +612,10 @@ impl Replay<'_> {
                         ps.view_angles
                     );
                 }
-                self.step(&mut ps, c, &mut old);
+                self.think(&mut ps, c, &mut old, k);
                 ran += 1;
             }
+            self.frame_start(&mut ps, k);
             if trace == Some(k) {
                 eprintln!("  ours origin {:?} velocity {:?}", ps.origin, ps.velocity);
             }

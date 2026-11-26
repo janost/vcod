@@ -618,7 +618,7 @@ impl Cod4Level {
         }
         // A grenade armed by distance keeps the thrower's cook unless it
         // was given a fuse of its own.
-        let timed = d.projectile_activate_dist == 0 || fuse > 0;
+        let timed = d.takes_fuse(fuse);
         let cooked = self.pm_state(slot).map_or(0, |ps| ps.grenade_time_left);
         if timed {
             if let Some(p) = self.players[slot].as_mut() {

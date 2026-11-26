@@ -1334,10 +1334,10 @@ charge yaw and distance with the timer still 0 (the update runs before
 50 ms frame of friction) and the timer 358; the charge clears at 52700,
 the swing having killed the target at 52450, the attacker 133 units on.
 VERIFIED live. `cod4_moves_ab`'s `lunge` row replays it armed: 147
-snapshots from 51250, origins exact in the free run (largest error 0.000)
-and 146 of 147 rows exact resynced; the one row left is the server's
-(`EV_MELEE_BLOOD` on the attacker and the ammo off the victim's dropped
-rifle, in `GAPS`). VERIFIED (the gate). vcod-server and the client's
+snapshots from 51250, every row exact free and resynced (largest origin
+error 0.000), with the server's writes on the hit's row: `EV_MELEE_BLOOD`
+on the attacker and the ammo off the victim's dropped rifle
+(cod4-combat.md 10.4.1, 6.2). VERIFIED (the gate). vcod-server and the client's
 prediction run the same module: `cod4_live_the_melee_key_lunges_at_a_bot_in_reach`
 lunges at a bot 100 units off through the client's own pick and lands
 where the server put it. VERIFIED (the gate).
