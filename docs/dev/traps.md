@@ -967,7 +967,8 @@ otherwise.
   a strafe's legs swing a frame late and the head reads 0.05 units off
   (cod4-player-anims.md 8.1).
 - Inline: `cod4-combat.md` 3.2 (the eye and gun angle bytes), 5 (the
-  corpse's bit, `suicide`, the end-frame draw), 7.1 (the last-cmd word),
+  corpse's bit, `suicide`, the end-frame draw), 6.2 (1.7 takes a dropped
+  weapon at the next frame's start, still falling; vcod's touch is open), 7.1 (the last-cmd word),
   10.2, 10.3, 10.8, 10.10 (missiles, the burst, flash and concussion,
   `radiusDamage`), 13 and 13.1 (rounds on script entities), 14 (entity
   numbers).
