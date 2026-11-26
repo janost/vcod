@@ -460,7 +460,7 @@ impl Bot {
     /// Attackers: deliver what they carry, else go for the nearest objective
     /// lying there, else escort a teammate carrying one, else stand by the
     /// goal it goes to. Defenders: each guards an objective lying there by
-    /// rank. Once one is carried the first by rank holds its goal and the
+    /// rank. Once one is carried the one nearest its goal holds it and the
     /// rest go after the carrier: at him while the compass shows him, else
     /// back along his likely way once, then to the goal.
     fn retrieval_target(&self, view: &BotView, re: &ReView) -> Option<ObjTarget> {
@@ -509,7 +509,7 @@ impl Bot {
             }
             ObjRole::Defend => {
                 if let Some(g) = Self::goal_guard(view, o) {
-                    if re.rank == 0 {
+                    if re.holds_goal {
                         return Some(g);
                     }
                     if let Some(at) = Self::carrier(view, o) {
@@ -1713,7 +1713,7 @@ mod tests {
         let mut v = re_view(ObjRole::Defend);
         v.origin = [2500.0, 0.0, 64.0];
         let re = v.re.as_mut().unwrap();
-        re.rank = 1;
+        re.holds_goal = false;
         let o = &mut re.objectives[0];
         (o.pickup, o.carried) = (None, true);
         assert_eq!(bot.goal(&v), Goal::To([30.0, 0.0, 64.0]));

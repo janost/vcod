@@ -247,7 +247,8 @@ team spreads its bots over different routes
 ([research/bot-objectives.md](research/bot-objectives.md) section 9).
 Guards take their own posts round an objective, most of them farther out
 on the ways in, and half walk back in when it comes under attack
-(sections 13 and 14).
+(sections 13 and 14). No post stands where a guard's body would close a
+door or a corridor one body wide (section 4.2.1).
 
 ### Yells
 
@@ -267,7 +268,8 @@ Behaviour differs by game, never by map.
 - Gametypes: every stock one, `dm`, `tdm`, `sd`, `re` and `bel`, and
   UO's `ctf`, `dom`, `hq` and `bas` (bot-objectives.md sections 4 to 7).
 - In Retrieval the team escorts the carrier and holds the goal ahead of
-  him.
+  him; of the defenders, the one nearest the goal holds it while the rest
+  go after the carrier.
 - In `bas` a bot throws a frag into a charge room where a teammate just
   died before it goes in, when it finds a lob in.
 - UO grenades are cooked; 1.1 has none to cook. A UO bot sprints only on

@@ -253,6 +253,82 @@ fn flood(g: &NavGraph, start: u32, far: f32) -> BTreeMap<u32, f32> {
     cost
 }
 
+/// Graph hops the way round a body at a post may take before the post
+/// reads as closing a way ([`closes_way`]).
+const DETOUR_HOPS: u32 = 12;
+
+/// Whether a body standing at `p` closes a way: the graph's edges its box
+/// meets, flat and within a standing height, have far ends that do not
+/// all reach the first of them in [`DETOUR_HOPS`] without those edges. A
+/// guard posted in mp_rocket's `re` document room's door held his
+/// teammates in the room behind him (bot-objectives.md 4.2.1).
+pub(crate) fn closes_way(g: &NavGraph, p: Vec3) -> bool {
+    use vcod_common::pmove::{HALF_WIDTH, HEIGHT_STAND};
+    let half = 2.0 * HALF_WIDTH;
+    let under = |n: u32| {
+        let d = g.nodes[n as usize] - p;
+        d.x.abs() < half && d.y.abs() < half && d.z.abs() < HEIGHT_STAND
+    };
+    let meets = |a: u32, b: u32| {
+        let (a, b) = (g.nodes[a as usize], g.nodes[b as usize]);
+        (a.z - p.z).abs().min((b.z - p.z).abs()) < HEIGHT_STAND
+            && seg_meets_square(a.truncate(), b.truncate(), p.truncate(), half)
+    };
+    let near = g.nodes_in_box(p, half + 2.0 * g.spacing, HEIGHT_STAND + g.spacing);
+    let mut cut: Vec<(u32, u32)> = Vec::new();
+    let mut ends: Vec<u32> = Vec::new();
+    for &a in &near {
+        for b in g.next(a) {
+            if under(a) || under(b) || meets(a, b) {
+                cut.push((a, b));
+                ends.extend([a, b].into_iter().filter(|&n| !under(n)));
+            }
+        }
+    }
+    ends.sort_unstable();
+    ends.dedup();
+    let Some(&first) = ends.first() else {
+        return false;
+    };
+    let mut seen = std::collections::BTreeSet::from([first]);
+    let mut ring = vec![first];
+    for _ in 0..DETOUR_HOPS {
+        let mut next = Vec::new();
+        for &a in &ring {
+            for b in g.next(a) {
+                if !under(b) && !cut.contains(&(a, b)) && seen.insert(b) {
+                    next.push(b);
+                }
+            }
+        }
+        ring = next;
+    }
+    !ends.iter().all(|e| seen.contains(e))
+}
+
+/// Whether the flat segment `a`-`b` passes inside the square `half` round
+/// `c`.
+fn seg_meets_square(a: glam::Vec2, b: glam::Vec2, c: glam::Vec2, half: f32) -> bool {
+    let d = b - a;
+    let (mut lo, mut hi) = (0.0f32, 1.0f32);
+    for i in 0..2 {
+        let (o, v) = (a[i] - c[i], d[i]);
+        if v.abs() < 1e-6 {
+            if o.abs() >= half {
+                return false;
+            }
+            continue;
+        }
+        let (t0, t1) = ((-half - o) / v, (half - o) / v);
+        lo = lo.max(t0.min(t1));
+        hi = hi.min(t0.max(t1));
+        if lo >= hi {
+            return false;
+        }
+    }
+    true
+}
+
 /// The posts round `a` and its ways in, `clear` the shot trace's verdict
 /// on a segment. Floods the graph once from the anchor and traces each
 /// kept candidate against each way in: a few hundred traces, once per
@@ -298,7 +374,7 @@ pub fn survey(g: &NavGraph, clear: &dyn Fn(Vec3, Vec3) -> bool, a: &Anchor) -> S
     let mut kept: Vec<Vec3> = Vec::new();
     for (_, n) in near {
         let p = g.nodes[n as usize];
-        if kept.iter().all(|k| k.distance(p) >= THIN) {
+        if kept.iter().all(|k| k.distance(p) >= THIN) && !closes_way(g, p) {
             kept.push(p);
             if kept.len() >= MAX_POSTS {
                 break;
@@ -514,6 +590,9 @@ pub fn outer(g: &NavGraph, clear: &dyn Fn(Vec3, Vec3) -> bool, a: &Anchor, band:
             }
             let p = g.nodes[n as usize];
             if kept.iter().any(|k| k.distance(p) < OUT_THIN) {
+                continue;
+            }
+            if closes_way(g, p) {
                 continue;
             }
             // The lane point it watches: further out along the path.
@@ -1081,22 +1160,72 @@ mod tests {
         assert!(after.at.distance(first.at) >= SPREAD * 0.5, "moved on");
     }
 
-    /// A plus of corridors 32 apart out to 2400 from the middle, every
-    /// node linked both ways to its neighbours.
-    fn plus() -> NavGraph {
-        let mut nodes = vec![Vec3::ZERO];
-        let mut edges: Vec<Vec<u32>> = vec![Vec::new()];
-        for (dx, dy) in [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)] {
-            let mut prev = 0u32;
-            for i in 1..=75 {
-                let n = nodes.len() as u32;
-                nodes.push(Vec3::new(dx * 32.0 * i as f32, dy * 32.0 * i as f32, 0.0));
-                edges.push(vec![prev]);
-                edges[prev as usize].push(n);
-                prev = n;
-            }
-        }
+    /// The grid cells `keep` takes, 32 apart, each linked both ways to
+    /// its four neighbours.
+    fn grid(span: i32, keep: impl Fn(i32, i32) -> bool) -> NavGraph {
+        let cells: Vec<(i32, i32)> = (-span..=span)
+            .flat_map(|j| (-span..=span).map(move |i| (i, j)))
+            .filter(|&(i, j)| keep(i, j))
+            .collect();
+        let at: BTreeMap<(i32, i32), u32> = cells
+            .iter()
+            .enumerate()
+            .map(|(n, &c)| (c, n as u32))
+            .collect();
+        let nodes = cells
+            .iter()
+            .map(|&(i, j)| Vec3::new(32.0 * i as f32, 32.0 * j as f32, 0.0))
+            .collect();
+        let edges = cells
+            .iter()
+            .map(|&(i, j)| {
+                [(1, 0), (-1, 0), (0, 1), (0, -1)]
+                    .iter()
+                    .filter_map(|(di, dj)| at.get(&(i + di, j + dj)).copied())
+                    .collect()
+            })
+            .collect();
         NavGraph::from_parts(nodes, edges)
+    }
+
+    /// A plus of corridors three nodes wide out to 2400 from the middle.
+    fn plus() -> NavGraph {
+        grid(75, |i, j| i.abs() <= 1 || j.abs() <= 1)
+    }
+
+    /// A body in a corridor one node wide closes it; in one three nodes
+    /// wide the way goes round him. Between two rooms joined by a one-node
+    /// door, a body in the door closes the way and one in a room does not.
+    #[test]
+    fn a_body_in_a_narrow_way_closes_it() {
+        let row = grid(8, |_, j| j == 0);
+        assert!(closes_way(&row, Vec3::ZERO));
+        let wide = grid(8, |_, j| j.abs() <= 1);
+        assert!(!closes_way(&wide, Vec3::ZERO));
+        assert!(!closes_way(&wide, Vec3::new(0.0, 32.0, 0.0)));
+        let rooms = grid(8, |i, j| {
+            (i.abs() >= 2 && j.abs() <= 3) || (i == 0 && j == 0) || (i.abs() == 1 && j == 0)
+        });
+        assert!(closes_way(&rooms, Vec3::ZERO), "the door");
+        assert!(!closes_way(&rooms, Vec3::new(160.0, 0.0, 0.0)), "a room");
+    }
+
+    /// The survey deals no post in a door its ring takes in.
+    #[test]
+    fn no_post_stands_in_a_door() {
+        let rooms = grid(8, |i, j| {
+            (i.abs() >= 2 && j.abs() <= 3) || i.abs() <= 1 && j == 0
+        });
+        let a = Anchor::Ring {
+            at: [96.0, 0.0, 0.0],
+            inner: 0.0,
+            outer: 250.0,
+        };
+        let s = survey(&rooms, &|_, _| true, &a);
+        assert!(!s.posts.is_empty());
+        for p in &s.posts {
+            assert!(p.at.x.abs() > 40.0, "a post in the door: {p:?}");
+        }
     }
 
     /// A survey goes with the graph generation it was made under, though

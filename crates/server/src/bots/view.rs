@@ -341,6 +341,9 @@ pub struct ReView {
     pub objectives: Vec<ReObjView>,
     /// As [`SdView::rank`]: defenders spread over the objectives by it.
     pub rank: usize,
+    /// With one carried, this defender holds its goal: the one nearest
+    /// that goal ([`Bot::retrieval_target`]); the rest go after the carrier.
+    pub holds_goal: bool,
     /// One of the attackers nearest the teammate carrying an objective
     /// ([`team::escorts`]): it keeps by him, and the rest hold his goal.
     pub escort: bool,

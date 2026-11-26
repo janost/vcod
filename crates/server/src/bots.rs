@@ -1228,6 +1228,7 @@ mod tests {
         v.re = Some(ReView {
             role,
             rank: 0,
+            holds_goal: true,
             escort: true,
             objectives: vec![ReObjView {
                 pickup: Some([30.0, 0.0, 72.0]),

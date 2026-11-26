@@ -275,9 +275,11 @@ teammate was not told it carried and stood outside the goal.
 - Attacker with a teammate carrying: escorts him, holding within 250
   units and closing again when he moves on. Its compass always shows him.
 - Attacker with nothing to pick up and no carrier on its compass, and the
-  first defender by rank with one carried: a ring round its goal from just
-  clear of the trigger to 150 units past. The defender nearest the goal as
-  the holder was tried 2026-11-17 and not kept (below).
+  defender nearest the goal with one carried: a ring round its goal from
+  just clear of the trigger to 150 units past. The defender nearest the
+  goal as the holder was tried 2026-11-17 and not kept (below); since
+  2026-11-26 it is the holder again (4.2.1). With team play off it is the
+  first by rank.
 - An escort within 80 units of the carrier it keeps by walks away from
   him instead of holding (`ESCORT_CLEAR`, `Goal::Away`;
   `bots::objective::tests::an_escort_steps_off_a_carrier_it_stands_on`), so it
@@ -369,7 +371,8 @@ count for count):
   the objective's room, (9700 to 10240, 5700 to 6100, 160), where the
   step-off alone stalls 39 (seed 5), the holder alone 11 (seed 6) and the
   flank parts of 9.1 479; master's eight seeds never stall there. Not
-  traced (bot-navigation.md, "Open stalls, 2026-11-17").
+  traced (bot-navigation.md, "Open stalls, 2026-11-17"). Traced
+  2026-11-26: 4.2.1.
 - Shipped: the step-off and the clock, without the holder by distance.
   The holder adds 68 stalled bot-ticks over the step-off alone (140
   against 72) for no clear gain (rounds 137-79 against 134-80, captures
@@ -387,6 +390,126 @@ escort and chase above, against the same runs on the code before them):
 `mp_brecourt` 10 and 0 (10 and 0). Kills were 55 to 66 per map in both.
 On the three maps that never deliver the carrier dies on the way; the
 rounds end on eliminations.
+
+### 4.2.1 mp_rocket's document room, 2026-11-26
+
+The stalls round (9900, 5800, 160) on mp_rocket `re` (4.2, 9.1) are the
+documents' room: a room about x 9872 to 10048, y 5800 to 5912, floor at
+160, the documents at (9875, 5791, 193) by its south wall, its south
+door a gap where a standing box's middle fits only at x 9960 to 9968,
+y 5744 to 5792. VERIFIED (a standing-box trace grid at 8-unit steps over
+the built graph, temporary `nav_build` dump, master 35f10513c). Measured
+first: `bot_match GAMETYPE=re BOTS=10 TICKS=6000 MAPS=mp_rocket`, seeds
+1 to 48, master: 273 stalled bot-ticks, 9 of 48 matches, seed 10 the
+most (88). VERIFIED (measured, ours, release). Traced with a temporary
+print of each bot's target, goal, post and plan every 5 to 20 ticks:
+
+- Seed 21, ticks 3891 to 4130. The defender in slot 7 crouched on its
+  guard post at (9984, 5808, 160), the room's mouth behind the door
+  ([`posts::assign`]'s pick). Slot 1, leaving for a post outside, pressed
+  between him and the south wall for 10 s and its follower gave up 8
+  edges: the wall keeps a box's middle at y 5800 or more, the crouched
+  guard's box keeps it at 5795.6 or less, so no box passes him on that
+  side, and past his other side the door's gap is under his box too.
+  VERIFIED (the trace).
+- Seed 104, ticks 3740 to 4160. The rank-0 defender on its post at
+  (10081.6, 6048.0, 160), in a corridor north-east of the room; another
+  defender bound west paced beside him for 20 s. VERIFIED (the trace).
+- Seed 10, ticks 4800 to 5100. A defender's post moved within 128
+  units of the node the sweep's plan had ended at, (9889, 5856, 160); the
+  follower keeps a destination node within `RETARGET` of a moved point
+  and took the parked plan up, then walked at the post (9792, 5900, 160),
+  106 units off across the room's west wall, for 10 s, until the post
+  moved again. VERIFIED (the trace).
+- Seed 8, ticks 1920 to 2200. A defender in the room failed the door's
+  edge twice with a teammate coming in through it; both edges went dead
+  (`Follower::avoid_edge`), no plan left the room without them, and the
+  follower rested for 10 s. VERIFIED (the trace).
+
+The fix (`posts::closes_way`): no post, round an objective
+(`posts::survey`) or out on its ways in (`posts::outer`), stands where a
+body closes a way. The graph's edges a passing box's middle cannot run
+along past a standing box there (flat, a 60-unit square round it, within
+a standing height) are taken out; if their
+far ends do not all reach the first of them in 12 hops (`DETOUR_HOPS`)
+without those edges, the node is passed over. A corridor one node wide
+closes, one three nodes wide does not, and a one-node door between two
+rooms closes at the door and beside it
+(`bots::posts::tests::a_body_in_a_narrow_way_closes_it`,
+`no_post_stands_in_a_door`; `outposts_hold_the_ways_in_apart` now runs on
+corridors three nodes wide). It applies to every game's posts.
+
+VERIFIED (measured, ours, release, master 35f10513c against the branch,
+`bot_match GAMETYPE=re BOTS=10 TICKS=6000`). Wins are by team, not side:
+the attackers are allies but on mp_dawnville.
+
+| Set | Build | stalled | captures | pickups | carrier deaths | allies W | axis W | kills |
+|---|---|---|---|---|---|---|---|---|
+| mp_rocket, seeds 1-144 | master | 936 | 76 | 446 | 174 | 264 | 109 | 3123 |
+| mp_rocket, seeds 1-144 | door rule | 41 | 60 | 410 | 153 | 247 | 137 | 3268 |
+| six maps, seeds 1-24 | master | 419 | 286 | 842 | 345 | 405 | 246 | 4854 |
+| six maps, seeds 1-24 | door rule | 321 | 293 | 857 | 347 | 396 | 247 | 4919 |
+| six maps, seeds 1-24 | door rule, holder by distance | 52 | 305 | 816 | 302 | 414 | 234 | 4826 |
+
+The six maps are 4.2's (mp_brecourt, mp_carentan, mp_chateau,
+mp_dawnville, mp_pavlov, mp_rocket). The door rule's 321 are one match,
+mp_pavlov seed 6 (315), below.
+
+- VERIFIED (the table): on mp_rocket the room's stalls go (936 to 41,
+  none in the room; 144 matches). The defenders win more of its rounds
+  (109 to 137) and the attackers carry less out (captures 76 to 60).
+  INFERRED: guards that held the door had kept their own side in.
+- VERIFIED (the table): over the six maps captures and pickups hold
+  (286 to 293, 842 to 857).
+- The goal holder by distance (4.2, dropped 2026-11-17 for the stalls
+  it added there) was tried again on the door rule: stalls 321 to 52,
+  captures 293 to 305, carrier deaths 347 to 302, pickups 857 to 816.
+  VERIFIED (the table). Kept: with team play on, the playing defender
+  nearest a carried objective's goal holds it (`ReView::holds_goal`,
+  `Server::deal`); with it off, the first by rank.
+- `sd` on mp_brecourt, mp_carentan, mp_chateau, mp_dawnville, mp_depot,
+  mp_harbor, mp_hurtgen, mp_pavlov, mp_powcamp and mp_railyard, 10 bots, 12000 ticks, seeds 1 to 4: plants 272 to 286,
+  defuses 79 to 92, stalled 735 to 549, rounds 266 to 282. VERIFIED
+  (measured, ours, release).
+- United Offensive, 10 bots, 6000 ticks, mp_arnhem, mp_berlin,
+  mp_cassino and mp_sicily: `ctf` seeds 1 to 24 flags taken 126 to 127,
+  captured 15 to 23, returned 68 to 69, stalled 6674 to 2751; `dom` seeds
+  1 to 12 flags captured 730 to 766, levels ended 15 and 15, stalled
+  4277 to 4869. VERIFIED (measured, ours, release).
+- CoD4 1.7 `sd`, `GAME=cod4 BOTS=10`, mp_crash, mp_backlot, mp_strike
+  and mp_crossfire, seeds 1 to 8: plants 87 to 104, defuses 26 to 35,
+  stalled 197 to 192, kills 1064 to 1062. CoD2 1.3 `sd`, `GAME=cod2
+  BOTS=10`, mp_toujane, mp_carentan, mp_burgundy and mp_dawnville, seeds
+  1 to 8: plants 136 to 126, defuses 65 to 68, stalled 2 to 50 (one
+  match, mp_toujane seed 7, a bot held up by a teammate), kills 1316 to
+  1292. VERIFIED (measured, ours, release).
+
+Tried on the way, not kept. VERIFIED (measured, ours, release, mp_rocket
+seeds 1 to 144 unless named, stalled bot-ticks):
+
+| Variant | stalled |
+|---|---|
+| master | 936 (273 on seeds 1-48) |
+| a walked-out plan whose node is not the point's nearest plans again to it (seed 10's wall) | 894 (417 on 1-48) |
+| a start its dead edges pen in (under 64 nodes reached) plans through them (seed 8's rest) | 971 |
+| both | 623 |
+| a body whose box touches the bot's counts as in its way (`Follower::bodies_in_way`), seeds 1-48 | 1111 |
+
+- The arrival replan and the pen moved the stalls between seeds more
+  than they cut them; the touching rule planned round guards it only
+  brushed. INFERRED (the per-seed counts).
+- A retrieval pickup's side moved on after 3 s (60 ticks) with the body
+  no 16 units nearer it, on the door rule, six maps seeds 1 to 8:
+  stalled 319 to 268, pickups 286 to 262, captures 98 to 90. VERIFIED
+  (measured, ours, release). Not kept. It was aimed at mp_pavlov seed 6
+  (315 stalled on the door rule): an attacker walked out its plan at
+  (-9337, 10016, 160) and walked at the pickup's side (-9360, 9985, 162)
+  into a wall for the rest of the round; the tap that moves the side
+  never came. VERIFIED (the trace). Open.
+- Left: mp_rocket's upper floor at (9100 to 9240, 5900 to 6160, 338 to
+  371), a climb toward a node 33 up (wp (9217, 5904, 371)) that bots
+  pace below, 3 to 8 windows in 144 matches on every build above.
+  VERIFIED (measured). Not traced.
 
 ## 5. Behind Enemy Lines (`bel`)
 
@@ -712,14 +835,54 @@ kill lines):
   last noise, and preferring mounts (`bg_lmg_yawcap`'s arc on a sill),
   are untried. Open.
 
+### 6.1.1 A lane toward the last enemy, 2026-11-26 (not shipped)
+
+Tried, vcod's own: 6.1's camp with the lane picked toward the enemy. The
+bot keeps the last enemy it saw or heard (the enemy's origin, or the
+noise's spot). With an LMG, no enemy, objective, memory or noise and no
+seat, on the ground, it probes 16 yaws from its prone eye (`shot_trace`
+3000 out) and camps on the longest lane at least `MIN` long within
+`ARC` of the bearing to that contact: turns onto it, holds the sight
+button once facing it, watches it until 15 s pass with no enemy (60 s
+at most); a deploy not down 20 ticks after the press, a noise or memory
+to follow, an objective or the gun put away end it, then it walks 20 s
+before the next. No contact yet, no camp. VERIFIED (measured, ours,
+release, master 35f10513c plus the camp, UO `tdm`, mp_cassino and
+mp_kursk, 8 bots, 6000 ticks, kills by weapon off `VERBOSE`'s kill
+lines):
+
+| Seeds | Run | LMG kills (dp28, mg30cal, mg34) | All kills | Stalled |
+|---|---|---|---|---|
+| 1-16 | master | 53 (3, 17, 33) | 1357 | 12 |
+| 1-16 | MIN 600, ARC 45 | 52 (3, 32, 17) | 1342 | 5 |
+| 1-16 | MIN 600, ARC 45, 1 s before probing again when no lane does | 55 (2, 39, 14) | 1299 | 29 |
+| 1-16 | MIN 400, ARC 60 | 78 (3, 39, 36) | 1373 | 10 |
+| 17-48 | master | 163 (24, 53, 86) | 2617 | 281 |
+| 17-48 | MIN 400, ARC 60 | 150 (19, 31, 100) | 2464 | 385 |
+| 17-48 | MIN 300, ARC 75 | 138 (24, 30, 84) | 2452 | 290 |
+
+- VERIFIED (the table): over seeds 1 to 48, MIN 400 and ARC 60 takes
+  228 LMG kills against master's 216, and 3837 kills in all against
+  3974. The first 16 seeds' 78 against 53 did not hold on the next 32.
+- VERIFIED (measured, a temporary print, MIN 600 and ARC 45, seeds 1 to
+  4, 8 matches): 42 camps, 16 ended by the quiet 15 s, 19 by something
+  to follow or do, 5 by a refused deploy; 1051 thinks found no lane in
+  the arc.
+- Not kept: no more LMG kills than master and fewer kills in all.
+  INFERRED (the counts): the contact's bearing is a stale guess of where
+  the next enemy comes from, as the longest sightline was. Mounts
+  (`bg_lmg_yawcap`'s arc on a sill) are still untried: finding a sill a
+  standing bipod takes needs a probe of its own. Open.
+
 ## 7. United Offensive's `ctf`, `dom`, `hq` and `bas`
 
 Line numbers are `maps/mp/gametypes/<gt>.gsc` in `pakuo00.pk3`; the
 server reads each gametype's state off the script every frame
 (`ScriptRuntime::uo_objectives`) and deals each bot a `bots::UoView`
 (`Server::bot_uo_view`), its zones' standing points by `site_stand` as
-for a bombzone. Roles go by rank (the bot's place among its team's bots
-by slot): odd ranks keep their own side's objective, even ranks go for
+for a bombzone. Roles go by rank (the bot's place among its team's bots,
+shuffled per round as section 9's since 2026-11-26, 9.3; by slot before,
+and with team play off): odd ranks keep their own side's objective, even ranks go for
 the other side's, so a lone bot attacks. A visible enemy still comes
 first everywhere.
 
@@ -1474,7 +1637,8 @@ view.
   the shuffle only redeals which bot plays which part, so both sides'
   counts falling together is either the seed spread or a rule elsewhere
   that reads the slot order (the `ctf` posts and escorts deal by slot);
-  not traced.
+  not traced. Measured again 2026-11-26 with a control: the spread
+  (9.3); UO deals per round since.
 - S&D attackers go together. Every attacker goes for one site, picked per
   round (`team::round_shift`, `team::site_rank`); the defenders still
   split over both. A failed plant moves the bot on to the other site as
@@ -1738,6 +1902,46 @@ Not shipped.
   Holding off the pickup trades carries for elimination wins that came
   anyway. What is left is the guards' side: they stand within 250 units
   of the objective (section 4.2) and close on it the moment it goes.
+
+### 9.3 United Offensive's deal per round, 2026-11-26
+
+9's shuffle cut UO's objective counts on 8 `ctf` and 4 `dom` seeds
+(2026-11-17). Measured again on more seeds, with a control: the slot
+order reversed (the last slot first), a deal as fixed as the slot
+order's that no rule elsewhere can tell from it unless it reads the
+slot order. VERIFIED (measured, ours, release, UO, `bot_match UO=1
+BOTS=10 TICKS=6000`, mp_arnhem, mp_berlin, mp_cassino and mp_sicily,
+all on 4.2.1's door rule):
+
+| Gametype, seeds | Deal | taken | captured | returned | stalled |
+|---|---|---|---|---|---|
+| `ctf` 1-24 | by slot | 127 | 23 | 69 | 2751 |
+| `ctf` 1-24 | slots reversed | 127 | 23 | 69 | 2751 |
+| `ctf` 1-24 | shuffled per round | 139 | 18 | 88 | 1613 |
+| `dom` 1-12 | by slot | | 766 | | 4869 |
+| `dom` 1-12 | slots reversed | | 818 | | 4026 |
+| `dom` 1-12 | shuffled per round | | 793 | | 5938 |
+
+`dom`'s captured column counts flags taken (`dom_captured`), both
+sides.
+
+- `ctf` reversed is the by-slot run tick for tick: `ctf` reads the rank
+  only by its parity (odd ranks defend, `bots::driver::ctf`), and five
+  bots a side reversed keep each rank's parity. VERIFIED (the identical
+  counts; `objective/uo.rs`, `driver/ctf.rs` read `rank % 2`).
+- `dom`'s two fixed deals differ by 52 flags (7%) with no rule changed,
+  more than the shuffle's 27 from the slot order. INFERRED: the 2026-11-17
+  drop was the seed spread on 4 and 8 seeds, not a rule reading the slot
+  order.
+- `bas`, mp_foy, mp_italy, mp_kursk, mp_ponyri and mp_rhinevalley, 8
+  bots, 12000 ticks, seeds 1 to 8, by slot against shuffled: bases
+  breached 157 and 165, destroyed 112 and 110, charges planted 133 and
+  130, levels ended 6 and 3, stalled 38458 and 35940. VERIFIED
+  (measured, ours, release).
+- Kept: UO's `ctf`, `dom`, `hq` and `bas` deal by `team::round_rank`
+  (`Server::deal`'s UO pass), as `sd` and `re` do; a bot with team play
+  off still by slot. `hq.gsc` has no `map_restart`, so on `hq` the deal
+  is one shuffle for the level.
 
 ## 10. United Offensive vehicles
 
