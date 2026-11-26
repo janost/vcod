@@ -58,6 +58,10 @@ impl Server {
     /// gametype scripts) has no level left to fall back to, so it ends the
     /// process through [`Self::take_fatal`].
     pub(super) fn exec_console_line(&mut self, line: &str, now: Instant) -> bool {
+        self.game.argv1 = crate::game::say::tokenize(line)
+            .into_iter()
+            .nth(1)
+            .unwrap_or_default();
         match console::Command::parse(line) {
             console::Command::Map { map, bsp, cheats } => {
                 if self
