@@ -230,6 +230,7 @@ const RUN_IN_SERVER_CRATE: &[&str] = &[
     "probe_attach_twice",
     "probe_attach_twice_notag",
     "probe_bootstrap",
+    "probe_closer",
     "probe_cvar",
     "probe_delete",
     "probe_detach_missing",

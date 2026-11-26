@@ -35,6 +35,10 @@ by doc and section. Grep `Trap:` in the subsystem doc you were sent to.
   pixels (GPU kit pack 8). Keep a new position term off the other outputs'
   operations; `renderer::tests::the_entity_position_reads_no_world_normal_operation`
   holds it for the normal.
+- One builtin can round differently per build: `closer` keeps 1.1d's second
+  distance on the x87 stack, rounds both on 1.5b, UO and CoD2, and neither
+  on CoD4 (`CloserRounding`, cod11-gsc-object-model.md 9.2). Read every
+  build's handler before binding a shared one by name.
 
 ### Script host and VM
 

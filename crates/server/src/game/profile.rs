@@ -9,6 +9,7 @@ use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V2
 use vcod_gsc::VmProfile;
 
 use crate::defs::{self, Defs};
+use crate::game::builtins::math::CloserRounding;
 use crate::game::builtins::set::BuiltinSet;
 use crate::game::fields::{self, Route};
 use crate::game::trigger::{self, TriggerKind};
@@ -134,6 +135,8 @@ pub struct HostProfile {
     /// A client's model change runs `G_UpdateClientInfo` (UO's 0x87df9);
     /// 1.1d's and 1.5b's return.
     pub model_change_updates_client: bool,
+    /// Where `closer()` rounds (`builtins::math::closer`).
+    pub closer: CloserRounding,
 }
 
 /// `G_Say`'s rules (`game::say`).
@@ -392,6 +395,11 @@ const fn cod1(
         readonly_vehicletype: uo,
         head_icon_spectator: uo,
         model_change_updates_client: uo,
+        closer: if v1 {
+            CloserRounding::FirstOnly
+        } else {
+            CloserRounding::Floats
+        },
     }
 }
 
@@ -482,6 +490,7 @@ pub static COD2: HostProfile = HostProfile {
     readonly_vehicletype: false,
     head_icon_spectator: false,
     model_change_updates_client: false,
+    closer: CloserRounding::Floats,
 };
 
 /// CoD2's and CoD4's combat rules: 1.1's where the CoD1 code reads them.
@@ -582,6 +591,7 @@ pub static COD4: HostProfile = HostProfile {
     readonly_vehicletype: false,
     head_icon_spectator: false,
     model_change_updates_client: false,
+    closer: CloserRounding::None,
 };
 
 impl HostProfile {
