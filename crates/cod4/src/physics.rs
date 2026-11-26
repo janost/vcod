@@ -1984,7 +1984,7 @@ fn unwedge(c: &mut Vec<Contact>, v0: Vec3, w0: Vec3) {
 /// whose means dot over 0.999 merged (0x5a1cc0), and of each cluster the
 /// least and most along two tangents and the deepest, a contact within
 /// 0.1 of an earlier one passed over (0x5a1e40).
-fn reduce(c: &[(Vec3, Vec3, f32)]) -> Vec<usize> {
+pub(crate) fn reduce(c: &[(Vec3, Vec3, f32)]) -> Vec<usize> {
     let n = c.len();
     let mut tags = vec![usize::MAX; n];
     if n == 0 {

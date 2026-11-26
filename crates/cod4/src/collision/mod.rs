@@ -26,7 +26,10 @@ use crate::assets::world;
 use crate::walk::{f32_at, i16_at, i32_at, u16_at, u32_at};
 use crate::zone::Pointer;
 
+mod pieces;
 mod static_tree;
+
+pub use pieces::{BrushFaces, Piece};
 
 pub use vcod_common::clipmap::{
     CONTENTS_BODY, CONTENTS_GLASS, CONTENTS_PLAYERCLIP, CONTENTS_SOLID, MASK_PLAYERSOLID,
@@ -92,6 +95,11 @@ pub struct ClipMap {
     pub static_models: Vec<StaticModel>,
     /// [`Self::static_models`]' boxes, which a point trace walks.
     static_tree: static_tree::StaticTree,
+    /// Per brush, each face's neighbours in winding order
+    /// ([`BrushFaces::adjacent`]): `cbrush_t` +0x30 (`baseAdjacentSide`),
+    /// +0x34 and +0x40 (the axial faces' first and count, `[is_max][axis]`),
+    /// a side's +8 and +0xa. Empty when built without them.
+    pub brush_adjacent: Vec<Vec<Vec<u8>>>,
 }
 
 impl ClipMap {
@@ -110,6 +118,7 @@ impl ClipMap {
             submodels,
             static_tree: static_tree::StaticTree::build(&static_models),
             static_models,
+            brush_adjacent: Vec::new(),
         }
     }
 
@@ -717,6 +726,8 @@ fn build(c: &world::ClipMap, a: &Assets, refs: &[&Assets]) -> Result<ClipMap> {
     let sides = bulk(&c.brush_sides, "brush sides")?;
     let side_count = n(c.brush_side_count);
     let mut brushes = Vec::with_capacity(usize::from(c.brush_count) + 1);
+    let edges = c.brush_edges.as_deref().unwrap_or_default();
+    let mut brush_adjacent = Vec::with_capacity(usize::from(c.brush_count));
     for (i, b) in bulk(&c.brushes, "brushes")?
         .as_chunks::<0x50>()
         .0
@@ -750,6 +761,51 @@ fn build(c: &world::ClipMap, a: &Assets, refs: &[&Assets]) -> Result<ClipMap> {
                 ));
             }
         }
+        // Each face's (first, count) into the brush's run of edges.
+        let mut runs: Vec<(i16, u8)> = (0..6)
+            .map(|i| {
+                let j = 3 * (i & 1) + (i >> 1);
+                (i16_at(b, 52 + 2 * j), b[64 + j])
+            })
+            .collect();
+        if numsides > 0 {
+            let first = index_of(
+                u32_at(b, 32),
+                c.at.brush_sides,
+                0xC,
+                side_count,
+                "brush sides",
+            )?;
+            runs.extend(
+                sides[0xC * first..]
+                    .as_chunks::<0xC>()
+                    .0
+                    .iter()
+                    .take(numsides)
+                    .map(|s| (i16_at(s, 8), s[10])),
+            );
+        }
+        let base = if runs.iter().any(|&(_, k)| k > 0) {
+            Some(index_of(
+                u32_at(b, 48),
+                c.at.brush_edges,
+                1,
+                edges.len(),
+                "brush edges",
+            )?)
+        } else {
+            None
+        };
+        brush_adjacent.push(
+            runs.iter()
+                .map(|&(first, k)| match base {
+                    Some(e) if first >= 0 => edges
+                        .get(e + first as usize..e + first as usize + usize::from(k))
+                        .map_or_else(Vec::new, <[u8]>::to_vec),
+                    _ => Vec::new(),
+                })
+                .collect(),
+        );
         let mut axial_material = [[0u16; 3]; 2];
         for (k, row) in axial_material.iter_mut().enumerate() {
             for (j, m) in row.iter_mut().enumerate() {
@@ -899,13 +955,15 @@ fn build(c: &world::ClipMap, a: &Assets, refs: &[&Assets]) -> Result<ClipMap> {
         reach: Default::default(),
     };
     world.check_trees()?;
-    Ok(ClipMap::new(
+    let mut clip = ClipMap::new(
         c.name.clone(),
         content_hash(c),
         world,
         submodels,
         static_models,
-    ))
+    );
+    clip.brush_adjacent = brush_adjacent;
+    Ok(clip)
 }
 
 #[cfg(test)]
