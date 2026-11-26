@@ -79,10 +79,20 @@ impl MsvcRand {
         MsvcRand(seed)
     }
 
+    /// The LCG multiplier and increment.
+    pub const MUL: u32 = 214_013;
+    pub const INC: u32 = 2_531_011;
+
+    /// Advances the state and returns it whole, for callers that take
+    /// another slice of its bits than `rand()` does (`holdrand >> 17`).
+    pub const fn step(&mut self) -> u32 {
+        self.0 = self.0.wrapping_mul(Self::MUL).wrapping_add(Self::INC);
+        self.0
+    }
+
     /// `rand()`: `[0, 0x7fff]`.
     pub const fn next(&mut self) -> u32 {
-        self.0 = self.0.wrapping_mul(214_013).wrapping_add(2_531_011);
-        (self.0 >> 16) & 0x7fff
+        (self.step() >> 16) & 0x7fff
     }
 
     /// `rand() / 32768`: `[0, 1)`.

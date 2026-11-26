@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use glam::{Quat, Vec3};
 use vcod_common::clipmap::ClipTrace;
+use vcod_common::rng::MsvcRand;
 
 use crate::assets::Assets;
 use crate::assets::model::{XModel, XModelCollSurf};
@@ -53,6 +54,12 @@ const JITTER_REACH: f64 = 1.414_213_538_169_860_8;
 /// The regions a physics world holds at once (0x5a7738); a sixth takes
 /// the last one's place (0x5a773d).
 const JITTER_MAX: usize = 5;
+
+/// One step of the shared MSVC LCG on a bare state; returns the new state.
+fn step_state(state: &mut u32) -> u32 {
+    *state = MsvcRand::seed(*state).step();
+    *state
+}
 
 /// What the type table (0x6bdb70, 8 bytes a type) says of `kind`: whether
 /// it starts live for the walks (byte 4, client flag 1, 0x48d088), takes
@@ -347,9 +354,14 @@ impl DynEnts {
         d.length_squared()
     }
 
+    /// One step of the shared MSVC LCG on `rand`; returns the new state.
+    fn step_rand(&mut self) -> u32 {
+        step_state(&mut self.rand)
+    }
+
     fn next_rand(&mut self) -> f32 {
-        self.rand = self.rand.wrapping_mul(0x343fd).wrapping_add(0x269ec3);
-        (self.rand >> 17) as f32 * 2.0 / 32768.0 - 1.0
+        // Bits 17..31 of the state, as retail's `holdrand` draws.
+        (self.step_rand() >> 17) as f32 * 2.0 / 32768.0 - 1.0
     }
 
     /// `DynEntCl_ExplosionEvent` (0x48e670): `e` pushes every live entity
@@ -556,8 +568,7 @@ impl DynEnts {
         }
         for e in &mut self.ents {
             let Some(b) = &mut e.body else { continue };
-            self.rand = self.rand.wrapping_mul(0x343fd).wrapping_add(0x269ec3);
-            b.jitter_rand = self.rand;
+            b.jitter_rand = step_state(&mut self.rand);
             if b.jitter.len() == JITTER_MAX {
                 b.jitter[JITTER_MAX - 1] = j;
             } else {

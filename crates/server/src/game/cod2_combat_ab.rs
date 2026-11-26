@@ -1202,8 +1202,9 @@ fn recover_rocket_seed() {
         }
     }
     eprintln!("{name}: first wobble's draws {draws:?}");
-    const A: u32 = 0x343fd;
-    const C: u32 = 0x269ec3;
+    use vcod_common::rng::MsvcRand;
+    const A: u32 = MsvcRand::MUL;
+    const C: u32 = MsvcRand::INC;
     let inverse = (0..32).fold(1u32, |x, _| {
         x.wrapping_mul(2u32.wrapping_sub(A.wrapping_mul(x)))
     });
@@ -1215,8 +1216,8 @@ fn recover_rocket_seed() {
     for v in &draws {
         for low in 0..1u32 << 17 {
             let s1 = ((v[0] as u32) << 17) | low;
-            let s2 = s1.wrapping_mul(A).wrapping_add(C);
-            let s3 = s2.wrapping_mul(A).wrapping_add(C);
+            let mut fwd = MsvcRand::seed(s1);
+            let (s2, s3) = (fwd.step(), fwd.step());
             if i64::from(s2 >> 17) != v[1] || i64::from(s3 >> 17) != v[2] {
                 continue;
             }
