@@ -27,9 +27,9 @@ pub struct Rotation {
 /// `SV_MapRotate_f`'s walk (`crate::engine::rotation`), each skipped word
 /// logged. VERIFIED, the branches and the strings.
 pub fn rotate(rotation: &str, current: &str) -> Rotation {
-    use crate::engine::rotation::{End, Words};
+    use crate::engine::rotation::{End, Keywords, Words};
     let mut rest = current.to_string();
-    let walk = crate::engine::rotation::rotate(rotation, &mut rest, Words::Cod2);
+    let walk = crate::engine::rotation::rotate(rotation, &mut rest, Words::Cod2, Keywords::Base);
     for w in &walk.unknown {
         log::info!("Unknown keyword '{w}' in sv_mapRotation.");
     }
