@@ -398,7 +398,8 @@ into a headless renderer (lavapipe env as for `pipeline_check`).
 ## CoD4 live tests
 
 The `cod4_live_*` tests (`COD4_DIR`) each run a CoD4 vcod-server and client
-in process, on `play::cod4`'s `tests::sim` clock.
+in process, on `crate::harness`'s `sim` clock (`src/harness.rs`; the CoD4
+joins and war pairs on it are `play/cod4/live.rs`).
 
 - A test's loops count frames its own sleeps move. Under load it runs slower,
   never out of time; only `sim::Clock::sleep`'s 60 s wall assert stops a
@@ -407,7 +408,7 @@ in process, on `play::cod4`'s `tests::sim` clock.
   lose a packet. An input whose edge rides one cmd (the location selector's
   confirm, `live_streaks::selector_attack`) is pressed again until its
   effect shows, or one lost packet hangs the test to its limit.
-- A test takes one of `play::cod4::tests::live_slot`'s slots before it
+- A test takes one of `harness::live_slot`'s slots before it
   builds its server, three unless `VCOD_LIVE_SLOTS` says more, so a run at
   any `--test-threads` holds at most three maps at about 2.5 GB each. The
   107 of them ran in 90 s at 8 test threads under heavy.sh's 14 GB cap.
@@ -420,7 +421,7 @@ in process, on `play::cod4`'s `tests::sim` clock.
   builds the bots' graph inline. A helper thread on the wall (`live_www`'s
   HTTP server) holds the server's frames while it works, or the client's
   waits run the level minutes ahead of it.
-- A live test runs its server through `tests::run_held`, never on a thread
+- A live test runs its server through `harness::run_held`, never on a thread
   of its own pacing frames by `Instant`: under load such a client's
   deadlines run out before it spawns. The browser's and the front end's
   `TestServer` serves on a `sim` clock it puts the starting thread on, and
@@ -434,13 +435,13 @@ in process, on `play::cod4`'s `tests::sim` clock.
   (`COD4X_INNER_ADDR`, `COD4X_INNER_OUT` the capture's directory), where
   the second run joins (cod4x-protocol.md 18.3 to 18.5).
 - CoD2's live tests (`cod2_live_*`, `COD2_DIR`) run on the same clock:
-  `play::cod2::clock_now` is the session's, and `tests::run_held` serves a
-  `Cod2Server` (`tests::Held`: `drain_console`, then the frame). A
+  `play::cod2::clock_now` is the session's, and `harness::run_held` serves a
+  `Cod2Server` (`harness::Held`: `drain_console`, then the frame). A
   `Connecting`'s worker runs on its starter's clock, the starter waiting
   off it while the worker runs; the load pump (`Cod2Session::pump`) reads
   the clock but sleeps on the wall, so a map's load takes no clock time.
 - A live test that writes frames (`VCOD_C4_SHOTS`) runs through
-  `tests::run_held`, each frame loop sleeping its 16 ms first. The client
+  `harness::run_held`, each frame loop sleeping its 16 ms first. The client
   reads the session's clock through `play::cod4::clock_now`, never
   `Instant`. Three runs of one build then write the same bytes for every
   frame (cod4-client-perf.md 39).

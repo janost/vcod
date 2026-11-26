@@ -44,8 +44,8 @@ use std::time::{Duration, Instant};
 use glam::Vec3;
 
 use super::cod4::Cod4Session;
-use super::cod4::tests::{clk_now, clk_sleep, run_held, since as clk_since};
 use super::cod4_menus::Join as MenuJoin;
+use crate::harness::{clk_now, clk_sleep, run_held, since as clk_since};
 use crate::play::input::Action;
 use vcod_cod4::net::conn::Cp;
 

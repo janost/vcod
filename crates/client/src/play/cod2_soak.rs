@@ -25,7 +25,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use crate::play::cod4::tests::{clk_now, clk_sleep, since};
+use crate::harness::{clk_now, clk_sleep, since};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
@@ -541,7 +541,7 @@ fn play_soak(map: &str, addr: SocketAddr, shared: &Shared, opts: SoakOpts) -> an
 
 /// vcod-server `--game cod2` on `map` under dm, no bots, with
 /// `sv_mapRotation` set to `rotation`, under `client` on one test clock
-/// (`play::cod4::tests::run_held`): `client` gets its address and a
+/// (`crate::harness::run_held`): `client` gets its address and a
 /// channel whose lines run on the server's console (`map_rotate`,
 /// `addbot`).
 fn held<T: Send + 'static>(
@@ -567,7 +567,7 @@ fn held<T: Send + 'static>(
     sv.set_cvar("sv_mapRotation", rotation);
     sv.load(Some(fs)).unwrap();
     let (console, lines) = std::sync::mpsc::channel::<String>();
-    crate::play::cod4::tests::run_held(
+    crate::harness::run_held(
         &mut sv,
         move |addr| client(addr, console),
         |sv, _, _| {

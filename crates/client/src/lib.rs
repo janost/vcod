@@ -52,6 +52,8 @@ mod frame_prof;
 mod frontend;
 mod fx;
 mod gamma;
+#[cfg(test)]
+mod harness;
 mod head_icon;
 mod hud;
 mod hud_text;

@@ -812,7 +812,7 @@ pub fn ambient_alias(cs: &[u8]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::play::cod4::tests::{clk_now, clk_sleep, run_held, since as clk_since};
+    use crate::harness::{clk_now, clk_sleep, run_held, since as clk_since};
 
     /// The whizby window: 64 clear of both ends, 140 from the line.
     #[test]

@@ -356,9 +356,11 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
     accessors; `play/cod4/` its `join.rs` (connects, downloads, probe,
     drop text), `demo.rs`, `scene.rs` (`scene()` and the drawn types),
     `events.rs` (`Fired`, the snapshot walk) and `cmd.rs` (our cmds, the
-    weapon picks, the selector); its tests are `play/cod4/tests.rs` (the
-    sim clock, `serve`, `run_held`, `live_join*`) and `tests/*.rs` by
-    area. `cod4_audio.rs` and `cod4_fx.rs` play its events' sounds
+    weapon picks, the selector); its tests are `play/cod4/tests.rs` and
+    `tests/*.rs` by area, their rigs `live.rs` (`live_join*`,
+    `live_spectate`, `live_war_pair*`). The live harness every game's live
+    tests share is `harness.rs` (the sim clock, `serve`, `run_held`,
+    `live_slot`). `cod4_audio.rs` and `cod4_fx.rs` play its events' sounds
     and effects, `cod4_hud.rs` its 2D layer (`cod4_hud/`: `assets.rs`,
     `fonts.rs`, `env.rs` the menus' expression env, `board.rs`,
     `messages.rs`, `weapon_info.rs` the owner draws, `compass.rs`,

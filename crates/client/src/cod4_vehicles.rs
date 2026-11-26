@@ -419,7 +419,7 @@ fn pose_of(p: &Placed, bone: usize) -> TagPose {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::play::cod4::tests::{clk_now, clk_sleep, run_held, since as clk_since};
+    use crate::harness::{clk_now, clk_sleep, run_held, since as clk_since};
     use crate::play::cod4::{Cod4Session, ET_HELICOPTER, ET_PLANE};
     use std::time::Duration;
 
