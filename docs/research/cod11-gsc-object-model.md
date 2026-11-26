@@ -788,7 +788,7 @@ Against 1.1d:
 | `sin_1e24` | `sin(1e24)` | 1.7453293e22 | -0.7216 |
 
 A float at every step, as vcod rounded them before and still does for
-CoD2 and CoD4, logs 4096 for `dist_one_round` and `len_one_round` and
+CoD4, logs 4096 for `dist_one_round` and `len_one_round` and
 2^24 for `dsq_one_round`: the 2.25 or 2 that a float sum at 2^24 drops. `vectorToAngles`, the three `anglesTo*`,
 `tan`, `asin`, `acos` and `atan` log the same bits on all three builds.
 
@@ -808,9 +808,9 @@ Retail's `==` on two numbers holds within a tolerance: `1e-16 == 0`,
 compares exactly.
 
 vcod: `builtins::math`, bound by name for CoD1 and CoD2. The profile's
-`MathRounding` picks 1.1d's (`Kept`), 1.5b's and UO's (`Stored`), or a
-float at every step for CoD2 and CoD4 (`Float`, unverified against their
-binaries). `x87::F80` carries 1.1d's stack, and `F80::fsin` and
+`MathRounding` picks 1.1d's (`Kept`), 1.5b's and UO's (`Stored`),
+CoD2's (`Cod2`, cod2-gsc-diff.md 7), or a float at every step for CoD4
+(`Float`, unverified against its binary). `x87::F80` carries 1.1d's stack, and `F80::fsin` and
 `F80::fcos` reduce by the 66-bit pi. `semantics_ents`'s
 `probe_math_matches_retail` and `probe_math_matches_retail_uo` replay the
 capture.
