@@ -122,6 +122,9 @@ long it remembers a lost enemy, how far it hears and how wide it sees:
   and a heard shot longer.
 - Easy also lets the trigger up for a moment after every burst or shot,
   so it fires a fifth fewer rounds (bot-combat.md section 3.2).
+- A UO vehicle's guns react and miss by the same numbers, the vehicle's
+  speed counting for the bot's run, so a higher level kills more from a
+  machine gun seat (bot-objectives.md section 10.15).
 - Otherwise the levels change only these numbers. Routes, objective
   play and choices are the same at every level: an expert is faster and
   sharper, not smarter.

@@ -2844,6 +2844,60 @@ the seat change itself, read out of the UO game module.
 - Left: a driver who moves to the gunner's seat for an enemy on foot
   the jeep cannot run over, and a passenger who takes a free gun. Open.
 
+### 10.15 A seat's gun reacts and settles by the skill, 2026-11-26
+
+Retail has no bots; this section is measured on vcod-server only. It
+takes the last "Left" item of 10.12, an aim error by skill on the seat
+guns.
+
+- Before it a seat's gun went at a target the tick it came in sight,
+  laid on the lead exactly: `think_vehicle` drops the target on foot
+  (`Bot::disengage`) every tick in a seat, so the reaction delay and
+  the aim error of bot-combat.md 3 never reached it, and every level
+  gunned alike.
+- The rule: a seat keeps its own target (`SeatAim`, `Bot::seat_track`),
+  an enemy's slot or an enemy hull, through `forget_ticks` out of sight.
+  A new one waits `reaction_min + rand(reaction_spread)` ticks with the
+  gun not laid on it and no round fired. Then the miss is bot-combat.md
+  3's, `(error + across * track_lag) * (1 + range / error_range) *
+  moving`, with the hull's speed for the body's in `moving`; the error
+  starts at `error_start` and decays by `error_decay` a tick to
+  `error_floor`, its direction drawn again every 4 to 8 ticks
+  (`Bot::seat_miss`). The flick and drift of the aim on foot
+  (bot-combat.md 18) are left out. The miss turns the view off the lead,
+  from the chase camera for a tank's main gun and from the eye for an MG
+  or a passenger's weapon, and the gun fires once it lies within
+  `LAID_DEG` of that view, as before. A `bas` base takes no miss: it is
+  no player (`a_seat_gun_reacts_and_settles_by_the_skill`,
+  `a_tank_gun_holds_through_the_reaction_delay`).
+- VERIFIED (measured, ours, release, UO stock paks, `bot_vehicles
+  ON_ONLY=1 MAP=mp_cassino SKILL=N`, `tdm`, 6 bots at one level, 3 min,
+  seeds 1 to 239 odd, 120 games a row; master 86fcd256d, then the rule).
+  The kills are the `K;` lines: a crush's means is `MOD_CRUSH_*`, a
+  shell's weapon a tank's `<tank>_turret_mp`, an MG's a vehicle's
+  `<mg>_tank_mp`. "On foot" counts those three whose victim sat in no
+  seat the tick before. A row's sum of 120 games spreads by about 25 for
+  the MG kills and 45 for the three together (one standard deviation).
+
+  | Level | kills | shell kills | MG kills | crush kills | vehicle kills | of them on foot |
+  |---|---|---|---|---|---|---|
+  | 0 | 2890 → 2830 | 940 → 987 | 490 → 372 | 3 → 3 | 1433 → 1362 | 1187 → 1085 |
+  | 1 | 3241 → 3184 | 937 → 997 | 504 → 385 | 8 → 5 | 1449 → 1387 | 1199 → 1111 |
+  | 2 | 3321 → 3407 | 987 → 1004 | 509 → 458 | 9 → 2 | 1505 → 1464 | 1261 → 1181 |
+  | 3 | 3348 → 3453 | 901 → 981 | 481 → 487 | 5 → 6 | 1387 → 1474 | 1124 → 1191 |
+
+- The MG kills rise with the level now, 372, 385, 458 and 487, where
+  master's sat between 481 and 509 at every level; the vehicle kills
+  run 1362 to 1474 and those of victims on foot 1085 to 1191, where
+  master's had no order. VERIFIED (the table). Kept.
+- The shell kills rise at every level, by 17 to 80. Not traced.
+  INFERRED: an enemy the MG no longer kills at once is left for the
+  main gun, whose splash forgives most of a miss; the shell's line onto
+  a hull (10.11) holds the round until it meets the hull, so a miss
+  there costs time, not the shot.
+- Crushes are too few to read (2 to 9 a row). How a level plays from a
+  seat against a human is a hand check.
+
 ## 11. CoD2's `sd`, `ctf` and `hq`
 
 CoD2 bots (`crates/server/src/bots/cod2.rs`) play the three with the
