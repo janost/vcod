@@ -399,7 +399,7 @@ Each bullet VERIFIED (the instructions at the addresses named):
 ### 7.2.5 vcod
 
 - `vcod_cod4::net::download` reads the server's messages
-  (`XDownloadMsg`, to the body's last byte) and writes ops 0 to 6
+  (`XDownloadMsg`, to the body's last byte) and writes ops 0 to 7
   (`XAsk`). The 1.7 queue (`Downloads`) runs them under
   `with_dialect(Dialect::X21)`: its file rules (`missing_in`, the paths,
   the spool, the checks) as on 1.7, each ask on the side channel, and on
@@ -408,10 +408,15 @@ Each bullet VERIFIED (the instructions at the addresses named):
   the queue with `The server does not serve <name>`. CoD4x has no ask for
   1.7's `wwwdl ack`, so none goes; `www done` and `www failed` are ops 5
   and 4. The client sends op 3 on a begin that a redirect follows, which
-  the server ignores (7.2.1).
+  the server ignores (7.2.1). A file fetched over HTTP that fails those
+  checks gets op 7 in place of op 5 (7.2.6).
 - `Conn` keeps the server's download messages for `take_side_downloads`
-  and sends an ask through `side_download`, which clears the `cp` feed on
-  `Done` and `WwwFail` as `donedl` and `wwwdl fail` do on 1.7.
+  and sends an ask through `side_download`. The gamestate `Done`,
+  `WwwFail` and `WwwChecksumFail` bring gets no `cp` of its own: the
+  `cp` goes once, when the cgame is up (`Conn::cgame_up`,
+  cod4-netfields.md 14.3.1). Under `sv_wwwDlDisconnected` the joins the
+  fetches leave send none; only the last join's cgame sends one
+  (`cap-wwwdis-cp`, a run with the `cp` printed). VERIFIED live.
 - The netchan's send gate while a file is in flight (`set_downloading`,
   `CA_CONNECTED`, none within 50 ms of the last packet, then
   `cl_maxpackets`; `cod4-netfields.md` 14.1, 14.3) is 1.7's client's and
@@ -424,6 +429,112 @@ Each bullet VERIFIED (the instructions at the addresses named):
   7.4).
 - The gate, `cod4x_live_download_fetches_the_mods_files` (capture
   `cap-dl2`): see 18.5.
+
+### 7.2.6 Op 7, a bad file over HTTP
+
+- `SV_WWWDownload_ChkFail_f` (0x110e20) is `SV_WWWDownload_Fail_f`
+  (0x110d50) with its own warning. With both redirect marks set, it
+  prints `Client '%s' reports that the redirect download for '%s' had
+  wrong checksum.` (0x2c11e0), clears the download mark, closes the
+  file, clears the name and both marks, sets the www failure mark
+  +0x21140 and calls `SV_SendClientGameState` (0x110e70..0x110ed4);
+  without them it drops the client with `Unexpected www download
+  message.` (0x110e2a..0x110e5b). VERIFIED (the instructions).
+- The marks: +0x21138 set by `SV_WWWRedirect` (0x10e92b), +0x2113c once
+  the redirect's message went (0x110654). Op 5 clears both
+  (0x110cf1..0x110cfb), so an op 7 after op 5 drops the client: op 7
+  goes in op 5's place. VERIFIED (the instructions).
+- The next op 0 gets op 1 and no redirect, the failure mark being set
+  (0x110476), and clears it (0x1104d3), so the file after it is
+  redirected again. VERIFIED (the instructions).
+- vcod: a file fetched over HTTP on a connected join that fails
+  `Current::check` (the announced size, the listed size or iwd checksum,
+  the record's CRC-32) gets op 7, its spool is removed and it goes back
+  on the queue for the gamestate. 1.7's client has no such ask, and a
+  1.7 join still ends on it. A disconnected fetch (7.2.8) has no server
+  to tell and ends the join as before.
+- Live, `cap-dl4`'s third client `vcodxc`, whose HTTP root held the iwd
+  with one byte flipped, each row VERIFIED live:
+
+  | ms | Dir | What |
+  |---|---|---|
+  | 43976 | c2s | op 0 `mods/vcodx/z_vcodx.iwd` |
+  | 44049, 44096 | s2c | op 1, op 2 |
+  | 45024, 45074 | c2s | op 3 (ignored), op 7; the server's warning |
+  | 47298 | s2c | the gamestate again |
+  | 48274, 48348 | both | op 0, op 1 with no op 2 |
+  | 49326 | c2s | op 3 (0, 30263) |
+  | 49499..51297 | s2c | 13 blocks and the empty block at 30263 |
+  | 52268..53376 | both | `mod.ff` redirected, fetched over HTTP, op 3, op 5, op 1 |
+  | 55597 | s2c | the gamestate |
+
+  The client was in the world 15.8 s after `connect`, its files byte for
+  byte the server's, and the HTTP server saw two GETs from it.
+
+### 7.2.7 A refusal
+
+- Under `sv_allowDownload 0` the client's first op 0 got op 3,
+  `EXE_AUTODL_SERVERDISABLED\x15mods/vcodx/z_vcodx.iwd` (`sv_pure` 0),
+  and the console `clientDownload: 0 : "mods/vcodx/z_vcodx.iwd" download
+  disabled` with no newline (0x2c0f94). VERIFIED live (`cap-refused1`:
+  op 0 at 8852, op 3 at 9295).
+- After op 3 the server clears the download mark and the name, closes
+  the file and drops no one (0x110592..0x1105ba): the client stays
+  connected until it leaves. VERIFIED (the instructions).
+- vcod ends the join with the refusal as `conn::Refused`, which the
+  front end puts in the install's words, and sends `disconnect`; it asks
+  for no other file. The server logged one `download disabled` line and
+  `Player vcodxr^7, 0 dropped: EXE_DISCONNECTED` at once, 5.3 s after
+  the join began. VERIFIED live (`cap-refused1`).
+- Before that, the download step dropped the connection without
+  `disconnect`, and the slot stayed until the server's exit dropped it
+  (`cap-refused0`). VERIFIED live. Any end of the download step now sends
+  `disconnect` (`play::cod4::join`'s `fetch_missing`), as `CL_Disconnect`
+  (`iw3mp.exe` 0x469776..0x46978d) sends it; that 1.7's error drop goes
+  through it is INFERRED.
+
+### 7.2.8 `sv_wwwDlDisconnected`
+
+- With `sv_wwwDlDisconnected 1` the redirect's last long is 1, and the
+  client answers with op 6 after op 3. VERIFIED live (`cap-wwwdis1`).
+- Op 6 (`SV_WWWDownload_BBL8R_f` 0x110c60) drops the client with `Client
+  dropped to download files` (0x2c1138), after an `unexpected wwwdl`
+  warning when the redirect marks are clear (0x110c6a..0x110c9e).
+  VERIFIED (the instructions). The server answered the client's next
+  packets with an out-of-band `disconnect`, five in `cap-wwwdis1`.
+  VERIFIED live.
+- `SV_DirectConnect`, for each slot of the connect's address
+  (0x111690..0x111731): the same qport or the same port in state 2 is
+  rejected with no answer (`Rejected connection from %s. DoS attack
+  detected by emulating client 1.8`, 0x2c1350, a developer print); in any
+  other state the slot is dropped silently and `reconnected: %s` printed.
+  Neither the same qport nor port, in state 1 or 2, refuses the connect
+  (7.2.4). VERIFIED (the instructions). That a dropped slot sits in
+  state 1 until `sv_zombieTime`, 2 s, frees it (18.4) is INFERRED.
+- `cap-wwwdis0`, before the fix: the HTTP fetch landed before op 6 left
+  the side channel's queue, vcod sent `disconnect` (`dropped:
+  EXE_DISCONNECTED`) and connected again on a new qport, refused with
+  `Connection refused: An uncompleted connection from 127.0.0.1:42599
+  has been detected`. VERIFIED live.
+- vcod now waits, up to 3 s, until the side channel has every message
+  acknowledged, op 6 among them, then sends `disconnect` and joins again
+  on the qport of its first connect (`play::cod4::join`'s `new_qport`,
+  one per connect, as `Netchan_Init`'s is one per process). In
+  `cap-wwwdis1`, each row VERIFIED live:
+
+  | ms | Dir | What |
+  |---|---|---|
+  | 7804 | c2s | op 0 `mods/vcodx/z_vcodx.iwd` |
+  | 8218, 8268 | s2c | op 1, op 2 with flags 1 |
+  | 8852, 8902 | c2s | op 3, op 6; the server drops the client |
+  | 10861..11294 | s2c | five out-of-band `disconnect`s |
+  | 11294 | c2s | `getchallenge` from a new port; `reconnected: 127.0.0.1:59154` |
+  | 15500..16604 | both | `mod.ff` the same way, dropped again |
+  | 18634 | c2s | the third join; all files in, the gamestate at 21818 |
+
+  The client was in the world 18.9 s after the first `connect`, its
+  files byte for byte the server's. The 1.7 client's `reconnect` on the
+  same qport is INFERRED (the Q3 lineage's `net_qport`).
 
 ### 7.3 The packets in the captures
 
@@ -722,7 +833,9 @@ for its own client were not looked for; open (section 17).
   | `cap-join1`, `cap-join2` | `+set sv_noauth 1` | the test `cod4x_live_join_spawns_and_leaves` run inside, `COD4X_OUT` naming the directory (18.3) |
   | `cap-vcod-probe` | `+set sv_noauth 1` | `vcod --game cod4 --game-dir <1.7 install> --net-probe $ADDR --team allies --probe-secs 15` |
   | `cap-withheld1` | `+set sv_noauth 1` | the test `cod4x_live_withheld_gamestate_times_out` run inside (18.4) |
-  | `cap-dl1`, `cap-dl2`, `cap-dl3` | `+set sv_noauth 1 +set fs_game mods/vcodx +set sv_wwwDownload 1 +set sv_wwwBaseURL "http://127.0.0.1:28991"` (`cap-dl1` unquoted, 7.2.4) | the test `cod4x_live_download_fetches_the_mods_files` run inside (18.5) |
+  | `cap-dl1`, `cap-dl2`, `cap-dl3`, `cap-dl4` | `+set sv_noauth 1 +set fs_game mods/vcodx +set sv_wwwDownload 1 +set sv_wwwBaseURL "http://127.0.0.1:28991"` (`cap-dl1` unquoted, 7.2.4) | the test `cod4x_live_download_fetches_the_mods_files` run inside (18.5; `cap-dl4` with the op 7 client, 7.2.6) |
+  | `cap-refused0`, `cap-refused1` | `+set sv_noauth 1 +set fs_game mods/vcodx +set sv_allowDownload 0` | the test `cod4x_live_download_refused_ends_the_join` run inside (7.2.7; `cap-refused0` before the `disconnect`) |
+  | `cap-wwwdis0`, `cap-wwwdis1`, `cap-wwwdis-cp` | as `cap-dl2` with `+set sv_wwwDlDisconnected 1` | the test `cod4x_live_www_disconnected_reconnects` run inside (7.2.8; `cap-wwwdis0` before the fix, `cap-wwwdis-cp` with a print at each `cp`, not committed) |
   | `dl-try1` | `+set sv_noauth 1 +set fs_game mods/vcodx`, `CAP_SECS=3` | none: the boot with `mod.ff` (7.2.4) |
 
   `oob_walk.py` and `legacy_walk.py` are throwaway scripts beside the
@@ -951,7 +1064,12 @@ scoreboard, and a map change on a CoD4x server, which no run made.
   `NO_GAMESTATE`; the relay dropped 292 fragments, the server's laps over
   the 44, about 20 a second; the server logged the client connecting and
   `dropped: EXE_DISCONNECTED`. VERIFIED live. The stage 2 gate passed on
-  the same build. VERIFIED live.
+  the same build. VERIFIED live. That drop came only at the server's own
+  exit, after its `Received signal: Terminated`, in `cap-withheld1` and
+  `cap-withheld2`: the `disconnect` sent after the wait freed no slot,
+  and the gate checks the connect alone since. VERIFIED live. That the
+  server drops the commands of a client that has not acknowledged the
+  gamestate it sent is INFERRED (the Q3 lineage's serverId test).
 - An authenticating server whose library sent nothing before the stats
   request would get the stats and meet the fallback. None of section
   19's 35 did. VERIFIED live (19.3).
@@ -1002,9 +1120,13 @@ scoreboard, and a map change on a CoD4x server, which no run made.
 - With 1.7's send gate of `cod4-netfields.md` 14.1 and 14.3 on the
   netchan (7.2.5) the gate passed again (capture `cap-dl3`): in the world
   7.7 s and 26.7 s after `connect`. VERIFIED live.
-- Not run live: a refusal (`sv_allowDownload 0`), `sv_wwwDlDisconnected
-  1` and a CRC-32 mismatch (that one a unit test,
-  `a_cod4x_file_comes_in_the_bytes_asked_for`).
+- Since run live (2026-11-26): a refusal (`sv_allowDownload 0`, 7.2.7,
+  gate `cod4x_live_download_refused_ends_the_join`),
+  `sv_wwwDlDisconnected 1` (7.2.8, gate
+  `cod4x_live_www_disconnected_reconnects`) and a bad file over HTTP
+  answered with op 7 (7.2.6, the download gate's third client). A CRC-32
+  mismatch over the side channel is a unit test,
+  `a_cod4x_file_comes_in_the_bytes_asked_for`.
 
 ## 19. Public reach, 2026-11-23
 

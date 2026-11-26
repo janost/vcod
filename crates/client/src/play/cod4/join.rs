@@ -15,8 +15,8 @@ use super::{CS_SERVERINFO, Cod4Session, ET_PLAYER, Source, clock_now, info_value
 use crate::play::cod4_menus::{Join as MenuJoin, ScriptMenus};
 
 impl Cod4Session {
-    /// Joins `addr` and waits for its gamestate (`cp` answered), up to
-    /// 30 s; `join` answers the team and class menus on their own.
+    /// Joins `addr` and waits for its gamestate, up to 30 s (the `cp` goes
+    /// once the cgame is up, `Conn::cgame_up`); `join` answers the team and class menus on their own.
     #[cfg(test)]
     pub fn connect(addr: SocketAddr, name: &str, cp: Cp, join: MenuJoin) -> Result<Cod4Session> {
         Self::connect_with(addr, name, cp, join, None)
@@ -70,6 +70,7 @@ impl Cod4Session {
         let mut fetched = std::collections::HashSet::new();
         let cancel = downloads.as_ref().and_then(|d| d.cancel.clone());
         let notes = downloads.as_ref().and_then(|d| d.notes.clone());
+        let qport = new_qport();
         // A reconnect a disconnected fetch, each one landing a file.
         for _ in 0..16 {
             // The profile's stats under the server's `fs_game`, as 1.7
@@ -87,6 +88,7 @@ impl Cod4Session {
             let conn = Self::join_conn(
                 addr,
                 Join {
+                    qport,
                     name: name.into(),
                     password: password.into(),
                     cp: cp.clone(),
@@ -123,19 +125,13 @@ impl Cod4Session {
         bail!("{addr}: still missing files after 16 reconnects")
     }
 
-    /// `connect` to `addr` as `join` says and its first gamestate (`cp`
-    /// answered), on a qport of its own, with voice.
+    /// `connect` to `addr` as `join` says and its first gamestate, with
+    /// voice. No `cp` goes here: a join a disconnected fetch leaves sends
+    /// none.
     fn join_conn(addr: SocketAddr, join: Join) -> Result<Conn> {
-        // A qport of its own, as `Netchan_Init`'s random one, so two clients
-        // on one host are two clients; under 0x8000, as retail's stats
-        // lookup misses a larger one (it read none on a live server).
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.subsec_nanos());
         let mut conn = Conn::join(
             addr,
             Join {
-                qport: (nanos ^ std::process::id()) as u16 & 0x7fff,
                 voice: true,
                 ..join
             },
@@ -152,6 +148,18 @@ impl Cod4Session {
         }
         Ok(conn)
     }
+}
+
+/// A qport for one connect and its reconnects, as `Netchan_Init`'s random
+/// one is the process's: two clients on one host are two clients, and a
+/// CoD4x server takes a reconnect on it for the slot it dropped
+/// (cod4x-protocol.md 7.2.8). Under 0x8000, as retail's stats lookup misses
+/// a larger one (it read none on a live server).
+fn new_qport() -> u16 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    (nanos ^ std::process::id()) as u16 & 0x7fff
 }
 
 /// How [`Cod4Session::connect_with`] fetches what the install lacks.
@@ -195,12 +203,30 @@ impl Fetch<'_> {
 /// a file that still differs after its download again on every
 /// gamestate; vcod ends the join on the second ask (`fetched` holds what
 /// this connect landed, across the joins of a disconnected fetch). `None` when a disconnected HTTP fetch landed and
-/// the caller joins again.
+/// the caller joins again. A join that ends here sends `disconnect`, as
+/// `CL_Disconnect` does on a drop, so the server frees the slot.
 fn fetch_missing(
     mut conn: Conn,
     fetch: &mut Fetch,
     fetched: &mut std::collections::HashSet<String>,
 ) -> Result<Option<Conn>> {
+    match fetch_rounds(&mut conn, fetch, fetched) {
+        Ok(true) => Ok(Some(conn)),
+        Ok(false) => Ok(None),
+        Err(e) => {
+            let _ = conn.disconnect();
+            Err(e)
+        }
+    }
+}
+
+/// [`fetch_missing`]'s rounds: `false` when a disconnected HTTP fetch
+/// landed.
+fn fetch_rounds(
+    conn: &mut Conn,
+    fetch: &mut Fetch,
+    fetched: &mut std::collections::HashSet<String>,
+) -> Result<bool> {
     loop {
         let gs = conn.client.gamestate.as_ref().context("gamestate")?;
         let si = String::from_utf8_lossy(gs.configstring(1)).into_owned();
@@ -208,7 +234,7 @@ fn fetch_missing(
             .filter(|m| vcod_cod4::install::is_zone_name(m));
         let wanted = vcod_cod4::net::download::missing_in(fetch.root, &si, map.as_deref());
         if wanted.is_empty() {
-            return Ok(Some(conn));
+            return Ok(true);
         }
         let names: Vec<&str> = wanted.iter().map(|w| w.remote.as_str()).collect();
         log::info!("cod4: need files: {}", names.join(" "));
@@ -225,22 +251,21 @@ fn fetch_missing(
             ))
             .into());
         }
-        match download_round(conn, fetch, fetched, wanted)? {
-            Some(c) => conn = c,
-            None => return Ok(None),
+        if !download_round(conn, fetch, fetched, wanted)? {
+            return Ok(false);
         }
     }
 }
 
 /// `CL_NextDownload` through the list, then `donedl` and the gamestate it
 /// brings (or nothing asked for); each file that lands goes in `fetched`.
-/// `None` when a disconnected HTTP fetch landed: join again.
+/// `false` when a disconnected HTTP fetch landed: join again.
 fn download_round(
-    mut conn: Conn,
+    conn: &mut Conn,
     fetch: &mut Fetch,
     fetched: &mut std::collections::HashSet<String>,
     wanted: Vec<vcod_cod4::net::download::Wanted>,
-) -> Result<Option<Conn>> {
+) -> Result<bool> {
     use vcod_cod4::net::download::{DownloadEvent, Downloads, XAsk};
     let mut dls = Downloads::new(fetch.root, wanted)
         .with_www(fetch.www)
@@ -292,15 +317,24 @@ fn download_round(
                 }
                 DownloadEvent::Reconnect => {
                     fetch.report(None);
+                    // CoD4x: op 6 reaches the server, which drops the
+                    // client, before the `disconnect` (cod4x-protocol.md
+                    // 7.2.8).
+                    let until = clock_now() + Duration::from_secs(3);
+                    while !conn.side_idle() && clock_now() < until {
+                        if conn.poll(clock_now() + Duration::from_millis(10)).is_err() {
+                            break;
+                        }
+                    }
                     let _ = conn.disconnect();
-                    return Ok(None);
+                    return Ok(false);
                 }
             }
         }
         conn.set_downloading(dls.in_flight());
         if dls.is_done() && !waiting {
             fetch.report(None);
-            return Ok(Some(conn));
+            return Ok(true);
         }
         // A disconnected fetch hears nothing from the server it left.
         if clock_now().saturating_duration_since(last_heard) > Duration::from_secs(30)
@@ -342,7 +376,7 @@ fn download_round(
                     Op::Download(m) => events.extend(dls.on_message(m)),
                     Op::Gamestate if waiting => {
                         fetch.report(None);
-                        return Ok(Some(conn));
+                        return Ok(true);
                     }
                     Op::Gamestate => events.extend(dls.on_gamestate()),
                     _ => {}
@@ -354,9 +388,10 @@ fn download_round(
 
 /// `vcod --game cod4 --net-probe ADDR [--team T [--class C]]`: joins a
 /// server headless for `secs` through the same session steps as the
-/// window (join, `cp`, the menus answered, a cmd a frame, events, the
-/// scene), a line a second, and the menus opened and the spawn as they
-/// come.
+/// window, in its order (`App::cod4_level`, then `Cod4Client::pump`): the
+/// map change, the step (`cp`, the menus answered, a cmd a frame, events),
+/// then the scene, which sends the frame's packet. A line a second, and
+/// the menus opened, the map changes and the spawn as they come.
 /// With `install`, the files the server references that it lacks are
 /// downloaded into it first.
 pub fn probe(
@@ -386,7 +421,12 @@ pub fn probe(
     let (mut menus, mut spawned) = (0, false);
     while t0.elapsed() < Duration::from_secs(secs) {
         let ms = t0.elapsed().as_secs_f64() * 1000.0;
+        // Headless, the new level has nothing to load.
+        if let Some(map) = s.take_map_change() {
+            println!("{ms:.0} map change {map}");
+        }
         s.step(ms)?;
+        let scene = s.scene();
         for m in &s.menus.opened[menus..] {
             println!("{ms:.0} menu {m}");
         }
@@ -403,7 +443,7 @@ pub fn probe(
         }
         if t0.elapsed().as_secs() >= next {
             next = t0.elapsed().as_secs() + 1;
-            if let Some(sc) = s.scene() {
+            if let Some(sc) = &scene {
                 let kinds: Vec<u32> = sc.entities.iter().map(|d| d.etype).collect();
                 let players: Vec<String> = sc
                     .entities

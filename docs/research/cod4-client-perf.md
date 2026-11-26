@@ -374,7 +374,7 @@ after a renderer rebuild, and the soak's `rig`) runs the HUD zones and
 menus (`load_hud`), the effects (`take_level_effects`) and uploads every
 model of the level's entity model set before the first frame; `pump`
 still calls the first two, no-ops once done. The Huffman tree is built
-with the gamestate (`Conn::answer_gamestate`) and `clmsg` reads `parse`'s.
+with the gamestate (`Conn::new_gamestate`) and `clmsg` reads `parse`'s.
 The prewarm takes about 1.7 s on mp_crossfire (HUD 0.62, effects 0.09, 37
 models 1.0), behind the connect screen. Retail registers the level's
 models in `CG_Init`, before its first frame. INFERRED (the Q3 lineage's

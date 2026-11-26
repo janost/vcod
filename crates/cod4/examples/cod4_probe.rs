@@ -6,7 +6,7 @@
 //! and the move messages are `vcod_cod4::net::conn`'s, the client's own.
 //!
 //!     cargo run -p vcod-cod4 --example cod4_probe -- HOST:PORT OUT.txt [--secs 15] [--auth 127.0.0.2]
-//!         [--team allies|axis|spectator] [--class assault_mp,0] [--script walk|idle|follow|shoot|fly|mantle|frag|flash|melee|lunge|auto|saw|throwback|sway|poses|prone|rocket|push]
+//!         [--team allies|axis|spectator] [--class assault_mp,0] [--script walk|idle|follow|shoot|fly|mantle|frag|flash|melee|lunge|auto|saw|swap|throwback|sway|poses|prone|rocket|push]
 //!         [--name NAME] [--qport N] [--iwds MAIN_DIR] [--no-cp] [--goto "X Y Z"] [--scores] [--weapon N] [--pitch P]
 //!         [--download auto|FILE,FILE...] [--dl-dir DIR] [--cmd "SECS TEXT"]...
 //!
@@ -33,7 +33,12 @@
 //! capture, cod4-combat.md 2.1). `saw` faces `--face YAW` level, taps use
 //! at 2 s, fires 3 to 5 s, swings the view 70 right and 70 left of it 5 to
 //! 8 s, taps use again at 8.5 s and fires 9.5 to 10.5 s (a mounted SAW,
-//! cod4-gsc.md 9.2; use it with `--goto` behind the gun). `throwback`
+//! cod4-gsc.md 9.2; use it with `--goto` behind the gun). `swap` shoots
+//! as `shoot` does until a weapon lies in its snapshot (eType 3), then,
+//! while weapon `--weapon N` is in hand, walks at the nearest one looking at it
+//! and holds use while the cursor hint is up, and from the first `a`
+//! server command on sends the weapon it names (the cgame's
+//! `cg_weaponSelect`; the use key's swap, cod4-gsc.md 9.1). `throwback`
 //! views the nearest other player and holds the frag key while its
 //! playerstate's `throwBackGrenadeTimeLeft` is set and no owner is
 //! named, so a live frag under its cursor hint goes back (9.3). `sway`
@@ -123,6 +128,9 @@ enum Script {
     Auto,
     /// Mans a turret ahead and lets it go (`--face`).
     Saw,
+    /// Shoots until a weapon drops, then walks to it and takes it with
+    /// the use key.
+    Swap,
     /// Throws back a live frag under its cursor hint.
     Throwback,
     /// `shoot` while strafing, leaning, crouching and swinging the view.
@@ -139,13 +147,15 @@ enum Script {
     Push,
 }
 
-/// The fixed aims `saw` and `rocket` read: `--face`, and `rocket`'s
-/// `--weapon` byte and first round's `--pitch`.
+/// The aims `saw`, `rocket` and `swap` read: `--face`, the `--weapon`
+/// byte (`rocket`'s pick, the one `swap` gives up), `rocket`'s first
+/// round's `--pitch`, and the view to the snapshot's nearest item.
 #[derive(Clone, Copy, Default)]
 struct Aim {
     face: f32,
     weapon: u8,
     pitch: f32,
+    item: Option<[f32; 2]>,
 }
 
 /// `+activate`: the use key's button.
@@ -267,6 +277,24 @@ fn script_cmd(
             }
             if within(3.0, 5.0) || within(9.5, 10.5) {
                 c.buttons |= buttons::ATTACK;
+            }
+        }
+        Script::Swap => {
+            if let Some(v) = aim.item {
+                if ps_u32(ps, "weapon") == u32::from(aim.weapon) {
+                    [pitch, yaw] = v;
+                    if ps_u32(ps, "cursorHint") != 0 {
+                        c.buttons |= USE;
+                    } else {
+                        c.forwardmove = 127;
+                    }
+                }
+            } else if let (Some(t), Some(s)) = (target, s) {
+                [pitch, yaw] = t;
+                c.buttons |= buttons::ADS;
+                if s % 0.25 < 0.05 && s > 1.0 {
+                    c.buttons |= buttons::ATTACK;
+                }
             }
         }
         Script::Throwback => {
@@ -461,6 +489,32 @@ fn nearest_dist(ps: &PlayerState, ents: &[EntityState]) -> Option<f32> {
             ((o[0] - at[0]).powi(2) + (o[1] - at[1]).powi(2) + (o[2] - at[2]).powi(2)).sqrt()
         })
         .min_by(f32::total_cmp)
+}
+
+/// The view (pitch, yaw) from our eye to the nearest item (eType 3) in the
+/// snapshot.
+fn item_at(ps: &PlayerState, ents: &[EntityState]) -> Option<[f32; 2]> {
+    let eye = [
+        ps_f32(ps, "origin[0]"),
+        ps_f32(ps, "origin[1]"),
+        ps_f32(ps, "origin[2]") + ps_f32(ps, "viewHeightCurrent"),
+    ];
+    let d = ents
+        .iter()
+        .filter(|e| e.etype() == 3)
+        .map(|e| {
+            let o = e.origin();
+            [o[0] - eye[0], o[1] - eye[1], o[2] - eye[2]]
+        })
+        .min_by(|a, b| {
+            let n = |v: &[f32; 3]| v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+            n(a).total_cmp(&n(b))
+        })?;
+    let flat = (d[0] * d[0] + d[1] * d[1]).sqrt();
+    Some([
+        -d[2].atan2(flat).to_degrees(),
+        d[1].atan2(d[0]).to_degrees(),
+    ])
 }
 
 /// The view (pitch, yaw) from our eye to the chest of the nearest other
@@ -666,6 +720,7 @@ fn main() -> Result<()> {
         Some("mantle") => Script::Mantle,
         Some("auto") => Script::Auto,
         Some("saw") => Script::Saw,
+        Some("swap") => Script::Swap,
         Some("throwback") => Script::Throwback,
         Some("sway") => Script::Sway,
         Some("poses") => Script::Poses,
@@ -690,6 +745,7 @@ fn main() -> Result<()> {
         face: opt("--face").map_or(Ok(0.0), |s| s.parse())?,
         weapon: opt("--weapon").map_or(Ok(0), |s| s.parse())?,
         pitch: opt("--pitch").map_or(Ok(-15.0), |s| s.parse())?,
+        item: None,
     };
     let scores = args.iter().any(|a| a == "--scores");
     let answers = opt("--answers").cloned();
@@ -751,6 +807,8 @@ fn main() -> Result<()> {
     let mut last_events = [0u32; 4];
     let mut last_pm_type = None;
     let mut life = 0u32;
+    // `swap`'s weapon from the last `a` server command.
+    let mut selected: Option<u8> = None;
     let mut near_since: Option<Instant> = None;
     // Our own client number, off the first spawn: a killcam's playerstate
     // is the killer's.
@@ -824,6 +882,10 @@ fn main() -> Result<()> {
             });
             let spawn_s = spawned.map(|s| s.elapsed().as_secs_f32());
             let target = snap.and_then(|s| aim_at(&s.ps, &s.entities, aim_z, corpse_z));
+            let aim = Aim {
+                item: snap.and_then(|s| item_at(&s.ps, &s.entities)),
+                ..aim
+            };
             let mut last_time = conn.last_cmd().server_time;
             for k in [2, 1, 0] {
                 let t = now_time - 16 * k;
@@ -843,6 +905,9 @@ fn main() -> Result<()> {
                     .is_some_and(|f| near_since.is_none_or(|t| t.elapsed().as_secs_f32() < f))
                 {
                     c.buttons &= !buttons::ATTACK;
+                }
+                if let Some(w) = selected {
+                    c.weapon = w;
                 }
                 if c.buttons & buttons::MELEE != 0 {
                     (c.melee_charge_yaw, c.melee_charge_dist) =
@@ -886,10 +951,13 @@ fn main() -> Result<()> {
                         }
                     }
                     Op::ServerCommand { sequence, text } => {
-                        eprintln!(
-                            "server command {sequence}: {}",
-                            String::from_utf8_lossy(text)
-                        )
+                        let t = String::from_utf8_lossy(text);
+                        eprintln!("server command {sequence}: {t}");
+                        if let Some(w) = t.strip_prefix("a ").and_then(|w| w.trim().parse().ok())
+                            && script == Script::Swap
+                        {
+                            selected = Some(w);
+                        }
                     }
                     Op::Snapshot(i) => {
                         last_snap_at = Instant::now();

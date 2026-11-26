@@ -105,6 +105,10 @@ CoD4 1.7:
   table the stat writes check).
 - `d3d9dis.py`: a small D3D9 shader bytecode disassembler for a technique's
   pixel shader.
+- `cod4_tagread_gdb.py`: a gdb script for `cod4_lnxded` that logs each
+  player body's end-frame swings, controller runs and script tag reads,
+  and each `srand` (its header has the line format and the run;
+  cod4-player-anims.md 8.1).
 
 Ghidra helpers: `ExportDecomp.java` decompiles every function of a program
 into one `.c` file. `DecompAt.java <hex addr>...` decompiles just those,

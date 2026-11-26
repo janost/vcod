@@ -64,7 +64,9 @@ with its `mouse_over`, `mouse_click` and `music_mainmenu_mp` sounds.
 - Missing mod or usermap iwds and fastfiles download before the map
   loads (`cl_allowDownload`, on by default), over UDP (on CoD4x its side
   channel) or a www redirect's
-  `http://` under `cl_wwwDownload`; a failed fetch falls back to UDP. A
+  `http://` under `cl_wwwDownload`; a failed fetch falls back to UDP, and
+  on CoD4x so does a fetched file off the server's checksum. A server's
+  `sv_wwwDlDisconnected` leaves it, fetches and joins again. A
   file still different on the next gamestate ends the join, as on 1.7.
 
 **Joining and the script menus** ([cod4-hud.md](../research/cod4-hud.md) 12):

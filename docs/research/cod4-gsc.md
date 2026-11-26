@@ -1128,8 +1128,9 @@ checks keys and both arms. VERIFIED (the test).
   (`--script sway --aim-z 150`), and every frame three `bulletTrace`s
   from the idle shooter's eye run past the target's origin at 64, 56 and
   44 up, printing the entity, the point in tenths and the normal in
-  thousandths. Ours matches every print. VERIFIED (the gate). Its `GAPS`
-  hold eleven frames of the target's `aimSpreadScale` an ulp off. Open.
+  thousandths. Ours matches every print and every playerstate word,
+  the target's `aimSpreadScale` with 1.7's spread step on the x87 stack
+  (cod4-combat.md 2.3); its `GAPS` are empty. VERIFIED (the gate).
 
 vcod, INFERRED (the code):
 
@@ -2578,15 +2579,37 @@ bot-objectives.md 12).
   runs it on a live mp_crash level: a bot's gun dropped through the stock
   `dropWeaponForDeath`, taken by another player holding use over it.
 
+#### 9.1.1 The swap capture
+
+`play-1.7-swap-target.txt` and `-shooter.txt` (mp_crash, war): the
+shooter (`cod4_probe --script swap --weapon 27`) kills the target
+(`--class specops_mp,0`), walks to the MP5 he dropped and holds use while
+the hint is up. VERIFIED live, in the frame of the pickup (44400):
+
+- the taker's playerstate rings `EV_ITEM_PICKUP` (9) with the new weapon
+  (16) as its parm, `weapon` reads 0 that frame and the `a 16` server
+  command selects the new one;
+- the M16 given up is item 321 lying at rest where the taken MP5 lay
+  (203 2310 237, `groundEntityNum` 1022, yaw 124 and roll 90), not
+  launched from the taker;
+- the hint then names it: weapon 27 plus 4 (31) on entity 321.
+
+vcod's swap (9.1) launches the old gun from the taker and rings no
+pickup, so `cod4::capture_ab::cod4_use_key_swap_ab` replays the pair and
+fails: about 6000 rows, the items, the corpse a unit off, the taker's
+events and the target's respawn after them. It is `#[ignore]`d until the
+swap is ported (cod4-server-gaps.md 1).
+
 ### 9.2 Mounted SAWs
 
-VERIFIED live (capture not kept): every VERIFIED in this section without
-a gate or an address rests on one retail run, `cod4_probe --script saw`
-behind mp_backlot's crouch SAW 393 (`devmap mp_backlot`, war,
-`setviewpos -770 68 320 0`, `--face 0`), whose `play-1.7-saw.txt` was
-never committed, so no A/B gate replays it (cod4-server-gaps.md, Open).
-Live gate: the client's
-`cod4_live_saw_mounts_fires_clamps_and_lets_go`. Port: `game::cod4::turret`
+VERIFIED live: every VERIFIED in this section without a gate or an
+address rests on a retail run of `cod4_probe --script saw` behind
+mp_backlot's crouch SAW 393 (`devmap mp_backlot`, war, `setviewpos -770
+68 320 0`, `--face 0`). The first run's capture was not kept; the second,
+under `sv_clientSideBullets` 0 with a watcher behind the gunner, is
+`play-1.7-saw-gunner.txt` and `-watcher.txt`, which
+`cod4::capture_ab::cod4_mounted_saw_ab` replays (9.2.1). Live gate: the
+client's `cod4_live_saw_mounts_fires_clamps_and_lets_go`. Port: `game::cod4::turret`
 over the shared `TurretRecord`. Names and order are INFERRED where no
 label says otherwise.
 
@@ -2673,6 +2696,49 @@ label says otherwise.
   (`play::cod4_players::GunInfo`, the gun's `animHorRotateInc` at
   `WeaponDef` +2004), keeping the wire's height. The first-person eye on a
   gun is `tag_player` (`cod4_client::turret_eye`).
+
+#### 9.2.1 The A/B
+
+`cod4_mounted_saw_ab` replays both probes of the second run on ours and
+matches every playerstate word and every entity but its `GAPS`. VERIFIED
+(the gate). What it took:
+
+- `PmoveSingle`'s gunner arm ends in 0x8060d8e (called at 0x805c2df):
+  `weapFlags` 2 and `pm_flags` 0x200 cleared, both weapon clocks 0,
+  state ready and, under `pm_type` 7, the idle anim restarted. The capture's
+  gunner `weapAnim` reads 0x200 and 0 by turns every manned frame, one
+  flip a cmd. VERIFIED (the instructions, the gate). `PM_Weapon`
+  (0x8062e1c) returns at once on `eFlags` 0x300. VERIFIED (the
+  instructions). The arm's 0x8061a3c, between the duck and the
+  footsteps, zeroes `fWeaponPosFrac` and `adsDelayTime` on a gun; vcod
+  leaves it out (the capture never sights). INFERRED.
+- `G_PlayerTurretPositionAndBlend` rebuilds the gunner's entity off the
+  placed playerstate (`BG_PlayerStateToEntityState` at 0x80b863b, after
+  the point trace on either branch), so a placed gunner goes out with
+  `pos.trType` 1, not the end frame's 3 (0x80a6db3). VERIFIED (the
+  instructions, the watcher's rows).
+- The release rebuilds the entity inside 0x80b778a (0x80b7815), after the
+  stance, the spot a unit up, the teleport flip and `SetClientViewAngle`
+  but before 0x80b791d clears 0x300, then zeroes its `otherEntityNum`
+  (0x80b794e): the watcher reads `eFlags` 0x204, `trType` 1 and the
+  crouched box (`solid` 0x52010f, the last link's) on the release frame.
+  VERIFIED (the instructions, the capture).
+- `turret_clientaim`'s `AngleDelta` (0x80b7aed..0x80b7b3c) subtracts the
+  gun's angle from the view on the x87 stack, stores only the floor and
+  clamps the unstored fraction. VERIFIED (the instructions). vcod's
+  doubles cut the barrel's rows from 104 to 76. VERIFIED (the gate).
+- Still differing, the gate's `GAPS`: the barrel's angles 1 to 5 ulps off
+  where the view is still near 0 or walking home, and the unmanned gun's
+  roll residuals (4.8e-8) where ours reads 0, with the gunner's origin an
+  ulp off where the body hangs off them; the gunner's yaw after the let
+  go, which the body sends as the smallest float (ours -0, retail +0);
+  and the watcher's spawn. The last: the watcher's spectator view read 94
+  and its spot's yaw is 0 (mp_backlot's `mp_tdm_spawn` at -670 -2176 88,
+  angles 0 2.5e-6 0, VERIFIED, the zone's entity string). Retail's spawn
+  frame shows `viewangles` 94, `delta_angles` 94 and the body's yaw 0 for
+  two frames (VERIFIED live), so the snapshot's view is not the spot's,
+  and the harness's spawn pin (off the snapshot's view) puts ours at 94.
+  How the spawn frame keeps 94 is unread. INFERRED.
 
 ### 9.3 The live grenade's throw back
 

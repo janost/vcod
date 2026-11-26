@@ -2604,7 +2604,7 @@ mod weapon_pins {
             "s0 t0 d0 n0 a0 f0 c5 r10 p0 k0 g0 o0 C2 v00 q0 y0 sp161.75 b1/0 m0/0/0 []\n",
             "s0 t0 d0 n0 a0 f0 c5 r10 p0 k0 g0 o0 C2 v00 q0 y0 sp123.5 b1/0 m0/0/0 []\n",
             "s0 t0 d0 n0 a0 f0 c5 r10 p0 k0 g0 o0 C2 v00 q0 y0 sp123.5 b1/0 m0/0/0 []\n",
-            "s0 t0 d0 n0 a0 f0 c5 r10 p0 k0 g0 o0 C2 v00 q0 y0 sp47 b1/0 m0/0/0 []\n",
+            "s0 t0 d0 n0 a0 f0 c5 r10 p0 k0 g0 o0 C2 v00 q0 y0 sp46.999996 b1/0 m0/0/0 []\n",
             "--\n",
             "s0 t0 d0 n0 a0 f0 c5 r10 p0 k0 g0 o0 C2 v00 q0 y0 sp132.64 b1/0 m0/0/0 []\n",
             "s0 t0 d0 n0 a0 f0 c5 r10 p0 k0 g0 o0 C2 v00 q0 y0 sp165.28 b1/0 m0/0/0 []\n",
