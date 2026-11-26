@@ -2757,6 +2757,41 @@ carriers against the section 19 captures.
   round, the first round after it and the mark (VERIFIED). The overheat tank
   capture's vehicle gunner is section 9's, not this path.
 
+#### 21.3.1 The heat builtins
+
+- `getTurretHeat()` (0x69aec) and `getTurretOverheating()` (0x69b60) are
+  the last two generic entity methods (`dump_builtins.py`, rows 54 and
+  55). Each takes `self`, compares its classname (`ent+0x184`) against two
+  `scr_const` strings and raises `Can only call turret script functions on
+  misc_mg42 or misc_turret` (0xa2fa0) on neither, then reads
+  `pTurretInfo` (`ent+0x168`): the heat at +0x40 through `Scr_AddFloat`,
+  the latch at +0x44 through `Scr_AddBool`. VERIFIED (the instructions,
+  0x69b04..0x69b55 and 0x69b78..0x69bc9).
+- The one stock caller is `maps/mp/_turret_gmi.gsc` (`pakuo` scripts,
+  threaded by `_load::main` on every map): once a gun is `activated` it
+  gives the gunner two hudelems at (501, 449) and (502, 450), and every
+  0.1 s sets the bar's width to `(1 - heat) * 126`, at least 1, and its
+  colour to `(1, 1 - heat, 1 - heat)`, red while overheating. VERIFIED (the
+  script). The heat therefore reaches the client only as that hudelem;
+  no playerstate or entity field carries it (section 21.3's
+  `animMovetype` marks the first overheat only).
+- VERIFIED, live (retail 1.51b, 2026-11-26,
+  `client-probes/probe_turretheat` on mp_carentan with a `--save-turret`
+  gunner and an axis target, recipe in
+  `mp_carentan-dm-turret-heat-uo.txt`): the trigger held 201 frames reads
+  0.02 on the first round's frame and 0.01 more each frame after (a
+  round's 0.02 less the frame's `cooldownRate`), 1.01 at +4950 ms, then
+  the latch at 1 with the heat 1, cooling 0.01 a frame to 0.49 with the
+  latch still 1, the latch 0 and the next round on the frame after (0.5),
+  and from the release 0.01 off a frame through `5.51343e-07` and
+  `-0.00999945` to 0. The printed floats (`0.270001`) are f32 steps.
+- vcod: `builtins::uo::get_turret_heat` and `get_turret_overheating` over
+  `TurretRecord::heat` and `overheated`; the heat model is section 21.3's.
+  `uo_weapons_ab`'s `the_mounted_mgs_heat_reads_as_on_uo` matches the
+  capture's 301 lines, every printed digit, with ours holding the trigger
+  as many frames as retail's heat rose. 1.1 and 1.5 do not compile these
+  methods, so the probe is UO's alone.
+
 ### 21.4 Flamethrower
 
 - `weaponType gas` does nothing in `FireWeapon` (0x7bd05: types 0 to 3 have
@@ -3457,6 +3492,84 @@ sv_master2=coduomaster.activision.com`, `master.cod.pm` and
 - With bots, `clients` in `infoResponse` counts them and the
   `statusResponse` player lines read ping 0. VERIFIED (live). Retail has no
   bots to compare.
+
+## 26. Per-map configs
+
+Measured 2026-11-26 on the retail 1.51b server on loopback
+(`COD_VERSION=uo tools/run_server.sh`, commands on stdin), with config
+files in the homepath's `uo/` and `main/` and in a pk3 in its `uo/`.
+
+### 26.1 Retail
+
+- `SV_Map_f` (0x80880c9), after the map's lowercasing (0x8086a97), its
+  `Can't find map` test (0x8088143) and the `devmap` and `timescale`
+  handling, reads `g_gametype` (`Cvar_VariableString` 0x8073b14),
+  copies 16 bytes of it, lowercases it, and runs `Cbuf_ExecuteText(0,
+  va("exec %s_%s.cfg\n", map, gametype))` (0x80e34d7, used at
+  0x8088275; the call at 0x808828c). It skips that when `Cmd_Argc() > 2`
+  and argument 2 is `noautoexec` case-insensitively (0x80881c2..0x80881fd,
+  0x80e34c1). Only then does it pick the restart (0x8088325) for the map
+  already running or `SV_SpawnServer`. VERIFIED (the instructions). 1.1d
+  and 1.5b have no `exec %s_%s.cfg` (strings).
+- `Cmd_Exec_f` (0x805fc9a): one argument or the usage line `exec
+  <filename> : execute a script file` (0x80dcb40); argument 1 and `.cfg`
+  (0x80dcb69) to 0x808637a, the file read at 0x8062eb0 (INFERRED:
+  `COM_DefaultExtension` and `FS_ReadFile`, off the arguments); a miss
+  prints `couldn't exec %s` (0x80dcb6e) with argument 1 as typed, a
+  hit `execing %s` (0x80dcb80) and inserts the text ahead of the buffer
+  (0x805fa59). With `sv_console_lockout` set it first says `say Server
+  exec: %s, size: %i, checksum: %i` (0x80dcba0). VERIFIED (the
+  instructions). What that lockout guards is not followed here.
+- Live, every claim VERIFIED:
+  - the first `+map mp_cassino` printed `execing mp_cassino_tdm.cfg` before
+    `------ Server Initialization ------`, and the file's `echo` printed
+    after `------- Game Initialization -------`: the read happens before
+    the load and the lines run after it, ahead of the next frame;
+  - `set g_gametype sd` (`will be changed upon restarting`) then `map
+    mp_arnhem` execed `mp_arnhem_tdm.cfg`: the latched value waits;
+  - `map mp_arnhem` again, now sd, printed `couldn't exec
+    mp_arnhem_sd.cfg` and took the restart path (no Server Initialization):
+    the restart execs too;
+  - `map_restart`, including the one a latched gametype turns into a full
+    load, and `map mp_cassino noautoexec` execed nothing;
+  - `map MP_Cassino` execed `mp_cassino_sd.cfg`;
+  - `exec nothere` printed `couldn't exec nothere`, `exec mp_cassino_tdm`
+    `execing mp_cassino_tdm`;
+  - `map_rotate` over `gametype tdm map mp_arnhem` from sd printed
+    `Setting g_gametype: tdm.` and execed `mp_arnhem_tdm.cfg`: the
+    rotation's `Cvar_Set` (0x8088a17) is not held by the latch;
+  - a file in the homepath's `main/` was read on UO, and one in a pk3 in
+    `uo/` was read over a loose file of the same name beside it, the
+    search path's order (FS_Startup lists a directory's pk3s above it).
+- UO's `SV_MapRotate_f` (0x8088690..0x8088aea) knows three more words
+  than 1.1's: `exec <file>` (`Execing: %s.` 0x80e3712, `exec %s`
+  0x80e3720 run at once, and the next `map` is queued as `map %s
+  noautoexec` 0x80e3961), `allow_jeeps <v>` and `allow_tanks <v>`
+  (`Setting scr_allow_jeeps: %s.` 0x80e3799, a `Cvar_Set` of
+  `scr_allow_jeeps` 0x80e37b7 and `scr_allow_tanks` 0x80e3857). VERIFIED
+  (the strings and calls). Not run live.
+- INFERRED, off Q3's `Com_AddStartupCommands` and the insert ahead of the
+  buffer: a `+set` written after `+map` runs after the map's config.
+
+### 26.2 vcod-server
+
+- `Server::exec_map_cfg` runs at the same step on UO: in the console's
+  `map`, after the map check and before the load or restart, and in
+  `load_scripts` for the first map; the gametype is the running level's
+  (`live_gametype`), so a latched `set` waits. `map_rotate` writes its
+  gametype into the running table as well, retail's forced `Cvar_Set`.
+  `Server::exec_file` is `Cmd_Exec_f`, the console's and rcon's `exec` on
+  every CoD1 version: the file through the search path (`Pk3Fs::read`,
+  uncached), `execing` or `couldn't exec`, the text pushed ahead of the
+  console queue. `noautoexec` skips it.
+- The challenge a pushed status carries (section 25.2) is the exec line's
+  argument at the first frame, as retail's.
+- `console_cmds::tests::uo_map_execs_the_maps_gametype_cfg` replays the
+  live run's steps on vcod.
+- Not done: the rotation's `exec`, `allow_jeeps` and `allow_tanks` words
+  (vcod's `engine::rotation` skips them as unknown); `sv_console_lockout`;
+  a loose file added after the server started (the search path indexes
+  loose files at start); vcod has no separate homepath to search.
 
 ## Tools
 

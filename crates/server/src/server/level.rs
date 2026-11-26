@@ -193,6 +193,10 @@ impl Server {
     /// it was, so the error the caller reports is about the script rather
     /// than about a half-cleared table. `main.rs` exits on it.
     pub fn load_scripts(&mut self, fs: Rc<vcod_common::pk3::Pk3Fs>) -> anyhow::Result<()> {
+        // The first map comes through `SV_Map_f` too, so UO execs its config.
+        self.game.fs = Some(fs.clone());
+        let map = self.game.cfg.map.clone();
+        self.exec_map_cfg(&map);
         self.load_scripts_with(fs, false, crate::game::script::Carry::default(), false)?;
         // Configstring 0 from the cvar table the scripts now own, as the
         // first frame's flush would write it.

@@ -63,7 +63,12 @@ impl Server {
             .nth(1)
             .unwrap_or_default();
         match console::Command::parse(line) {
-            console::Command::Map { map, bsp, cheats } => {
+            console::Command::Map {
+                map,
+                bsp,
+                cheats,
+                noautoexec,
+            } => {
                 if self
                     .game
                     .fs
@@ -72,6 +77,9 @@ impl Server {
                 {
                     self.print(&format!("Can't find map {bsp}\n"));
                     return true;
+                }
+                if !noautoexec {
+                    self.exec_map_cfg(&map);
                 }
                 // `map <the map already serving>` is a restart, not a
                 // spawn (doc section 4.2).
@@ -127,6 +135,11 @@ impl Server {
                     // replays an earlier `--set g_gametype` over the
                     // table that script then reads.
                     self.set_cvar("g_gametype", &gametype);
+                    // `Cvar_Set` forces past the latch, so the running
+                    // table reads it at once (coduo-diff.md 26).
+                    if let Some(rt) = self.game.module.script.as_mut() {
+                        rt.host.cvars.set("g_gametype", &gametype);
+                    }
                     // A gametype change discards what exitLevel(true)
                     // asked to keep (doc section 5.2).
                     if let Some(rt) = self.game.module.script.as_mut() {
@@ -138,6 +151,10 @@ impl Server {
                     console::Rotate::Restart => self.core.console.push_front("map_restart".into()),
                 }
             }
+            console::Command::Exec(None) => {
+                self.print("exec <filename> : execute a script file\n");
+            }
+            console::Command::Exec(Some(file)) => self.exec_file(&file),
             console::Command::Status => {
                 let text = self.status_text(now);
                 self.print(&text);
@@ -293,6 +310,51 @@ impl Server {
             }
         }
         true
+    }
+
+    /// `Cmd_Exec_f` (UO 0x805fc9a): `arg` through the search path, `.cfg`
+    /// added when its last component has no `.`. The text goes ahead of
+    /// the rest of the buffer (`Cbuf_InsertText`), so its lines run once
+    /// the command that execed it is done.
+    pub(super) fn exec_file(&mut self, arg: &str) {
+        let has_ext = arg
+            .rsplit(['/', '\\'])
+            .next()
+            .is_some_and(|f| f.contains('.'));
+        let name = if has_ext {
+            arg.to_string()
+        } else {
+            format!("{arg}.cfg")
+        };
+        match self.game.fs.as_ref().and_then(|fs| fs.read(&name)) {
+            Some(bytes) => {
+                self.print(&format!("execing {arg}\n"));
+                self.core
+                    .console
+                    .push_front(String::from_utf8_lossy(&bytes).into_owned());
+            }
+            None => self.print(&format!("couldn't exec {arg}\n")),
+        }
+    }
+
+    /// UO's `SV_Map_f` (0x8088275): `exec <map>_<g_gametype>.cfg`, both
+    /// lowercased, ahead of the load, the gametype as the running table
+    /// holds it (a latched `set` waits). 1.1 and 1.5 run none
+    /// (coduo-diff.md 26).
+    pub(super) fn exec_map_cfg(&mut self, map: &str) {
+        if !self.game.proto.is_uo() {
+            return;
+        }
+        let gametype: String = self.live_gametype().chars().take(15).collect();
+        let line = format!(
+            "exec {}_{}.cfg",
+            map.to_ascii_lowercase(),
+            gametype.to_ascii_lowercase()
+        );
+        // `Cmd_ExecuteString` tokenizes the line: the status the masters
+        // are pushed carries its argument (coduo-diff.md 25.1).
+        self.game.argv1 = line["exec ".len()..].to_string();
+        self.exec_file(&self.game.argv1.clone());
     }
 
     /// `SV_KickNum_f` (0x8084be4) and `SV_GetPlayerByNum` (0x8083b9c). A
@@ -820,6 +882,70 @@ mod tests {
         want.extend(["ShutdownGame:", &sep]);
         assert_eq!(lines, want, "{text}");
         assert!(text.lines().all(|l| l.as_bytes()[3] == b':'), "{text}");
+    }
+
+    /// UO's `map` execs `<map>_<gametype>.cfg` ahead of the load and runs
+    /// its lines after it, the first load included; a latched gametype
+    /// waits, a rotation's goes at once and `noautoexec` skips it, as the
+    /// retail 1.51b runs (coduo-diff.md 26).
+    #[test]
+    fn uo_map_execs_the_maps_gametype_cfg() {
+        let Some(mut fs) = vcod_common::testing::uo_fs() else {
+            eprintln!("COD_DIR is not a UO install: skipping");
+            return;
+        };
+        fs.overlay("mp_carentan_tdm.cfg", b"set vc_cfg tdm\n".to_vec());
+        fs.overlay("mp_carentan_dm.cfg", b"set vc_cfg dm\n".to_vec());
+        let fs = Rc::new(fs);
+        let mut now = Instant::now();
+        let mut sv = Server::new(
+            ServerConfig {
+                gametype: "tdm".into(),
+                ..cfg()
+            },
+            now,
+        );
+        sv.set_protocol(&PROTOCOL_V22);
+        let path = fs.resolve_map("mp_carentan").expect("map in the paks");
+        let bsp = vcod_common::bsp::parse(&fs.read(&path).unwrap()).unwrap();
+        sv.load_world(World::from_bsp(&bsp, Some(&*fs)));
+        sv.load_scripts(fs).expect("load the scripts");
+        assert_eq!(sv.game.argv1, "mp_carentan_tdm.cfg");
+        assert_eq!(sv.level_cvar("vc_cfg"), None, "the level's init ran first");
+        sv.tick(now);
+        assert_eq!(sv.level_cvar("vc_cfg").as_deref(), Some("tdm"));
+        let mut run = |sv: &mut Server, lines: &[&str]| {
+            now += Duration::from_secs(1);
+            sv.game.redirect = Some(crate::rcon::Redirect::default());
+            for l in lines {
+                sv.push_console(l);
+            }
+            sv.tick(now);
+            let out = sv.game.redirect.take().unwrap().finish().concat();
+            (sv.level_cvar("vc_cfg").unwrap_or_default(), out)
+        };
+        let (ran, out) = run(
+            &mut sv,
+            &["set vc_cfg -", "set g_gametype dm", "map mp_carentan"],
+        );
+        assert_eq!(ran, "tdm");
+        assert!(out.contains("execing mp_carentan_tdm.cfg\n"), "{out}");
+        assert_eq!(run(&mut sv, &["set vc_cfg -", "map MP_Carentan"]).0, "dm");
+        let (ran, out) = run(&mut sv, &["set vc_cfg -", "map mp_carentan noautoexec"]);
+        assert_eq!(ran, "-");
+        assert!(!out.contains("exec"), "{out}");
+        let rotate = [
+            "set vc_cfg -",
+            "set sv_mapRotation \"gametype tdm map mp_carentan\"",
+            "map_rotate",
+        ];
+        assert_eq!(run(&mut sv, &rotate).0, "tdm");
+        let (_, out) = run(&mut sv, &["exec nothere", "exec mp_carentan_dm", "exec"]);
+        assert_eq!(
+            out,
+            "print\ncouldn't exec nothere\nexecing mp_carentan_dm\nexec <filename> : execute a script file\n"
+        );
+        assert_eq!(sv.level_cvar("vc_cfg").as_deref(), Some("dm"));
     }
 
     /// `scriptUsage` on retail 1.1d, mp_brecourt `tdm` (handshake doc,

@@ -11,6 +11,8 @@ use super::Builtin;
 pub const NAMES: &[(&str, Builtin)] = &[
     ("distance", distance),
     ("length", length),
+    ("lengthsquared", length_squared),
+    ("closer", closer),
     ("vectordot", vector_dot),
     ("vectornormalize", vector_normalize),
     ("vectortoangles", vector_to_angles),
@@ -65,6 +67,69 @@ pub fn vector_dot(
     );
     let dot: f64 = (0..3).map(|i| f64::from(a[i]) * f64::from(b[i])).sum();
     Ok(Value::Float(dot as f32))
+}
+
+/// `lengthSquared(v)`: the three squares summed on the x87 stack and rounded
+/// to a float once (1.1d 0x5e920, 1.5b 0x5fbfd, UO 0x6b8ec, CoD2 0x811418c;
+/// CoD4 has its own). VERIFIED, `probe_closer` on 1.1d, 1.5b and UO
+/// (cod11-gsc-object-model.md 9.2).
+pub fn length_squared(
+    _host: &mut GameHost,
+    _cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let v = vector(args.first(), "lengthSquared takes a vector")?.to_array();
+    let sum: f64 = v.iter().map(|&c| f64::from(c) * f64::from(c)).sum();
+    Ok(Value::Float(sum as f32))
+}
+
+/// Where `closer(ref, a, b)` rounds its two squared distances to floats
+/// before the compare (cod11-gsc-object-model.md 9.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloserRounding {
+    /// 1.1d: the differences and the second distance stay on the x87
+    /// stack; only the first distance is stored as a float.
+    FirstOnly,
+    /// 1.5b, UO and CoD2: each difference and each distance is a float.
+    Floats,
+    /// CoD4 1.7 (0x80c206e): nothing is stored.
+    None,
+}
+
+/// `closer(ref, a, b)`: 1 when `a`'s squared distance to `ref` is under
+/// `b`'s, rounded as the profile's [`CloserRounding`] says. The products
+/// of two floats are exact in `f64`; the 80-bit stack can differ from it
+/// only by a double rounding (INFERRED).
+pub fn closer(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    const USAGE: &str = "closer takes three vectors";
+    let r = vector(args.first(), USAGE)?.to_array();
+    let a = vector(args.get(1), USAGE)?.to_array();
+    let b = vector(args.get(2), USAGE)?.to_array();
+    let rounding = host.profile.closer;
+    let dist = |p: [f32; 3]| -> f64 {
+        (0..3)
+            .map(|i| {
+                let d = match rounding {
+                    CloserRounding::Floats => f64::from(p[i] - r[i]),
+                    _ => f64::from(p[i]) - f64::from(r[i]),
+                };
+                d * d
+            })
+            .sum()
+    };
+    let float = |d: f64| f64::from(d as f32);
+    let (near, far) = match rounding {
+        CloserRounding::FirstOnly => (float(dist(a)), dist(b)),
+        CloserRounding::Floats => (float(dist(a)), float(dist(b))),
+        CloserRounding::None => (dist(a), dist(b)),
+    };
+    Ok(Value::Int(i32::from(far > near)))
 }
 
 /// `length(v)`: the vector's own magnitude, in f32. Unverified against
