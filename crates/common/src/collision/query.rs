@@ -188,6 +188,7 @@ impl CollisionWorld {
                 world_only,
                 boxed: true,
                 sphere: capsule.offset,
+                sight: false,
             },
             &mut trace,
         );
@@ -229,11 +230,10 @@ impl CollisionWorld {
         }
         if self.any_copy.load(Ordering::Acquire) {
             let copies = self.copies.read().unwrap_or_else(|e| e.into_inner());
-            if copies
-                .iter()
-                .filter(|c| c.contents & mask != 0)
-                .any(|c| self.clip_copy(*c, p, p, mins, maxs, mask, true).startsolid)
-            {
+            if copies.iter().filter(|c| c.contents & mask != 0).any(|c| {
+                self.clip_copy(*c, p, p, mins, maxs, mask, true, false)
+                    .startsolid
+            }) {
                 return true;
             }
         }
@@ -307,6 +307,7 @@ impl CollisionWorld {
                 world_only: true,
                 boxed: false,
                 sphere: Capsule::of(Vec3::ZERO, Vec3::ZERO).offset,
+                sight: false,
             },
             &mut trace,
         );
@@ -434,6 +435,7 @@ impl CollisionWorld {
                 world_only: false,
                 boxed,
                 sphere: capsule.offset,
+                sight: false,
             },
             &mut trace,
         );

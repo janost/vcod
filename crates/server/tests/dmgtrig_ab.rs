@@ -173,16 +173,18 @@ fn direct_run_seeded(map: &str, probe: &str, seed: Option<u64>) -> Option<Vec<St
         map,
         probe,
         seed,
+        &[],
     ))
 }
 
-/// [`direct_run`] on `fs` under `proto`.
+/// [`direct_run`] on `fs` under `proto` with `cvars` set.
 fn direct_run_on(
     fs: vcod_common::pk3::Pk3Fs,
     proto: &'static vcod_common::net::protocol::Cod1Wire,
     map: &str,
     probe: &str,
     seed: Option<u64>,
+    cvars: &[(&str, &str)],
 ) -> Vec<String> {
     use common::{Join, Queues};
     use std::cell::RefCell;
@@ -197,6 +199,7 @@ fn direct_run_on(
     .expect("the probe");
     let (mut sv, mut now) = common::Boot {
         proto: Some(proto),
+        cvars,
         script: Some(&src),
         ..common::Boot::new(map, probe)
     }
@@ -567,7 +570,7 @@ fn a_round_on_a_script_spawned_trigger_damage_matches_retail() {
     if proto.transport.version == vcod_common::net::protocol::PROTOCOL_V22.transport.version {
         return;
     }
-    let ours = direct_run_on(fs, proto, "mp_carentan", "probe_dmgspawnshot", None);
+    let ours = direct_run_on(fs, proto, "mp_carentan", "probe_dmgspawnshot", None, &[]);
     let ours: Vec<&str> = ours.iter().map(String::as_str).collect();
     assert_eq!(ours, RETAIL_SPAWNED_SHOT);
 }
@@ -580,7 +583,91 @@ fn a_round_on_a_script_spawned_trigger_damage_matches_retail_uo() {
         return;
     };
     let proto = vcod_server::server::install_protocol(&fs);
-    let ours = direct_run_on(fs, proto, "mp_carentan", "probe_dmgspawnshot", None);
+    let ours = direct_run_on(fs, proto, "mp_carentan", "probe_dmgspawnshot", None, &[]);
     let ours: Vec<&str> = ours.iter().map(String::as_str).collect();
     assert_eq!(ours, RETAIL_SPAWNED_SHOT);
+}
+
+/// The same probe with `probe_fine 1` on retail 1.1d, 2026-11-26: the copy
+/// moved by sixteenths of a unit about the round's end, 0.125 over the
+/// site's terrain. Only a copy whose ground stands over the end fires, as
+/// the terrain arm's bare segment has it (cod11-combat.md 14.8.1).
+const RETAIL_SPAWNED_FINE: &[&str] = &[
+    "PROBE site (844.00, 3480.00, -23.88) (1004.00, 3480.00, -23.88)",
+    "PROBE phase up1_16 (0.00, 0.00, 0.06)",
+    "PROBE phase up1_8 (0.00, 0.00, 0.12)",
+    "PROBE phase up3_16 (0.00, 0.00, 0.19)",
+    "PROBE trigger player",
+    "PROBE damage 120 player -",
+    "PROBE phase up1_4 (0.00, 0.00, 0.25)",
+    "PROBE trigger player",
+    "PROBE damage 120 player -",
+    "PROBE phase down1_16 (0.00, 0.00, -0.06)",
+    "PROBE done",
+];
+
+/// Needs `COD_DIR` at a 1.1 or 1.5 install; a UO one returns early.
+#[test]
+fn a_round_on_a_world_copy_a_sixteenth_off_matches_retail() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        return;
+    };
+    let proto = vcod_server::server::install_protocol(&fs);
+    if proto.transport.version == vcod_common::net::protocol::PROTOCOL_V22.transport.version {
+        return;
+    }
+    let fine = [("probe_fine", "1")];
+    let ours = direct_run_on(fs, proto, "mp_carentan", "probe_dmgspawnshot", None, &fine);
+    let ours: Vec<&str> = ours.iter().map(String::as_str).collect();
+    assert_eq!(ours, RETAIL_SPAWNED_FINE);
+}
+
+/// `probe_fine 2` on retail 1.1d and UO, 2026-11-26, both logging these
+/// lines: the round strikes a wall's brush square on, its end 0.125 off the
+/// face, and the copy's wall is moved along the normal. A copy whose face
+/// stands a sixteenth or an eighth nearer than the world's, the end a
+/// sixteenth short of it or on it, fires nothing, where a trace's clip
+/// epsilon would meet it (cod11-combat.md 14.8.1).
+const RETAIL_SPAWNED_WALL: &[&str] = &[
+    "PROBE wall (-1.00, 0.00, 0.00)",
+    "PROBE site (1368.00, 2608.00, -23.88) (1831.88, 2608.00, 36.12)",
+    "PROBE phase near1_16 (-0.06, 0.00, 0.00)",
+    "PROBE phase near1_8 (-0.12, 0.00, 0.00)",
+    "PROBE phase near3_16 (-0.19, 0.00, 0.00)",
+    "PROBE trigger player",
+    "PROBE damage 120 player -",
+    "PROBE phase far1_16 (0.06, -0.00, 0.00)",
+    "PROBE phase near1 (-1.00, 0.00, 0.00)",
+    "PROBE trigger player",
+    "PROBE damage 120 player -",
+    "PROBE done",
+];
+
+/// Ours' `probe_dmgspawnshot` lines with `probe_fine 2` on `fs`.
+fn wall_run(fs: vcod_common::pk3::Pk3Fs) -> Vec<String> {
+    let proto = vcod_server::server::install_protocol(&fs);
+    let fine = [("probe_fine", "2")];
+    direct_run_on(fs, proto, "mp_carentan", "probe_dmgspawnshot", None, &fine)
+}
+
+/// Needs `COD_DIR` at a 1.1 or 1.5 install; a UO one returns early.
+#[test]
+fn a_round_on_a_world_copys_wall_matches_retail() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        return;
+    };
+    let proto = vcod_server::server::install_protocol(&fs);
+    if proto.transport.version == vcod_common::net::protocol::PROTOCOL_V22.transport.version {
+        return;
+    }
+    assert_eq!(wall_run(fs), RETAIL_SPAWNED_WALL);
+}
+
+/// Needs `COD_DIR` at a UO install.
+#[test]
+fn a_round_on_a_world_copys_wall_matches_retail_uo() {
+    let Some(fs) = vcod_common::testing::uo_fs() else {
+        return;
+    };
+    assert_eq!(wall_run(fs), RETAIL_SPAWNED_WALL);
 }

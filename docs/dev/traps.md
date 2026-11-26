@@ -511,6 +511,10 @@ otherwise.
 - A 1.1 shot, swing or throw starts at the truncated eye over the truncated
   origin. 1.5's and UO's start at the unsnapped origin's eye plus the walk
   bob, never truncated (`combat::muzzle_point_in`, combat doc 2.1).
+- `trap_SightTraceToEntity` (the `trigger_damage` walks) clips a brush
+  with no `SURFACE_CLIP_EPSILON`: a round's end 1/16 short of a face
+  misses. Test it with `collision::sight_meets_brush`, never a trace
+  (combat doc 14.8.1).
 - 1.1 MP has no grenade cook; "cooking" in the code means held.
   `grenadeTimeLeft` is `fuseTime` at the pullback and 0 at the throw, and the
   fuse always runs in full from release. UO has a cook (see its section).
