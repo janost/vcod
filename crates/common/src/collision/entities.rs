@@ -369,11 +369,29 @@ impl CollisionWorld {
             .find(|c| c.entity == entity)
             .copied();
         let mut trace = match copy.filter(|c| c.contents & mask != 0) {
-            Some(c) => self.clip_copy(c, start, end, mins, maxs, mask, true),
+            Some(c) => self.clip_copy(c, start, end, mins, maxs, mask, true, false),
             None => Trace::clear(end),
         };
         trace.endpos = start + (end - start) * trace.fraction;
         trace
+    }
+
+    /// Whether the point segment meets world copy `entity` under `mask` as
+    /// `trap_SightTraceToEntity` does: its brushes through
+    /// [`sight_meets_brush`](super::sight_meets_brush), its terrain and
+    /// patches as a trace clips them (cod11-combat.md 14.8.1).
+    pub fn copy_sight_trace(&self, entity: u32, start: Vec3, end: Vec3, mask: u32) -> bool {
+        let copy = self
+            .copies
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|c| c.entity == entity)
+            .copied();
+        copy.filter(|c| c.contents & mask != 0).is_some_and(|c| {
+            let t = self.clip_copy(c, start, end, Vec3::ZERO, Vec3::ZERO, mask, true, true);
+            t.fraction < 1.0 || t.startsolid
+        })
     }
 
     /// Clips a sweep against one model's brushes, moved by `pose` when there
@@ -811,7 +829,7 @@ impl CollisionWorld {
             if c.contents & mask == 0 || trace.allsolid || skip == Some(c.entity) {
                 continue;
             }
-            let t = self.clip_copy(*c, start, end, mins, maxs, mask, boxed);
+            let t = self.clip_copy(*c, start, end, mins, maxs, mask, boxed, false);
             if t.allsolid || t.fraction < trace.fraction {
                 let startsolid = trace.startsolid || t.startsolid;
                 *trace = Trace { startsolid, ..t };
@@ -823,6 +841,7 @@ impl CollisionWorld {
 
     /// One world copy alone against a sweep, in its frame; the normal comes
     /// back in the world's, `endpos` is left to the caller.
+    #[expect(clippy::too_many_arguments)]
     pub(super) fn clip_copy(
         &self,
         c: WorldCopy,
@@ -832,6 +851,7 @@ impl CollisionWorld {
         maxs: Vec3,
         mask: u32,
         boxed: bool,
+        sight: bool,
     ) -> Trace {
         // `CM_TransformedBoxTrace` turns the box's centre into the copy's
         // frame, not its origin (movers doc 21, "The turned centre").
@@ -852,6 +872,7 @@ impl CollisionWorld {
                 world_only: true,
                 boxed,
                 sphere: c.sphere(capsule.offset),
+                sight,
             },
             &mut t,
         );

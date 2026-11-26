@@ -464,6 +464,11 @@ fn first_place(fixture: &str) -> i64 {
         .expect("a PROBE place line")
 }
 
+/// How far 1.1d's prone body on the grade sits off retail's: every ray up
+/// to 137 float steps (0.00104), the bones 3, the origin 1
+/// (docs/research/player-model-anim-system.md 5.2).
+const RAYS_NEAR_11: f32 = 0.0015;
+
 /// A float `probe_rays` printed as its integer part and remainder.
 fn exact(int: &str, frac: &str) -> f32 {
     (int.parse::<f64>().unwrap() + frac.parse::<f64>().unwrap()) as f32
@@ -509,7 +514,8 @@ fn steps(a: f32, b: f32) -> i64 {
 }
 
 /// `probe_rays` against `fixture`: the settled origin, every bone mark and
-/// every ray's stop on the body to retail's float.
+/// every ray's stop on the body within `tol` of retail's float (0 for its
+/// bits).
 fn check_rays(
     fs: vcod_common::pk3::Pk3Fs,
     map: &str,
@@ -517,6 +523,7 @@ fn check_rays(
     yaw: f32,
     spawn_yaw: Option<f32>,
     fixture: &str,
+    tol: f32,
 ) {
     let read = std::env::var("PB_FIXTURE")
         .ok()
@@ -534,14 +541,15 @@ fn check_rays(
     let report = std::env::var_os("PB_REPORT").is_some();
     let mut off = Vec::new();
     for (f, (r, o)) in rf.iter().zip(&of).enumerate() {
-        if r.origin != o.origin {
+        let near = |a: [f32; 3], b: [f32; 3]| (0..3).all(|i| (a[i] - b[i]).abs() <= tol);
+        if !near(r.origin, o.origin) {
             off.push(format!(
                 "frame {f} origin: retail {:?}, ours {:?}",
                 r.origin, o.origin
             ));
         }
         for ((tag, a), (_, b)) in r.bones.iter().zip(&o.bones) {
-            if a != b {
+            if !near(*a, *b) {
                 off.push(format!(
                     "frame {f} {tag}: retail {a:?}, ours {b:?}, steps {:?}",
                     [0, 1, 2].map(|i| steps(a[i], b[i]))
@@ -560,7 +568,7 @@ fn check_rays(
         }
         for (k, a) in &r.rays {
             if let Some((_, b)) = o.rays.iter().find(|x| x.0 == *k)
-                && a != b
+                && (a - b).abs() > tol
             {
                 off.push(format!(
                     "frame {f} ray {k:?}: retail {a}, ours {b}, {} steps",
@@ -581,6 +589,25 @@ fn check_rays(
     );
 }
 
+/// probe_scriptmodel's prone target on mp_brecourt's grade, on 1.1d: his
+/// origin, the eight bone marks and every downward `bulletTrace` that
+/// stops on him within [`RAYS_NEAR_11`] of retail's float.
+#[test]
+fn a_prone_body_on_the_mp_brecourt_field_traces_like_retail() {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
+        return;
+    };
+    check_rays(
+        fs,
+        "mp_brecourt",
+        "brecourt",
+        270.0,
+        None,
+        include_str!("fixtures/pronebones/mp_brecourt-brecourt-rays.txt"),
+        RAYS_NEAR_11,
+    );
+}
+
 /// probe_scriptmodel's prone target on mp_brecourt's grade, on 1.5b,
 /// spawned on the spot: his origin, the eight bone marks and every
 /// downward `bulletTrace` that stops on him to retail's float. 1.5b's
@@ -598,6 +625,7 @@ fn a_prone_body_on_the_mp_brecourt_field_traces_like_15() {
         270.0,
         Some(270.0),
         include_str!("fixtures/pronebones/mp_brecourt-brecourt-rays-1.5.txt"),
+        0.0,
     );
 }
 
@@ -615,5 +643,6 @@ fn a_prone_body_on_the_mp_brecourt_field_traces_like_uo() {
         270.0,
         None,
         include_str!("fixtures/pronebones/mp_brecourt-brecourt-rays-uo.txt"),
+        0.0,
     );
 }

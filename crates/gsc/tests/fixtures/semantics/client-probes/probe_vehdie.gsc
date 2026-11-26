@@ -17,12 +17,15 @@
 //	kill       the vehicle, its health, the attacker
 //	rider      a rider's number, `isInVehicle`, health and origin, with
 //	           `when`: before the hit, straight after it in the killing
-//	           thread, a frame later and half a second later
+//	           thread, a frame later, half a second later and 1.5 s later
 //	dmg        a damage callback: victim, inflictor, attacker, damage,
 //	           flags, means, weapon, point, direction, hit location, the
 //	           victim's health and `isInVehicle` on the way in
 //	deact      a rider's `vehicle_deactivated`: the player
 //	death      the vehicle's `death`
+//	freed      with `probe_kill` `free`: `freeVehicle()` in place of the
+//	           damage, its `death` as a level thread sees it; `free_quiet`
+//	           first ends the stock scripts' rider death threads
 //
 //	Stock tdm reads `level.teamkill_penalty`, which nothing sets, when a
 //	player dies to something not a player; `_tankdrive_gmi`'s
@@ -144,13 +147,43 @@ log_vehicle()
 	if (getcvar("probe_die_by") == "gunner")
 		by = player(1);
 	log_riders(riders, "before");
-	logPrint("PROBE kill " + gettime() + " " + veh getEntityNumber() + " " + veh.health + " by " + by getEntityNumber() + "\n");
-	veh dodamage(10000, veh.origin + (0, 0, 1), by, by, "MOD_EXPLOSIVE");
+	kill = getcvar("probe_kill");
+	if (kill == "free_quiet")
+	{
+		// The stock vehicle scripts' rider thread (`death_player_damage`,
+		// `tank_death_player_damage`) ends on this; on a freed vehicle's
+		// `death` it reads a field off the dead handle.
+		for (i = 0; i < riders.size; i++)
+			riders[i] notify("deactivated_player");
+		kill = "free";
+	}
+	if (kill == "free")
+	{
+		level thread log_free(veh);
+		logPrint("PROBE kill " + gettime() + " " + veh getEntityNumber() + " " + veh.health + " free\n");
+		veh freeVehicle();
+	}
+	else
+	{
+		logPrint("PROBE kill " + gettime() + " " + veh getEntityNumber() + " " + veh.health + " by " + by getEntityNumber() + "\n");
+		veh dodamage(10000, veh.origin + (0, 0, 1), by, by, "MOD_EXPLOSIVE");
+	}
 	log_riders(riders, "after");
 	wait 0.05;
 	log_riders(riders, "frame");
 	wait 0.5;
 	log_riders(riders, "later");
+	wait 1;
+	log_riders(riders, "late");
+	logPrint("PROBE end " + gettime() + "\n");
+}
+
+//	`freeVehicle`'s `death`, seen from a level thread: the vehicle's own
+//	threads never run again (docs/research/coduo-vehicles.md 17.4).
+log_free(veh)
+{
+	veh waittill("death");
+	logPrint("PROBE freed " + gettime() + "\n");
 }
 
 player(n)

@@ -47,6 +47,9 @@ CoD1 (1.1d, 1.5b, UO):
   every `G_Damage` (cod11-movers.md 26.9).
 - `gdb_bullet.py`: a gdb script for the 1.1d server that logs every
   `Bullet_Fire_Extended` leg's trace and glass test and every `G_Damage`.
+- `gdb_missile.py`: a gdb script for the 1.1d server, read only, that logs
+  every `G_RunMissile` move and ground-snap trace, its ends and its trace
+  result, every float as its bits (cod11-combat.md 12.4).
 - `gdb_teams.py`: a gdb script for the 1.1d, 1.5b and UO servers, read
   only, that logs the team pick of `Use_Item` and `RespawnItem`
   (cod11-items.md 14.8).
@@ -54,6 +57,9 @@ CoD1 (1.1d, 1.5b, UO):
   every vehicle record's physics state, sway and jolt at each think's track
   clock, and its velocity and committed copy at the think's entry, every
   float as its bits (coduo-vehicles.md 17.5).
+- `gdb_fault.py`: a gdb script for the CoD1 servers that writes the pc,
+  registers and backtrace of a fatal signal, each frame also as a module
+  offset (coduo-vehicles.md 17.4.1).
 - `annotate_func.py`: one function of a PIC ELF (or an unstripped
   executable, by its full symbol table) with its relocations resolved. Run it first: a plain `objdump` of `game.mp.i386.so` hides every
   call and cvar behind PIC relocations.

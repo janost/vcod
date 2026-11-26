@@ -1640,10 +1640,11 @@ fn replay(
 /// Rows the replay cannot match, `(file, commandTime)`, each with its reason.
 /// A listed row that matches fails the gate, so the list cannot go stale.
 const REPLAY_GAPS: &[(&str, i32)] = &[
-    // The dead driver's corpse is pushed out of the jeep's hull by
-    // `ClientThink_real` ahead of `Pmove` (`vehicle_overlap`, coduo-vehicles.md
-    // 11.6, 11.7): the game's velocity write, which no predictor runs, at
-    // the two snapshots after the death.
+    // The dead driver's corpse is struck off the coasting jeep's hull by
+    // `ClientThink_real` ahead of the `Pmove`s of cmds 18718 and 18759
+    // (`VEH_PlayerCollision`, coduo-vehicles.md 11.6, 11.7.1). The strike
+    // reads the hull's velocity and origin, which no snapshot carries, so
+    // no replay of this capture can run it; `vehicle_ab` holds it.
     ("mp_peaks-tdm-slope-8ms-jeep-die-uo.txt", 18743),
     ("mp_peaks-tdm-slope-8ms-jeep-die-uo.txt", 18793),
 ];

@@ -6434,12 +6434,41 @@ their logged stamps, three a frame as the net probe sends them, ours
 matches every snapshot of both carentan frags to the bit, `trType` and
 ground included (`scriptmodel_ab::a_frag_rests_on_a_prone_players_back_like_retail`),
 so the unit the older gates allow is the even 16 ms cadence's, not the
-prone pose's. Open: on brecourt the target settles on retail's origin
-(1659.001, 780.999, -104.091) with the logged cmds, and the first frag
-still strikes him 1.47 earlier along its flight (snapshot 2: y 802.38
-against 803.85); the 1.1d prone pose on the grade, not the timing, is the
-remaining cause (player-model-anim-system.md, "The prone body on a
-grade"). VERIFIED, vcod measurement against the grenade part retaken the
+prone pose's. On brecourt the target settles on retail's origin
+(1659.001, 780.999, -104.091) with the logged cmds, and that capture's
+first frag strikes him 1.47 further along its flight than ours (snapshot
+2: y 803.85 against 802.38). That was not the pose:
+
+- VERIFIED, `PROBE body` (the probe logs the target's model and
+  attachments since 2026-11-26): the dm script draws the gear, and ours'
+  strike moves with it (y 802.38 with `gear_german_load1_falshrm`, 802.91
+  with `load2`, 803.94 with `load3`). Three 2026-11-26 retail retakes
+  drew `load1`.
+- VERIFIED, live (retail 1.1d under `tools/re/gdb_missile.py`, the move
+  trace at 0x540c6 and the snap's at 0x542a4; logs
+  `scriptmodel/mp_brecourt-scriptmodel-prone-rest-{875,gear}-gdb.txt`): the frag meets
+  `torso_lower` (bone name id 328, hit location 5) with the normal
+  (-0.07153, -0.21968, 0.97295), ours' face to the float, on both
+  retakes. One leaves at (0, 875, -272), as the 2026-11-14 capture did,
+  strikes at fraction 0.678308, and its snap from the contact meets the
+  same face at fraction 1.3e-6, so the bounce reads that normal (ground 0,
+  the 0.1 nudge in x and y). The other leaves at (0, 876, -272), strikes
+  at 0.677248, and its snap starts solid (fraction 0, normal 0, the
+  start-solid byte `+47` set), so its bounce reads no face (ground 1023).
+  The 876 run rests at (1659.00, 804.80, -83.72), ours' spot.
+- vcod measurement: `throw_velocity` reads ours' `projectileSpeed` 960
+  times the forward's y as 876.009 before `fire_grenade` truncates it; the
+  aim (24.145542, 90) is the aim block's, off the short grid. Given
+  retail's (0, 875, -272) instead, ours matches every snapshot of an 875
+  run (`mp_brecourt-scriptmodel-prone-rest-875.txt`) to the bit. INFERRED: the throw sits 0.009 over a truncation, so
+  whether a run leaves at 875 or 876 rides the thrower's aim.
+
+`scriptmodel_ab::a_frag_rests_on_a_prone_players_back_on_a_grade_like_retail`
+replays the 876 retake (`mp_brecourt-scriptmodel-prone-rest-gear.txt`):
+both frags on retail's snapshots to the bit, `trType` and ground included.
+Open: ours sends 876 on the 875 run's cmds, so the thrower's aim on that
+run is not retail's; the fixture logs no cmd angles to tell which input
+moved it. VERIFIED, vcod measurement against the grenade part retaken the
 same way (`mp_carentan-scriptmodel-grenade-cmds.txt`, the target a
 `--probe-fall` client, the thrower's `SPAWNED` line kept), replayed on
 both clients' stamps with the times plumbing the prone gate uses: of 158
@@ -8751,10 +8780,8 @@ end, backed off the world's face, does not reach the same face in a copy
 at the same place. VERIFIED, the same probe on retail UO, 2026-11-14:
 the same lines (`a_round_on_a_script_spawned_trigger_damage_matches_retail_uo`).
 
-**Left open** (not captured): whether `trap_SightTraceToEntity` meets a
-map trigger's brushes as vcod's segment test does where the round ends
-inside a brush's backed-off face; a tank shell's walk on
-the belltower; a grenade blast's charges (a 2026-11-14 UO recapture of
+**Left open** (not captured): a tank shell on the belltower (its walk,
+14.8.3); a grenade blast's charges (a 2026-11-14 UO recapture of
 `probe_dmgshot` with the client's cmd times,
 `fixtures/triggers/mp_uo_stanjel-dmgshot-uo.txt`, replayed on them by
 `tests/common`'s `direct_replay`, holds every round and swing line, but
@@ -8763,7 +8790,8 @@ it leaves (-1853.50, 3240.49, 37.16) where retail's left (-1853.47,
 3244.39, 34.04), the same along x, 3.9 apart along the view's right and
 3.1 in z with the thrower at (-1862, 3232, -13.6) pitched 46.9 (VERIFIED,
 the capture's `VEH missile` lines against ours'; INFERRED: UO's walk bob
-off a `bobCycle` the probe's per-frame `setOrigin` hold leaves apart); and the `use` arm's `accumulate + 1` count.
+off a `bobCycle` the probe's per-frame `setOrigin` hold leaves apart); and the `use` arm's `accumulate + 1` count
+(14.8.2).
 
 The `wait` arm's `crandom` draws off the level's glibc `rand()`, the
 stream every other game draw takes (`G_TriggerDamage`'s call at
@@ -8774,19 +8802,80 @@ in the stream shows.
 **As implemented.** `crate::game::damage_trigger`: `spec_of` (the spawn's
 keys), `responds`, `activate`, `damaged` (`pain`/`die`, from
 `GameHost::damage_nonclient`) and `sweep` (both walks; the sight trace is
-the segment against the trigger's brushes, or its box without them).
+`collision::sight_meets_brush` on the trigger's brushes, 14.8.1, or the
+segment against its box without them).
 `GameHost::blast_entities` lists every linked `trigger_damage` with its
 brush model's box. `spawn_scripted` is a script `spawn`'s: model 0's box,
 linked as a world copy (`CollisionWorld::set_world_copy`, contents
 0x405c0008, which no trace mask but the walks' -1 meets), measured from
-that box's centre with its own copy passed, and walked by tracing the
-segment against the copy (`pusher_box_trace` with `Pusher::Copy`). A round's legs and a swing raise
+that box's centre with its own copy passed, and walked by
+`CollisionWorld::copy_sight_trace` (14.8.1). A round's legs and a swing raise
 `Effect::TriggerSweep` ahead of their hits; the missile pass sweeps a
 grenade's move with its `explosionInnerDamage`; UO's shell impact
 tests its contact point. A blast's notifies on an entity raised in the entity pass go through
 `engine_notifies` (the pass's other notifies' path), so they wake with
 the trigger round rather than in the next frame's packet pass.
 `enableGrenadeTouchDamage` / `disableGrenadeTouchDamage` set the bit.
+
+#### 14.8.1 The sight trace takes no clip epsilon
+
+VERIFIED, `client-probes/probe_dmgspawnshot.gsc` with `probe_fine` on
+mp_carentan, the kar98k client of 14.8's sixth test, 2026-11-26
+(`dmgtrig_ab.rs`, `a_round_on_a_world_copy_a_sixteenth_off_matches_retail`
+and `a_round_on_a_world_copys_wall_matches_retail{,_uo}`). A round's end
+sits 0.125 off the world face it strikes (the trace's
+`SURFACE_CLIP_EPSILON` back-off), and the spawned trigger's world copy is
+moved by sixteenths of a unit about it:
+
+| struck face | copy's face against the world's | fires |
+|---|---|---|
+| the site's ground (terrain), `probe_fine 1`, 1.1d | 1/16, 1/8 over; 1/16 under | no |
+| the same | 3/16, 1/4 over | yes |
+| a building's brush wall at x = 1832, normal -x, struck square on from (1368, 2608), `probe_fine 2`, 1.1d and UO | 1/16, 1/8 nearer; 1/16 farther | no |
+| the same | 3/16, 1 nearer | yes |
+
+So the round fires the copy only when its end lies strictly inside the
+copy's face: an end 1/16 short of a brush face, which a trace's brush clip
+meets (`d2 < SURFACE_CLIP_EPSILON`, Q3 `CM_TraceThroughBrush`), and an end
+on the face both miss. INFERRED: `trap_SightTraceToEntity` (1.1d 0x63830,
+syscall 0x26) clips a brush with no epsilon, and a map trigger's brushes
+go through the same brush arm as the copy's. vcod:
+`collision::sight_meets_brush` (an end on or ahead of any face misses) for
+a map trigger's hulls and, through `TraceInput::sight`, for the copy's
+brushes; the copy's terrain keeps its trace arm, whose bare segment
+already reads the ground rows. Before this the copy's brushes took the
+trace's brush clip and fired the 1/16 and 1/8 wall rows.
+
+#### 14.8.2 The `use` arm's count
+
+VERIFIED (the instructions), 1.1d `Use_trigger_damage` 0x65d10: it calls
+`Activate_trigger_damage(self, other, accumulate (+0x250) + 1, -1)`.
+`Activate_trigger_damage` reads that damage only against `threshold`
+(0x650eb..0x650f8, `damage < threshold` refuses); the `accumulate` gate
+reads `32000 - health` (+0x230, 0x65113..0x6512a), which a `useBy` leaves
+at 0. So a `useBy` fires a trigger with `accumulate` 0 and `threshold` up
+to `accumulate + 1`, and never one with `accumulate` set while it is at
+full health. Mod -1 skips `G_Trigger` (0x65136). Not captured: no stock
+map's `trigger_damage` sets `accumulate` or `threshold`, and a script's
+`spawn` sets neither.
+
+#### 14.8.3 A tank shell's walk
+
+VERIFIED, a gdb breakpoint on retail UO's `G_CheckHitTriggerDamage`
+(0x77130, its arguments read off the frame) under
+`client-probes/probe_vehicle_shell.gsc` on mp_kharkov, the recipe in
+`vehicles/mp_kharkov-tank-shell-uo.txt`'s header, 2026-11-26: the Panzer
+IV's `fireTurret` shell strikes the Elefant and walks once with the driver
+(client 0) as the attacker, start and end both the contact
+(-1421.27, 6196.21, 0.30), damage 700 and mod 5 (`MOD_PROJECTILE`): the
+panzerschreck shell's walk (14.8) with the turret weapon's damage.
+INFERRED, 14.8's table: mp_foy's belltower (spawnflags 115) refuses no mod
+5, so a tank shell whose contact lies inside `*44` fires it as the
+panzerschreck's did; not captured on mp_foy, which needs a seated driver
+with a line of fire to the belfry. vcod: the same walk off the UO missile
+impact (`cod1_frame`, `x.shell_damage`, `x.direct_mod`); a debug print on
+`vehicle_shell_ab`'s replay read the same attacker, damage, mod and
+contact to 2e-6.
 
 ---
 

@@ -459,14 +459,10 @@ fn first_drop(lines: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// The first drops no gate replays: a victim who lies down on his
-/// placement lands on the grade 0.35 units short of retail's spot, where
-/// retail's second drop, already prone, lands (coduo-vehicles.md 11.6,
-/// "The first drop").
-const FIRST_DROP_GAPS: &[(&str, &str)] = &[(
-    "bail-prone",
-    "the prone press's landing slides 0.35 units short of retail's",
-)];
+/// The first drops ours misses, each with its reason; none since the
+/// driverless prone run's lie-down waits for the ground as retail's does
+/// (coduo-vehicles.md 11.6, "The first drop").
+const FIRST_DROP_GAPS: &[(&str, &str)] = &[];
 
 /// The victim's first drop on ours against retail's, line for line to the
 /// hundredth, unless [`FIRST_DROP_GAPS`] names `capture`: then at least one

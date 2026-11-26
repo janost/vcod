@@ -368,8 +368,8 @@ fn ours_pair_run(
     // The script draws the target's variant (`randomInt(3)`) and head
     // (`randomInt(20)`) off `holdrand`, which retail seeds from its clock
     // (map-cycle doc 4.8). This seed draws variant 0, the `load1` gear the
-    // 1.1d prone captures' rests sit on (INFERRED, off ours matching them
-    // in it and not in variant 1), and head `a_01`.
+    // 1.1d prone captures' rests sit on (the brecourt retake's `PROBE body`
+    // logs it, combat doc 12.4), and head `a_01`.
     sv.pin_script_rand(1);
     let (join_ms, late_ms) = match (target_play, target_log) {
         (Some((t, _)), Some(log)) => {
@@ -815,8 +815,9 @@ fn missile_grounds(lines: &[String]) -> Vec<Vec<MissileRow>> {
     out.into_iter().map(|(_, v)| v).collect()
 }
 
-/// How far ours' frames may sit from retail's off a prone body: his pose
-/// strikes half a unit off retail's.
+/// How far ours' frames may sit from retail's off a prone body in a capture
+/// that logged no cmds: the even 16 ms cadence ours sends there settles him,
+/// and so the strike, up to a unit off retail's (combat doc 12.4).
 const PRONE_NEAR: f32 = 1.0;
 
 /// mp_carentan on 1.1d: a frag thrown onto a prone player's back rests
@@ -861,6 +862,20 @@ fn a_frag_rests_on_a_prone_players_back_like_retail() {
         "mp_carentan",
         225.0,
         include_str!("fixtures/scriptmodel/mp_carentan-scriptmodel-prone-rest-cmds.txt"),
+    );
+}
+
+/// [`a_frag_rests_on_a_prone_players_back_like_retail`] on mp_brecourt's
+/// grade, on a retake whose probe logged the target's gear (`load1`, the
+/// pinned draw's): both frags on retail's snapshots to the bit, the first
+/// struck off his back and resting there, the second rolling down the
+/// terrain (docs/research/cod11-combat.md 12.4).
+#[test]
+fn a_frag_rests_on_a_prone_players_back_on_a_grade_like_retail() {
+    prone_cmds_gate(
+        "mp_brecourt",
+        270.0,
+        include_str!("fixtures/scriptmodel/mp_brecourt-scriptmodel-prone-rest-gear.txt"),
     );
 }
 

@@ -6,7 +6,8 @@
 //! (docs/research/coduo-vehicles.md 11.2). Ours runs the same probe with
 //! two clients joined as axis on the capture's clock, each sending the cmds
 //! and use taps its probe client's `CMDS` lines logged, and every line from
-//! the kill on matches retail's word for word.
+//! the kill on matches retail's word for word. The `*-free-*` captures put
+//! `freeVehicle()` in the kill's place (coduo-vehicles.md 17.4.1).
 //!
 //! `DIE_REPORT=1` prints both sides' lines. Needs `COD_DIR` at a UO
 //! install; without one it returns early.
@@ -51,6 +52,15 @@ fn placed_time(capture: &str, n: usize) -> Option<i64> {
 /// placement came, each sending the cmds and use taps of the capture's
 /// `CMDS` lines, run on until 3 s past the kill.
 fn ours(map: &str, cvars: &[(&str, &str)], capture: &str) -> Option<Vec<String>> {
+    ours_aborts(map, cvars, capture).map(|(lines, _)| lines)
+}
+
+/// [`ours`] with the script errors the run raised.
+fn ours_aborts(
+    map: &str,
+    cvars: &[(&str, &str)],
+    capture: &str,
+) -> Option<(Vec<String>, Vec<String>)> {
     let fs = vcod_common::testing::uo_fs()?;
     let placed = |n: usize| {
         placed_time(capture, n).unwrap_or_else(|| panic!("the capture's PROBE place for {n}"))
@@ -153,13 +163,14 @@ fn ours(map: &str, cvars: &[(&str, &str)], capture: &str) -> Option<Vec<String>>
         "the vehicle was never killed:\n{}",
         sv.script_log().join("")
     );
-    Some(
+    Some((
         sv.script_log()
             .iter()
             .filter(|l| l.starts_with("PROBE "))
             .map(|l| l.trim_end().to_string())
             .collect(),
-    )
+        sv.script_aborts(),
+    ))
 }
 
 fn retail(text: &str) -> Vec<String> {
@@ -251,4 +262,60 @@ fn the_jeep_killed_by_a_teammate_dismounts_its_driver() {
         return;
     };
     compare(&r, &o);
+}
+
+/// `freeVehicle()` on the tank with both riders in it (coduo-vehicles.md
+/// 17.4.1): each rider's stock `tank_death_player_damage` wakes on the
+/// `death` and reads `last_attacker` off the freed handle, the script error
+/// that ends retail's server.
+#[test]
+fn freeing_the_occupied_tank_trips_the_stock_rider_thread() {
+    let text = std::fs::read_to_string("tests/fixtures/vehicles/mp_cassino-tank-free-uo.txt")
+        .expect("the capture");
+    // run_probe.sh's: the error ends the thread (retail's whole server).
+    let cvars = [
+        ("probe_vehicletype", "panzeriv_mp"),
+        ("probe_kill", "free"),
+        ("developer", "1"),
+    ];
+    let Some((o, aborts)) = ours_aborts("mp_cassino", &cvars, &text) else {
+        return;
+    };
+    let (r, o) = (from_kill(&retail(&text)), from_kill(&o));
+    assert_eq!(r, o[..r.len().min(o.len())]);
+    assert_eq!(
+        aborts,
+        [
+            "maps/mp/_tankdrive_gmi::tank_death_player_damage:461: BadType(\"dead entity is not an object\")"
+        ]
+    );
+}
+
+/// The same with the stock rider threads ended first: retail's next client
+/// think reads the riders' freed record and segfaults, so its lines end at
+/// the `death`. Ours puts each rider out where he sits instead.
+#[test]
+fn freeing_the_occupied_tank_puts_the_riders_out_where_retail_faults() {
+    let text = std::fs::read_to_string("tests/fixtures/vehicles/mp_cassino-tank-free-quiet-uo.txt")
+        .expect("the capture");
+    let cvars = [
+        ("probe_vehicletype", "panzeriv_mp"),
+        ("probe_kill", "free_quiet"),
+    ];
+    let Some((o, aborts)) = ours_aborts("mp_cassino", &cvars, &text) else {
+        return;
+    };
+    assert_eq!(aborts, Vec::<String>::new());
+    let (r, o) = (from_kill(&retail(&text)), from_kill(&o));
+    assert_eq!(r, o[..r.len()]);
+    let frame: Vec<&str> = o[r.len()..]
+        .iter()
+        .filter(|l| l.contains(" frame "))
+        .map(String::as_str)
+        .collect();
+    assert_eq!(frame.len(), 2, "{o:?}");
+    assert!(
+        frame.iter().all(|l| l.contains(" veh 0 health 100 ")),
+        "{frame:?}"
+    );
 }

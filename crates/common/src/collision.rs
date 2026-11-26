@@ -25,7 +25,10 @@ mod walk;
 pub use build::brush_side_planes;
 use build::{BvhNode, Volume};
 pub(crate) use clip::{Capsule, note_contact};
-pub use clip::{ModelSurf, clip_entity_box, clip_model_surfs, clip_model_tris, segment_misses_box};
+pub use clip::{
+    ModelSurf, clip_entity_box, clip_model_surfs, clip_model_tris, segment_misses_box,
+    sight_meets_brush,
+};
 pub use entities::UnlinkedInstance;
 use entities::{ModelInstance, ModelPose, ModelSpan, WorldCopy};
 pub use masks::{

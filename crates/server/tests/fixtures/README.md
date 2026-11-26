@@ -24,7 +24,7 @@ path says otherwise.
 | `gunduel` | 1.1d (under gdb), 1.5b and UO, `client-probes/probe_gunduel` | `gunduel_ab` |
 | `handshake` | 1.1d, 1.5b and UO, `client-probes/probe_primedprint`, `probe_svinfoquote`, `--probe-download` | `connect`, `www_download`, `src/download.rs` |
 | `istouching` | 1.1d, 1.5b and UO, `client-probes/probe_istouching` | `istouching_ab` |
-| `items` | 1.1d, 1.5b and UO, item probes (`probe_itemdrop`, `probe_startsolid`, `probe_class`, `probe_fragcount`) and `--probe-items` | `pickup_ab`, `itemdrop_ab`, `src/game/teams_ab.rs` |
+| `items` | 1.1d, 1.5b and UO, item probes (`probe_itemdrop`, `probe_respawnsign`, `probe_startsolid`, `probe_class`, `probe_fragcount`) and `--probe-items` | `pickup_ab`, `itemdrop_ab`, `src/game/teams_ab.rs` |
 | `leanhit` | 1.1d, 1.5b and UO, `client-probes/probe_leanhit` with a `--probe-uo-weapon direct` client | `leanhit_ab` |
 | `leanpvs` | 1.1d, `client-probes/probe_leanpvs` | `leanpvs_ab` |
 | `missiles` | 1.1d, 1.5b and UO, `client-probes/probe_skyshot`, `probe_satchelshot` and kin | `missile_edge_ab`, `uo_weapons_ab` |
