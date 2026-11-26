@@ -776,6 +776,11 @@ impl Bot {
         std::mem::take(&mut self.kill)
     }
 
+    /// The seat change [`Bot::think`] asked for, once.
+    pub(crate) fn take_seat_change(&mut self) -> Option<&'static str> {
+        std::mem::take(&mut self.rider.cycle).then_some("prevvehslot")
+    }
+
     /// The yell [`Bot::think`] asked for, once.
     pub(crate) fn take_yell(&mut self) -> Option<yell::Yell> {
         self.yell.take()
@@ -1859,6 +1864,57 @@ mod tests {
             bot.think(&v).forward < 0
         });
         assert_eq!(backs, None);
+    }
+
+    /// A gunner whose driver's seat stands empty asks for it with
+    /// `prevvehslot`, every 2 s for three tries, and gets out only once
+    /// they are spent; a jeep's gunner with an enemy to shoot stays on the
+    /// gun (bot-objectives.md 10.14).
+    #[test]
+    fn a_gunner_moves_to_an_empty_drivers_seat() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = driving(Crowd::default());
+        let seat = v.seat.as_mut().unwrap();
+        (seat.seat, seat.driven, seat.speed) = (2, false, 0.0);
+        let mut asked = Vec::new();
+        let out = (0..300).find(|&i| {
+            v.seat.as_mut().unwrap().level_ms = i * 50;
+            let cmd = bot.think(&v);
+            if bot.take_seat_change() == Some("prevvehslot") {
+                asked.push(i);
+            }
+            cmd.buttons & msg::BUTTON_USE != 0
+        });
+        assert_eq!(asked, [0, 40, 80]);
+        assert!(out.is_some_and(|i| i > 80), "{out:?}");
+        let mut bot = Bot::new("allies", false, 1);
+        let seat = v.seat.as_mut().unwrap();
+        (seat.tank, seat.gun_speed) = (false, 0.0);
+        v.enemy = engaged(1).1.enemy;
+        bot.think(&v);
+        assert_eq!(bot.take_seat_change(), None);
+    }
+
+    /// A stall window is judged by the keys it opened under: a tank that
+    /// turns in place and then drives off is no stall when the window
+    /// closes on its first units of ground (bot-objectives.md 10.13).
+    #[test]
+    fn a_tank_that_pivots_and_then_drives_off_is_no_stall() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = driving(Crowd::default());
+        v.waypoint = Some([0.0, 1000.0, 64.0]);
+        v.seat.as_mut().unwrap().speed = 0.0;
+        for i in 0..60 {
+            let cmd = bot.think(&v);
+            assert!(cmd.forward >= 0, "backed off on tick {i}");
+            let seat = v.seat.as_mut().unwrap();
+            seat.yaw -= 3.0 * f32::from(cmd.right.signum());
+            if cmd.forward > 0 {
+                let (s, c) = seat.yaw.to_radians().sin_cos();
+                seat.origin[0] += 2.0 * c;
+                seat.origin[1] += 2.0 * s;
+            }
+        }
     }
 
     fn armored(at: [f32; 3]) -> BotView {
