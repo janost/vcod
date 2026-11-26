@@ -201,6 +201,10 @@ pub enum XAsk {
     WwwDone,
     /// Op 6 (`SV_WWWDownload_BBL8R_f` 0x110c60): the server drops the client.
     WwwDisconnect,
+    /// Op 7 (`SV_WWWDownload_ChkFail_f` 0x110e20): the fetched file failed
+    /// its check; the server answers as op 4, the redirect marks cleared
+    /// only while op 5 has not gone.
+    WwwChecksumFail,
 }
 
 impl XAsk {
@@ -215,6 +219,7 @@ impl XAsk {
             XAsk::WwwFail => 4,
             XAsk::WwwDone => 5,
             XAsk::WwwDisconnect => 6,
+            XAsk::WwwChecksumFail => 7,
         };
         b.push(op);
         match self {
@@ -602,6 +607,18 @@ impl Downloads {
         match done {
             Ok(()) => {
                 cur.udp.spool.received = got;
+                // CoD4x: a bad file is reported in place of op 5, and the
+                // server sends it over the side channel instead
+                // (cod4x-protocol.md 7.2.6).
+                if self.dialect == Dialect::X21
+                    && !self.disconnected
+                    && let Some(why) = cur.check()
+                {
+                    log::warn!("cod4: {}: {why} over HTTP", cur.wanted.remote);
+                    self.queue.push_front(cur.wanted);
+                    self.refetch = true;
+                    return vec![DownloadEvent::Side(XAsk::WwwChecksumFail)];
+                }
                 let mut out = Vec::new();
                 if !self.disconnected {
                     out.extend(self.ask(Ask::WwwDone));
@@ -1017,19 +1034,12 @@ mod tests {
         assert!(tmp.path().join("usermaps/mp_x/mp_x.ff").is_file());
     }
 
-    /// A redirect to a name holding a colour code (a CoD4x update
-    /// backend's `mods/cod4i/^7mod.ff`): the GET carries the `^` raw, as
-    /// libwww sends the path, and the file lands under that name
-    /// (cod4-handshake.md 11, 13).
-    #[test]
-    fn a_colour_coded_name_is_fetched_raw_and_kept() {
+    /// A loopback HTTP server that answers one GET with `body`; its port,
+    /// and the request line once it answered.
+    fn serve_once(body: Vec<u8>) -> (u16, std::thread::JoinHandle<String>) {
         use std::io::{BufRead, Write};
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().to_path_buf();
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = l.local_addr().unwrap().port();
-        let body: Vec<u8> = (0..5000u32).map(|i| (i * 7) as u8).collect();
-        let served = body.clone();
         let server = std::thread::spawn(move || {
             let (sock, _) = l.accept().unwrap();
             let mut r = std::io::BufReader::new(sock);
@@ -1043,12 +1053,36 @@ mod tests {
             write!(
                 w,
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
-                served.len()
+                body.len()
             )
             .unwrap();
-            w.write_all(&served).unwrap();
+            w.write_all(&body).unwrap();
             first
         });
+        (port, server)
+    }
+
+    /// [`Downloads::poll`] until it has something, up to 10 s.
+    fn poll_fetch(dls: &mut Downloads) -> Vec<DownloadEvent> {
+        let t0 = std::time::Instant::now();
+        let mut evs = Vec::new();
+        while evs.is_empty() && t0.elapsed().as_secs() < 10 {
+            evs = dls.poll();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        evs
+    }
+
+    /// A redirect to a name holding a colour code (a CoD4x update
+    /// backend's `mods/cod4i/^7mod.ff`): the GET carries the `^` raw, as
+    /// libwww sends the path, and the file lands under that name
+    /// (cod4-handshake.md 11, 13).
+    #[test]
+    fn a_colour_coded_name_is_fetched_raw_and_kept() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        let body: Vec<u8> = (0..5000u32).map(|i| (i * 7) as u8).collect();
+        let (port, server) = serve_once(body.clone());
         let wanted = Wanted {
             remote: "mods/cod4i/^7mod.ff".into(),
             checksum: None,
@@ -1068,12 +1102,7 @@ mod tests {
             flags: 0,
         });
         assert_eq!(evs, [DownloadEvent::Command("wwwdl ack".into())]);
-        let t0 = std::time::Instant::now();
-        let mut evs = Vec::new();
-        while evs.is_empty() && t0.elapsed().as_secs() < 10 {
-            evs = dls.poll();
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+        let evs = poll_fetch(&mut dls);
         let first = server.join().unwrap();
         assert_eq!(first, "GET /mods/cod4i/^7mod.ff HTTP/1.0\r\n");
         let dest = root.join("mods/cod4i/^7mod.ff");
@@ -1278,6 +1307,7 @@ mod tests {
             x_body(3, &[1, 0, 0, 0, 2, 0, 0, 0])
         );
         assert_eq!(XAsk::Done.write(), x_body(1, &[]));
+        assert_eq!(XAsk::WwwChecksumFail.write(), x_body(7, &[]));
     }
 
     /// On CoD4x the queue asks on the side channel: the file by name, its
@@ -1326,6 +1356,44 @@ mod tests {
         );
         assert!(dls.is_done());
         assert!(!tmp.path().join("mods/x/bad.ff").exists());
+    }
+
+    /// On CoD4x a file off the record's CRC-32 over HTTP is answered with
+    /// op 7 and no op 5, its spool removed, and asked for again on the
+    /// gamestate the server answers with (`SV_WWWDownload_ChkFail_f`
+    /// 0x110e20, cod4x-protocol.md 7.2.6).
+    #[test]
+    fn a_cod4x_file_off_its_crc_over_http_is_asked_for_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wanted = Wanted {
+            remote: "mods/x/mod.ff".into(),
+            checksum: None,
+            size: Some(9),
+        };
+        let mut dls = Downloads::new(tmp.path(), vec![wanted]).with_dialect(Dialect::X21);
+        let side = |a| DownloadEvent::Side(a);
+        let begin = || side(XAsk::Begin("mods/x/mod.ff".into()));
+        assert_eq!(dls.next_download(), [begin()]);
+        let crc = 0xcbf4_3926; // "123456789"'s
+        dls.on_side(&XDownloadMsg::read(&x_begin(9, crc)).unwrap());
+        let (port, server) = serve_once(b"123456780".to_vec());
+        let url = format!("http://127.0.0.1:{port}/mods/x/mod.ff");
+        let redirect = XDownloadMsg::Redirect {
+            url,
+            size: 9,
+            flags: 0,
+        };
+        assert!(dls.on_side(&redirect).is_empty());
+        assert_eq!(poll_fetch(&mut dls), [side(XAsk::WwwChecksumFail)]);
+        server.join().unwrap();
+        assert!(!dls.is_done());
+        let dir = tmp.path().join("mods/x");
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            0,
+            "a spool stayed"
+        );
+        assert_eq!(dls.on_gamestate(), [begin()]);
     }
 
     /// A CoD4x server answers a name off its lists with the gamestate

@@ -6434,12 +6434,41 @@ their logged stamps, three a frame as the net probe sends them, ours
 matches every snapshot of both carentan frags to the bit, `trType` and
 ground included (`scriptmodel_ab::a_frag_rests_on_a_prone_players_back_like_retail`),
 so the unit the older gates allow is the even 16 ms cadence's, not the
-prone pose's. Open: on brecourt the target settles on retail's origin
-(1659.001, 780.999, -104.091) with the logged cmds, and the first frag
-still strikes him 1.47 earlier along its flight (snapshot 2: y 802.38
-against 803.85); the 1.1d prone pose on the grade, not the timing, is the
-remaining cause (player-model-anim-system.md, "The prone body on a
-grade"). VERIFIED, vcod measurement against the grenade part retaken the
+prone pose's. On brecourt the target settles on retail's origin
+(1659.001, 780.999, -104.091) with the logged cmds, and that capture's
+first frag strikes him 1.47 further along its flight than ours (snapshot
+2: y 803.85 against 802.38). That was not the pose:
+
+- VERIFIED, `PROBE body` (the probe logs the target's model and
+  attachments since 2026-11-26): the dm script draws the gear, and ours'
+  strike moves with it (y 802.38 with `gear_german_load1_falshrm`, 802.91
+  with `load2`, 803.94 with `load3`). Three 2026-11-26 retail retakes
+  drew `load1`.
+- VERIFIED, live (retail 1.1d under `tools/re/gdb_missile.py`, the move
+  trace at 0x540c6 and the snap's at 0x542a4; logs
+  `scriptmodel/mp_brecourt-scriptmodel-prone-rest-{875,gear}-gdb.txt`): the frag meets
+  `torso_lower` (bone name id 328, hit location 5) with the normal
+  (-0.07153, -0.21968, 0.97295), ours' face to the float, on both
+  retakes. One leaves at (0, 875, -272), as the 2026-11-14 capture did,
+  strikes at fraction 0.678308, and its snap from the contact meets the
+  same face at fraction 1.3e-6, so the bounce reads that normal (ground 0,
+  the 0.1 nudge in x and y). The other leaves at (0, 876, -272), strikes
+  at 0.677248, and its snap starts solid (fraction 0, normal 0, the
+  start-solid byte `+47` set), so its bounce reads no face (ground 1023).
+  The 876 run rests at (1659.00, 804.80, -83.72), ours' spot.
+- vcod measurement: `throw_velocity` reads ours' `projectileSpeed` 960
+  times the forward's y as 876.009 before `fire_grenade` truncates it; the
+  aim (24.145542, 90) is the aim block's, off the short grid. Given
+  retail's (0, 875, -272) instead, ours matches every snapshot of an 875
+  run (`mp_brecourt-scriptmodel-prone-rest-875.txt`) to the bit. INFERRED: the throw sits 0.009 over a truncation, so
+  whether a run leaves at 875 or 876 rides the thrower's aim.
+
+`scriptmodel_ab::a_frag_rests_on_a_prone_players_back_on_a_grade_like_retail`
+replays the 876 retake (`mp_brecourt-scriptmodel-prone-rest-gear.txt`):
+both frags on retail's snapshots to the bit, `trType` and ground included.
+Open: ours sends 876 on the 875 run's cmds, so the thrower's aim on that
+run is not retail's; the fixture logs no cmd angles to tell which input
+moved it. VERIFIED, vcod measurement against the grenade part retaken the
 same way (`mp_carentan-scriptmodel-grenade-cmds.txt`, the target a
 `--probe-fall` client, the thrower's `SPAWNED` line kept), replayed on
 both clients' stamps with the times plumbing the prone gate uses: of 158

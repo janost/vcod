@@ -60,6 +60,8 @@ fn join(cp: Cp, done: fn(&Seen) -> bool) -> (Seen, Vec<capture::Line>) {
             // sends from its first frame in the level.
             let cmds = match &conn.client.gamestate {
                 Some(_) => {
+                    // The level is up: the `cp` and three packets go first.
+                    conn.cgame_up().unwrap();
                     let snap = conn
                         .client
                         .snapshots

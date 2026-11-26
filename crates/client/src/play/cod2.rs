@@ -157,8 +157,11 @@ const PUMP_CMD_MS: u64 = 16;
 /// Shortest gap between two packets off the LAN: `1000 / cl_maxpackets`,
 /// 30 by default (`CL_SendCmdInternal`, Mac 0x18a032).
 const PACKET_MS: u64 = 1000 / 30;
-/// The gap before the client is primed: one packet a second (the same).
+/// The gap outside `CA_PRIMED` and `CA_ACTIVE` with no download: one
+/// packet a second (`CL_ReadyToSendPacket`, cod2-protocol.md 18.4.2).
 const CONNECTING_PACKET_MS: u64 = 1000;
+/// The gap while a download runs (the same).
+const DOWNLOAD_PACKET_MS: u64 = 50;
 /// `cl_packetdup`'s default: each packet carries the cmds of this many
 /// packets before it again (`CL_WritePacket`, Mac 0x188154).
 const PACKET_DUP: usize = 1;
@@ -239,7 +242,8 @@ pub struct Cod2Session {
     fetched: Vec<PathBuf>,
     /// Their checksums, which count as held from then on.
     fetched_sums: Vec<i32>,
-    /// `donedl` went out: the `cp` waits for the gamestate it brings.
+    /// `donedl` or `loadingnewmap`: the `cp` and the cmds wait for the
+    /// gamestate that comes next.
     await_gamestate: bool,
     /// The server dropped us: its reason.
     pub dropped: Option<String>,
@@ -598,11 +602,16 @@ impl Cod2Session {
                             self.prints.push(text.to_string());
                         }
                     }
-                    Reply::LoadingNewMap(m) => log::info!(
-                        "cod2: loadingnewmap {} at {:.0}",
-                        m.replace('\n', " "),
-                        self.real_ms()
-                    ),
+                    // `CL_ConnectionlessPacket` puts the client back in
+                    // `CA_CONNECTED` (`CoD2MP_s.exe` 0x40f18f).
+                    Reply::LoadingNewMap(m) => {
+                        log::info!(
+                            "cod2: loadingnewmap {} at {:.0}",
+                            m.replace('\n', " "),
+                            self.real_ms()
+                        );
+                        self.await_gamestate = true;
+                    }
                     r => log::debug!("cod2 oob: {r:?}"),
                 }
                 continue;
@@ -902,8 +911,11 @@ impl Cod2Session {
         self.cp_owed = false;
     }
 
-    /// A gamestate is in and no download runs or is owed one: the map
-    /// can load and the `cp` go (`CL_DownloadsComplete`).
+    /// A gamestate is in and no download runs or is owed one, and no
+    /// `loadingnewmap` came since: the map can load and the `cp` go
+    /// (`CL_DownloadsComplete`). With the `cp` queued it is retail's
+    /// `CA_PRIMED` or `CA_ACTIVE`, where cmds are made (cod2-protocol.md
+    /// 18.4.2).
     pub fn settled(&self) -> bool {
         self.view.gamestates > 0 && self.downloads.is_none() && !self.await_gamestate
     }
@@ -1410,7 +1422,7 @@ impl Cod2Session {
         buttons: i32,
     ) -> anyhow::Result<()> {
         self.advance_clock();
-        if self.view.gamestates > 0
+        if self.settled()
             && !self.cp_owed
             && since(self.last_cmd) >= Duration::from_millis(PUMP_CMD_MS)
         {
@@ -1439,28 +1451,19 @@ impl Cod2Session {
         self.send_due()
     }
 
-    /// A packet when `CL_SendCmdInternal` (Mac 0x18a032) would send one:
-    /// once a second before the gamestate, then every frame to a LAN
-    /// server and every [`PACKET_MS`] off it. It carries the new cmds and,
+    /// A packet when `CL_ReadyToSendPacket` (`CoD2MP_s.exe` 0x408c10)
+    /// would send one ([`Self::packet_wait`]). It carries the new cmds and,
     /// as `cl_packetdup` 1 does, the last packet's again, at most
     /// `MAX_PACKET_USERCMDS`.
     fn send_due(&mut self) -> anyhow::Result<()> {
-        let lan = self.sock.as_ref().is_some_and(UdpTransport::is_lan);
-        let wait = if self.view.gamestates == 0 {
-            CONNECTING_PACKET_MS
-        } else if lan {
-            0
-        } else {
-            PACKET_MS
-        };
-        if since(self.last_packet) < Duration::from_millis(wait) {
+        if since(self.last_packet) < self.packet_wait() {
             return Ok(());
         }
         // No new cmd: the clock stands (a cmd is held within 5 s of the
         // snapshot, `CL_CreateCmd` Mac 0x189f0e). Retail still makes one a
         // frame and sends it, so the newest goes again, at most at the
         // off-LAN pace: the server keeps hearing from us.
-        if self.view.gamestates > 0
+        if self.settled()
             && self.pending.is_empty()
             && !self.cp_owed
             && (self.sent.is_empty() || since(self.last_packet) < Duration::from_millis(PACKET_MS))
@@ -1491,6 +1494,22 @@ impl Cod2Session {
             .sent(cmds.last().map(|c| c.server_time), self.last_packet);
         self.stats.packets_sent += 1;
         Ok(())
+    }
+
+    /// The least gap since the last packet (cod2-protocol.md 18.4.2): 50 ms
+    /// while a download runs, a second until settled, then none to a LAN
+    /// server and [`PACKET_MS`] off it.
+    fn packet_wait(&self) -> Duration {
+        let lan = self.sock.as_ref().is_some_and(UdpTransport::is_lan);
+        Duration::from_millis(if self.downloads.is_some() {
+            DOWNLOAD_PACKET_MS
+        } else if !self.settled() {
+            CONNECTING_PACKET_MS
+        } else if lan {
+            0
+        } else {
+            PACKET_MS
+        })
     }
 
     /// One frame of a spectator or a player: read the server, run the
@@ -1525,7 +1544,7 @@ impl Cod2Session {
         }
         let view = [-cam.pitch.to_degrees(), cam.yaw.to_degrees()];
         let mut draw_cmd = None;
-        if self.view.gamestates > 0 && !self.cp_owed && self.view.snap.is_some() {
+        if self.settled() && !self.cp_owed && self.view.snap.is_some() {
             let now = self.cmd_time();
             let last = self.sent.back().map_or(i32::MIN, |c| c.server_time);
             // Past what the pump sent while the map loaded.
@@ -1540,7 +1559,7 @@ impl Cod2Session {
         // A primed client is sent no snapshot until it moves (cod2-protocol.md
         // 17.2): after a gamestate the map did not reload for (a download's,
         // a same-map one) idle cmds go out as the load pump's do.
-        let primed = self.view.gamestates > 0 && !self.cp_owed && self.view.snap.is_none();
+        let primed = self.settled() && !self.cp_owed && self.view.snap.is_none();
         let sent = if primed {
             self.send_move(None, 0, 0, 0)
         } else {
@@ -2360,6 +2379,39 @@ mod tests {
         assert!(home.path().join("veteran").is_dir());
 
         let s = session_on(&si, home.path(), false);
+        assert!(s.settled());
+    }
+
+    /// `CL_ReadyToSendPacket`'s gaps by the state (cod2-protocol.md
+    /// 18.4.2): 50 ms while a download runs, a second after `donedl` and
+    /// after `loadingnewmap` until the gamestate, and no cmd made then.
+    #[test]
+    fn the_packet_gap_follows_the_connection_state() {
+        let home = tempfile::tempdir().unwrap();
+        let si = "\\fs_game\\veteran\\sv_referencedIwds\\5 \\sv_referencedIwdNames\\veteran/rt";
+        let mut s = session_on(si, home.path(), true);
+        assert_eq!(s.packet_wait(), Duration::from_millis(50));
+        s.download_events(vec![DownloadEvent::Command("donedl".into())]);
+        assert_eq!(s.packet_wait(), Duration::from_millis(1000));
+        // The gamestate `donedl` brings, the file no longer asked for.
+        s.opts.allow_download = false;
+        s.on_gamestate();
+        assert!(s.packet_wait() <= Duration::from_millis(PACKET_MS));
+
+        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let me = sock.local_addr().unwrap();
+        s.sock = UdpTransport::from_socket(sock, vcod_common::net::lan::is_lan_cod2).ok();
+        UdpSocket::bind("127.0.0.1:0")
+            .unwrap()
+            .send_to(b"\xff\xff\xff\xffloadingnewmap\nmp_toujane\ntdm", me)
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        s.poll(None);
+        assert_eq!(s.packet_wait(), Duration::from_millis(1000));
+        let sent = s.sent.len();
+        s.send_move(None, 0, 0, 0).unwrap();
+        assert_eq!(s.sent.len(), sent, "no cmd in CA_CONNECTED");
+        s.on_gamestate();
         assert!(s.settled());
     }
 
