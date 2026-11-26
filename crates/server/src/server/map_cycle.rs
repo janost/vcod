@@ -193,6 +193,10 @@ impl Server {
         // and settle frames left, so a `setCvar` of a serverinfo cvar in the
         // level's init is in the gamestate.
         self.flush_serverinfo();
+        // UO's load runs `exec <map>_<gametype>.cfg` (coduo-diff.md 25).
+        if self.game.proto.is_uo() {
+            self.game.argv1 = format!("{map}_{}.cfg", self.game.cfg.gametype.to_ascii_lowercase());
+        }
         self.game.last_spawn_tick = Some(self.svs_time_ms());
         log::info!(
             "map {map} ({}), serverId {:#04x}, {} clients kept",
