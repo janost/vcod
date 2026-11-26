@@ -2844,6 +2844,124 @@ the seat change itself, read out of the UO game module.
 - Left: a driver who moves to the gunner's seat for an enemy on foot
   the jeep cannot run over, and a passenger who takes a free gun. Open.
 
+### 10.15 A seat's gun reacts and settles by the skill, 2026-11-26
+
+Retail has no bots; this section is measured on vcod-server only. It
+takes the last "Left" item of 10.12, an aim error by skill on the seat
+guns.
+
+- Before it a seat's gun went at a target the tick it came in sight,
+  laid on the lead exactly: `think_vehicle` drops the target on foot
+  (`Bot::disengage`) every tick in a seat, so the reaction delay and
+  the aim error of bot-combat.md 3 never reached it, and every level
+  gunned alike.
+- The rule: a seat keeps its own target (`SeatAim`, `Bot::seat_track`),
+  an enemy's slot or an enemy hull, through `forget_ticks` out of sight.
+  A new one waits `reaction_min + rand(reaction_spread)` ticks with the
+  gun not laid on it and no round fired. Then the miss is bot-combat.md
+  3's, `(error + across * track_lag) * (1 + range / error_range) *
+  moving`, with the hull's speed for the body's in `moving`; the error
+  starts at `error_start` and decays by `error_decay` a tick to
+  `error_floor`, its direction drawn again every 4 to 8 ticks
+  (`Bot::seat_miss`). The flick and drift of the aim on foot
+  (bot-combat.md 18) are left out. The miss turns the view off the lead,
+  from the chase camera for a tank's main gun and from the eye for an MG
+  or a passenger's weapon, and the gun fires once it lies within
+  `LAID_DEG` of that view, as before. A `bas` base takes no miss: it is
+  no player (`a_seat_gun_reacts_and_settles_by_the_skill`,
+  `a_tank_gun_holds_through_the_reaction_delay`).
+- VERIFIED (measured, ours, release, UO stock paks, `bot_vehicles
+  ON_ONLY=1 MAP=mp_cassino SKILL=N`, `tdm`, 6 bots at one level, 3 min,
+  seeds 1 to 239 odd, 120 games a row; master 86fcd256d, then the rule).
+  The kills are the `K;` lines: a crush's means is `MOD_CRUSH_*`, a
+  shell's weapon a tank's `<tank>_turret_mp`, an MG's a vehicle's
+  `<mg>_tank_mp`. "On foot" counts those three whose victim sat in no
+  seat the tick before. A row's sum of 120 games spreads by about 25 for
+  the MG kills and 45 for the three together (one standard deviation).
+
+  | Level | kills | shell kills | MG kills | crush kills | vehicle kills | of them on foot |
+  |---|---|---|---|---|---|---|
+  | 0 | 2890 → 2830 | 940 → 987 | 490 → 372 | 3 → 3 | 1433 → 1362 | 1187 → 1085 |
+  | 1 | 3241 → 3184 | 937 → 997 | 504 → 385 | 8 → 5 | 1449 → 1387 | 1199 → 1111 |
+  | 2 | 3321 → 3407 | 987 → 1004 | 509 → 458 | 9 → 2 | 1505 → 1464 | 1261 → 1181 |
+  | 3 | 3348 → 3453 | 901 → 981 | 481 → 487 | 5 → 6 | 1387 → 1474 | 1124 → 1191 |
+
+- The MG kills rise with the level now, 372, 385, 458 and 487, where
+  master's sat between 481 and 509 at every level; the vehicle kills
+  run 1362 to 1474 and those of victims on foot 1085 to 1191, where
+  master's had no order. VERIFIED (the table). Kept.
+- The shell kills rise at every level, by 17 to 80. Not traced.
+  INFERRED: an enemy the MG no longer kills at once is left for the
+  main gun, whose splash forgives most of a miss; the shell's line onto
+  a hull (10.11) holds the round until it meets the hull, so a miss
+  there costs time, not the shot.
+- Crushes are too few to read (2 to 9 a row). How a level plays from a
+  seat against a human is a hand check.
+
+### 10.16 A hull's route keeps off the other vehicles, 2026-11-26
+
+Retail has no bots; this section is measured on vcod-server only. It
+takes the "Left" item of 10.13: no plan read another vehicle.
+
+- What a moving hull struck, counted on this branch with 10.15's rule
+  on (a temporary count of each strike in `Physics::collide`, by its
+  `HitEntity`: the world, a vehicle moving faster than 10 units/s, one
+  slower), 120 games a map: mp_cassino 5527 on the world, 254 on a
+  moving vehicle and 543 on a still one; mp_kharkov 8281, 1076 and 1101.
+  So 13 % and 21 % of the strikes are on a vehicle, about half of them a
+  still one. VERIFIED (the runs). A strike here is each think whose
+  probes meet something, so a hull pressed on a wall counts once a frame.
+- The rule: `plan_route` takes every live vehicle but the driver's own
+  where it stands at the plan (`Server::other_hulls`), with a reach of
+  its box's farthest corner across plus the driver's half width, 224 for
+  two Panzer IVs. Entering a node within that reach across and 128 up or
+  down (`OTHER_HULL_RISE`) costs `OTHER_HULL_STEPS` (2) grid steps more,
+  on top of 10.13's room costs. It is a cost, not a fit, so every route
+  found before is still found (`a_route_keeps_off_another_vehicle`). A
+  moving vehicle is planned round where it stood; the route goes again
+  on 10.3's clock (a goal moved 300, 5 s with no headway, 15 s).
+- VERIFIED (measured, ours, release, UO stock paks, `bot_vehicles
+  ON_ONLY=1`, `tdm`, 6 bots at level 1, 3 min, seeds 1 to 239 odd, 120
+  games a row, on 10.15; a temporary measuring arm, taken out before the
+  commit). "Back-offs" are a driver's stall and contact back-offs,
+  "stall exits", "contact" and "vehicle kills" as 10.13's; "stuck
+  drivers" are `bot_vehicles`' 12 s spells within 150 units of one spot
+  with no enemy in range.
+
+  mp_cassino:
+
+  | | strikes on the world | on a moving vehicle | on a still one | back-offs | stall exits | contact | stuck drivers | stuck kills | kills | vehicle kills |
+  |---|---|---|---|---|---|---|---|---|---|---|
+  | none | 5527 | 254 | 543 | 608 | 417 | 12.6 % | 5 | 10 | 3184 | 1387 |
+  | 2 steps | 6260 | 171 | 377 | 584 | 409 | 12.2 % | 6 | 13 | 3199 | 1411 |
+  | 4 steps | 6302 | 188 | 341 | 585 | 402 | 12.3 % | 5 | 13 | 3252 | 1414 |
+
+  mp_kharkov:
+
+  | | strikes on the world | on a moving vehicle | on a still one | back-offs | stall exits | contact | stuck drivers | stuck kills | kills | vehicle kills |
+  |---|---|---|---|---|---|---|---|---|---|---|
+  | none | 8281 | 1076 | 1101 | 1700 | 789 | 16.9 % | 3 | 16 | 740 | 180 |
+  | 2 steps | 8415 | 784 | 982 | 1604 | 774 | 16.1 % | 5 | 18 | 770 | 142 |
+  | 4 steps | 9104 | 779 | 916 | 1605 | 765 | 16.1 % | 2 | 20 | 754 | 141 |
+  | 2 steps, own side's and empty hulls only | 8384 | 784 | 979 | 1601 | 773 | 16.0 % | 5 | 18 | 767 | 140 |
+
+- Kept at 2 steps. The strikes on another vehicle fall by 31 % on
+  mp_cassino and 19 % on mp_kharkov, both the moving and the still ones;
+  back-offs fall 4 % and 6 %, and the contact share by under a point.
+  The strikes on the world move both ways by more than that (one game
+  pressed on a wall adds hundreds), so they read as spread. 4 steps
+  moves nothing past 2. Leaving out hulls with an enemy aboard changes
+  nothing: few plans meet one. VERIFIED (the tables).
+- mp_kharkov's vehicle kills fall from 180 to 142 under each variant
+  (its shell kills 161 to 130), two standard deviations of the
+  difference (a row's sum spreads by about 14); mp_cassino's rise from
+  1387 to 1411. Not traced: the variant that leaves enemy hulls out did
+  not bring them back. Open.
+- The cost: a loop over the live vehicles at a node's first pop, and the
+  detours' extra expansions. Not timed.
+- Left: a yield for a moving vehicle met on the way, which the plan sees
+  only where it stood. Open.
+
 ## 11. CoD2's `sd`, `ctf` and `hq`
 
 CoD2 bots (`crates/server/src/bots/cod2.rs`) play the three with the

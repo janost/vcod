@@ -102,6 +102,8 @@ pub(crate) const ROCKET_RANGE: f32 = super::BREACH_RANGE;
 /// box, which reaches a half width (15) round the muzzle, and this is
 /// twice that, rounded up.
 pub(crate) const ROCKET_CLEAR_MARGIN: f32 = 32.0;
+/// A hull's [`SeatAim::key`]: its entity number past every client slot.
+const HULL_KEY: u32 = 64;
 
 /// A usable vehicle near the bot, as the server sees it this tick.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -257,6 +259,23 @@ pub(crate) fn lead(from: [f32; 3], at: [f32; 3], vel: [f32; 3], speed: f32) -> [
     ahead(ahead(ahead(at)))
 }
 
+/// A seat's hold on what its gun shoots at, as [`Bot::track`] and
+/// [`Bot::engage`] keep one on foot: the skill's reaction delay, then an
+/// aim error that decays to its floor (bot-objectives.md 10.15).
+#[derive(Clone, Copy, Debug)]
+struct SeatAim {
+    /// The enemy's client slot, or [`HULL_KEY`] plus a hull's number.
+    key: u32,
+    react: u32,
+    /// Units at the target, and its direction (pitch, yaw), unit length,
+    /// drawn again every `wobble` ticks.
+    error: f32,
+    dir: [f32; 2],
+    wobble: u32,
+    /// Ticks with nothing to shoot at.
+    lost: u32,
+}
+
 /// The bot's own vehicle state, carried across ticks.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Rider {
@@ -321,6 +340,8 @@ pub(crate) struct Rider {
     cycles: u32,
     cycle_wait: u32,
     pub(crate) cycle: bool,
+    /// The seat gun's target.
+    aim: Option<SeatAim>,
 }
 
 impl Rider {
@@ -464,6 +485,75 @@ impl Bot {
         Some(aim)
     }
 
+    /// Keeps [`Rider::aim`] on this tick's target `key`: a new one starts
+    /// with the full reaction delay and aim error, one gone for
+    /// `forget_ticks` is dropped.
+    fn seat_track(&mut self, key: Option<u32>) {
+        match (key, self.rider.aim.as_mut()) {
+            (Some(k), Some(a)) if a.key == k => a.lost = 0,
+            (Some(key), _) => {
+                let react = self.skill.reaction_min + self.rand_below(self.skill.reaction_spread);
+                self.rider.aim = Some(SeatAim {
+                    key,
+                    react,
+                    error: self.skill.error_start,
+                    dir: [0.0, 1.0],
+                    wobble: 0,
+                    lost: 0,
+                });
+            }
+            (None, Some(a)) => {
+                a.lost += 1;
+                if a.lost > self.skill.forget_ticks {
+                    self.rider.aim = None;
+                }
+            }
+            (None, None) => {}
+        }
+    }
+
+    /// The seat gun's miss this tick, (pitch, yaw) degrees off the aim at
+    /// `at` moving at `vel` from `from`, by [`Bot::engage`]'s rule with the
+    /// hull's `speed` for the body's; `None` while the reaction delay runs.
+    fn seat_miss(
+        &mut self,
+        speed: f32,
+        from: [f32; 3],
+        at: [f32; 3],
+        vel: [f32; 3],
+    ) -> Option<[f32; 2]> {
+        if !self.shoot {
+            return Some([0.0; 2]);
+        }
+        let mut a = self.rider.aim?;
+        if a.react > 0 {
+            a.react -= 1;
+            self.rider.aim = Some(a);
+            return None;
+        }
+        a.error = (a.error * self.skill.error_decay).max(self.skill.error_floor);
+        if a.wobble == 0 {
+            let d = ((self.rand() % 360) as f32).to_radians();
+            a.dir = [d.sin(), d.cos()];
+            a.wobble = 4 + self.rand_below(5);
+        }
+        a.wobble -= 1;
+        self.rider.aim = Some(a);
+        let dist = super::dist_sq(from, at).sqrt().max(1.0);
+        let to: [f32; 3] = std::array::from_fn(|i| (at[i] - from[i]) / dist);
+        let along: f32 = (0..3).map(|i| vel[i] * to[i]).sum();
+        let across = (0..3)
+            .map(|i| (vel[i] - along * to[i]).powi(2))
+            .sum::<f32>()
+            .sqrt();
+        let s = &self.skill;
+        let moving =
+            1.0 + (s.error_moving - 1.0) * (speed.abs() / super::RUN_SPEED).min(1.0).powi(2);
+        let miss = (a.error + across * s.track_lag) * (1.0 + dist / s.error_range) * moving;
+        let deg = (miss / dist).atan().to_degrees();
+        Some([a.dir[0] * deg, a.dir[1] * deg])
+    }
+
     /// In a seat with an enemy in its gun's range: a tank holds still
     /// for the shot on purpose.
     pub(crate) fn seated_fight(&self) -> bool {
@@ -591,6 +681,10 @@ impl Bot {
         let enemy = foot
             .map(|e| (e.origin, e.velocity))
             .or(armor.map(|a| (a.centre, a.velocity)));
+        if self.shoot {
+            let hull = armor.map(|a| HULL_KEY + a.num);
+            self.seat_track(foot.map(|e| e.slot as u32).or(hull));
+        }
         let friend_in_line = match foot {
             Some(_) => view.friend_in_line,
             None => armor.is_some_and(|a| a.friend_in_line),
@@ -640,28 +734,32 @@ impl Bot {
             }
         }
         let headless = seat.seat > 1 && self.rider.unmade > PROGRESS_TICKS;
-        if let Some((at, vel)) = enemy {
-            // A seat's gun leads a moving target by its round's flight; a
-            // passenger's own weapon aims as on foot. A tank's main gun
-            // aims from the chase camera, as onto a base: its shell bends
-            // toward where that view meets the world (bot-objectives.md
-            // 10.11.1).
-            let sight = seat.sight.filter(|_| seat.seat == 1);
+        // A seat's gun leads a moving target by its round's flight; a
+        // passenger's own weapon aims as on foot. A tank's main gun aims
+        // from the chase camera, as onto a base: its shell bends toward
+        // where that view meets the world (bot-objectives.md 10.11.1).
+        let sight = seat.sight.filter(|_| seat.seat == 1);
+        let eye = [
+            view.origin[0],
+            view.origin[1],
+            view.origin[2] + view.eye_height,
+        ];
+        let from = sight.map_or(eye, |g| g.eye);
+        // Through the reaction delay the gun is not laid on the target.
+        let miss =
+            enemy.and_then(|(at, vel)| Some((at, vel, self.seat_miss(seat.speed, from, at, vel)?)));
+        if let Some((at, vel, miss)) = miss {
             let (pitch, yaw) = match sight {
                 Some(g) => {
                     let [p, y] = angles_from(g.eye, lead(g.eye, at, vel, seat.gun_speed));
                     (p, y)
                 }
                 None if seat.gun_yaw.is_some() => {
-                    let eye = [
-                        view.origin[0],
-                        view.origin[1],
-                        view.origin[2] + view.eye_height,
-                    ];
                     aim_angles(view, lead(eye, at, vel, seat.gun_speed))
                 }
                 None => aim_angles(view, at),
             };
+            let (pitch, yaw) = (pitch + miss[0], yaw + miss[1]);
             aim = [pitch, yaw];
             // A four-wheel's driver has no gun (0x1 sounds the horn); a
             // passenger fires his own weapon, a tap at a time.
@@ -940,5 +1038,38 @@ mod tests {
         let _ = bot.think_vehicle(&crate::bots::tests::view(), UserCmd::default());
         assert_eq!(bot.rider.seated, 0);
         assert_eq!(bot.rockets_at_armor(), 3);
+    }
+
+    /// A seat gun's new target waits out the reaction delay, then the miss
+    /// starts at `error_start` and decays to `error_floor`, as on foot; the
+    /// same target out of sight past `forget_ticks` is a new one.
+    #[test]
+    fn a_seat_gun_reacts_and_settles_by_the_skill() {
+        let mut bot = Bot::new("allies", true, 1);
+        bot.skill.reaction_min = 3;
+        bot.skill.reaction_spread = 0;
+        let (from, at) = ([0.0; 3], [1000.0, 0.0, 0.0]);
+        let miss = |b: &mut Bot| {
+            b.seat_miss(0.0, from, at, [0.0; 3])
+                .map(|m| m[0].hypot(m[1]))
+        };
+        bot.seat_track(Some(3));
+        for _ in 0..3 {
+            assert_eq!(miss(&mut bot), None, "laid through the reaction delay");
+        }
+        let deg = |error: f32| (error * 2.0 / 1000.0).atan().to_degrees();
+        let s = bot.skill;
+        let first = miss(&mut bot).unwrap();
+        assert!(
+            (first - deg(s.error_start * s.error_decay)).abs() < 1e-3,
+            "{first}"
+        );
+        let later = (0..40).map(|_| miss(&mut bot).unwrap()).last().unwrap();
+        assert!((later - deg(s.error_floor)).abs() < 1e-3, "{later}");
+        for _ in 0..=s.forget_ticks {
+            bot.seat_track(None);
+        }
+        bot.seat_track(Some(3));
+        assert_eq!(miss(&mut bot), None, "a forgotten target reacts again");
     }
 }

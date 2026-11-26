@@ -569,6 +569,11 @@ const FIT_HEIGHT: f32 = 48.0;
 /// ends turn clear of the walls (bot-objectives.md 10.13).
 const TIGHT_STEPS: f32 = 2.0;
 const NARROW_STEPS: f32 = 1.0;
+/// What entering a node costs, in grid steps, where the hull's side would
+/// meet another vehicle's box where that one stood at the plan
+/// (bot-objectives.md 10.16), and how far up or down that reaches.
+const OTHER_HULL_STEPS: f32 = 2.0;
+const OTHER_HULL_RISE: f32 = 128.0;
 
 /// One driver's route over the navigation graph.
 pub(super) struct DriveRoute {
@@ -811,7 +816,7 @@ impl Server {
         if stale {
             self.game.module.bot_drives.routes.remove(&slot);
             let mut rng = self.game.module.driver.bots.get(&slot).map_or(1, |b| b.rng);
-            let path = self.plan_drive(&g, hull, at, want, &mut rng);
+            let path = self.plan_drive(slot, &g, hull, at, want, &mut rng);
             if let Some(b) = self.game.module.driver.bots.get_mut(&slot) {
                 b.rng = rng;
             }
@@ -932,6 +937,7 @@ impl Server {
     /// dropped what the brush links since moved.
     fn plan_drive(
         &mut self,
+        slot: usize,
         g: &crate::nav::NavGraph,
         hull: HullSize,
         at: glam::Vec3,
@@ -947,7 +953,38 @@ impl Server {
             .as_ref()
             .map_or(&[][..], |rt| &rt.host.model_bounds[..]);
         fits.relink(&world.collision, bounds);
-        plan_route(g, &world.collision, &mut fits.fit, hull, at, want, rng)
+        let others = self.other_hulls(slot, hull);
+        let fits = &mut self.game.module.bot_drives.fits;
+        plan_route(
+            g,
+            &world.collision,
+            &mut fits.fit,
+            hull,
+            at,
+            want,
+            &others,
+            rng,
+        )
+    }
+
+    /// Every live vehicle but the one `slot` sits in, as [`plan_route`]'s
+    /// `others`: its origin, and how near it a node puts `hull`'s side on
+    /// its box (its farthest corner across, plus `hull`'s half width).
+    fn other_hulls(&self, slot: usize, hull: HullSize) -> Vec<(glam::Vec3, f32)> {
+        let Some(rt) = self.game.module.script.as_ref() else {
+            return Vec::new();
+        };
+        let host = &rt.host;
+        let own = host.vehicles.seat_of(slot).map(|s| s.0);
+        (host.vehicles.live.iter())
+            .filter(|(id, _)| Some(**id) != own)
+            .map(|(_, v)| {
+                let info = host.vehicles.info_of(v);
+                let (lo, hi) = (info.mins, info.maxs);
+                let corner = lo[0].abs().max(hi[0]).hypot(lo[1].abs().max(hi[1]));
+                (glam::Vec3::from(v.pose.origin), corner + hull.half)
+            })
+            .collect()
     }
 }
 
@@ -956,8 +993,10 @@ type FitCache = HashMap<([u32; 3], u32), bool>;
 
 /// A* from the node nearest `at` to the node nearest `want` (a random far
 /// node for a roam) over the nodes `hull` fits on, through `fit`, a node
-/// with no room for the full width or the length costing more to enter.
+/// with no room for the full width or the length, or within reach of one
+/// of `others` (an origin and its reach across), costing more to enter.
 /// A goal out of reach routes to the reached node nearest it.
+#[allow(clippy::too_many_arguments)]
 fn plan_route(
     g: &crate::nav::NavGraph,
     collision: &vcod_common::collision::CollisionWorld,
@@ -965,6 +1004,7 @@ fn plan_route(
     hull: HullSize,
     at: glam::Vec3,
     want: Option<[f32; 3]>,
+    others: &[(glam::Vec3, f32)],
     rng: &mut u64,
 ) -> Option<Vec<u32>> {
     let [r, wide, long] = hull.radii();
@@ -975,6 +1015,12 @@ fn plan_route(
     };
     let tight = TIGHT_STEPS * g.spacing;
     let narrow = NARROW_STEPS * g.spacing;
+    let crowded = |n: u32| {
+        let p = g.nodes[n as usize];
+        others.iter().any(|&(o, reach)| {
+            (p - o).truncate().length() < reach && (p.z - o.z).abs() < OTHER_HULL_RISE
+        })
+    };
     let from = g.nearest(at.into())?;
     let to = match want {
         Some(p) => g.goal_node(p).or_else(|| g.nearest(p))?,
@@ -1013,13 +1059,19 @@ fn plan_route(
         // Its room is read as it first comes off too; a cost found goes
         // on and the node waits its turn again.
         if extra[n as usize].is_none() {
-            let e = if !test(n, wide) {
+            let room = if !test(n, wide) {
                 tight
             } else if !test(n, long) {
                 narrow
             } else {
                 0.0
             };
+            let e = room
+                + if crowded(n) {
+                    OTHER_HULL_STEPS * g.spacing
+                } else {
+                    0.0
+                };
             extra[n as usize] = Some(e);
             if e > 0.0 {
                 cost[n as usize].0 += e;
@@ -1373,10 +1425,30 @@ mod tests {
         from: u32,
         to: u32,
     ) -> Vec<u32> {
+        plan_among(g, world, half, from, to, &[])
+    }
+
+    fn plan_among(
+        g: &NavGraph,
+        world: &vcod_common::collision::CollisionWorld,
+        half: f32,
+        from: u32,
+        to: u32,
+        others: &[(Vec3, f32)],
+    ) -> Vec<u32> {
         let goal = g.nodes[to as usize].to_array();
         let at = g.nodes[from as usize];
         let hull = HullSize { half, long: half };
-        let path = plan_route(g, world, &mut FitCache::new(), hull, at, Some(goal), &mut 1);
+        let path = plan_route(
+            g,
+            world,
+            &mut FitCache::new(),
+            hull,
+            at,
+            Some(goal),
+            others,
+            &mut 1,
+        );
         let path = path.expect("no route");
         // A chain of the graph's own edges from the start.
         assert_eq!(path[0], from);
@@ -1495,6 +1567,23 @@ mod tests {
         assert!(p.contains(&12) && !p.contains(&2), "{p:?}");
         let p = plan(&g, &test_world(&[pillar, post_by(128.0)]), 40.0, 5, 9);
         assert!(p.contains(&2) && !p.contains(&12), "{p:?}");
+    }
+
+    /// A route goes round the nodes another vehicle's box reaches, and
+    /// through them when that is the only way (bot-objectives.md 10.16).
+    #[test]
+    fn a_route_keeps_off_another_vehicle() {
+        // A grid pitch apart, as the graph's spacing: the tank's reach
+        // covers node 12 and its four neighbours.
+        let g = grid(5, 5, 32.0);
+        let world = test_world(&[]);
+        let tank = [(Vec3::new(64.0, 64.0, 0.0), 40.0)];
+        assert_eq!(plan(&g, &world, 10.0, 10, 14), [10, 11, 12, 13, 14]);
+        let p = plan_among(&g, &world, 10.0, 10, 14, &tank);
+        assert!(!p.contains(&12), "{p:?}");
+        let g = grid(5, 1, 32.0);
+        let tank = [(Vec3::new(64.0, 0.0, 0.0), 40.0)];
+        assert_eq!(plan_among(&g, &world, 10.0, 0, 4, &tank), [0, 1, 2, 3, 4]);
     }
 
     /// A link change drops only the fits a toggled submodel's bounds (2

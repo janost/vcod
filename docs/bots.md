@@ -122,6 +122,9 @@ long it remembers a lost enemy, how far it hears and how wide it sees:
   and a heard shot longer.
 - Easy also lets the trigger up for a moment after every burst or shot,
   so it fires a fifth fewer rounds (bot-combat.md section 3.2).
+- A UO vehicle's guns react and miss by the same numbers, the vehicle's
+  speed counting for the bot's run, so a higher level kills more from a
+  machine gun seat (bot-objectives.md section 10.15).
 - Otherwise the levels change only these numbers. Routes, objective
   play and choices are the same at every level: an expert is faster and
   sharper, not smarter.
@@ -291,10 +294,11 @@ Behaviour differs by game, never by map.
 Cannot:
 
 - Drive anywhere but along the infantry graph. A hull's route keeps to
-  the graph's open ground, but it plans round no other vehicle, so a tank
-  can still wedge itself. Its crew gets out before the engine's stuck
-  kill, but a tank sliding into a wall with nobody aboard still destroys
-  itself (sections 10.3, 10.4 and 10.13).
+  the graph's open ground and off the other vehicles where they stood
+  when it planned, but it does not give way to one on the move, so a
+  tank can still wedge itself. Its crew gets out before the engine's
+  stuck kill, but a tank sliding into a wall with nobody aboard still
+  destroys itself (sections 10.3, 10.4, 10.13 and 10.16).
 - Change seats other than to an empty driver's seat, or use the hatch.
 - Fetch a rocket launcher outside `bas`.
 - Throw a satchel or call artillery at a `bas` base.

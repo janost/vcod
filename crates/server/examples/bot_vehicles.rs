@@ -7,9 +7,11 @@
 //! docs/research/bot-objectives.md section 10.
 //! Run: COD_DIR=<UO install> cargo run --release -p vcod-server --example bot_vehicles [seed...]
 //! `MAP=` picks the map (mp_cassino), `GAMETYPE=` the gametype (tdm),
-//! `BOTS=` how many (6), `TICKS=` the length (3600, 3 min), `ON_ONLY=1`
-//! skips the games with vehicles off, `VEH_LOG=1` prints the crush and
-//! rocket lines and each stalled driver.
+//! `BOTS=` how many (6), `TICKS=` the length (3600, 3 min), `SKILL=` every
+//! bot's `vc_bot_skill` (1), `ON_ONLY=1` skips the games with vehicles off,
+//! `VEH_LOG=1` prints the crush and rocket lines and each stalled driver.
+//! The vehicle kills split into crushes, tank shells and vehicle MGs, and
+//! `foot_kills` counts those whose victim was on foot.
 
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -38,6 +40,36 @@ struct Tally {
     /// Bot-ticks a tank's driver held its fire on an enemy hull for want
     /// of a shell's line on it.
     shell_held: u32,
+    /// `K;` lines of a crush, a tank's main gun and a vehicle's MG, and of
+    /// those three the victims on foot.
+    crush_kills: usize,
+    shell_kills: usize,
+    mg_kills: usize,
+    foot_kills: usize,
+}
+
+/// A vehicle's kill by its `K;` weapon and means: a crush, a tank's main
+/// gun (`<tank>_turret_mp`, not a mounted MG's) or a vehicle's MG
+/// (`<mg>_tank_mp`).
+#[derive(Clone, Copy, PartialEq)]
+enum VehicleKill {
+    Crush,
+    Shell,
+    Mg,
+}
+
+fn vehicle_kill(weapon: &str, means: &str) -> Option<VehicleKill> {
+    const SHELLS: [&str; 5] = ["elefant", "panzeriv", "sherman", "su152", "t34"];
+    let w = weapon.to_ascii_lowercase();
+    if means.contains("CRUSH") {
+        Some(VehicleKill::Crush)
+    } else if w.ends_with("_turret_mp") && SHELLS.iter().any(|s| w.starts_with(s)) {
+        Some(VehicleKill::Shell)
+    } else if w.ends_with("_tank_mp") {
+        Some(VehicleKill::Mg)
+    } else {
+        None
+    }
 }
 
 fn game(
@@ -65,19 +97,56 @@ fn game(
     sv.set_protocol(&vcod_common::net::protocol::PROTOCOL_V22);
     sv.test_seed_rng(seed);
     sv.set_cvar("vc_bot_vehicles", if on { "1" } else { "0" });
+    if let Ok(level) = std::env::var("SKILL") {
+        sv.set_cvar("vc_bot_skill", &level);
+    }
     sv.load_world(vcod_server::world::World::from_bsp(bsp, Some(&**fs)));
     sv.load_scripts(fs.clone()).expect("load the scripts");
     let mut t = Tally::default();
     let mut last: std::collections::HashMap<u32, [f32; 3]> = Default::default();
     let mut spells: std::collections::HashMap<usize, Vec<[f32; 3]>> = Default::default();
+    // The slots seated as the last tick ended, and the log lines read.
+    let mut seated = std::collections::HashSet::new();
+    let mut read = 0;
     for tick in 0..ticks {
         now += Duration::from_millis(50);
         sv.tick(now);
+        let log = sv.script_log();
+        for l in &log[read.min(log.len())..] {
+            let Some((_, k)) = l
+                .trim_end()
+                .split_once("K;")
+                .filter(|(pre, _)| !pre.ends_with(|c: char| c.is_ascii_alphanumeric()))
+            else {
+                continue;
+            };
+            let k: Vec<&str> = k.split(';').collect();
+            let (Some(w), Some(m)) = (k.get(8), k.get(10)) else {
+                continue;
+            };
+            let Some(kind) = vehicle_kill(w, m) else {
+                continue;
+            };
+            match kind {
+                VehicleKill::Crush => t.crush_kills += 1,
+                VehicleKill::Shell => t.shell_kills += 1,
+                VehicleKill::Mg => t.mg_kills += 1,
+            }
+            if k.get(1)
+                .and_then(|s| s.parse::<usize>().ok())
+                .is_some_and(|v| !seated.contains(&v))
+            {
+                t.foot_kills += 1;
+            }
+        }
+        read = log.len();
+        seated.clear();
         let mut driven = Vec::new();
         for slot in sv.bot_slots() {
             let body = sv.bot_body(slot);
             if let Some((v, seat)) = body.as_ref().and_then(|b| b.seat) {
                 t.seated += 1;
+                seated.insert(slot);
                 if seat == 1 {
                     driven.push(v);
                 }
@@ -190,7 +259,8 @@ fn main() {
     }
     println!(
         "seed vehicles kills gun_kills gun_hits crush_team crush_team_dmg crush_enemy rockets wrecks \
-         boardings seated_ticks driven stuck_kills stuck_drivers shell_held"
+         boardings seated_ticks driven stuck_kills stuck_drivers shell_held crush_kills shell_kills \
+         mg_kills foot_kills"
     );
     for seed in seeds {
         let modes: &[bool] = if std::env::var("ON_ONLY").is_ok() {
@@ -201,7 +271,7 @@ fn main() {
         for &on in modes {
             let t = game(&fs, &bsp, seed, on);
             println!(
-                "{seed} {} {} {} {} {} {} {} {} {} {} {} {:.0} {} {} {}",
+                "{seed} {} {} {} {} {} {} {} {} {} {} {} {:.0} {} {} {} {} {} {} {}",
                 u8::from(on),
                 t.kills,
                 t.gun_kills,
@@ -216,7 +286,11 @@ fn main() {
                 t.driven,
                 t.stuck_kills,
                 t.stuck_drivers,
-                t.shell_held
+                t.shell_held,
+                t.crush_kills,
+                t.shell_kills,
+                t.mg_kills,
+                t.foot_kills
             );
         }
     }

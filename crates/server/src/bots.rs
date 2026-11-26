@@ -1991,9 +1991,48 @@ mod tests {
         assert_eq!(bot.think(&v).weapon, 20);
     }
 
+    /// A shooting bot whose seat gun reacts at once and never misses.
+    fn steady() -> Bot {
+        let mut bot = Bot::new("allies", true, 1);
+        bot.skill.reaction_min = 0;
+        bot.skill.reaction_spread = 0;
+        bot.skill.error_start = 0.0;
+        bot.skill.error_floor = 0.0;
+        bot
+    }
+
+    /// A tank's gun waits out the reaction delay before it lays on a new
+    /// enemy hull and fires (bot-objectives.md 10.15).
+    #[test]
+    fn a_tank_gun_holds_through_the_reaction_delay() {
+        let mut bot = steady();
+        bot.skill.reaction_min = 4;
+        let mut v = driving(Crowd::default());
+        let at = [1500.0, 0.0, 100.0];
+        v.armor = Some(ArmorView {
+            num: 90,
+            centre: at,
+            velocity: [0.0; 3],
+            crew: 1 << 5,
+            shot_speed: 10000.0,
+            friend_in_line: false,
+            muzzle_clear: true,
+            shell_on: true,
+        });
+        for tick in 0..4 {
+            let cmd = bot.think(&v);
+            assert_eq!(cmd.buttons & BUTTON_ATTACK, 0, "fired at {tick}");
+            assert_eq!(cmd.angles, cmd_angles(&v, [0.0, 0.0]), "laid at {tick}");
+        }
+        let (pitch, yaw) = aim_angles(&v, at);
+        let cmd = bot.think(&v);
+        assert_eq!(cmd.angles, cmd_angles(&v, [pitch, yaw]));
+        assert_ne!(cmd.buttons & BUTTON_ATTACK, 0);
+    }
+
     #[test]
     fn a_tank_driver_lays_its_gun_on_an_enemy_vehicle() {
-        let mut bot = Bot::new("allies", true, 1);
+        let mut bot = steady();
         let mut v = driving(Crowd::default());
         let at = [1500.0, 0.0, 100.0];
         v.armor = Some(ArmorView {
@@ -2016,7 +2055,7 @@ mod tests {
     /// world (bot-objectives.md 10.11.1).
     #[test]
     fn a_tank_gun_aims_at_a_hull_from_the_chase_camera() {
-        let mut bot = Bot::new("allies", true, 1);
+        let mut bot = steady();
         let mut v = shelling(true);
         let at = [1500.0, 300.0, 100.0];
         v.armor = Some(ArmorView {
@@ -2041,7 +2080,7 @@ mod tests {
     /// the hull, firing once the line meets it.
     #[test]
     fn a_tank_gun_with_no_line_on_an_enemy_hull_holds_its_fire() {
-        let mut bot = Bot::new("allies", true, 1);
+        let mut bot = steady();
         let mut v = driving(Crowd::default());
         v.armor = Some(ArmorView {
             num: 90,
