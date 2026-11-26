@@ -499,9 +499,38 @@ the other's a match, mean and standard error):
   level edges between the searched nodes (24 units apart on the 48-unit
   grid, where only nodes were tested) each lengthen the cover holds a
   tenth and sit inside the spread. Neither kept. VERIFIED (the table).
-- Measured on 1.1 only. The rule is the shared brain's, so 1.5, UO,
+- Measured on 1.1 only here. The rule is the shared brain's, so 1.5, UO,
   CoD2 and CoD4 bots take no lean spot either; their lean is half 1.1's
-  (`pmove::lean_scale`) and was not measured against. Open.
+  (`pmove::lean_scale`). Measured on UO, CoD2 and CoD4 in 4.7.1.
+
+#### 4.7.1 The same measure on UO, CoD2 and CoD4 (2026-11-26)
+
+One side played the old rule (a body hidden standing, shown by a standing
+lean, is a spot; a stand spot still first) against the shipped one on
+the other, sides swapped by seed (odd seeds: old rule on axis), a
+measuring build's per-bot arm taken out again after the runs.
+VERIFIED (measured, ours, release, `tdm` (CoD4's `war`), 8 bots, 6000
+ticks, seeds 1-32 on four maps, 128 matches a row; margin is the no-lean
+side's kills less the old rule's a match, mean and standard error):
+
+| Game, maps | No-lean side's kills : old rule's | Margin |
+|---|---|---|
+| UO: mp_arnhem, mp_berlin, mp_cassino, mp_italy | 3130 : 2935 | +1.52 +- 0.94 |
+| CoD2: mp_carentan, mp_toujane, mp_burgundy, mp_dawnville | 6571 : 6192 | +2.96 +- 1.06 |
+| CoD4: mp_crash, mp_backlot, mp_crossfire, mp_strike | 5293 : 4465 | +6.47 +- 0.99 |
+| CoD2 null control (old rule on both sides) | 5836 : 5810 (axis on odd seeds : the other) | +0.20 +- 1.25 |
+
+- No game loses by dropping the lean spots, so none gets a switch. UO's margin is 1.6 standard errors, inside the spread
+  but on the same side as 1.1's (4.7); CoD2's is 2.8 and CoD4's 6.5.
+  VERIFIED (the table).
+- The arm works: CoD2's cover and lean bot-ticks over the 128 matches
+  were 2 388 792 and 285 102 with one side lean-free, against 3 418 024
+  and 676 716 with the old rule on both. VERIFIED (measured).
+- The null control's margin is zero within its error, so the seed swap
+  adds no side bias. VERIFIED (the table).
+- CoD2's mp_dawnville is level (the old rule +0.25 a match; the other
+  three maps give the no-lean side 3.7 to 4.3); per map the standard error is
+  about 2. INFERRED: noise.
 
 ## 5. Retreat
 
