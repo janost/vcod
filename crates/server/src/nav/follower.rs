@@ -1620,6 +1620,15 @@ impl Follower {
             return Some(at);
         };
         let foot = g.nodes[self.path[i] as usize];
+        let top = g.nodes[self.path[self.next] as usize];
+        // Landed on the top's own floor nearer it than the foot: the jump
+        // is made. Sent back to a foot level with its top, across mp_rocket's
+        // pit at (9196, 5930, 338) a bot walked off the ledge it had just
+        // jumped onto (bot-navigation.md 3.16).
+        let flat = |p: Vec3| (p.truncate() - glam::Vec2::new(at[0], at[1])).length();
+        if (at[2] - top.z).abs() < vcod_common::pmove::STEPSIZE && flat(top) < flat(foot) {
+            return None;
+        }
         let rise = at[2] - foot.z;
         if rise.abs() >= vcod_common::pmove::STEPSIZE {
             return None;
@@ -1629,7 +1638,6 @@ impl Follower {
         // there too, and one sent back down off mp_cassino's ledge at
         // (3667, -1240, 128) jumped again from the foot 53 under the top,
         // into the penalty, and back for good (bot-navigation.md "Jumps").
-        let top = g.nodes[self.path[self.next] as usize];
         let ledge = rise > ARRIVE && top.z - at[2] > vcod_common::pmove::STEPSIZE;
         Some(if ledge { at } else { foot.into() })
     }
@@ -3465,6 +3473,31 @@ mod tests {
             f.jump_wait(&low, [-20.0, 0.0, 16.0], &ps),
             Some(foot.into())
         );
+    }
+
+    /// A jump edge across a pit between two ledges level with each other:
+    /// a body down on the top's ledge after the jump, its jump cooling
+    /// down, walks on to the top; one on the foot's ledge still waits there
+    /// (mp_rocket seed 78, bot-navigation.md 3.16).
+    #[test]
+    fn a_jump_over_a_pit_is_not_waited_on_from_its_top_ledge() {
+        let (foot, top) = (
+            Vec3::new(9175.0, 5952.0, 371.0),
+            Vec3::new(9217.0, 5904.0, 371.0),
+        );
+        let mut g = NavGraph::from_parts(vec![foot, top], vec![vec![1], vec![]]);
+        g.edge_mut(0, 1).unwrap().jump = true;
+        let f = Follower {
+            path: vec![0, 1],
+            next: 1,
+            ..Follower::default()
+        };
+        let mut ps = PlayerState::spawn(Vec3::new(9216.0, 5929.0, 371.0), 0.0);
+        ps.since_jump_ms = 200.0;
+        ps.on_ground = true;
+        assert_eq!(f.jump_wait(&g, ps.origin.into(), &ps), None);
+        let near_foot = [9180.0, 5947.0, 371.0];
+        assert_eq!(f.jump_wait(&g, near_foot, &ps), Some(foot.into()));
     }
 
     /// The sprint's room runs along a straight, level line of plain edges
