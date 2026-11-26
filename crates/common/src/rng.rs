@@ -3,7 +3,8 @@
 //! draws its game logic from as retail's does (CoD1's through the server's
 //! `engine::core::LibcRand`, map-cycle doc 4.8.1). [`xorshift`] is vcod's
 //! own step, for the bots and the streams retail has no counterpart of.
-//! [`HoldRand`] is the script's second stream.
+//! [`HoldRand`] is the script's second stream. [`MsvcRand`] is the same
+//! LCG as the Windows binaries' CRT `rand()`.
 
 /// One xorshift64* step: advances `state` and returns the scrambled output.
 /// A zero state is the degenerate one xorshift never leaves, so a caller
@@ -61,6 +62,35 @@ impl GlibcRand {
     }
 }
 
+/// The MSVC C runtime's `rand()`: `state * 214013 + 2531011`, 15 bits out
+/// (`state >> 16 & 0x7fff`). `Default` is the CRT's own start, `srand(1)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MsvcRand(u32);
+
+impl Default for MsvcRand {
+    fn default() -> Self {
+        MsvcRand(1)
+    }
+}
+
+impl MsvcRand {
+    /// `srand(seed)`.
+    pub const fn seed(seed: u32) -> Self {
+        MsvcRand(seed)
+    }
+
+    /// `rand()`: `[0, 0x7fff]`.
+    pub const fn next(&mut self) -> u32 {
+        self.0 = self.0.wrapping_mul(214_013).wrapping_add(2_531_011);
+        (self.0 >> 16) & 0x7fff
+    }
+
+    /// `rand() / 32768`: `[0, 1)`.
+    pub fn unit(&mut self) -> f32 {
+        self.next() as f32 / 32768.0
+    }
+}
+
 /// q_shared's `holdrand` stream (`Rand_Init`, `flrand`, `irand`): the
 /// MSVC-style LCG CoD2 1.3's game draws its rocket wobble, grenade tumble
 /// and script `randomInt`/`randomFloat` from, beside glibc's `rand()`.
@@ -94,6 +124,16 @@ impl HoldRand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn msvc_rand_matches_the_crt_sequence() {
+        let mut r = MsvcRand::seed(1);
+        assert_eq!([(); 5].map(|_| r.next()), [41, 18467, 6334, 26500, 19169]);
+        assert_eq!(MsvcRand::default(), MsvcRand::seed(1));
+        let mut r = MsvcRand::seed(0x1234);
+        assert_eq!([(); 5].map(|_| r.next()), [15256, 25789, 4789, 5383, 4116]);
+        assert_eq!(MsvcRand::seed(1).unit(), 41.0 / 32768.0);
+    }
 
     /// `Rand_Init(seed)` then `flrand(-1, 1)` three times: the draws one
     /// retail rocket's first wobble took (cod2-combat.md 9.7).
