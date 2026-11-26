@@ -283,6 +283,8 @@ pub(crate) struct Rider {
     /// Where the hull stood, and its yaw, as the stall window opened.
     stall_from: [f32; 3],
     stall_yaw: f32,
+    /// The window opened turning in place (no throttle).
+    stall_pivot: bool,
     /// Ticks a driver has been held by a teammate in its way.
     blocked: u32,
     reverse: u32,
@@ -812,9 +814,16 @@ impl Bot {
         // the hold's count runs down rather than starting over.
         r.blocked = r.blocked.saturating_sub(1);
         let keyed = cmd.forward != 0 || cmd.right != 0;
-        if !keyed || r.stall == 0 {
+        // A window is judged by the keys it opened under: a tank that
+        // pivoted most of it and drove the last tick read as stalled on
+        // ground, and one that drove and then pivoted on its turn
+        // (bot-objectives.md 10.13).
+        let pivot = cmd.forward == 0;
+        if !keyed || r.stall == 0 || pivot != r.stall_pivot {
             r.stall_from = seat.origin;
             r.stall_yaw = seat.yaw;
+            r.stall_pivot = pivot;
+            r.stall = 0;
         }
         r.stall = if keyed { r.stall + 1 } else { 0 };
         let stalled = r.stall >= STALL_TICKS && {

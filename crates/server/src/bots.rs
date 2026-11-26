@@ -1861,6 +1861,28 @@ mod tests {
         assert_eq!(backs, None);
     }
 
+    /// A stall window is judged by the keys it opened under: a tank that
+    /// turns in place and then drives off is no stall when the window
+    /// closes on its first units of ground (bot-objectives.md 10.13).
+    #[test]
+    fn a_tank_that_pivots_and_then_drives_off_is_no_stall() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = driving(Crowd::default());
+        v.waypoint = Some([0.0, 1000.0, 64.0]);
+        v.seat.as_mut().unwrap().speed = 0.0;
+        for i in 0..60 {
+            let cmd = bot.think(&v);
+            assert!(cmd.forward >= 0, "backed off on tick {i}");
+            let seat = v.seat.as_mut().unwrap();
+            seat.yaw -= 3.0 * f32::from(cmd.right.signum());
+            if cmd.forward > 0 {
+                let (s, c) = seat.yaw.to_radians().sin_cos();
+                seat.origin[0] += 2.0 * c;
+                seat.origin[1] += 2.0 * s;
+            }
+        }
+    }
+
     fn armored(at: [f32; 3]) -> BotView {
         let mut v = view();
         v.rocket = Some(20);
