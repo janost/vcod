@@ -1,37 +1,32 @@
 //! iw3mp.exe 1.7's ragdolls on the ODE port: the 32 slots and their states
 //! (`Ragdoll_Update` 0x5beca0, the handlers at 0x71e658), the build
 //! (bodies 0x5bc860, joints 0x5bcb30, the placement 0x5bc670, velocities
-//! 0x5be060, the tunnel test 0x5be3a0) and world 2's steps
-//! (`Phys_RunToTime` 0x5a6d50, `Phys_RunFrame` 0x5a6440, `Phys_PostStep`
-//! 0x5a6640, the after-frame checks 0x5a6c10); cod4-player-anims.md 10.7.
+//! 0x5be060, the tunnel test 0x5be3a0) and the self collision hook world
+//! 2 steps with (`ode::phys`); cod4-player-anims.md 10.7.
 
 use glam::{Mat3, Quat, Vec3};
 use vcod_common::skeleton::Skeleton;
 
 use super::iw::{self, IwQuat};
-use super::{CLIP_MASK, Dvars, Explosion, JointKind, Limit, RagdollDef, Reach, Sweep};
+use super::{Dvars, Explosion, JointKind, Limit, RagdollDef, Reach};
 use crate::ode::body::DISABLED;
 use crate::ode::collide::selfcol::{self, bone_segment};
-use crate::ode::collide::{self, Capsule, Obj, Pieces, RAGDOLL_WORLD};
+use crate::ode::collide::{self, Obj};
 use crate::ode::joint::amotor::{AMotor, Rel};
 use crate::ode::joint::ball::Ball;
 use crate::ode::joint::hinge::Hinge;
 use crate::ode::joint::limot::{LimitMotor, Param};
 use crate::ode::math::{M3, V3, mul0_331};
+use crate::ode::phys::{self, Geom, PhysObj, PhysWorld, WorldId, axes_of};
 use crate::ode::world::PhysDvars;
-use crate::ode::{BodyId, Joint, JointId, Kind, Mass, Params, World};
+use crate::ode::{BodyId, Joint, JointId, Kind, Mass, World};
+
+pub use crate::ode::phys::Clip;
 
 /// `ragdollPool[32]` (0x9d4 bytes each from 0xcc78a00).
 pub const SLOTS: usize = 32;
 /// The wait for the DObj gives up past this many frames (0x5beb90).
 const DOBJ_FRAMES: i32 = 3;
-/// `g_phys_msecStep`'s floor and ceiling for world 2 (0x71e7a4, 0x71e7b0).
-const MSEC_STEP_MIN: i32 = 17;
-const MSEC_STEP_MAX: i32 = 34;
-/// `0.001f` widened (0x70af98): a step's seconds per ms.
-const MS_TO_S: f64 = 0.001_000_000_047_497_451_3;
-/// World 2's angular damping a step (the double at 0x70b488).
-const AVEL_DAMP: f64 = -0.009_999_999_776_482_582;
 /// The joints' motor force at the build, times the limit's friction (the
 /// double at 0x70b588).
 const BUILD_FMAX: f64 = 15.0;
@@ -100,12 +95,8 @@ struct SlotBone {
     body: Option<BodyId>,
     /// `|p1 - p0|` in the base pose (+0xc).
     len: f32,
-    obj: Obj,
     /// The phys object's offset (its +0): `(-len / 2, 0, 0)`.
     offset: V3,
-    /// The body's position and axes when the frame's steps began (the
-    /// phys object's +0x10, +0x1c).
-    prev: (V3, M3),
 }
 
 /// One base lerp bone: its ragdoll bone, msec, and its pose under that
@@ -168,43 +159,6 @@ pub struct SlotId {
     generation: u64,
 }
 
-/// World 2's clock (`0xcc5461c`): the time at the last frame's first step,
-/// the time stepped to, the lerp between them; and `g_phys_msecStep[2]`.
-#[derive(Clone, Copy, Debug)]
-struct Clock {
-    last: i32,
-    now: i32,
-    frac: f32,
-    msec_step: i32,
-}
-
-/// The ragdoll world a map's ragdolls share: what it steps against.
-pub trait Clip: Pieces {
-    /// A box sweep under the ragdoll mask, half size `e` each way.
-    fn sweep(&self, a: Vec3, b: Vec3, e: f32) -> Sweep;
-    /// The world model's bounds (cmodel 0).
-    fn bounds(&self) -> (Vec3, Vec3);
-}
-
-impl Clip for crate::collision::ClipMap {
-    fn sweep(&self, a: Vec3, b: Vec3, e: f32) -> Sweep {
-        let t = self.trace(a, b, Vec3::splat(-e), Vec3::splat(e), CLIP_MASK);
-        Sweep {
-            fraction: t.fraction,
-            normal: t.normal,
-            startsolid: t.startsolid,
-        }
-    }
-
-    fn bounds(&self) -> (Vec3, Vec3) {
-        self.submodels
-            .first()
-            .map_or((Vec3::splat(-f32::MAX), Vec3::splat(f32::MAX)), |m| {
-                (m.mins, m.maxs)
-            })
-    }
-}
-
 /// The ragdoll pool and world 2.
 #[derive(Clone, Debug)]
 pub struct Ragdolls {
@@ -212,14 +166,11 @@ pub struct Ragdolls {
     pub dvars: Dvars,
     pub phys: PhysDvars,
     pub contact: collide::Dvars,
-    world: World,
+    pw: PhysWorld,
     slots: Vec<Slot>,
     generations: Vec<u64>,
     /// The ragdoll clock (0xd5ec534).
     time: i32,
-    clock: Clock,
-    /// World 2's geoms in the space's order, newest first (0x5a9f00).
-    geoms: Vec<(usize, usize)>,
 }
 
 #[inline]
@@ -235,32 +186,19 @@ fn iwq(q: Quat) -> IwQuat {
     q.to_array()
 }
 
-fn axes_of(r: &M3) -> M3 {
-    std::array::from_fn(|i| std::array::from_fn(|j| r[j][i]))
-}
-
 impl Ragdolls {
     /// An empty pool over `def`, world 2 as `Phys_Init` leaves it: the
     /// reorder's seed at 0x89abcdef.
     pub fn new(def: std::sync::Arc<RagdollDef>, dvars: Dvars) -> Ragdolls {
-        let mut world = World::new();
-        world.params = Params::ragdoll();
         Ragdolls {
             def,
             dvars,
             phys: PhysDvars::default(),
             contact: collide::Dvars::default(),
-            world,
+            pw: PhysWorld::new(WorldId::Ragdoll),
             slots: (0..SLOTS).map(|_| Slot::new()).collect(),
             generations: vec![0; SLOTS],
             time: 0,
-            clock: Clock {
-                last: 0,
-                now: 0,
-                frac: 1.0,
-                msec_step: MSEC_STEP_MIN,
-            },
-            geoms: Vec::new(),
         }
     }
 
@@ -411,9 +349,7 @@ impl Ragdolls {
                         parent: b.parent,
                         body: None,
                         len: 0.0,
-                        obj: Obj::default(),
                         offset: [0.0; 3],
-                        prev: ([0.0; 3], [[0.0; 3]; 3]),
                     })
                     .collect();
                 s.joints = vec![[None, None]; def.joints.len()];
@@ -479,16 +415,15 @@ impl Ragdolls {
     fn destroy(&mut self, i: usize) {
         for j in std::mem::take(&mut self.slots[i].joints) {
             for id in j.into_iter().flatten() {
-                self.world.destroy_joint(id);
+                self.pw.world.destroy_joint(id);
             }
         }
         self.slots[i].joints = vec![[None, None]; self.def.joints.len()];
         for b in 0..self.slots[i].bones.len() {
             if let Some(id) = self.slots[i].bones[b].body.take() {
-                self.world.destroy_body(id);
+                self.pw.destroy_body(id);
             }
         }
-        self.geoms.retain(|&(s, _)| s != i);
     }
 
     /// `Ragdoll_Update` (0x5beca0): the clock on by `msec`, every slot's
@@ -519,7 +454,12 @@ impl Ragdolls {
                 f.fresh = false;
             }
         }
-        self.run_to_time(self.time, clip);
+        let (slots, def, contact) = (&self.slots, &*self.def, &self.contact);
+        self.pw
+            .run_to_time(self.time, &self.phys, contact, clip, &mut |pw| {
+                self_collide(slots, def, contact, pw)
+            })
+            .expect("world 2 holds capsules only");
     }
 
     fn handle(&mut self, i: usize, clip: &dyn Clip) {
@@ -566,7 +506,7 @@ impl Ragdolls {
         s.msec > self.dvars.max_life_ms
             || s.bones.iter().all(|b| {
                 b.body
-                    .is_none_or(|id| self.world.body(id).flags & DISABLED != 0)
+                    .is_none_or(|id| self.pw.world.body(id).flags & DISABLED != 0)
             })
     }
 
@@ -619,8 +559,8 @@ impl Ragdolls {
             }
             // a p1 at DObj bone 0 reads as none (0x5bc947)
             let p1 = f.p1[b].filter(|&k| k != 0).map_or(p0, |k| at(f.base[k].0));
-            let id = self.world.create_body();
-            let body = self.world.body_mut(id);
+            let id = self.pw.create_body();
+            let body = self.pw.world.body_mut(id);
             body.flags &= !3;
             body.set_finite_rotation(true);
             body.pos = p0;
@@ -649,13 +589,21 @@ impl Ragdolls {
             sb.body = Some(id);
             sb.len = len;
             sb.offset = [-h, 0.0, 0.0];
-            sb.obj = Obj {
-                friction: d.friction,
-                bounce: 0.0,
-                state: 0,
-            };
-            sb.prev = (pos, axes);
-            self.geoms.insert(0, (i, b));
+            self.pw.add_obj(
+                id,
+                PhysObj {
+                    obj: Obj {
+                        friction: d.friction,
+                        bounce: 0.0,
+                        state: 0,
+                    },
+                    prev: (pos, axes),
+                    geom: Geom::Capsule {
+                        radius: d.radius,
+                        half_len: h,
+                    },
+                },
+            );
         }
         true
     }
@@ -665,14 +613,14 @@ impl Ragdolls {
     /// angular motor (0x5a7510), anchored at the child bone's root.
     fn build_joints(&mut self, i: usize) {
         let def = self.def.clone();
-        let params = self.world.params;
+        let params = self.pw.world.params;
         self.slots[i].limits = def.joints.iter().map(|j| j.limits.clone()).collect();
         for (j, jd) in def.joints.iter().enumerate() {
             let sb = &self.slots[i].bones[jd.bone];
             let Some(b1) = sb.body else { continue };
             let b2 = sb.parent.and_then(|p| self.slots[i].bones[p].body);
             let offset = sb.offset;
-            let body1 = self.world.body(b1);
+            let body1 = self.pw.world.body(b1);
             let r1 = body1.r;
             let anchor = iw::offset(body1.pos, &axes_of(&r1), offset);
             let lims = &mut self.slots[i].limits[j];
@@ -693,10 +641,11 @@ impl Ragdolls {
                 JointKind::None => {}
                 JointKind::Hinge => {
                     let id = self
+                        .pw
                         .world
                         .create_joint(Joint::new(Kind::Hinge(Hinge::new(&params))));
-                    self.world.attach(id, Some(b1), b2);
-                    self.world.with_joint(id, |jt, b| {
+                    self.pw.world.attach(id, Some(b1), b2);
+                    self.pw.world.with_joint(id, |jt, b| {
                         if let Kind::Hinge(h) = &mut jt.kind {
                             h.set_anchor(b, anchor);
                             h.set_axis(b, axis(0));
@@ -707,19 +656,21 @@ impl Ragdolls {
                 }
                 JointKind::Swivel => {
                     let ball = self
+                        .pw
                         .world
                         .create_joint(Joint::new(Kind::Ball(Ball::default())));
-                    self.world.attach(ball, Some(b1), b2);
-                    self.world.with_joint(ball, |jt, b| {
+                    self.pw.world.attach(ball, Some(b1), b2);
+                    self.pw.world.with_joint(ball, |jt, b| {
                         if let Kind::Ball(x) = &mut jt.kind {
                             x.set_anchor(b, anchor);
                         }
                     });
                     let am = self
+                        .pw
                         .world
                         .create_joint(Joint::new(Kind::AMotor(AMotor::euler(&params))));
-                    self.world.attach(am, Some(b1), b2);
-                    self.world.with_joint(am, |jt, b| {
+                    self.pw.world.attach(am, Some(b1), b2);
+                    self.pw.world.with_joint(am, |jt, b| {
                         if let Kind::AMotor(a) = &mut jt.kind {
                             let rel2 = if b2.is_some() {
                                 Rel::Body2
@@ -761,10 +712,12 @@ impl Ragdolls {
                     ((w(o[0]) * w(a[0][k]) + w(a[1][k]) * w(o[1])) + w(a[2][k]) * w(o[2])) as f32;
                 (w(r.pos[k]) - w(t)) as f32
             });
-            let body = self.world.body_mut(id);
+            let body = self.pw.world.body_mut(id);
             body.pos = pos;
             body.set_rotation(&iw::axes_to_r(&a));
-            self.slots[i].bones[b].prev = (pos, a);
+            if let Some(o) = self.pw.obj_mut(id) {
+                o.prev = (pos, a);
+            }
         }
     }
 
@@ -794,7 +747,7 @@ impl Ragdolls {
             // 0x5bb8e0: `(c (x) c*) (x) rv`, the identity but for rounding
             let t = iw::qmul(iw::conj(cq), cq);
             let av = iw::qmul([rv[0], rv[1], rv[2], 0.0], t);
-            let body = self.world.body_mut(id);
+            let body = self.pw.world.body_mut(id);
             body.avel = std::array::from_fn(|k| (w(av[k]) * w(sc)) as f32);
             body.lvel = std::array::from_fn(|k| (w(d[k]) * w(inv)) as f32);
         }
@@ -807,11 +760,12 @@ impl Ragdolls {
         let def = &self.def;
         let s = &self.slots[i];
         let bone_trace = |a: Vec3, b: Vec3| {
-            let f = clip.sweep(a, b, 0.0);
+            let z = Vec3::ZERO;
+            let f = clip.sweep(a, b, z, z);
             if f.startsolid {
-                !clip.sweep(b, a, 0.0).startsolid
+                !clip.sweep(b, a, z, z).startsolid
             } else {
-                f.fraction == 1.0 || clip.sweep(b, a, 0.0).fraction == 1.0
+                f.fraction == 1.0 || clip.sweep(b, a, z, z).fraction == 1.0
             }
         };
         for (b, sb) in s.bones.iter().enumerate() {
@@ -928,17 +882,18 @@ impl Ragdolls {
     /// the base lerp bones.
     fn save_pose(&mut self, i: usize) {
         let def = self.def.clone();
-        let frac = self.clock.frac;
+        let frac = self.pw.clock.frac;
         let mut rec = Vec::with_capacity(def.bones.len() + def.base_lerp.len());
         for (b, sb) in self.slots[i].bones.iter().enumerate() {
             let Some(id) = sb.body else { return };
-            let body = self.world.body(id);
+            let body = self.pw.world.body(id);
+            let prev = self.pw.obj(id).expect("a body's object").prev;
             let a = axes_of(&body.r);
-            let o0 = Vec3::from(iw::offset(sb.prev.0, &sb.prev.1, sb.offset));
+            let o0 = Vec3::from(iw::offset(prev.0, &prev.1, sb.offset));
             let o1 = Vec3::from(iw::offset(body.pos, &a, sb.offset));
             let quat =
                 |m: &M3| Quat::from_mat3(&Mat3::from_cols(m[0].into(), m[1].into(), m[2].into()));
-            let (q0, mut q1) = (quat(&sb.prev.1), quat(&a));
+            let (q0, mut q1) = (quat(&prev.1), quat(&a));
             if q0.dot(q1) < 0.0 {
                 q1 = -q1;
             }
@@ -977,12 +932,12 @@ impl Ragdolls {
             let stops = |n: usize| lims.get(n).map_or((0.0, 0.0), |l| (l.lo, l.hi));
             match ids {
                 [Some(h), None] => {
-                    if let Kind::Hinge(h) = &mut self.world.joint_mut(*h).kind {
+                    if let Kind::Hinge(h) = &mut self.pw.world.joint_mut(*h).kind {
                         set_limot(&mut h.limot, fmax(0), stops(0));
                     }
                 }
                 [_, Some(a)] => {
-                    if let Kind::AMotor(a) = &mut self.world.joint_mut(*a).kind {
+                    if let Kind::AMotor(a) = &mut self.pw.world.joint_mut(*a).kind {
                         for n in 0..3 {
                             set_limot(&mut a.limot[n], fmax(n), stops(n));
                         }
@@ -993,217 +948,16 @@ impl Ragdolls {
         }
     }
 
-    /// `Phys_RunToTime` (0x5a6d50) for world 2: at most two steps, each
-    /// `max(msecStep, owed / steps left)`, then the after-frame checks, and
-    /// the lerp between the frame's first step's start and the last's end.
-    fn run_to_time(&mut self, target: i32, clip: &dyn Clip) {
-        let c = &mut self.clock;
-        if target < c.last {
-            // 0x5a6cd0
-            let f = if c.now > c.last {
-                ((target - c.last) as f64 / (c.now - c.last) as f64) as f32
-            } else {
-                1.0
-            };
-            if c.frac > f {
-                if (0.0..=1.0).contains(&f) {
-                    c.frac = f;
-                } else {
-                    c.frac = 1.0;
-                    c.last = target;
-                    c.now = target;
-                }
-            }
-        }
-        if self.clock.now < target {
-            self.clock.last = self.clock.now;
-            for s in &mut self.slots {
-                for sb in &mut s.bones {
-                    if let Some(id) = sb.body {
-                        let b = self.world.body(id);
-                        sb.prev = (b.pos, axes_of(&b.r));
-                    }
-                }
-            }
-            let mut left = 2u32;
-            loop {
-                let owed = (target.wrapping_sub(self.clock.now) as u32) / left;
-                let msec = owed.max(self.clock.msec_step as u32);
-                left -= 1;
-                let dt = (msec as f64 * MS_TO_S) as f32;
-                self.run_frame(dt, clip);
-                self.clock.now = self.clock.now.wrapping_add(msec as i32);
-                self.post_step();
-                if self.clock.now >= target || left == 0 {
-                    break;
-                }
-            }
-            self.after_frame(clip);
-        }
-        let c = &mut self.clock;
-        c.frac = if c.now > c.last {
-            ((target - c.last) as f64 / (c.now - c.last) as f64) as f32
-        } else {
-            1.0
-        };
-    }
-
-    /// `Phys_RunFrame` (0x5a6440) on world 2: the dvars stored, the self
-    /// collision hook, each awake geom against the world newest first
-    /// (0x5aa100 into the near callback 0x5a5f20), the world's step.
-    fn run_frame(&mut self, dt: f32, clip: &dyn Clip) {
-        self.world.params.apply_phys_frame(&self.phys);
-        let def = self.def.clone();
-        for i in 0..SLOTS {
-            if !matches!(self.slots[i].state, State::Build | State::Simulating) {
-                continue;
-            }
-            for &(a, b) in &def.self_pairs {
-                let s = &self.slots[i];
-                let (Some(ba), Some(bb)) = (s.bones[a].body, s.bones[b].body) else {
-                    continue;
-                };
-                let bone = |k: usize, id: BodyId| {
-                    let sb = &s.bones[k];
-                    selfcol::Bone {
-                        body: id,
-                        seg: bone_segment(self.world.body(id), sb.offset, sb.len),
-                        radius: def.bones[k].radius,
-                        friction: def.bones[k].friction,
-                    }
-                };
-                let (bone_a, bone_b) = (bone(a, ba), bone(b, bb));
-                let (mut oa, mut ob) = (s.bones[a].obj, s.bones[b].obj);
-                selfcol::self_pair(
-                    &mut self.world,
-                    &bone_a,
-                    &mut oa,
-                    &bone_b,
-                    &mut ob,
-                    &self.contact,
-                );
-                self.slots[i].bones[a].obj = oa;
-                self.slots[i].bones[b].obj = ob;
-            }
-        }
-        for g in 0..self.geoms.len() {
-            let (i, b) = self.geoms[g];
-            let sb = &self.slots[i].bones[b];
-            let Some(id) = sb.body else { continue };
-            let body = self.world.body(id);
-            if body.flags & DISABLED != 0 {
-                continue;
-            }
-            let cap = Capsule {
-                centre: body.pos,
-                axis: [body.r[0][0], body.r[1][0], body.r[2][0]],
-                radius: def.bones[b].radius,
-                half_len: -sb.offset[0],
-            };
-            let mut obj = sb.obj;
-            collide::near_world(
-                &mut self.world,
-                id,
-                &mut obj,
-                &cap,
-                clip,
-                &self.contact,
-                RAGDOLL_WORLD,
-            );
-            self.slots[i].bones[b].obj = obj;
-        }
-        self.world.quick_step(dt);
-    }
-
-    /// `Phys_PostStep` (0x5a6640): awake bodies' accumulators cleared, the
-    /// contacts emptied, world 2's angular damping (0x5a62f0), and the next
-    /// step's length off the awake count (0x5a6738..0x5a67bb).
-    fn post_step(&mut self) {
-        self.world.zero_forces();
-        self.world.empty_contacts();
-        let mut awake = 0i32;
-        for k in 0..self.world.bodies().len() {
-            let id = self.world.bodies()[k];
-            let b = self.world.body_mut(id);
-            if b.flags & DISABLED == 0 {
-                b.avel = b.avel.map(|x| (w(x) + w((w(x) * AVEL_DAMP) as f32)) as f32);
-                awake += 1;
-            }
-        }
-        let x = ((awake - 32) as f64 / 18.0) as f32;
-        let t = if x <= 0.0 {
-            0.0
-        } else if ((w(x) - 1.0) as f32) < 0.0 {
-            x
-        } else {
-            1.0
-        };
-        self.clock.msec_step =
-            MSEC_STEP_MIN + ((MSEC_STEP_MAX - MSEC_STEP_MIN) as f64 * w(t)) as i32;
-    }
-
-    /// 0x5a6c10 on each awake body after a frame's steps: a box sweep from
-    /// where the frame began (0x5a6930) pulls a body that tunnelled back
-    /// to where it hit, and one outside the world model is put to sleep.
-    fn after_frame(&mut self, clip: &dyn Clip) {
-        let (mins, maxs) = clip.bounds();
-        let csl2 = (w(self.phys.csl) * 2.0) as f32;
-        let def = self.def.clone();
-        for i in 0..SLOTS {
-            for b in 0..self.slots[i].bones.len() {
-                let sb = &self.slots[i].bones[b];
-                let Some(id) = sb.body else { continue };
-                if self.world.body(id).flags & DISABLED != 0 {
-                    continue;
-                }
-                let a = (w(def.bones[b].radius) * 0.707_106_77) as f32;
-                let (e, thin) = if csl2 > a {
-                    (0.001, true)
-                } else if (w(a) - w((w(a) * 0.2) as f32)) as f32 >= csl2 {
-                    ((w(a) * 0.200_000_002_98) as f32, false)
-                } else {
-                    (((w(a) - w(csl2)) as f32).max(0.001), false)
-                };
-                let prev = sb.prev.0;
-                let mut obj = sb.obj;
-                let body = self.world.body_mut(id);
-                if !(body.pos == prev && obj.state == 2) {
-                    let tr = clip.sweep(Vec3::from(prev), Vec3::from(body.pos), e);
-                    obj.state = if tr.startsolid { 1 } else { 2 };
-                    if tr.fraction < 1.0 && !tr.startsolid {
-                        let d: V3 = std::array::from_fn(|k| (w(body.pos[k]) - w(prev[k])) as f32);
-                        let mut f = tr.fraction;
-                        if thin {
-                            let l2 = ((w(d[0]) * w(d[0]) + w(d[1]) * w(d[1])) + w(d[2]) * w(d[2]))
-                                as f32;
-                            f = ((w(f) - 0.5 * w(a) * w(rsqrt(l2))) as f32).max(0.0);
-                        }
-                        body.pos = std::array::from_fn(|k| (w(prev[k]) + w(d[k]) * w(f)) as f32);
-                        if tr.fraction < 0.001 {
-                            body.lvel = [0.0; 3];
-                            body.avel = [0.0; 3];
-                        }
-                    }
-                }
-                let p = body.pos;
-                if (0..3).any(|k| p[k] > maxs[k] || p[k] < mins[k]) {
-                    body.flags |= DISABLED;
-                }
-                self.slots[i].bones[b].obj = obj;
-            }
-        }
-    }
-
     /// `Ragdoll_ExplosionEvent` (0x5bdc10, cod4-player-anims.md 10.1): each
     /// simulating or idle ragdoll whose root is inside the outer radius
     /// wakes (an idle one rebuilt, 0x5beaa0), its clock restarts, and each
     /// bone whose jittered centre is inside takes its share of
-    /// `ragdoll_explode_force` (`Phys_ObjAddForce` 0x5a5900: times `1000 /
-    /// msecStep`, the body woken). How many it reached.
+    /// `ragdoll_explode_force` at that centre ([`phys::obj_add_force`]
+    /// with world 2's `msecStep`, 0x5bdfe0). How many it reached.
     pub fn explode(&mut self, e: &Explosion, rand: &mut dyn FnMut() -> f32) -> usize {
         let Some(reach) = Reach::of(e) else { return 0 };
         let mut hit = 0;
-        let per_s = (1000.0 / self.clock.msec_step as f64) as f32;
+        let msec_step = self.pw.clock.msec_step;
         for i in 0..SLOTS {
             let s = &self.slots[i];
             if !matches!(s.state, State::Simulating | State::Idle) {
@@ -1229,10 +983,11 @@ impl Ragdolls {
             let share = 1.0 / s.bones.len() as f32;
             for sb in &s.bones {
                 let Some(id) = sb.body else { continue };
-                let body = self.world.body_mut(id);
+                let body = self.pw.world.body_mut(id);
                 // the jitter's three draws come before the bone's range test
                 let jitter = Vec3::new(rand(), rand(), rand());
-                let off = Vec3::from(body.pos) + jitter - e.origin;
+                let at = Vec3::from(body.pos) + jitter;
+                let off = at - e.origin;
                 let Some(falloff) = reach.falloff(off.length_squared()) else {
                     continue;
                 };
@@ -1243,8 +998,8 @@ impl Ragdolls {
                 };
                 heading.z += self.dvars.explode_upbias;
                 let force = e.scale * falloff * self.dvars.explode_force * share;
-                body.add_force(v3(heading.normalize_or_zero() * force * per_s));
-                body.enable();
+                let f = v3(heading.normalize_or_zero() * force);
+                phys::obj_add_force(body, msec_step, v3(at), f);
             }
         }
         hit
@@ -1274,7 +1029,7 @@ impl Ragdolls {
         self.slot(id).map_or_else(Vec::new, |s| {
             s.bones
                 .iter()
-                .map(|b| b.body.map(|id| self.world.body(id)))
+                .map(|b| b.body.map(|id| self.pw.world.body(id)))
                 .collect()
         })
     }
@@ -1289,7 +1044,7 @@ impl Ragdolls {
             .iter()
             .enumerate()
             .filter_map(|(k, b)| {
-                let body = self.world.body(b.body?);
+                let body = self.pw.world.body(b.body?);
                 let [a, e] = bone_segment(body, b.offset, b.len);
                 Some((Vec3::from(a), Vec3::from(e), self.def.bones[k].radius))
             })
@@ -1305,7 +1060,7 @@ impl Ragdolls {
         s.bones
             .iter()
             .filter_map(|b| {
-                let body = self.world.body(b.body?);
+                let body = self.pw.world.body(b.body?);
                 let [a, e] = bone_segment(body, b.offset, b.len);
                 let [qw, qx, qy, qz] = body.q;
                 Some((
@@ -1318,7 +1073,7 @@ impl Ragdolls {
     }
 
     pub fn world(&self) -> &World {
-        &self.world
+        &self.pw.world
     }
 
     /// A slot built straight off two snapshots `dt` ms apart, the latest
@@ -1360,14 +1115,44 @@ impl Ragdolls {
     /// World 2's reorder seed, as a capture had it.
     #[cfg(any(test, feature = "testing"))]
     pub fn set_seed(&mut self, seed: u32) {
-        self.world.seed = seed;
+        self.pw.world.seed = seed;
     }
 
     /// A body of the slot, to set it as a capture had it.
     #[cfg(any(test, feature = "testing"))]
     pub fn body_mut(&mut self, id: SlotId, bone: usize) -> Option<&mut crate::ode::Body> {
         let b = self.slot(id)?.bones.get(bone)?.body?;
-        Some(self.world.body_mut(b))
+        Some(self.pw.world.body_mut(b))
+    }
+}
+
+/// World 2's hook (0x5bd9c0, run by `Phys_RunFrame` before the space's
+/// collide): each building or simulating slot's self pairs.
+fn self_collide(slots: &[Slot], def: &RagdollDef, contact: &collide::Dvars, pw: &mut PhysWorld) {
+    for s in slots {
+        if !matches!(s.state, State::Build | State::Simulating) {
+            continue;
+        }
+        for &(a, b) in &def.self_pairs {
+            let (Some(ba), Some(bb)) = (s.bones[a].body, s.bones[b].body) else {
+                continue;
+            };
+            let bone = |k: usize, id: BodyId| {
+                let sb = &s.bones[k];
+                selfcol::Bone {
+                    body: id,
+                    seg: bone_segment(pw.world.body(id), sb.offset, sb.len),
+                    radius: def.bones[k].radius,
+                    friction: def.bones[k].friction,
+                }
+            };
+            let (bone_a, bone_b) = (bone(a, ba), bone(b, bb));
+            let obj = |id: BodyId| pw.obj(id).expect("a body's object").obj;
+            let (mut oa, mut ob) = (obj(ba), obj(bb));
+            selfcol::self_pair(&mut pw.world, &bone_a, &mut oa, &bone_b, &mut ob, contact);
+            pw.obj_mut(ba).expect("a body's object").obj = oa;
+            pw.obj_mut(bb).expect("a body's object").obj = ob;
+        }
     }
 }
 
@@ -1431,9 +1216,3 @@ fn set_limot(l: &mut LimitMotor, fmax: f32, (lo, hi): (f32, f32)) {
 const JOINT_CFM: f32 = 1e-4;
 const JOINT_STOP_CFM: f32 = 1e-4;
 const JOINT_STOP_ERP: f32 = 0.8;
-
-/// 0x403a90: `0x5f3759df` less half the bits, one Newton step.
-fn rsqrt(x: f32) -> f32 {
-    let y = f32::from_bits(0x5f37_59df - (x.to_bits() >> 1));
-    y * (1.5 - 0.5 * x * y * y)
-}
