@@ -422,7 +422,7 @@ ring and temp entities, means of death.
     `-victim-uo.txt`, which logs the target's entity);
   - `--probe-flame` beside `probe_flame` (`coduo-diff.md` 19, "The flame
     report");
-  - `--probe-items` beside `probe_itemdrop` and `probe_fragcount`
+  - `--probe-items` beside `probe_itemdrop`, `probe_respawnsign` and `probe_fragcount`
     (`cod11-items.md` 4.1, 14.7);
   - `--save-scripted` beside `probe_ctf`, `probe_dom`, `probe_hq`,
     `probe_bas`, their `*end` endings, `probe_ctftime`, `probe_tdmend`,
