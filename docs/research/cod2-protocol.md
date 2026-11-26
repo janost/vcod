@@ -2893,15 +2893,15 @@ snapshot.
 
 ### 15.8 What the gametypes showed
 
-Each fix below turned a gametype capture's difference into a match. VERIFIED
-live, the fixtures of 15.7, unless labelled.
+Each fix below turned a gametype capture's difference into a match (the
+fixtures of 15.7). Each claim carries its own label.
 
 - A player body's `iHeadIcon` and `iHeadIconTeam` are the script's `.headicon`
   / `.headiconteam` (`ClientScr_SetHeadIcon` 0x80f81d4 stores the 1-based
   index of `GScr_GetHeadIconIndex` 0x8113770 over configstrings 31..45; the
   team setter 0x80f82b6 stores none 0, axis 1, allies 2, spectator 3).
   VERIFIED, the stores. `tdm` sends `iHeadIcon` 2 (`headicon_german`) and team
-  1 for an axis player. vcod's CoD2 body copies them
+  1 for an axis player (VERIFIED live). vcod's CoD2 body copies them
   (`Cod2Level::player_entity`).
 - `G_ShaderIndex` (0x811d44a) lowercases the name before
   `G_FindConfigstringIndex(.., 0x61e, 0x80, ..)`. VERIFIED. So `sd`'s
@@ -2918,7 +2918,7 @@ live, the fixtures of 15.7, unless labelled.
   words to -1, so no client's snapshot carries the entity; the entity pass
   (0x8109f5c) turns 0x800 into `eFlags` 0x20, which the baseline still
   carries. VERIFIED, the stores. `sd`'s hidden exploder models (452, 454, 460, 462)
-  are in the baselines with `eFlags` 0x20 and in no snapshot. vcod drops a
+  are in the baselines with `eFlags` 0x20 and in no snapshot (VERIFIED live). vcod drops a
   hidden entity from `Cod2Level::world_entities`.
 - The script clock: `G_RunFrame` (0x810a13a) ends its thread passes with
   0x80855e2, which adds 1 to the VM's time word (masked to 24 bits) once a
@@ -3243,14 +3243,14 @@ Two script divergences came out of the gametype copies. VERIFIED live:
 ### 16.9 Pure, and the `cp` under `sv_pure 0`
 
 The client held an extra `main/zzz_c15extra.iwd` (a changed
-`weapons/mp/enfield_mp`) in both runs. VERIFIED live, unless labelled.
+`weapons/mp/enfield_mp`) in both runs. Each claim carries its own label.
 
 - **`sv_pure 1`.** The client's `cp` listed 13 keyed sums, none the extra
-  iwd's, and vcod logged `cp ok`; retail kept the client for the whole run.
+  iwd's, and vcod logged `cp ok`; retail kept the client for the whole run (VERIFIED live).
   That the client read nothing from an iwd off the pure list is INFERRED (the
   sums, and 11.3).
 - **`sv_pure 0`.** The client's `cp` listed 14 sums, then `42`, then the key;
-  without the extra iwd 13 sums, `42` and the key (vcod's log, both runs).
+  without the extra iwd 13 sums, `42` and the key (VERIFIED live, vcod's log, both runs).
   That the 14th is the extra iwd's is INFERRED from the count. The Linux
   build's file open (0x809f958, the one that prints
   `FS_FOpenFileRead: %s (found in '%s/%s')`) sets the global behind that

@@ -46,7 +46,7 @@ against the soup-material set of every map in those paks.
 (needs `COD_DIR`) and fails when parser changes move them. It scopes to stock
 paks, since server downloads drop third-party `zzz_*.pk3` files into `main/`.
 
-Headline numbers on that install (all VERIFIED):
+Headline numbers on that install, each VERIFIED (counts):
 
 | measure | value |
 |---|---|

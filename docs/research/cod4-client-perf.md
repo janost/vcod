@@ -2110,7 +2110,7 @@ fragments. VERIFIED (scratch timer, ours). A full pool's regroup and
 rebuild (1024 marks, eight shaders, PERF-081) is 0.06 ms at opt-level 1,
 under its 0.1 ms bar: left as is. VERIFIED (scratch timer, ours).
 
-Not done: a draw per model of the sleeping dynents (41's next cut). With
+Done in 41.2 (5ffd40d3d), not done when this was written: a draw per model of the sleeping dynents (41's next cut). With
 the lookups gone a held dynent cost its placement, LOD pick, posed box,
 light set pack and draw sort each frame, 0.2 ms of `build` on mp_crash
 on the card, and its entity calls in `encode` and `finish` (41). 41.1

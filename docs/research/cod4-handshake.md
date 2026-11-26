@@ -154,7 +154,7 @@ What this capture left undecoded is read elsewhere: baselines, `svc_EOF`,
 `constantConfigStrings` (section 5), the pure check (8), `requeststats`
 and the authorize round trip (15).
 
-Still open: the rate pacing on loopback (section 3) and why the first two fragments go out together.
+Closed: the rate pacing on loopback (section 3) and why the first two fragments go out together. A loopback or LAN address is due the next frame, anyone else is paced by `rate` and waits a second out of the world (15.5); vcod-server matches it (`cod4-server-gaps.md` 6).
 
 ## 7. Recipe
 

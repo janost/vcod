@@ -367,7 +367,7 @@ From a release build (`cargo build --release -p vcod -p vcod-server`):
 `SESSION=1 GAME=cod1 COD_DIR=<1.1 install> tools/cod4_perf.sh /tmp/p27 mp_carentan 30`
 
 and compare fps, `gpu.opaque` and the `frags` row with the 570 fps run. A card that keeps early depth without the discard shows it in
-`gpu.opaque` beyond the prop cut. Pending.
+`gpu.opaque` beyond the prop cut. Done: section 6 records that real-card run (659.6 fps at 1600 x 900), and section 3's 780M run (c7a121895) is the later one.
 
 ## 6. The props' fill at mp_carentan's spectator spot
 

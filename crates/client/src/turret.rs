@@ -10,6 +10,7 @@ pub use vcod_common::net::flags::EF_MOUNTED;
 /// Flipped on a teleport, and on a turret's first mounted frame (turrets doc 6.2).
 use vcod_common::net::flags::EF_TELEPORT_BIT;
 use vcod_common::pmove::aim::angle_subtract;
+pub use vcod_common::rng::MsvcRand;
 use vcod_common::skeleton::{PoseBuffer, Skeleton};
 use vcod_common::turretpose::angles_quat;
 
@@ -213,8 +214,8 @@ pub fn uo_eye(
     let mut pos = origin;
     if let Some(t) = shake {
         pos += axis[0] * (t * -0.5);
-        angles[0] += rand.shake() * jitter[0];
-        angles[1] += rand.shake() * jitter[1];
+        angles[0] += rand_shake(rand) * jitter[0];
+        angles[1] += rand_shake(rand) * jitter[1];
     }
     TurretEye {
         pos,
@@ -242,8 +243,8 @@ pub fn v15_eye(
     let barrel = arcs.barrel(view, base);
     let mut angles = [base[0] + barrel[0], base[1] + barrel[1], view[2]];
     if let Some([pitch, yaw]) = jitter {
-        angles[0] += rand.shake() * pitch;
-        angles[1] += rand.shake() * yaw;
+        angles[0] += rand_shake(rand) * pitch;
+        angles[1] += rand_shake(rand) * yaw;
     }
     let moved = (0..2).any(|i| angle_subtract(angles[i], view[i]).abs() > 1e-4);
     TurretEye {
@@ -283,26 +284,11 @@ impl TurretEye {
     }
 }
 
-/// The C runtime's `rand()`, which 0x30033220 draws the shake from.
-pub struct MsvcRand(u32);
-
-impl Default for MsvcRand {
-    fn default() -> Self {
-        MsvcRand(1)
-    }
-}
-
-impl MsvcRand {
-    fn next(&mut self) -> i32 {
-        self.0 = self.0.wrapping_mul(214013).wrapping_add(2531011);
-        ((self.0 >> 16) & 0x7fff) as i32
-    }
-
-    /// `2 * rand() / 32768 - 1` degrees.
-    pub fn shake(&mut self) -> f32 {
-        let r = self.next() as f32 / 32768.0;
-        r + r - 1.0
-    }
+/// `2 * rand() / 32768 - 1` degrees: the shake 0x30033220 draws off the C
+/// runtime's `rand()`.
+pub fn rand_shake(rng: &mut MsvcRand) -> f32 {
+    let r = rng.unit();
+    r + r - 1.0
 }
 
 #[cfg(test)]
@@ -454,7 +440,10 @@ mod tests {
             Some([0.15; 2]),
             &mut rng,
         );
-        let [p, y] = [expect.shake() * 0.15, expect.shake() * 0.15];
+        let [p, y] = [
+            rand_shake(&mut expect) * 0.15,
+            rand_shake(&mut expect) * 0.15,
+        ];
         assert_eq!(fired.angles, [10.0 + p, -101.0 + y, 0.0]);
         assert!(p.abs() <= 0.15 && y.abs() <= 0.15);
         assert_eq!(fired.snap, Some([10.0 + p, -101.0 + y]));
@@ -519,7 +508,7 @@ mod tests {
         // msvcrt's first three draws from seed 1.
         assert_eq!([rng.next(), rng.next(), rng.next()], [41, 18467, 6334]);
         for _ in 0..1000 {
-            let s = rng.shake();
+            let s = rand_shake(&mut rng);
             assert!((-1.0..1.0).contains(&s), "{s}");
         }
     }

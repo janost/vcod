@@ -39,30 +39,30 @@ clears it and calls `0x4ddbf0`, then `0x4f0780`. A slider move takes
 effect on the next frame, no restart. VERIFIED (instructions at
 `0x4de38b`-`0x4de39d`).
 
-The steps in order. VERIFIED (disassembly `0x4f0780`-`0x4f0970`,
-constants read from `.rdata`) unless labelled:
+The steps in order, disassembly `0x4f0780`-`0x4f0970` with the constants
+read from `.rdata`:
 
 1. `overbrightBits` (`0x16c55b8`) = `r_overBrightBits`, then 0 when
    device gamma is unsupported (`0x16c3a8c` is 0) or the window is not
    full screen (`0x16c3af4` is 0). Then clamped to 0..1 at colour depth
-   (`0x16c3a80`) 16 or less, else 0..2. INFERRED (from its writes):
+   (`0x16c3a80`) 16 or less, else 0..2. VERIFIED. INFERRED (from its writes):
    `0x16c3af4` is the full-screen flag. GLW_SetMode (`0x508630`) stores
    its full-screen argument there and clears it when
    `ChangeDisplaySettingsA` fails and it falls back.
 2. `identityLight` (`0x16c55b0`) = `1.0 / (1 << overbrightBits)`;
    `identityLightByte` (`0x16c55b4`) = `ftol(identityLight * 255.0)`
-   (constants `0x568e60` 1.0, `0x568ec0` 255.0).
-3. `r_intensity` <= 1.0 is set to "1".
+   (constants `0x568e60` 1.0, `0x568ec0` 255.0). VERIFIED.
+3. `r_intensity` <= 1.0 is set to "1". VERIFIED (the compare and the string store).
 4. `r_gamma` < 0.5 (`0x568e70`) is set to "0.5" (`0x55797c`); > 3.0
-   (`0x5690c8`) to "3.0" (`0x54b554`).
+   (`0x5690c8`) to "3.0" (`0x54b554`). VERIFIED.
 5. The gamma table at `0x11de160`, for i in 0..256:
    `v = (g == 1.0) ? i : ftol(255.0 * pow(i * (1/255), 1/g) + 0.5)`,
    then `v << overbrightBits`, clamped to 0..255. `1/255` is the float at
    `0x568ec4` (0.0039215689); 255.0 and 0.5 are doubles at `0x5690c0` and
-   `0x568f38`. INFERRED (call shape, two x87 operands in, one out; MSVC
+   `0x568f38`. VERIFIED. INFERRED (call shape, two x87 operands in, one out; MSVC
    `_CIpow` and `_ftol`): `0x538ca0` is `pow` and `0x538be0` a truncating
    `ftol`.
-6. The intensity table at `0x11de268`: `min(255, ftol(i * r_intensity))`.
+6. The intensity table at `0x11de268`: `min(255, ftol(i * r_intensity))`. VERIFIED (the loop's operands).
 7. With device gamma, `0x515d20` (GLimp_SetGamma) loads the table as all
    three channels of the hardware ramp (each byte widened to
    `b << 8 | b`) through `SetDeviceGammaRamp`, with a "performing W2K
