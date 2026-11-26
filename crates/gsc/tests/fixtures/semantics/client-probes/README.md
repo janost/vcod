@@ -1211,6 +1211,29 @@ COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=115 \
 cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-team allies --probe-items --probe-secs 90
 ```
 
+The client prints its `SPAWNED` and `CMDS` lines last, which the fixtures
+keep: `itemdrop_ab` spawns ours on that frame and replays the cmds. The
+three fixtures were taken with both halves inside one `unshare -rn` (`ip
+link set lo up` first), the client 15 s after the server.
+
+## probe_respawnsign
+
+The respawn draw's sign: a colt with spawnflags 8 and `random` 4 under
+`+set g_weaponrespawn 20`, taken six times 25 s apart by walking onto it
+with the pistol's reserve emptied, so each return lands 9 to 16 s after
+its take on 1.1d and 16 to 23 on 1.5b and UO. Logs `PROBE start` (with
+`g_weaponrespawn`), `PROBE spawned` and one `PROBE trigger` per take; the
+`--probe-items` client's `ITEM` lines carry the returns. Fixtures
+`crates/server/tests/fixtures/items/mp_carentan-dm-respawnsign*.txt`, read
+in `docs/research/cod11-items.md` 14.10 and gated by
+`crates/server/tests/itemdrop_ab.rs`.
+
+```
+PROBE_SECS=230 tools/run_probe.sh client-probes/probe_respawnsign mp_carentan +set g_weaponrespawn 20
+# second shell, about 15 s later:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-team allies --probe-items --probe-secs 210
+```
+
 ## probe_nodrop
 
 `CONTENTS_NODROP` (0x80000000) on four spawned carbines. No stock material
