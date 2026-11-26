@@ -7,6 +7,8 @@
 
 use glam::Vec3;
 
+pub use super::geom::{Geom, GeomClass, Unported};
+
 use super::Body;
 use super::body::DISABLED;
 use super::collide::{self, Capsule, Obj, Pieces};
@@ -44,8 +46,6 @@ pub const MSEC_STEP_MAX: [i32; 3] = [67, 67, 34];
 const MS_TO_S: f64 = 0.001_000_000_047_497_451_3;
 /// World 2's angular damping a step (the double at 0x70b488).
 const AVEL_DAMP: f64 = -0.009_999_999_776_482_582;
-/// `sqrt(1/2)` as a float widened (the double at 0x70ae70).
-const HALF_SQRT2: f64 = 0.707_106_769_084_930_4;
 /// The sweep box's share of the geom's bounds (the double at 0x70b3e8).
 const SWEEP_SHARE: f64 = 0.200_000_002_980_232_24;
 /// A thin geom's sweep is a point this big (the floats at 0x70b460, 0x70b278).
@@ -90,62 +90,25 @@ pub struct Clock {
     pub msec_step: i32,
 }
 
-/// The ODE geom classes 0x5a9a20 sizes (geom +4).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GeomClass {
-    Box = 1,
-    Brush = 12,
-    Cylinder = 13,
-    Capsule = 14,
-}
-
-/// A body's first geom, as far as the glue reads it.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Geom {
-    /// Class 14 (0x5a8e10): radius (+0x50), half length (+0x54).
-    Capsule { radius: f32, half_len: f32 },
-    /// A class whose geom is not ported yet (P2 of the world 0/1 port).
-    Unported(GeomClass),
-}
-
-/// The glue met a geom class it has no arm for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Unported(pub GeomClass);
-
-impl std::fmt::Display for Unported {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "geom class {:?} is not ported", self.0)
-    }
-}
-
-impl std::error::Error for Unported {}
-
-impl Geom {
-    /// 0x5a9a20's box about the body: the capsule's arm of 0x5a67d0
-    /// (0x5a68b7), `m = r sqrt(1/2)` unless `2 r + h` is less, the box
-    /// `-m..m`. The box (0x5a9a44), brush (0x5a684f) and cylinder
-    /// (0x5a688b) arms come with their geoms.
-    pub fn bounds(&self) -> Result<(V3, V3), Unported> {
-        match *self {
-            Geom::Capsule { radius, half_len } => {
-                let t = (w(radius) * HALF_SQRT2) as f32;
-                let s = w(radius) * 2.0 + w(half_len);
-                let m = if s < w(t) { s as f32 } else { t };
-                Ok(([-m; 3], [m; 3]))
-            }
-            Geom::Unported(c) => Err(Unported(c)),
-        }
-    }
-}
-
-/// A body's phys object (its userdata, body +0xc): what the near callback
-/// reads and writes (`obj`), the pose the frame's steps began from (+0x10,
-/// and the axes at +0x1c), and its first geom.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// A body's phys object (its userdata, body +0xc, 0x5c bytes): the body's
+/// offset from its model's origin in the body's frame (+0), what the near
+/// callback reads and writes (`obj`: +0x44..+0x4c), the pose the frame's
+/// steps began from (+0x10, and the axes at +0x1c), the impact sound row
+/// (+0x40); and the body's geoms, newest first (body +0x1c).
+#[derive(Clone, Debug, PartialEq)]
 pub struct PhysObj {
+    pub offset: V3,
     pub obj: Obj,
     pub prev: (V3, M3),
-    pub geom: Geom,
+    pub sound: i32,
+    pub geoms: Vec<Geom>,
+}
+
+impl PhysObj {
+    /// The body's first geom, the one 0x5a6930 sizes its sweep by.
+    pub fn geom(&self) -> Option<&Geom> {
+        self.geoms.first()
+    }
 }
 
 /// One of retail's worlds: the ODE world, its clock, each body's phys
@@ -302,15 +265,18 @@ impl PhysWorld {
             if body.flags & DISABLED != 0 {
                 continue;
             }
-            let Some(&o) = self.obj(id) else { continue };
-            let cap = match o.geom {
-                Geom::Capsule { radius, half_len } => Capsule {
+            let Some(o) = self.obj(id) else { continue };
+            // Only the capsule has its colliders (P3 of the world 0/1 port);
+            // a body of any other class refuses the frame.
+            let cap = match o.geom() {
+                Some(&Geom::Capsule { radius, half_len }) => Capsule {
                     centre: body.pos,
                     axis: [body.r[0][0], body.r[1][0], body.r[2][0]],
                     radius,
                     half_len,
                 },
-                Geom::Unported(c) => return Err(Unported(c)),
+                Some(g) => return Err(Unported(g.class())),
+                None => continue,
             };
             let mut obj = o.obj;
             collide::near_world(
@@ -375,10 +341,13 @@ impl PhysWorld {
     /// the move's length first, at least 0), and a fraction under 0.001
     /// stills it.
     fn sweep(&mut self, id: BodyId, clip: &dyn Clip, csl: f32) -> Result<(), Unported> {
-        let Some(&o) = self.obj(id) else {
+        let Some(o) = self.obj(id) else {
             return Ok(());
         };
-        let (lo, hi) = o.geom.bounds()?;
+        let Some(geom) = o.geom() else {
+            return Ok(());
+        };
+        let (lo, hi) = geom.bounds()?;
         let m = hi[0];
         let csl2 = (w(csl) + w(csl)) as f32;
         let thin = csl2 > m;
@@ -394,8 +363,7 @@ impl PhysWorld {
                 (lo5, hi5)
             }
         };
-        let prev = o.prev.0;
-        let mut obj = o.obj;
+        let (prev, mut obj) = (o.prev.0, o.obj);
         let body = self.world.body_mut(id);
         if body.pos != prev || obj.state == 0 || obj.state == 1 {
             let tr = clip.sweep(

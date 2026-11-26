@@ -1605,9 +1605,11 @@ hook and calls `PhysWorld::run_to_time` for world 2.
   (0x5a688b), 14 (capsule) `r * 0.70710677` (the double at 0x70ae70)
   unless `2 r + h` (the double 2.0 at 0x70ae50, `h` at +0x54) is less
   (0x5a68b7). The box is `-m..m` on each axis for 1, 13 and 14.
-  VERIFIED (the instructions). The capsule's arm is the one in the port;
-  `Geom::Unported` stands for the others until their geoms are ported,
-  and `run_to_time` returns its class as an error. vcod's.
+  VERIFIED (the instructions). The port has the box's, the cylinder's,
+  the capsule's and the transform's arms (`Geom::bounds`); class 12's
+  waits for 0x561910. `run_frame` refuses a body whose first geom is not
+  a capsule until P3 brings the colliders: `run_to_time` returns its
+  class as an error (cod4-gsc.md 3.6.3). vcod's.
 - **The sweep box.** With `m` the box's top x: `m` under `2 phys_csl`
   (the sum stored) sweeps a point (corners -0.001 and 0.001, 0x70b460,
   0x70b278); else the box at 0.2 of the bounds (the double at 0x70b3e8,

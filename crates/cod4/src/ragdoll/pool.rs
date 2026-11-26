@@ -592,16 +592,19 @@ impl Ragdolls {
             self.pw.add_obj(
                 id,
                 PhysObj {
+                    offset: [-h, 0.0, 0.0],
+                    // the bone block's sound row (+0x68) is not read; nothing plays it
+                    sound: 0,
                     obj: Obj {
                         friction: d.friction,
                         bounce: 0.0,
                         state: 0,
                     },
                     prev: (pos, axes),
-                    geom: Geom::Capsule {
+                    geoms: vec![Geom::Capsule {
                         radius: d.radius,
                         half_len: h,
-                    },
+                    }],
                 },
             );
         }

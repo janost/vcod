@@ -6,14 +6,17 @@
 //! masses, the ball, hinge, angular motor and contact joints, the island
 //! walk and IW's QuickStep; and the ragdoll world's contacts, IW's capsule
 //! colliders and near callback (`collide`, 10.6); the frame glue each
-//! world steps through (`phys`, 10.7.1). `ragdoll::pool` runs the corpses
-//! on world 2 (10.7).
+//! world steps through (`phys`, 10.7.1); worlds 0 and 1's geoms and
+//! bodies (`geom`, `obj`, cod4-gsc.md 3.6.3). `ragdoll::pool` runs the
+//! corpses on world 2 (10.7).
 
 pub mod body;
 pub mod collide;
+pub mod geom;
 pub mod joint;
 pub mod mass;
 pub mod math;
+pub mod obj;
 pub mod phys;
 pub mod quickstep;
 pub mod rotation;

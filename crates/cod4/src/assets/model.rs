@@ -10,7 +10,7 @@ use anyhow::Result;
 use std::io::BufRead;
 
 /// `XModel`, 0xDC.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct XModel {
     pub name: String,
     pub num_bones: u8,
