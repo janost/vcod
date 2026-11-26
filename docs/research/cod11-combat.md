@@ -8751,8 +8751,8 @@ end, backed off the world's face, does not reach the same face in a copy
 at the same place. VERIFIED, the same probe on retail UO, 2026-11-14:
 the same lines (`a_round_on_a_script_spawned_trigger_damage_matches_retail_uo`).
 
-**Left open** (not captured): a tank shell's walk on
-the belltower; a grenade blast's charges (a 2026-11-14 UO recapture of
+**Left open** (not captured): a tank shell on the belltower (its walk,
+14.8.3); a grenade blast's charges (a 2026-11-14 UO recapture of
 `probe_dmgshot` with the client's cmd times,
 `fixtures/triggers/mp_uo_stanjel-dmgshot-uo.txt`, replayed on them by
 `tests/common`'s `direct_replay`, holds every round and swing line, but
@@ -8829,6 +8829,24 @@ to `accumulate + 1`, and never one with `accumulate` set while it is at
 full health. Mod -1 skips `G_Trigger` (0x65136). Not captured: no stock
 map's `trigger_damage` sets `accumulate` or `threshold`, and a script's
 `spawn` sets neither.
+
+#### 14.8.3 A tank shell's walk
+
+VERIFIED, a gdb breakpoint on retail UO's `G_CheckHitTriggerDamage`
+(0x77130, its arguments read off the frame) under
+`client-probes/probe_vehicle_shell.gsc` on mp_kharkov, the recipe in
+`vehicles/mp_kharkov-tank-shell-uo.txt`'s header, 2026-11-26: the Panzer
+IV's `fireTurret` shell strikes the Elefant and walks once with the driver
+(client 0) as the attacker, start and end both the contact
+(-1421.27, 6196.21, 0.30), damage 700 and mod 5 (`MOD_PROJECTILE`): the
+panzerschreck shell's walk (14.8) with the turret weapon's damage.
+INFERRED, 14.8's table: mp_foy's belltower (spawnflags 115) refuses no mod
+5, so a tank shell whose contact lies inside `*44` fires it as the
+panzerschreck's did; not captured on mp_foy, which needs a seated driver
+with a line of fire to the belfry. vcod: the same walk off the UO missile
+impact (`cod1_frame`, `x.shell_damage`, `x.direct_mod`); a debug print on
+`vehicle_shell_ab`'s replay read the same attacker, damage, mod and
+contact to 2e-6.
 
 ---
 
