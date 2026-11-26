@@ -661,7 +661,7 @@ impl CollisionWorld {
             Some(Prim::Patch(p)) => self.patches[p as usize].content_flags,
             Some(Prim::Model(t)) => self.model_tris[t as usize].contents,
             Some(Prim::Clip(contents)) => contents,
-            Some(Prim::Terrain(_) | Prim::Body(_)) | None => 0,
+            Some(Prim::Terrain(_) | Prim::Body(_) | Prim::Static(_)) | None => 0,
         }
     }
 
@@ -867,7 +867,6 @@ impl CollisionWorld {
                 maxs,
                 capsule,
                 mask,
-                statics: false,
                 skip: None,
                 world_only: true,
                 boxed,

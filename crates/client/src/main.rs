@@ -1071,7 +1071,7 @@ fn live_phase(fs: &Pk3Fs, bsp: &MapWorld, placed: &props::Placed, weapons_cs: &s
 /// (CoDMP.exe 0x419c90) loads for the cgame. `placed` is decoded once for
 /// it and the renderer's props (`Renderer::load_world_placed`).
 fn client_world(bsp: &MapWorld, placed: &props::Placed) -> collision::CollisionWorld {
-    let world = collision::CollisionWorld::build(bsp, &placed.collision_tris());
+    let world = collision::CollisionWorld::with_statics(bsp, &placed.static_models());
     // Predict as the retail Windows client does, not as the server.
     world.set_arith(vcod_common::patch::Arith::for_client());
     // A brush model clips only through its snapshot entity
@@ -3275,7 +3275,8 @@ fn walk_mode(
     let Some((origin, yaw)) = bsp::find_spawn(&bsp.entities) else {
         bail!("map {map} has no player spawn; run without --walk to fly");
     };
-    let world = collision::CollisionWorld::build(bsp, &props::collision_tris(fs, &bsp.entities));
+    let world =
+        collision::CollisionWorld::with_statics(bsp, &props::static_models(fs, &bsp.entities));
     if world.brushes.is_empty() && world.tris.is_empty() {
         bail!("no collidable geometry in {map}; run without --walk to fly");
     }

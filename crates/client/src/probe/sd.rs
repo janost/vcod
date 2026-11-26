@@ -367,10 +367,10 @@ impl SdProbe {
                 maxs: offset_by(m.maxs, at),
             });
         }
-        let tris = vcod_common::props::collision_tris(fs, &bsp.entities);
-        self.world = Some(Box::new(vcod_common::collision::CollisionWorld::build(
-            &bsp, &tris,
-        )));
+        let statics = vcod_common::props::static_models(fs, &bsp.entities);
+        self.world = Some(Box::new(
+            vcod_common::collision::CollisionWorld::with_statics(&bsp, &statics),
+        ));
         match &self.zone {
             Some(z) => println!(
                 "SD: bombzone_A is *{} at [{:.0},{:.0},{:.0}] (world)",

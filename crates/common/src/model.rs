@@ -46,8 +46,9 @@ pub struct CollSurf {
     pub contents: u32,
     pub flags: u32,
     pub tris: Vec<[Vec3; 3]>,
-    /// The stored `mins`/`maxs`, in the bone's space and unbaked: what the
-    /// engine's static-model bounds are built from (combat doc 14.7).
+    /// The stored `mins`/`maxs` as the loader grows them, in the bone's
+    /// space and unbaked: what the engine's static-model bounds are built
+    /// from (combat doc 14.7) and what its surface walk culls by (2.7.1).
     pub bounds: (Vec3, Vec3),
     /// The bone the surface rides, into `Model::bones`: `tris` are baked
     /// at its bind, and a posed model's trace moves them with it
