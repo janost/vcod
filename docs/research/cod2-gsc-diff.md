@@ -516,6 +516,12 @@ refusal of both (VERIFIED,
   and two floats (type 5) with `fucompp`; `>` at 0x807de00 has the same
   shape with `setg`/`seta`. Two ints order exactly past 2^24, as on 1.1
   (cod11-gsc-language.md 9, "Ordering").
+- VERIFIED (the instructions), `Scr_EvalEquality` (Mac 0x9084a, lnxded
+  0x807dac0): two numbers are equal when `|a - b| < 1e-6` with the
+  difference stored as a float first, as on 1.5b and UO, where 1.1d keeps
+  it at 80 bits; `!=` is its negation (Mac 0x90a70, lnxded 0x807dd26).
+  VERIFIED live, `probe_eq_tol` on `cod2_lnxded` 1.3. Addresses, the
+  capture and vcod's `NumberEq::Stored`: cod11-gsc-object-model.md 9.3.1.
 - VERIFIED, `Scr_EvalMultiply` (lnxded 0x807e290): `*` takes two numbers
   only, an int promoted to a float beside a float (0x807d7aa); a vector
   operand is `pair '(1, 0, -0)' and '200' has unmatching types 'vector'

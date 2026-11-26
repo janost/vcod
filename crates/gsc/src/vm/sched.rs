@@ -368,6 +368,7 @@ impl Vm {
         let mut keep = Vec::new();
         let mut order: Vec<usize> = Vec::new();
         let interner = &self.interner;
+        let number_eq = self.number_eq;
         for id in cands {
             let Some(i) = thread_index_in(&self.threads, id) else {
                 continue;
@@ -385,8 +386,9 @@ impl Vm {
                 continue;
             }
             if matches.iter().enumerate().all(|(k, m)| {
-                args.get(k)
-                    .is_some_and(|a| super::interp::values_equal(interner, *m, *a).unwrap_or(false))
+                args.get(k).is_some_and(|a| {
+                    super::interp::values_equal(interner, number_eq, *m, *a).unwrap_or(false)
+                })
             }) {
                 order.push(i);
             } else {

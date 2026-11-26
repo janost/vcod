@@ -816,8 +816,7 @@ the bit.
 Retail's `==` on two numbers holds within a tolerance: `1e-16 == 0`,
 `1e-16 == 0.0` and `1 == 1.0000001` are 1, `0.000001 == 0` is 0, while
 `1e-16 > 0` is 1 (VERIFIED, live, a scratch probe on 1.1d, 2026-11-26).
-`probe_math` tests zero by order for that reason. vcod's `values_equal`
-compares exactly.
+`probe_math` tests zero by order for that reason. The rule, per game: 9.3.1.
 
 vcod: `builtins::math`, bound by name for CoD1 and CoD2. The profile's
 `MathRounding` picks 1.1d's (`Kept`), 1.5b's and UO's (`Stored`),
@@ -826,6 +825,94 @@ CoD2's (`Cod2`, cod2-gsc-diff.md 7), or a float at every step for CoD4
 `F80::fcos` reduce by the 66-bit pi. `semantics_ents`'s
 `probe_math_matches_retail` and `probe_math_matches_retail_uo` replay the
 capture.
+
+#### 9.3.1 `==` and `!=` on two numbers
+
+Two ints compare exactly. Any other pair of numbers is cast to floats (an
+int beside a float becomes a float) and is equal when `|a - b| < T`, `T`
+the float nearest 1e-6 (`0x358637bd`, 9.99999997e-7). What differs
+between the games is how the difference is rounded before the test.
+
+- 1.1d: `cod_lnxded`'s equality function (0x80a4430; the cast at
+  0x80a4444, the float arm 0x80a4484..0x80a44a2) runs `flds a`, `fsubs b`,
+  `fabs`, `fcomps` against `T` at `.rodata` 0x80d7b88, and is equal on
+  C0 alone (`and $0x45`, `cmp $1`). `!=` is its own arm in the
+  interpreter (0x80a5dd5..0x80a5dee): the same sequence against the
+  copy at 0x80d7ff0, true on C0 and C2 clear. The difference stays on
+  the x87 stack at the extended precision Linux starts it in. VERIFIED
+  (the instructions).
+- 1.5b (0x80aa364..0x80aa37d, `!=` 0x80abd36..0x80abd4f) and UO 1.51b
+  (0x80ab3ae..0x80ab3c7, `!=` 0x80acd80..0x80acd99): `flds a`, `fsubs b`,
+  `fstps` to a float, `fabs` in a call (1.5b 0x80af812, UO 0x80b085c),
+  `fucompp` against `T` (1.5b 0x80e20c8 and 0x80e254c, UO 0x80e7f88 and
+  0x80e840c). VERIFIED (the instructions).
+- CoD2 1.3: `Scr_EvalEquality` (Mac 0x9084a, its float arm
+  0x90962..0x90988: `subss`, `andps` with `0x7fffffff`, `ucomiss`
+  against `T` at 0x3263a0) and `cod2_lnxded` 0x807dac0 (float arm
+  0x807db42..0x807db5b: `fsubs`, `fstps`, the `fabs` at 0x807fe46,
+  `fucompp` against `T` at 0x8144c18). `Scr_EvalInequality` (Mac
+  0x90a70, lnxded 0x807dd26) is `!(a == b)`. Two vectors compare
+  component by component, exactly (Mac 0x90913..0x90a38). VERIFIED (the
+  instructions).
+- CoD4 1.7: `cod4_lnxded` 0x8158844, float arm 0x81588bf..0x81588de:
+  `fsubs`, `fabs`, `fstps`, `fucomip` against `T` at 0x8220c38; 0x8158a30
+  is `!(a == b)` over it. VERIFIED (the instructions).
+
+So 1.1d tests the difference rounded to 80 bits and the others the
+difference rounded to a float. They part only when the exact difference
+lies just under `T`: a float difference rounds up to `T` itself, an
+80-bit one only within 2^-84 of it, the tie at `T - 2^-84` rounding to
+`T`'s even mantissa.
+
+VERIFIED, live (`probe_eq_tol` on 1.1d, 1.5b, UO 1.51b and `cod2_lnxded`
+1.3, 2026-11-26; on `cod4_lnxded` 1.7 the same lines as a scratch `war.gsc`
+under `fs_game`). Among its 24 lines:
+
+| Line | Expression | 1.1d | 1.5b, UO, CoD2, CoD4 |
+|---|---|---|---|
+| `eq_tiny_zero` | `0.00000000000000000001 == 0` | 1 | 1 |
+| `gt_tiny_zero` | `0.00000000000000000001 > 0` | 1 | 1 |
+| `eq_thresh_zero` | `0.000001 == 0` | 0 | 0 |
+| `eq_below_zero` | `0.00000099999994 == 0` (`T` less an ulp) | 1 | 1 |
+| `eq_neg_thresh_zero` | `(0 - 0.000001) == 0` | 0 | 0 |
+| `eq_thresh_tiny` | `0.000001 == 1e-20` | 1 | 0 |
+| `eq_thresh_e24` | `0.000001 == 1e-24` | 1 | 0 |
+| `eq_thresh_e30` | `0.000001 == 1e-30` | 0 | 0 |
+| `eq_thresh_tie` | `0.000001 == 2^-84` | 0 | 0 |
+| `eq_thresh_past_tie` | `0.000001 == 1.5 * 2^-84` | 1 | 0 |
+| `ne_thresh_tiny` | `0.000001 != 1e-20` | 0 | 1 |
+| `eq_int_ulp`, `ne_int_ulp` | `1 == 1.0000001`, `!=` | 1, 0 | 1, 0 |
+| `eq_int_near`, `eq_int_far` | `1 == 1.000001`, `1 == 1.00001` | 1, 0 | 1, 0 |
+| `eq_large_float` | `100000.0 == 100000.01` | 0 | 0 |
+| `eq_large_int_float` | `16777217 == 16777216.0` | 1 | 1 |
+| `eq_large_int_int` | `16777217 == 16777216` | 0 | 0 |
+
+The probe writes the small operands as decimals (the lexer takes no
+exponent); `1e-24` lands where a 53-bit difference would round to `T` and
+an 80-bit one does not, so 1.1d's difference is not a double.
+
+- `waittillmatch` on 1.1d, 1.5b, UO and CoD2 matches through the same test:
+  `level waittillmatch("e", 1.0000001)` woke on `level notify("e", 1)`
+  and one on `1.00001` did not (VERIFIED, live, the 1.1d, 1.5b, UO and
+  CoD2 runs with two waiters added). 1.1d's notify calls the equality function at
+  0x80a755f, CoD2's at 0x80837c1 and CoD4's at 0x815dc0c (INFERRED:
+  which caller is the match). vcod compiles `waittillmatch` for CoD4
+  only.
+- `switch` does not use it: `switch (1.0000001)` with `case 1:` is the
+  fatal `cannot switch on float` on 1.1d (VERIFIED, live, a scratch
+  probe, 2026-11-26), and every build holds `case expression must be an
+  int or string` (the strings, VERIFIED). vcod compiles a `switch` into
+  `==` tests, so it runs the case; open.
+- NaN: 1.1d's and 1.5b's `!=` arms are false on an unordered compare, as
+  `==` is, where CoD2's and CoD4's `!(a == b)` is true (the instructions
+  above, VERIFIED). vcod's `!=` is `!(a == b)` for all; no probe made a
+  NaN.
+
+vcod: `values_equal` and `floats_equal` (`crates/gsc/src/vm/interp.rs`)
+under `VmProfile::number_eq`: `NumberEq::Kept` for 1.1, `Stored` for
+1.5, UO, CoD2 and CoD4. `Kept` gets the 80-bit rounding exact off an f64
+TwoSum. `semantics_ab` replays the 1.1d capture and
+`probe_eq_tol_matches_retail_stored` the others.
 
 ## 10. `getEntArray` returns ascending entity number
 

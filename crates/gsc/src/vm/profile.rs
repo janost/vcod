@@ -4,6 +4,16 @@
 
 use crate::Dialect;
 
+/// How `==` and `!=` test two numbers: `|a - b| < 1e-6` as floats, the
+/// difference rounded one of two ways (cod11-gsc-object-model.md 9.3.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NumberEq {
+    /// The difference stays on the x87 stack at 80 bits (1.1d).
+    Kept,
+    /// The difference is stored as a float first (1.5b, UO, CoD2, CoD4).
+    Stored,
+}
+
 /// One game's VM rules.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VmProfile {
@@ -26,10 +36,12 @@ pub struct VmProfile {
     /// A bracket read on a struct reads undefined
     /// ([`super::Vm::set_struct_index_reads_undefined`]).
     pub struct_index_reads_undefined: bool,
+    /// How `==` rounds the difference of two numbers ([`super::Vm::set_number_eq`]).
+    pub number_eq: NumberEq,
 }
 
 impl VmProfile {
-    /// CoD 1.1 and United Offensive.
+    /// CoD 1.1.
     pub const COD1: VmProfile = VmProfile {
         dialect: Dialect::Cod1,
         vectors_g: false,
@@ -39,11 +51,19 @@ impl VmProfile {
         frame_waits: false,
         endons_end_with_call: false,
         struct_index_reads_undefined: false,
+        number_eq: NumberEq::Kept,
     };
 
-    /// CoD 1.5: 1.1's rules but for its bracket read on a struct.
+    /// CoD 1.5: 1.1's rules but for its bracket read on a struct and its `==`.
     pub const COD1_15: VmProfile = VmProfile {
         struct_index_reads_undefined: true,
+        number_eq: NumberEq::Stored,
+        ..VmProfile::COD1
+    };
+
+    /// United Offensive 1.51: 1.1's rules but for its `==`.
+    pub const COD1_UO: VmProfile = VmProfile {
+        number_eq: NumberEq::Stored,
         ..VmProfile::COD1
     };
 
@@ -57,6 +77,7 @@ impl VmProfile {
         frame_waits: false,
         endons_end_with_call: false,
         struct_index_reads_undefined: false,
+        number_eq: NumberEq::Stored,
     };
 
     /// CoD4 1.7: CoD2's rules until a retail probe says otherwise
@@ -80,5 +101,6 @@ impl super::Vm {
         self.set_frame_waits(p.frame_waits);
         self.set_endons_end_with_call(p.endons_end_with_call);
         self.set_struct_index_reads_undefined(p.struct_index_reads_undefined);
+        self.set_number_eq(p.number_eq);
     }
 }
