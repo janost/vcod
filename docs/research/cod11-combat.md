@@ -5651,9 +5651,9 @@ three ranges against the server's `D;` records, a grenade kill and its
 killfeed line, a melee kill and its icon, a death while cooking and the
 grenade the body drops, and a wall between the eye and the blast.
 
-### 9.6 What the third hand check found
+### 9.6 Three pmove traps from the third hand check, and their pins
 
-Three traps, fixed in `crates/common/src/pmove/weapon.rs` and
+Retail facts, pinned in `crates/common/src/pmove/weapon.rs` and
 `crates/common/src/pmove.rs`:
 
 - A missing def must not end `pm_weapon` before the switch check. INFERRED,
@@ -8975,9 +8975,9 @@ VERIFIED (the instructions), 1.1d `Use_trigger_damage` 0x65d10: it calls
 `Activate_trigger_damage` reads that damage only against `threshold`
 (0x650eb..0x650f8, `damage < threshold` refuses); the `accumulate` gate
 reads `32000 - health` (+0x230, 0x65113..0x6512a), which a `useBy` leaves
-at 0. So a `useBy` fires a trigger with `accumulate` 0 and `threshold` up
+at 0. INFERRED (from the two reads above): so a `useBy` fires a trigger with `accumulate` 0 and `threshold` up
 to `accumulate + 1`, and never one with `accumulate` set while it is at
-full health. Mod -1 skips `G_Trigger` (0x65136). Not captured: no stock
+full health. Mod -1 skips `G_Trigger` (0x65136). INFERRED (not captured): no stock
 map's `trigger_damage` sets `accumulate` or `threshold`, and a script's
 `spawn` sets neither.
 

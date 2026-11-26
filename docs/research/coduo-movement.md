@@ -53,7 +53,7 @@ and ground trace (INFERRED from the order).
 ## 2. The sprint flag
 
 `PM_UpdatePlayerSprintingFlag` (0x2c74a) clears `pm_flags` 0x10000 and
-sets it again only when all of these hold (VERIFIED decompile; the two
+sets it again only when all of these hold (INFERRED (decompile); the two
 fatigue thresholds VERIFIED bytes at 0x9b968 and 0x9b96c):
 
 - `pm_type < 4` and the cmd's `buttons` 0x8.
@@ -73,14 +73,14 @@ sprint held against a wall keeps it with no speed (VERIFIED, ct 29092).
 The walk's cmd scale (0x23af5) picks `walkSpeedScale` for the ADS walk, a
 lean, or an LMG in `weaponstate` 13; else `sprintSpeedScale` while 0x10000
 is set; else `runSpeedScale`. While sprinting it leaves out the weapon's
-`moveSpeedScale` (VERIFIED decompile). The air and ladder scale (0x23905)
+`moveSpeedScale` (INFERRED (decompile)). The air and ladder scale (0x23905)
 makes the same three-way pick (VERIFIED decompile). `sprintSpeedScale`
 reads 1.6 on the wire (VERIFIED, `coduo-diff.md` 5). In the capture the
 mg30cal (`moveSpeedScale` 1.1) runs at 209 and sprints at 304, 190 x 1.6
 with no weapon factor (VERIFIED).
 
 `PM_Footsteps` (0x297e4) divides the bob rate by the sprint scale instead
-of the run scale while sprinting (VERIFIED decompile).
+of the run scale while sprinting (INFERRED (decompile)).
 
 Footstep ids, from the picker (0x25b9b) (VERIFIED decompile, those
 immediates):
@@ -114,7 +114,7 @@ Acceleration and friction are 1.5's: rodata 0x9b4a4..0x9b4e4 equals 1.5's
 | `pm_fatigueRegen` | 1/7 | 0x9b4ec |
 | `pm_fatigueRegenDelay` | 1000 | 0x9b4f0 |
 
-Logic, VERIFIED decompile:
+Logic, INFERRED (decompile):
 
 - A sprinting cmd (not noclip, `bg_nofatigue` 0) stamps `lastSprintTime`
   with its `serverTime` and takes `0.001 * msec / 3` off the bar. Under
@@ -128,7 +128,7 @@ Logic, VERIFIED decompile:
   `PM_PlayFatigueSound`. A cmd inside the refill delay without the button
   calls nothing.
 
-`PM_PlayFatigueSound` (0x2a968, VERIFIED decompile; immediate 0x6a4 =
+`PM_PlayFatigueSound` (0x2a968, INFERRED (decompile); VERIFIED immediate 0x6a4 =
 1700): when winded and `iFatigueSoundTime` (ps+0x3c, the netfield of that
 name) is more than 1700 ms behind the cmd's `serverTime`, it raises event
 140 and stamps the field with `serverTime`. When not winded it zeroes a
@@ -220,9 +220,9 @@ capture a sighted press standing against a wall was refused on every cmd
 ### Deploy and breakdown
 
 The deploy driver (0x35b66) runs in `PM_Weapon` for `weaponClass` 3 and 8
-outside a match timeout, after the timers (VERIFIED decompile). It leaves
+outside a match timeout, after the timers (INFERRED (decompile)). It leaves
 `weaponstate` 1, 2, 10 and 11 alone, and 5 to 9 while sighted (INFERRED,
-its jump table). Otherwise (VERIFIED decompile):
+its jump table). Otherwise (INFERRED (decompile)):
 
 | Trigger | Routine | `weaponstate` | `weaponTime` | `weapAnim` | Event |
 |---|---|---|---|---|---|
@@ -230,7 +230,7 @@ its jump table). Otherwise (VERIFIED decompile):
 | flag lost, fraction > 0 | breakdown 0x3484c | 13 | `adsTransOutTime` | 20 | 161 |
 
 Each ends at `weaponstate` 0 and `weapAnim` 0 once both timers run out
-(0x350c2, 0x35120, VERIFIED decompile). The stock mg30cal reads
+(0x350c2, 0x35120, INFERRED (decompile)). The stock mg30cal reads
 `adsTransInTime 1.8`, `adsTransOutTime 1.9`, `moveSpeedScale 1.1`
 (VERIFIED, the weapon file). The capture's first deploy snapshot reads
 `weaponTime` 1774, 25 ms in, and the breakdown's 1875, 24 ms in
@@ -242,7 +242,7 @@ event too, and the breakdown raises it again across a stance change
 
 ### While deployed
 
-VERIFIED decompile:
+INFERRED (decompile):
 
 - Moves are zeroed (section 1).
 - `PM_CheckDuck` (0x27e16) takes no stance key.
@@ -447,7 +447,7 @@ short.
 
 ### The server's half
 
-`G_CheckForCursorHints` (game.mp.uo 0x67aa0, VERIFIED decompile):
+`G_CheckForCursorHints` (game.mp.uo 0x67aa0, INFERRED (decompile)):
 
 - Zeroes the hint and its value; for a live client with no in-use flag
   sets the string to -1 (0xff on the wire).
@@ -511,7 +511,7 @@ vcod-server:
 
 A mount is in the touch pass only while its contents meet
 `G_TouchTriggers`' area query, `trap_EntitiesInBox` under 0x405c0008
-(`G_TouchTriggers` 0x3fb15, VERIFIED decompile); nothing else in the pass
+(`G_TouchTriggers` 0x3fb15, INFERRED (decompile)); nothing else in the pass
 reads a trigger's kind. Measured on retail UO 1.51b, mp_foy
 (`client-probes/probe_mounttouch`, one spawned `--probe-team allies` probe
 inside a standing script mount around his spawn), `"trigger"` notifies
@@ -600,7 +600,7 @@ asserts it).
 ## 12. The grenade cook
 
 In `PM_Weapon` (0x3726c), before its timers, for `weaponType` 1
-(VERIFIED decompile; immediates 10, 0x33, 0x32, 0xa3, 0xd2, 0x640, 0xb6):
+(INFERRED (decompile); VERIFIED immediates 10, 0x33, 0x32, 0xa3, 0xd2, 0x640, 0xb6):
 
 - With `cookOffHold` set, an edge of `buttons` 0x10 (the sight, pressed or
   released) against the previous cmd while `grenadeTimeLeft >= fuseTime`
@@ -625,7 +625,7 @@ sight's edge starts it (INFERRED from the conditions).
   `grenadeTimeLeft` (2500 ms when that is 0) and zeroes it (VERIFIED
   decompile).
 - `PM_UpdatePlayerSprintingFlag` refuses the sprint while a `cookOffHold`
-  grenade's fuse runs (section 2, VERIFIED decompile).
+  grenade's fuse runs (section 2, INFERRED (decompile)).
 - Every stock UO grenade has `cookOffHold 1`; the frag's `fuseTime` is 4
   and `explosionInnerDamage` 120 (VERIFIED, `pakuo07.pk3`).
 
@@ -728,13 +728,13 @@ retail 1.51b, from `probe_prone`'s street placement. `moves_ab.rs`
   sight's ranges (def+0x3f4..0x400) only at `fWeaponPosFrac` 1.0, else
   the hip's (def+0x43c..0x448), roll -0.5 times the yaw. It adds the
   gun's kick from the sight's (def+0x3d4..0x3e0) at any `frac` above 0.0,
-  else the hip's (def+0x41c..0x428) (VERIFIED, the decompile; constants
+  else the hip's (def+0x41c..0x428) (INFERRED (decompile); VERIFIED constants
   1.0, 0.0, -0.5 and 1/32768 at 0x3007bce0, 0x3007bcec, 0x3007bf50,
   0x3007bec0).
 - `CG_KickAngles` (0x3003f9f0) steps 5 ms slices, centres at the sight's
   speed (def+0x404) above `frac` 0.5, else the hip's (def+0x44c), 2400
   with no weapon; it moves back at 0.06 of the speed and clamps at 10
-  degrees (VERIFIED, the decompile; constants at 0x3007bdac, 0x3007bda8,
+  degrees (INFERRED (decompile); VERIFIED constants at 0x3007bdac, 0x3007bda8,
   0x3007bd30, 0x3007bce8).
 - The sight's offsets sit 0x84 past 1.1's (0x370, 0x350, 0x380), the
   hip's 0x8c past (0x3b0, 0x390, 0x3c0), each block in 1.1's order

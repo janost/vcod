@@ -1066,10 +1066,10 @@ restarts each, no client in, loopback, in a sealed namespace
 | UO 1.51b | mp_foy bas | 110 to 124 ms |
 | UO 1.51b | mp_cassino sd | 96 to 101 ms |
 
-Retail UO's restart holds its frame loop about 100 ms, four times 1.1's.
+INFERRED (from the round trip): retail UO's restart holds its frame loop about 100 ms, four times 1.1's.
 Where UO spends it is not read.
 
-vcod-server, the same restarts with six shooting bots
+VERIFIED (measured), vcod-server, the same restarts with six shooting bots
 (`VCOD_TICK_PROFILE_MS=20`; the `console/map_restart` and `load/*` phases,
 `spawn/*` inside `load/spawn`), mp_foy sd:
 
@@ -1604,39 +1604,35 @@ compare these frame for frame, with no tolerance.
   starts (53350 to 118400). The probe's receive clock read 5177 ms and
   64619 / 64624 ms for the same spans.
 
-### 8.2 What differed, and the one still open
+### 8.2 What the `dm` and `sd` runs read on vcod's server, and the one open item
 
-Each bullet was a defect in vcod the runs found. One is still open, the
-`loadingnewmap` timing (the sixth bullet).
+The runs found these differences against retail's captures. Each closed one
+keeps its retail fact and its pin; the sixth bullet is still open.
 
 - Closed. VERIFIED, the `dm` run: the restart burst carried no `d 13` and no
   `d 12` where retail's carries both, and its `d 3` read `t\0` where retail's
-  reads the incoming level's start time. 4.5's write log and squash now
-  drive both off the level clock, and `tests/mapchange_ab.rs` compares the
-  burst slot for slot.
+  reads the incoming level's start time. 4.5's write log and squash drive
+  both off the level clock; `tests/mapchange_ab.rs` compares the burst slot
+  for slot.
 - Closed. VERIFIED, the `dm` run: no `f` server command at all, against five
   in retail's capture (`MPSCRIPT_CONNECTED` at each of the three level
-  starts, `MPSCRIPT_TIME_LIMIT_REACHED` at each of the two map ends). Cause:
-  `iprintln` routed to `println`'s handler. `builtins::io::iprint_line`
-  sends `f "<message>"` to every client, or to the receiver alone when the
-  call has one: the split between `Scr_MakeGameMessage`'s two callers at
-  `0x5cd28` and `0x45594`.
+  starts, `MPSCRIPT_TIME_LIMIT_REACHED` at each of the two map ends).
+  `builtins::io::iprint_line` sends `f "<message>"` to every client, or to
+  the receiver alone when the call has one: the split between
+  `Scr_MakeGameMessage`'s two callers at `0x5cd28` and `0x45594`.
 - Closed. VERIFIED, the `dm` run: the intermission's `v cg_objectiveText`
   value was `MPSCRIPT_WINS` and the localized separator, where retail's
-  adds the winner's name and colour code. Cause: `set_client_cvar` read only
-  `args[0]` and `args[1]`. `builtins::message::construct` packs the
-  substitution arguments as `Scr_ConstructMessageString`
+  adds the winner's name and colour code. `builtins::message::construct`
+  packs the substitution arguments as `Scr_ConstructMessageString`
   (`game.mp.i386.so` `0x594d0`) does, a player entity through the `%s^7` at
   `0x767d9`.
 - Closed. VERIFIED, the `dm` run: the life after the restart carried
   `eFlags` 24, the intermission's word, where retail's carries 16 against
-  the intermission's 24. Cause: `ClientSim::respawn` flipped the teleport
-  bit only for a player spawn and pinned the spectator and intermission word
-  at 24. VERIFIED, from the three committed captures read spawn for spawn:
-  retail's word alternates on *every* spawn, the connect's `spawnSpectator`
-  and the intermission camera included, which is why the `sd` target's
-  post-death spectator frame reads 16 where its first one read 24 and why
-  two of its consecutive lives both read 24
+  the intermission's 24. VERIFIED, from the three committed captures read
+  spawn for spawn: retail's word alternates on *every* spawn, the connect's
+  `spawnSpectator` and the intermission camera included, which is why the
+  `sd` target's post-death spectator frame reads 16 where its first one read
+  24 and why two of its consecutive lives both read 24
   (`mp_carentan-sd-roundrestart-target.txt`, `!trace ms=335`, `ms=25436`,
   `ms=28607` and `ms=118532`). INFERRED, from that rule against the `dm`
   capture's restart, whose spectator frame repeats the intermission's 24
@@ -1648,9 +1644,9 @@ Each bullet was a defect in vcod the runs found. One is still open, the
   0 on all three axes where retail's read a yaw of 90 (`mp_carentan`'s
   `mp_deathmatch_intermission` heading); the origins agree. `PM_UpdateViewAngles`
   returns at `pm_type` 5 and a spawn's `SetClientViewAngle` writes the field
-  (`docs/protocol-1.1.md`, "View angles"); `to_wire` writes the sim's view
-  in every mode, so the camera reads the spawn's 0, 90. Whether a retail
-  client's intermission camera faces the same way is a pending hand check.
+  (`docs/protocol-1.1.md`, "View angles"), so the camera reads the spawn's
+  0, 90. Whether a retail client's intermission camera faces the same way is
+  a pending hand check.
 - Open. VERIFIED, the `dm` run: the `loadingnewmap` line and the gamestate
   reached the probe in the same millisecond, where retail left 1493 ms
   between them. INFERRED, from `Server::spawn_server`: it queues the line
@@ -1663,24 +1659,19 @@ Each bullet was a defect in vcod the runs found. One is still open, the
 - Closed. VERIFIED, the `sd` run: the announcer command `s 4` went out with
   no `d 528` naming the alias before it, where retail sends `d 528` then
   `s 4`. VERIFIED, a debug probe against the same server: configstring 528
-  was empty in vcod's gamestate. Cause: `send_configstring_update` had
-  callers on the restart path only. `Server::broadcast_configstring_changes`
+  was empty in vcod's gamestate. `Server::broadcast_configstring_changes`
   diffs the table against the copy the clients last heard after every script
   frame and sends `d <index> <text>` for each slot that moved (the broadcast
-  3.1's compare pair lets through while `sv.state` reads 2). It runs ahead
-  of the frame's client commands, so the `d` naming an alias precedes the
-  `s` that plays it, and both level boundaries re-sync the copy instead of
-  replaying a whole table slot by slot.
+  3.1's compare pair lets through while `sv.state` reads 2), ahead of the
+  frame's client commands; both level boundaries re-sync the copy.
 - Closed. VERIFIED, a debug probe against a server started with
   `--set g_gametype=sd`: configstring 0 read `g_gametype\dm` while the `sd`
   scripts ran, which is why the `sd` run's fixtures came out named for `dm`.
-  Cause: `Server::new` stamped the table from the config before `main.rs`
-  replayed the `--set` list. `Server::set_cvar` rewrites slot 0 from the
-  serverinfo string when it mirrors a cvar that string carries, as 4.3's
-  flush follows a serverinfo write with
-  `SV_SetConfigstring(0, Cvar_InfoString(CVAR_SERVERINFO))`.
+  `Server::set_cvar` rewrites slot 0 from the serverinfo string when it
+  mirrors a cvar that string carries, as 4.3's flush follows a serverinfo
+  write with `SV_SetConfigstring(0, Cvar_InfoString(CVAR_SERVERINFO))`.
 
-### 8.3 What the first runs could not reach (closed)
+### 8.3 What the first runs could not reach, and the callback frame
 
 VERIFIED, the `sd` run: both probes answered the team menu and never left
 it, reading `team` 3 and `pm_type` 4 for the whole run, where the same probe
@@ -1690,18 +1681,14 @@ before the `spawnSpectator` that calls `updateTeamStatus`, and from that
 function opening with `wait 0`: the `t 0` was on the wire while the connect
 thread was suspended, and an answer arriving inside that frame notified an
 event no thread was parked on and was lost. INFERRED, from 4.4's
-`VM_Call(gvm, 3, clientNum)` against vcod's ordering: retail raises
-`ClientBegin` inside `SV_ExecuteClientMessage`, before `G_RunFrame` advances
-`level.time`, so the callback's `wait 0` is due in that frame's thread pass;
-vcod dispatched the event at the top of `G_RunFrame`'s counterpart, a frame
-late. Closed: `ScriptRuntime::run_frame` opens with a packet pass that
-dispatches the netcode's events on the previous frame's clock, each callback
-running to its first suspend; what they woke runs in the frame's first pass
-(`cod11-gsc-language.md`, "The packet pass"). The callback is parked on
-`menuresponse` before its `t 0` can be answered, and the `sd` gates answer
-the menu the instant it opens. A waiter a later-started thread woke is taken
-by the frame's pass, not resumed on the previous frame's clock, which
-`probe_notify_frame` measures (`cod11-gsc-language.md`, the thread pick
+`VM_Call(gvm, 3, clientNum)`: retail raises `ClientBegin` inside
+`SV_ExecuteClientMessage`, before `G_RunFrame` advances `level.time`, so the
+callback's `wait 0` is due in that frame's thread pass.
+`ScriptRuntime::run_frame` opens with a packet pass that dispatches the
+netcode's events on the previous frame's clock, each callback running to its
+first suspend (`cod11-gsc-language.md`, "The packet pass"). The `sd` gates
+answer the menu the instant it opens, and `probe_notify_frame` measures a
+waiter a later-started thread woke (`cod11-gsc-language.md`, the thread pick
 paragraph).
 
 The elimination restart's timing is read off the `sd` fixtures (8.1, last

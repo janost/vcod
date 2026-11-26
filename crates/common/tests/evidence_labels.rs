@@ -20,6 +20,11 @@
 //!   pairs with INFERRED without contradiction, so a clause carrying those two
 //!   is legitimate and is left alone.
 //!
+//! - a label in a section heading (`## 16. ..., VERIFIED`), which covers the
+//!   whole section the same as a blanket;
+//! - a section of 400 bytes or more whose body opens with a bare `VERIFIED`
+//!   and holds no other label: one word over every claim that follows.
+//!
 //! **What it cannot catch**, and a reader still has to:
 //!
 //! - a VERIFIED claim that narrates sequencing ("followed by", "then") or a
@@ -27,9 +32,6 @@
 //!   range behind it, or that rests on another game's source shape. A grep
 //!   cannot tell it from the same sentence read at a cited range;
 //! - a claim carrying no label at all;
-//! - a blanket in a section heading (`## 16. ..., VERIFIED`). The rule
-//!   forbids it the same as any other per-section blanket, and nine section
-//!   headings in `cod11-gsc-object-model.md` still carry one;
 //! - a document-level default ("everything here is VERIFIED unless labelled
 //!   otherwise"), the most common blanket left in the corpus. The rule
 //!   sanctions it where the document's provenance is uniform and every
@@ -235,6 +237,103 @@ fn no_claim_carries_both_evidence_labels() {
     );
 }
 
+/// The sections of `text` as (heading line, one-based line of the heading,
+/// body), a section running to the next heading of any level.
+fn sections(text: &str) -> Vec<(&str, usize, String)> {
+    let mut out: Vec<(&str, usize, String)> = Vec::new();
+    let mut fence = false;
+    for (n, line) in text.lines().enumerate() {
+        if line.starts_with("```") {
+            fence = !fence;
+        }
+        if !fence && line.starts_with('#') && line.trim_start_matches('#').starts_with(' ') {
+            out.push((line, n + 1, String::new()));
+        } else if let Some(last) = out.last_mut() {
+            last.2.push_str(line);
+            last.2.push('\n');
+        }
+    }
+    out
+}
+
+/// A label in a heading covers the whole section.
+fn labelled_headings(text: &str) -> Vec<(usize, String)> {
+    sections(text)
+        .into_iter()
+        .filter(|(h, ..)| has_verified(h) || h.contains("INFERRED"))
+        .map(|(h, n, _)| (n, excerpt(h, 90)))
+        .collect()
+}
+
+/// A body this long holds several claims; a shorter one is one claim and one
+/// label.
+const LONE_LABEL_MIN_BODY: usize = 400;
+
+/// Sections that are one table or one decompiled function under a single
+/// source-naming lead-in (`VERIFIED (the decompilation): ...`), where the one
+/// label is the claim. (file, heading prefix)
+const ONE_SOURCE_SECTIONS: [(&str, &str); 5] = [
+    ("cod11-events-and-fx.md", "### 5a."),
+    ("cod11-gametypes-re-bel.md", "### 7.4 "),
+    ("cod2-combat.md", "### 1.5 "),
+    ("coduo-movement.md", "### While deployed"),
+    ("player-model-anim-system.md", "### 6.9 "),
+];
+
+/// Sections whose first body line opens with a bare `VERIFIED` and whose body
+/// carries no second label, and is long enough to hold more than one claim.
+fn lone_verified_openers(text: &str) -> Vec<(usize, String)> {
+    sections(text)
+        .into_iter()
+        .filter(|(_, _, body)| {
+            let first = body.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+            let first = first.trim_start_matches(['`', '*', ' ']);
+            let labels = body.matches("VERIFIED").count() + body.matches("INFERRED").count()
+                - body.matches("UNVERIFIED").count();
+            first.starts_with("VERIFIED") && labels <= 1 && body.len() >= LONE_LABEL_MIN_BODY
+        })
+        .map(|(h, n, _)| (n, excerpt(h, 90)))
+        .collect()
+}
+
+/// A section carries its labels in its body, one per claim.
+#[test]
+fn no_heading_carries_a_label() {
+    let mut hits = Vec::new();
+    for (name, text) in research_docs() {
+        for (line, h) in labelled_headings(&text) {
+            hits.push(format!("{name}:{line}: {h}"));
+        }
+    }
+    assert!(
+        hits.is_empty(),
+        "a heading label covers the whole section; label each claim in the body:\n{}",
+        hits.join("\n")
+    );
+}
+
+#[test]
+fn no_section_opens_with_a_lone_verified() {
+    let mut hits = Vec::new();
+    for (name, text) in research_docs() {
+        for (line, h) in lone_verified_openers(&text) {
+            if ONE_SOURCE_SECTIONS
+                .iter()
+                .any(|(f, p)| *f == name && h.starts_with(p))
+            {
+                continue;
+            }
+            hits.push(format!("{name}:{line}: {h}"));
+        }
+    }
+    assert!(
+        hits.is_empty(),
+        "a section opens with VERIFIED and holds no other label, so one word \
+         covers every claim; label each claim:\n{}",
+        hits.join("\n")
+    );
+}
+
 #[test]
 fn the_check_fires_on_the_shapes_it_claims_to_catch() {
     // The section 19 sentence that cost this repo a review round: opens
@@ -290,4 +389,21 @@ fn the_check_fires_on_the_shapes_it_claims_to_catch() {
                 Each bullet is VERIFIED unless labelled otherwise.\n\n\
                 The stores, each VERIFIED:\n\n- c\n";
     assert_eq!(blankets(lead).len(), 4);
+
+    // A label in a heading, and a lone VERIFIED opener, are caught; a section
+    // with a second label is not.
+    assert_eq!(labelled_headings("## 3. Name, VERIFIED\n\ntext\n").len(), 1);
+    assert_eq!(labelled_headings("## 3. Name\n\nVERIFIED x.\n").len(), 0);
+    assert_eq!(
+        lone_verified_openers(&format!(
+            "## 1. A\n\n`VERIFIED`. Per-row defaults. {}\n",
+            "x".repeat(400)
+        ))
+        .len(),
+        1
+    );
+    assert_eq!(
+        lone_verified_openers("## 1. A\n\nVERIFIED x. INFERRED y.\n").len(),
+        0
+    );
 }

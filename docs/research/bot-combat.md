@@ -1235,7 +1235,7 @@ stands still, never backs off and never lies down.
 ### 9.4 What the UO bot gates found
 
 VERIFIED (measured, ours, `tests/bots.rs` ignored tests at a stock UO
-install, 2026-10-21). This change routed bots into follower pins, all
+install, 2026-10-21). INFERRED (from the causes found): this change routed bots into follower pins, all
 since fixed (bot-objectives.md 10.6, bot-navigation.md "Jumps", "A goal
 that flickers"):
 
