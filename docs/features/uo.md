@@ -87,7 +87,8 @@ Vehicles:
   script's `spawnTriggerMount` (coduo-movement.md 11).
 - Artillery strikes, smoke grenades, satchel charges, the flamethrower's
   reported damage and mounted MG overheat run UO's rules. The strike, the
-  smoke, the bipod MG, the satchel and the overheat match retail captures,
+  smoke, the bipod MG, the satchel, the overheat and the gunner's heat bar
+  (`getTurretHeat`, frame by frame) match retail captures,
   and so does a satchel shot off or set off by another's blast
   (coduo-diff.md 21).
 - The bazooka and panzerschreck fire rockets like the panzerfaust's. A

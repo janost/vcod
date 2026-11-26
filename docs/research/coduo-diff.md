@@ -2757,6 +2757,41 @@ carriers against the section 19 captures.
   round, the first round after it and the mark (VERIFIED). The overheat tank
   capture's vehicle gunner is section 9's, not this path.
 
+#### 21.3.1 The heat builtins
+
+- `getTurretHeat()` (0x69aec) and `getTurretOverheating()` (0x69b60) are
+  the last two generic entity methods (`dump_builtins.py`, rows 54 and
+  55). Each takes `self`, compares its classname (`ent+0x184`) against two
+  `scr_const` strings and raises `Can only call turret script functions on
+  misc_mg42 or misc_turret` (0xa2fa0) on neither, then reads
+  `pTurretInfo` (`ent+0x168`): the heat at +0x40 through `Scr_AddFloat`,
+  the latch at +0x44 through `Scr_AddBool`. VERIFIED (the instructions,
+  0x69b04..0x69b55 and 0x69b78..0x69bc9).
+- The one stock caller is `maps/mp/_turret_gmi.gsc` (`pakuo` scripts,
+  threaded by `_load::main` on every map): once a gun is `activated` it
+  gives the gunner two hudelems at (501, 449) and (502, 450), and every
+  0.1 s sets the bar's width to `(1 - heat) * 126`, at least 1, and its
+  colour to `(1, 1 - heat, 1 - heat)`, red while overheating. VERIFIED (the
+  script). The heat therefore reaches the client only as that hudelem;
+  no playerstate or entity field carries it (section 21.3's
+  `animMovetype` marks the first overheat only).
+- VERIFIED, live (retail 1.51b, 2026-11-26,
+  `client-probes/probe_turretheat` on mp_carentan with a `--save-turret`
+  gunner and an axis target, recipe in
+  `mp_carentan-dm-turret-heat-uo.txt`): the trigger held 201 frames reads
+  0.02 on the first round's frame and 0.01 more each frame after (a
+  round's 0.02 less the frame's `cooldownRate`), 1.01 at +4950 ms, then
+  the latch at 1 with the heat 1, cooling 0.01 a frame to 0.49 with the
+  latch still 1, the latch 0 and the next round on the frame after (0.5),
+  and from the release 0.01 off a frame through `5.51343e-07` and
+  `-0.00999945` to 0. The printed floats (`0.270001`) are f32 steps.
+- vcod: `builtins::uo::get_turret_heat` and `get_turret_overheating` over
+  `TurretRecord::heat` and `overheated`; the heat model is section 21.3's.
+  `uo_weapons_ab`'s `the_mounted_mgs_heat_reads_as_on_uo` matches the
+  capture's 301 lines, every printed digit, with ours holding the trigger
+  as many frames as retail's heat rose. 1.1 and 1.5 do not compile these
+  methods, so the probe is UO's alone.
+
 ### 21.4 Flamethrower
 
 - `weaponType gas` does nothing in `FireWeapon` (0x7bd05: types 0 to 3 have

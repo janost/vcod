@@ -584,75 +584,8 @@ fn the_mounted_mg_overheats_and_cools_as_on_uo() {
     }
     let (r_rounds, r_heats) = turret_shape(&retail, gun.expect("the fired gun"));
 
-    let map = "mp_carentan";
-    let src = "../gsc/tests/fixtures/semantics/client-probes/probe_turret.gsc";
-    let probe = std::fs::read_to_string(src).expect("read the probe");
-    let (mut sv, mut now) = common::Boot {
-        proto: Some(p),
-        cvars: &[("probe_teleport", "1")],
-        script: Some(&probe),
-        ..common::Boot::new(map, "probe_turret")
-    }
-    .start(fs);
-    let q = Rc::new(RefCell::new(common::Queues::default()));
-    let (mut cl, _join) = common::join(&mut sv, &q, &mut now, "allies", "m1garand_mp");
-    let mut ours = Run::default();
-    let mut tracker = EventTracker::new();
-    let mut ours_mark = None;
-    let mut our_gun = None;
-    // Settle, use, 10 s on the trigger, let go.
-    for frame in 0..(2_000 + 300 + 12_000) / common::FRAME_MS {
-        let ms = frame * common::FRAME_MS;
-        let newest = cl.snapshots().newest();
-        let mut view = newest.map_or([0.0; 3], |s| s.ps.viewangles(p));
-        let weapon = newest.map_or(0, |s| s.ps.field_i32(p, "weapon") as u8);
-        // The joins' cmds turned the view off the script's
-        // `setPlayerAngles`; face the gun before the use, as turret_ab does.
-        if (1_000..2_000).contains(&ms)
-            && let Some(s) = newest
-            && let Some(at) = s
-                .entities
-                .values()
-                .filter(|e| e.field_i32(p, "eType") == ET_TURRET)
-                .map(|e| e.origin(p))
-                .min_by(|a, b| {
-                    let d = |o: &[f32; 3]| (o[0] - 1712.0).hypot(o[1] - 1830.0);
-                    d(a).total_cmp(&d(b))
-                })
-        {
-            let me = s.ps.origin(p);
-            view = [0.0, (at[1] - me[1]).atan2(at[0] - me[0]).to_degrees(), 0.0];
-        }
-        let buttons = match ms {
-            2_000..2_100 => BUTTON_USE,
-            2_300..12_300 => BUTTON_ATTACK,
-            _ => 0,
-        };
-        for cmd_ms in [16, 17, 17] {
-            now += Duration::from_millis(cmd_ms);
-            cl.pump_at(now);
-            cl.send_frame(&UserCmd {
-                buttons,
-                weapon,
-                angles: [deg_to_short(view[0]), deg_to_short(view[1]), 0],
-                ..vcod_common::net::msg::NULL_USERCMD
-            });
-        }
-        common::step(&mut sv, &q, &mut cl, now);
-        if let Some(s) = cl.snapshots().newest() {
-            ours.record(&mut tracker, s, p);
-            for (&n, e) in &s.entities {
-                if e.field_i32(p, "eType") == ET_TURRET {
-                    if e.field_i32(p, "eFlags") & EF_FIRING != 0 {
-                        our_gun = Some(n);
-                    }
-                    if e.field_i32(p, "animMovetype") == 1 && ours_mark.is_none() {
-                        ours_mark = Some(s.server_time.raw());
-                    }
-                }
-            }
-        }
-    }
+    let drive = drive_the_carentan_mg(fs, "probe_turret", &[("probe_teleport", "1")], 10_000);
+    let (ours, ours_mark, our_gun) = (drive.run, drive.mark, drive.gun);
     let (o_rounds, o_heats) = turret_shape(&ours, our_gun.expect("our gun fired"));
     if std::env::var_os("UOWEAP_REPORT").is_some() {
         println!("retail rounds {r_rounds:?}\nheats {r_heats:?} mark {retail_mark:?}");
@@ -1271,5 +1204,144 @@ fn a_satchel_blast_sets_off_the_next_and_none_goes_off_twice() {
     assert_eq!(
         r, o,
         "(since the shot, since the first throw, eType, parm, type, eFlags, surface, origin)"
+    );
+}
+
+/// What [`drive_the_carentan_mg`] saw: the server, the gunner's events, the
+/// time `animMovetype` 1 first reached the wire and the gun that fired.
+struct MgDrive {
+    sv: vcod_server::Server,
+    run: Run,
+    mark: Option<i32>,
+    gun: Option<u32>,
+}
+
+/// An allied gunner on `probe`'s level on UO's mp_carentan: settle, use the
+/// gun at (1712 1830 8), hold the trigger `hold_ms`, let go and cool 6 s.
+fn drive_the_carentan_mg(
+    fs: vcod_common::pk3::Pk3Fs,
+    probe: &str,
+    cvars: &[(&str, &str)],
+    hold_ms: i64,
+) -> MgDrive {
+    let p: &'static Cod1Wire = &PROTOCOL_V22;
+    let src = format!("../gsc/tests/fixtures/semantics/client-probes/{probe}.gsc");
+    let script = std::fs::read_to_string(src).expect("read the probe");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        cvars,
+        script: Some(&script),
+        ..common::Boot::new("mp_carentan", probe)
+    }
+    .start(fs);
+    let q = Rc::new(RefCell::new(common::Queues::default()));
+    let (mut cl, _join) = common::join(&mut sv, &q, &mut now, "allies", "m1garand_mp");
+    let mut run = Run::default();
+    let mut tracker = EventTracker::new();
+    let mut mark = None;
+    let mut gun = None;
+    let held = 2_300..2_300 + hold_ms;
+    for frame in 0..(held.end + 6_000) / common::FRAME_MS {
+        let ms = frame * common::FRAME_MS;
+        let newest = cl.snapshots().newest();
+        let mut view = newest.map_or([0.0; 3], |s| s.ps.viewangles(p));
+        let weapon = newest.map_or(0, |s| s.ps.field_i32(p, "weapon") as u8);
+        // The joins' cmds turned the view off the script's
+        // `setPlayerAngles`; face the gun before the use, as turret_ab does.
+        if (1_000..2_000).contains(&ms)
+            && let Some(s) = newest
+            && let Some(at) = s
+                .entities
+                .values()
+                .filter(|e| e.field_i32(p, "eType") == ET_TURRET)
+                .map(|e| e.origin(p))
+                .min_by(|a, b| {
+                    let d = |o: &[f32; 3]| (o[0] - 1712.0).hypot(o[1] - 1830.0);
+                    d(a).total_cmp(&d(b))
+                })
+        {
+            let me = s.ps.origin(p);
+            view = [0.0, (at[1] - me[1]).atan2(at[0] - me[0]).to_degrees(), 0.0];
+        }
+        let buttons = match ms {
+            2_000..2_100 => BUTTON_USE,
+            _ if held.contains(&ms) => BUTTON_ATTACK,
+            _ => 0,
+        };
+        for cmd_ms in [16, 17, 17] {
+            now += Duration::from_millis(cmd_ms);
+            cl.pump_at(now);
+            cl.send_frame(&UserCmd {
+                buttons,
+                weapon,
+                angles: [deg_to_short(view[0]), deg_to_short(view[1]), 0],
+                ..vcod_common::net::msg::NULL_USERCMD
+            });
+        }
+        common::step(&mut sv, &q, &mut cl, now);
+        if let Some(s) = cl.snapshots().newest() {
+            run.record(&mut tracker, s, p);
+            for (&n, e) in &s.entities {
+                if e.field_i32(p, "eType") == ET_TURRET {
+                    if e.field_i32(p, "eFlags") & EF_FIRING != 0 {
+                        gun = Some(n);
+                    }
+                    if e.field_i32(p, "animMovetype") == 1 && mark.is_none() {
+                        mark = Some(s.server_time.raw());
+                    }
+                }
+            }
+        }
+    }
+    MgDrive { sv, run, mark, gun }
+}
+
+/// `probe_turretheat`'s `PROBE heat <time> <heat> <overheating>` lines from
+/// the first warm one on, each time taken from that one's.
+fn heat_series(log: &str) -> Vec<(i64, String, String)> {
+    let rows: Vec<(i64, String, String)> = log
+        .lines()
+        .filter_map(|l| {
+            let mut w = l.split_whitespace().skip_while(|w| *w != "heat").skip(1);
+            Some((w.next()?.parse().ok()?, w.next()?.into(), w.next()?.into()))
+        })
+        .skip_while(|r| r.1 == "0")
+        .collect();
+    let t0 = rows.first().expect("the gun warmed").0;
+    rows.into_iter().map(|(t, h, o)| (t - t0, h, o)).collect()
+}
+
+/// UO's `getTurretHeat()` and `getTurretOverheating()` on a gun fired
+/// through an overheat (`mp_carentan-dm-turret-heat-uo.txt`,
+/// `client-probes/probe_turretheat`; coduo-diff.md 21.3.1): every frame's
+/// heat and latch, to the float's printed digits, from the first round to
+/// the gun cold again. Retail's gunner held the trigger a frame more than
+/// 10 s; ours holds it as many frames as retail's heat rose.
+#[test]
+fn the_mounted_mgs_heat_reads_as_on_uo() {
+    let Some(fs) = vcod_common::testing::uo_fs() else {
+        return;
+    };
+    let retail = std::fs::read_to_string("tests/fixtures/turret/mp_carentan-dm-turret-heat-uo.txt")
+        .expect("read the heat fixture");
+    let retail = heat_series(&retail);
+    // The last round's frame: the last line above a warm one before it (the
+    // cold gun's last step, -0.00999945 to 0, is not a round).
+    let heat = |i: usize| retail[i].1.parse::<f32>().unwrap();
+    let last = (1..retail.len())
+        .rev()
+        .find(|&i| heat(i - 1) > 0.0 && heat(i) > heat(i - 1))
+        .expect("a rise");
+    let hold_ms = retail[last].0 + common::FRAME_MS;
+    let drive = drive_the_carentan_mg(fs, "probe_turretheat", &[], hold_ms);
+    let ours = heat_series(&drive.sv.script_log().join("\n"));
+    let first = ours.iter().zip(&retail).position(|(o, r)| o != r);
+    assert!(
+        first.is_none() && ours.len() == retail.len(),
+        "first difference at {first:?} (ours {}, retail {} lines): {:?} against {:?}",
+        ours.len(),
+        retail.len(),
+        first.map(|i| &ours[i]),
+        first.map(|i| &retail[i]),
     );
 }
