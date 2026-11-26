@@ -629,6 +629,28 @@ The movers are the scriptent table, ordinary code pointers in `.data`:
 in `.data`, likely why the region was once mistaken for a `.rodata` string
 list.
 
+### 9.1 `vectorDot`
+
+VERIFIED (the instructions): `functions` row 49 on 1.1d names `vectordot`
+at 0x5e9d4 (row 51 on 1.5b, 0x5fcdc; row 54 on UO, 0x6b9cb;
+`tools/re/dump_builtins.py`). Each reads two vectors with `Scr_GetVector`
+(arguments 0 and 1), multiplies and adds the three products on the x87
+stack (`fmul`/`faddp`, 1.1d 0x5e9f6..0x5ea11), and hands the sum to
+`Scr_AddFloat` through one `fstp DWORD` (0x5ea19), so the sum rounds to a
+float once. CoD2's `Scr_VectorDot` (0x8114240) is the same
+(`cod2-gsc-diff.md`).
+
+VERIFIED, live (retail 1.1d, 1.5b and UO 1.51b, 2026-11-26,
+`probe_vectordot`): `vectorDot((16777216, 1, 1), (1, 1, 1)) - 16777216`
+logs 2 on all three, where a float running sum would drop both ones and
+log 0; `(1, 2, 3)` against `(4, -5, 6)` logs 12 and `(0.5, 0.25, 2)`
+against `(3, 8, 0.125)` 3.75.
+
+vcod: `builtins::math::vector_dot`, bound by name for every game
+(`semantics_ents::probe_vectordot_matches_retail`). It sums in `f64`,
+whose products of two floats are exact; the 80-bit stack can differ from
+it only by a double rounding (INFERRED).
+
 ## 10. `getEntArray` returns ascending entity number, VERIFIED
 
 `Scr_GetEntArray` (0x61980) walks `esi` from 0 to `level.num_entities`

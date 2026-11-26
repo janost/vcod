@@ -2415,8 +2415,34 @@ replay the part, each fraction within 5e-4 and each hit's normal and
 position within 0.015; ours read 0.115893 on the Kübelwagen's segment 2
 before. Not ported: 1.1d's static models (`misc_model`) take the same
 `0x80c203c` (`cod11-mantle.md`, "Static models are clipped as a
-segment"), and vcod's static walk still tries each triangle of a
+segment"; 2.7.2), and vcod's static walk still tries each triangle of a
 placement on its own.
+
+### 2.7.2 A static model's surfaces
+
+VERIFIED (the instructions), 1.1d `cod_lnxded`: the static model clip
+`0x8051984` sizes a stack array of 64 bytes per bone (`0x80c2874`, the
+bone count, `shl eax,0x6` at `0x80519a6`), fills it (`0x80c1d00`, the
+model and the array; INFERRED: the base pose), takes `start` and `end` less the placement's origin
+(`+0x4`) through its axis (`+0x10`, `0x8066380` at `0x80519f8` and
+`0x8051a2f`), and calls the surface walk `0x80c203c` at `0x8051a4b` with
+the model, the trace's fraction, the pose, the two points and the mask:
+the walk 2.7.1 reads for a script model. 1.5b's (`0x8053ed2`: `shl` at
+`0x8053efe`, the pose `0x80cf2c4`, the turns `0x8069244`, the walk
+`0x80cf4fe` at `0x8053fea`) and UO's (`0x8053d9b`: `0x8053dc7`,
+`0x80c4658`, `0x8069154`, the walk `0x80c4892` at `0x8053eb3`) have the
+same shape. So a `misc_model` is clipped a surface at a time under its
+surfaces' stored bounds, in their order, as a script model is. INFERRED:
+the models come in the order of the static tree walk (`0x805a58c`), and a
+model's `modelscale` reaches the bounds test through the scaled axis the
+loader builds (`0x80c241c`; `props::Placed::area_bounds`).
+
+Not ported: vcod's static models are world triangles in the trace BVH,
+each tried on its own in the BVH's order (`walk.rs`, `Prim::Model`). The
+port needs a BVH leaf per placement whose surfaces clip in file order
+through `clip_model_surfs`' gate, which `CollisionWorld::build` and the
+`props::collision_tris` callers do not carry today. No capture measures a
+static model's surface order yet.
 
 ---
 

@@ -4,7 +4,7 @@
 //! The query entry points: traces, position tests and contents.
 
 use super::build::Volume;
-use super::clip::{Capsule, Shape, clip_segment};
+use super::clip::{Capsule, Shape, capsule_sweep, clip_brush_capsule, clip_segment};
 use super::masks::{
     CONTENTS_NODROP, CONTENTS_WATER, MASK_MISSILE_MOVE, TRACE_MASK_MOVE, TRACE_MASK_SHOT,
 };
@@ -76,6 +76,52 @@ impl CollisionWorld {
         }
         trace.endpos = start + (end - start) * trace.fraction;
         (trace.fraction < 1.0).then_some(trace)
+    }
+
+    /// The water brushes' half of a world trace whose mask holds
+    /// [`CONTENTS_WATER`], clipped into `trace` by the brush arm the world's
+    /// own brushes take (UO's prone check, 0x810031; coduo-movement.md
+    /// 17.1). A water side that cuts the fraction, or a start inside water,
+    /// leaves `hit` at `Prim::Clip(CONTENTS_WATER)`, the trace's contents.
+    pub fn clip_water(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, trace: &mut Trace) {
+        let sweep = capsule_sweep(start, end, mins, maxs);
+        let sphere = Capsule::of(mins, maxs).offset;
+        let (lo, hi) = (start.min(end) + mins, start.max(end) + maxs);
+        let before = trace.fraction;
+        for v in &self.water {
+            if !(lo.cmple(v.hi).all() && hi.cmpge(v.lo).all()) {
+                continue;
+            }
+            let mut w = Trace::clear(end);
+            clip_brush_capsule(
+                &mut w,
+                &sweep,
+                sphere,
+                &v.planes,
+                &v.side_flags,
+                Prim::Clip(CONTENTS_WATER),
+                self.arith(),
+                false,
+            );
+            if w.startsolid {
+                trace.startsolid = true;
+                trace.hit = Some(Prim::Clip(CONTENTS_WATER));
+                if w.allsolid {
+                    trace.allsolid = true;
+                    trace.fraction = 0.0;
+                    trace.surface_flags = 0;
+                }
+            } else if w.fraction < trace.fraction {
+                trace.fraction = w.fraction;
+                trace.normal = w.normal;
+                trace.surface_flags = w.surface_flags;
+                trace.hit = Some(Prim::Clip(CONTENTS_WATER));
+            }
+        }
+        if trace.fraction < before {
+            trace.copy = None;
+            trace.endpos = cm_endpos(start, end, mins, maxs, trace.fraction, self.arith());
+        }
     }
 
     /// Contents at a point: `CONTENTS_WATER` inside any water brush,
