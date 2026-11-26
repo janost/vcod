@@ -946,7 +946,11 @@ otherwise.
   frame as the two clients' packets arrived. A gate replaying two retail
   captures sends each frame's packets in the order retail got them
   (`cod4::capture_ab`); a fixed order read as damage applied a frame late
-  (cod4-combat.md 15).
+  (cod4-combat.md 15). Two probes' sends can tie to the ms: the pair's
+  `ties` names retail's order off its snapshots (cod4-gsc.md 9.1.1).
+- 1.7 snaps with `(int)` casts, which give +0 where Rust's `trunc` gives
+  -0, and a -100 angle field sends -0 as the smallest float: snap with
+  `as i32 as f32` (cod4-gsc.md 9.1.1).
 - The end frame's swing reads the `MOVETYPE` the frame's cmds wrote, as on
   CoD2: call `PlayerBody::script_movetype` ahead of `animate`. Without it
   a strafe's legs swing a frame late and the head reads 0.05 units off
