@@ -952,7 +952,17 @@ impl Cod4Server {
             );
             let plain = self.game.huff.decompress(&m.ops);
             let max = c.link.netchan.max_commands();
-            match clmsg::read_ops(plain, key, &UserCmd::default()) {
+            // `MSG_SetDefaultUserCmd` of the slot's playerstate
+            // (`SV_UserMove` 0x8172664, cod4-netfields.md 14.5).
+            let base = self
+                .game
+                .level
+                .as_ref()
+                .and_then(|l| l.players.get(slot)?.as_ref())
+                .map_or_else(UserCmd::default, |p| {
+                    clmsg::default_usercmd(&p.ps, clmsg::CmdBaseSide::Server)
+                });
+            match clmsg::read_ops(plain, key, &base) {
                 Ok(ops) if commands(&ops) > max => {
                     log::debug!("cod4: client {slot}: more than {max} commands in a message");
                     return;
