@@ -93,33 +93,9 @@ fn unit(x: f32) -> f32 {
     if x >= 0.0 { x.min(1.0) } else { 0.0 }
 }
 
-/// `atof`: the longest leading float, 0 for none.
+/// C's `atof` ([`vcod_common::text::atof`]) stored as a float.
 pub(crate) fn atof(s: &str) -> f32 {
-    let s = s.trim_start();
-    let b = s.as_bytes();
-    let mut end = 0;
-    let mut seen_digit = false;
-    let mut seen_dot = false;
-    let mut seen_exp = false;
-    while end < b.len() {
-        let c = b[end];
-        match c {
-            b'+' | b'-' if end == 0 || matches!(b[end - 1], b'e' | b'E') => {}
-            b'0'..=b'9' => seen_digit = true,
-            b'.' if !seen_dot && !seen_exp => seen_dot = true,
-            b'e' | b'E' if seen_digit && !seen_exp => seen_exp = true,
-            _ => break,
-        }
-        end += 1;
-    }
-    // Back off a dangling exponent or sign.
-    while end > 0 {
-        if let Ok(v) = s[..end].parse::<f32>() {
-            return v;
-        }
-        end -= 1;
-    }
-    0.0
+    vcod_common::text::atof(s) as f32
 }
 
 /// `COM_Parse`'s tokens with the line each starts on: whitespace, `//` and
