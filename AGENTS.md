@@ -108,14 +108,15 @@ Before a commit, run what CI runs:
 
 ```
 cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo clippy -p vcod-common -p vcod-cod4 -p vcod-server --lib --bins -- -D warnings
+cargo clippy --workspace --all-targets --features vcod/testing -- -D warnings
+cargo clippy -p vcod-common -p vcod-cod4 -p vcod-server -p vcod --lib --bins -- -D warnings
 cargo test --workspace --lib --bins --tests
 cargo deny check   # after a dependency change
 ```
 
 The second clippy builds the crates with a `testing` feature without it,
-as a release build does: `--all-targets` turns it on. `--lib --bins
+as a release build does: `--all-targets` turns it on, and
+`--features vcod/testing` the client's, which builds its tools. `--lib --bins
 --tests` leaves out the examples, about a GB of links that clippy's
 `--all-targets` already compiles. `tools/gate.sh [area...]` runs the
 first four, the suite once per install the environment names (`COD_DIR`,
@@ -132,8 +133,8 @@ area; its header lists them.
   early through `game_fs()` or uses `Pk3Fs::empty()`.
 - Each crate's integration tests are one binary named after the crate
   (`--test common`, `--test server`; `tests/main.rs`): a new file needs its
-  `mod` line. The client's tests live in its binary: `cargo test -p vcod
-  --bins`.
+  `mod` line. The client's unit tests live in its lib: `cargo test -p vcod
+  --lib`.
 - Some gates are `#[ignore]`d for their cost. Run the one for your area when
   you touch it (`tools/gate.sh nav`, `bots`, `render`, `cod2`, `cod4`).
 

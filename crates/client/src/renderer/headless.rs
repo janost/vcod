@@ -58,7 +58,7 @@ pub(crate) fn test_adapter(need: Need) -> Option<wgpu::Adapter> {
 }
 
 /// A device off [`test_adapter`] with BC textures when `need` asks for them.
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 pub(crate) fn test_device(need: Need) -> Option<(wgpu::Device, wgpu::Queue)> {
     let adapter = test_adapter(need)?;
     let required_features = match need {
@@ -140,6 +140,44 @@ impl Renderer {
             samples,
         );
         Some((r, errors))
+    }
+
+    /// The offscreen target's last frame: `(width, height, BGRA bytes)`.
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn read_offscreen(&self) -> Option<(u32, u32, Vec<u8>)> {
+        let Target::Offscreen(t) = &self.target else {
+            return None;
+        };
+        let (w, h) = (t.width(), t.height());
+        let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("offscreen readback"),
+            size: u64::from(w * h * 4),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut enc = self.device.create_command_encoder(&Default::default());
+        enc.copy_texture_to_buffer(
+            t.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buf,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(w * 4),
+                    rows_per_image: Some(h),
+                },
+            },
+            t.size(),
+        );
+        self.queue.submit([enc.finish()]);
+        buf.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        self.device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+        let mut bytes = buf.slice(..).get_mapped_range().ok()?.to_vec();
+        // RGBA to BGRA; alpha as an opaque swapchain shows it, whatever the
+        // 2D's blends wrote there when no gamma pass set it to 1
+        for px in bytes.as_chunks_mut::<4>().0 {
+            *px = [px[2], px[1], px[0], 255];
+        }
+        Some((w, h, bytes))
     }
 }
 

@@ -647,7 +647,7 @@ mod tests {
     /// `rcon host`. Needs `COD2_DIR`.
     #[test]
     fn cod2_live_rcon_status_from_a_joined_client_and_from_the_host() {
-        use crate::play::cod4::tests::run_held;
+        use crate::harness::run_held;
         use vcod_server::cod2::{Cod2Config, Cod2Server};
         let Some(fs) = vcod_common::testing::cod2_fs() else {
             return;
@@ -674,7 +674,7 @@ mod tests {
 
     /// The rcon test's client, on the test clock.
     fn rcon_client(addr: std::net::SocketAddr) {
-        use crate::play::cod4::tests::{clk_now, clk_sleep};
+        use crate::harness::{clk_now, clk_sleep};
         let fs = vcod_common::testing::cod2_fs().unwrap();
         let mut shell = Shell::new();
         shell.use_cod2_cvars();

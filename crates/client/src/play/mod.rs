@@ -5,8 +5,6 @@ pub mod clock;
 pub mod cmds;
 pub mod cod1_soak;
 pub mod cod2;
-#[cfg(test)]
-mod cod2_census;
 pub mod cod2_events;
 pub mod cod2_fx;
 pub mod cod2_gun;
@@ -15,8 +13,8 @@ pub mod cod2_net;
 pub mod cod2_predict;
 pub mod cod2_recoil;
 pub mod cod2_shock;
-#[cfg(test)]
-mod cod2_soak;
+#[cfg(any(test, feature = "testing"))]
+pub(crate) mod cod2_soak;
 pub mod cod2_sound;
 pub mod cod2_view;
 pub mod cod2_weapons;
@@ -30,8 +28,8 @@ pub mod cod4_players;
 pub mod cod4_predict;
 pub mod cod4_profile;
 pub mod cod4_shock;
-#[cfg(test)]
-mod cod4_sweep;
+#[cfg(any(test, feature = "testing"))]
+pub(crate) mod cod4_sweep;
 pub mod cod4_third_person;
 pub mod cvars;
 pub mod demos;

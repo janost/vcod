@@ -468,7 +468,7 @@ Most need `COD4_DIR` and pass vacuously without it.
 | `hardpoint_ab`, `planefx_ab`, `prematch_ab`, `oob_ab` | hardpoints, plane effects, the prematch HUD, connectionless replies |
 | census tests (`crates/cod4/tests`) | every stock map's materials, clip, cull, sun shadow, sounds, effects, HUD assets |
 | `cod4_live_*` | a vcod-server and client in process on a simulated clock |
-| `cod4_map_sweep` (ignored) | every stock map under war, dm, sd, sab, dom and koth with bots and a playing client ([cod4-map-sweep.md](../research/cod4-map-sweep.md)) |
+| `client_tools cod4_map_sweep` | every stock map under war, dm, sd, sab, dom and koth with bots and a playing client ([cod4-map-sweep.md](../research/cod4-map-sweep.md)) |
 | `tools/cod4_soak.sh` | the client playing a whole match per map through `main`'s frame |
 | `tools/cod4_perf.sh` | client frame time, `SWEEP=1` per setting ([cod4-client-perf.md](../research/cod4-client-perf.md)) |
 | `GAME=cod4 bot_match`, `nav_build` | seeded bot matches and the bots' graph ([bots.md](../bots.md#cod4)) |

@@ -247,7 +247,7 @@ cg_fov` (0x30032fe2, into 0x3020b5f4), and the frame passes it to trap 0x55
 0x3020d5c0 when that is not 1. VERIFIED: that factor is the shellshock's
 mouse scale; 0x3002f5b0 writes it off the active shock's record (`+0x70`)
 and resets it to 1 when no shock runs (`cod11-shellshock.md`, "Mouse").
-vcod multiplies it into the fov ratio (`main.rs`, `App::look_zoom`).
+vcod multiplies it into the fov ratio (`lib.rs`, `App::look_zoom`).
 
 The default turn is 5 x 0.022 = 0.11 degrees a count both ways, and a sight
 that zooms to half the fov halves it. vcod's `play::input::MouseLook` and

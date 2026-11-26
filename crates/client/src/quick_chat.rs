@@ -73,7 +73,7 @@ impl QuickChat {
 
     /// A new cgame (a disconnect or a gamestate): the queued lines named
     /// the last server's clients, and retail's ring starts empty.
-    // main.rs's `fresh_cgame` and `disconnect` call it once its split lands.
+    // lib.rs's `fresh_cgame` and `disconnect` call it once its split lands.
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn clear(&mut self) {
         self.queue.clear();

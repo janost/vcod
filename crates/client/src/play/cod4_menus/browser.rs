@@ -1003,10 +1003,10 @@ impl Browser {
 }
 
 /// Now for the browser's ping clock: the wall's, or the clock a live test
-/// runs its server on (`play::cod4::tests::sim`).
+/// runs its server on (`crate::harness::sim`).
 pub(crate) fn browser_now() -> Instant {
     #[cfg(test)]
-    if let Some(t) = crate::play::cod4::tests::sim::now() {
+    if let Some(t) = crate::harness::sim::now() {
         return t;
     }
     Instant::now()
@@ -1029,7 +1029,7 @@ pub(crate) struct TestServer {
 #[cfg(test)]
 impl TestServer {
     pub(crate) fn start(password: &str) -> Option<TestServer> {
-        use crate::play::cod4::tests::{serve_until, sim};
+        use crate::harness::{serve_until, sim};
         use std::sync::atomic::{AtomicBool, Ordering};
         use vcod_server::cod4::{Cod4Config, Cod4Server};
         let install = vcod_cod4::testing::cod4_install()?;
@@ -1088,7 +1088,7 @@ impl Drop for TestServer {
         if let Some(h) = self.handle.take() {
             let _ = h.join();
         }
-        crate::play::cod4::tests::sim::install(None);
+        crate::harness::sim::install(None);
     }
 }
 
@@ -1142,7 +1142,7 @@ mod tests {
     /// loopback helper thread (a fake master, the resolve) answers in
     /// wall time.
     fn pump_until(m: &mut ScriptMenus, done: impl Fn(&ScriptMenus) -> bool) -> bool {
-        use crate::play::cod4::tests::{clk_now, clk_sleep};
+        use crate::harness::{clk_now, clk_sleep};
         let (t0, wall) = (clk_now(), Instant::now());
         let budget = Duration::from_secs(5);
         while clk_now() - t0 < budget || wall.elapsed() < budget {

@@ -788,7 +788,7 @@ pub fn dump_quads(quads: &[HudQuad]) -> String {
 }
 
 /// [`dump_quads`]' text back; a malformed line is skipped.
-#[cfg(test)]
+#[cfg(all(feature = "testing", not(test)))]
 pub fn load_quads(text: &str) -> Vec<HudQuad> {
     text.lines()
         .filter_map(|l| {

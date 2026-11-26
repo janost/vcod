@@ -142,7 +142,7 @@ pub fn open_fs(game_dir: &Path, fs_game: Option<&str>, map: Option<&str>) -> Res
 /// map's and `common_mp`'s (cod4-fastfile.md 13).
 ///
 /// A thread that set [`set_load_report`] hears how far the load has got.
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 pub fn load(
     game_dir: &Path,
     fs_game: Option<&str>,
@@ -223,7 +223,7 @@ pub enum Mode<'a> {
 
 impl<'a> Mode<'a> {
     /// [`Mode::Fly`] when `ents` names nothing, as [`load`] reads it.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn of(ents: &'a EntityAssets) -> Self {
         if ents.models.is_empty() && ents.weapons.is_empty() {
             Mode::Fly

@@ -996,7 +996,7 @@ mod tests {
         Some((Ui::new(&fs, "0"), Localized::load(&fs)))
     }
 
-    /// Runs the console commands a menu asked for, as `main.rs` does.
+    /// Runs the console commands a menu asked for, as `lib.rs` does.
     fn apply(shell: &mut Shell, effects: Vec<UiEffect>) {
         for e in effects {
             match e {

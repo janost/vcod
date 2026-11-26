@@ -1200,7 +1200,7 @@ trace @0x328cc), water enter/leave 144/145, forced stance 140/141/142.
 
 ### Ambient without a server
 
-Offline fly and walk modes play `ambient_<map>` at load (`main.rs`), what a
+Offline fly and walk modes play `ambient_<map>` at load (`lib.rs`), what a
 gametype's `ambientPlay` would put in configstring 3. Every stock MP map has
 that row in `soundaliases/iw_sound.csv` (all twelve checked in pak1.pk3); a
 custom map without one stays silent.

@@ -629,7 +629,7 @@ mod tests {
         assert_eq!(i.weapons().0, 27);
     }
 
-    /// The stock keys a CoD4 install starts with (`main.rs`: vcod's
+    /// The stock keys a CoD4 install starts with (`lib.rs`: vcod's
     /// defaults under CoD2's under CoD4's) through the console's binds into the cmd's
     /// buttons and weapon byte.
     #[test]

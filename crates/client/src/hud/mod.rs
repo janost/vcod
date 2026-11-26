@@ -122,10 +122,10 @@ pub struct Hud {
     bold_messages: messages::Window,
     /// `CG_Obituary`'s "You killed" line.
     center_print: centerprint::CenterPrint,
-    /// The `messagemode` line being typed: `main.rs` edits it, the HUD
+    /// The `messagemode` line being typed: `lib.rs` edits it, the HUD
     /// draws it.
     pub chat_field: Option<ChatField>,
-    /// `main.rs`'s Tab handler holds it; `online_frame.rs` sends the `score`
+    /// `lib.rs`'s Tab handler holds it; `online_frame.rs` sends the `score`
     /// requests.
     pub scoreboard: Scoreboard,
     /// `UI_LoadGameTypes`' list, which names the board's game type.

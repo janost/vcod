@@ -9,8 +9,8 @@
 //! Needs `COD4_DIR` and an adapter with BC textures (lavapipe will do).
 
 use super::*;
+use crate::harness::{clk_now, clk_sleep, run_held, since as clk_since};
 use crate::play::cod4::Cod4Session;
-use crate::play::cod4::tests::{clk_now, clk_sleep, run_held, since as clk_since};
 use glam::Vec3;
 use std::time::{Duration, Instant};
 

@@ -466,7 +466,7 @@ impl MarkPass {
     }
 
     /// Mark shaders registered so far.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub(super) fn registered(&self) -> usize {
         self.shaders.len()
     }
@@ -705,7 +705,7 @@ impl Renderer {
     }
 
     /// Mark shaders registered (their images and stages built) so far.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn mark_shaders(&self) -> usize {
         self.marks.registered()
     }

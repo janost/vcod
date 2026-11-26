@@ -118,7 +118,7 @@ all pairs again. INFERRED, off the test at 0x3002bc65: the writer returns at
 once while `sv_running` (0x301d1fd8) is set. INFERRED: one store holds a cvar's `v`, mirror and
 console writes, the last one standing. vcod: `ClientCvars::apply_mirror`
 forces the pairs into the console at the cgame's start (`cgame_init` in
-`main.rs`) and on a mirror slot's change; vcod has no listen server, so the
+`lib.rs`) and on a mirror slot's change; vcod has no listen server, so the
 `sv_running` skip never applies.
 
 ### 0.1 The script menu handshake
@@ -897,7 +897,7 @@ nothing until the next load.
 
 vcod builds `LivePhase::weapons` at the gamestate and ignores a
 `ConfigstringChanged(7)`. It reruns its viewmodel prewarm on each CS 8
-update (`prewarm_viewmodels`, `crates/client/src/main.rs`); cached rigs cost
+update (`prewarm_viewmodels`, `crates/client/src/lib.rs`); cached rigs cost
 a lookup, and weapon files, models and clips are shared by name across rigs
 (`viewmodel::RigCache`).
 

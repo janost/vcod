@@ -128,7 +128,7 @@ pub fn script_menu_response(
 /// Clicks the topmost shown item whose text or name is `what` on a `w` x
 /// `h` window, then runs the `set` lines it queued and a UI frame, as the
 /// app does. Tests and the offscreen menu shot walk the menus with it.
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 pub(crate) fn click_shown(
     ui: &mut Ui,
     shell: &mut Shell,
