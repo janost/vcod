@@ -2065,7 +2065,7 @@ mod tests {
         };
         host.xmodel_collision.insert(
             "xmodel/test_wall".into(),
-            Some(std::sync::Arc::from(vec![wall])),
+            Some((std::sync::Arc::from(vec![wall]), Default::default())),
         );
         vm.with_cx(|cx| {
             let id = host.ents.spawn(cx).unwrap();

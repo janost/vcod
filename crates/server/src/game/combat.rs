@@ -2113,8 +2113,9 @@ pub struct PlacedModel {
     pub origin: Vec3,
     pub axis: glam::Mat3,
     pub tris: std::sync::Arc<[vcod_common::collision::ModelTri]>,
-    /// A posed vehicle's collision surfaces over `tris`, each culled by its
-    /// bounds in its bone's frame; empty clips `tris` whole.
+    /// The collision surfaces over `tris`, a vehicle's as posed or a script
+    /// model's at its bind, each culled by its bounds in its bone's frame
+    /// (combat doc 2.7.1); empty clips `tris` whole.
     pub surfs: std::sync::Arc<[vcod_common::collision::ModelSurf]>,
     /// `r.ownerNum`, `None` for `ENTITYNUM_NONE`: a driven vehicle's
     /// driver, which a trace's pass rule reads.
