@@ -5,7 +5,9 @@
 //! cod4-player-anims.md 10.6.
 
 pub mod capsule;
+pub mod cylinder;
 pub mod selfcol;
+pub mod transform;
 pub mod world;
 
 #[cfg(test)]
@@ -14,7 +16,7 @@ pub(crate) mod tests;
 use glam::Vec3;
 
 use super::joint::contact::{APPROX1_1, APPROX1_2, BOUNCE, Contact, SOFT_CFM, SOFT_ERP, Surface};
-use super::math::{V3, normalize3, sub};
+use super::math::{V3, dot, normalize3, sub};
 use super::world::{BodyId, World};
 
 pub use world::{Capsule, Pieces, collide_world};
@@ -135,6 +137,18 @@ pub fn near_world(
     world_index: usize,
 ) {
     let contacts = collide_world(clip, cap, crate::ragdoll::CLIP_MASK, MAX_CONTACTS);
+    near_contacts(world, body, obj, contacts, dv, world_index);
+}
+
+/// The rest of 0x5a5f20 on a geom's `contacts` from its collide.
+pub fn near_contacts(
+    world: &mut World,
+    body: BodyId,
+    obj: &mut Obj,
+    contacts: Vec<ContactGeom>,
+    dv: &Dvars,
+    world_index: usize,
+) {
     if contacts.is_empty() {
         obj.state = 2;
         return;
@@ -163,19 +177,22 @@ pub fn cut(c: &[ContactGeom]) -> Vec<ContactGeom> {
 /// (0x5a18e0), five k-means rounds over the normals (0x5a1aa0), clusters
 /// whose means dot over 0.999 merged (0x5a1cc0), and of each cluster the
 /// least and most along two tangents and the deepest, a contact within
-/// 0.1 of an earlier one passed over (0x5a1e40).
+/// 0.1 of an earlier one passed over (0x5a1e40). Each value is stored where
+/// the binary stores it (cod4-player-anims.md 10.4).
 pub fn reduce(c: &[(Vec3, Vec3, f32)]) -> Vec<usize> {
+    use super::phys::{fmax, normalize};
     let n = c.len();
-    let mut tags = vec![usize::MAX; n];
     if n == 0 {
         return Vec::new();
     }
+    let pos: Vec<V3> = c.iter().map(|x| x.0.to_array()).collect();
+    let nor: Vec<V3> = c.iter().map(|x| x.1.to_array()).collect();
+    let mut tags = vec![usize::MAX; n];
     // 0x5a18e0: the seed 104729 mod the count, the contact whose normal is
     // most against it, then the one most against both.
-    let k0 = 104_729 % n;
-    let least = |f: &dyn Fn(Vec3) -> f32| {
+    let least = |f: &dyn Fn(V3) -> f32| {
         let (mut best, mut at) = (f32::MAX, None);
-        for (i, &(_, nm, _)) in c.iter().enumerate() {
+        for (i, &nm) in nor.iter().enumerate() {
             let d = f(nm);
             if best > d {
                 (best, at) = (d, Some(i));
@@ -183,64 +200,70 @@ pub fn reduce(c: &[(Vec3, Vec3, f32)]) -> Vec<usize> {
         }
         at
     };
-    let n0 = c[k0].1;
-    let k1 = least(&|nm| nm.dot(n0));
+    let k0 = 104_729 % n;
+    let n0 = nor[k0];
+    let k1 = least(&|nm| dot(nm, n0));
     tags[k0] = 0;
     if let Some(k1) = k1 {
         tags[k1] = 1;
-        let n1 = c[k1].1;
-        if let Some(k2) = least(&|nm| nm.dot(n0).max(nm.dot(n1))) {
+        let n1 = nor[k1];
+        if let Some(k2) = least(&|nm| fmax(dot(nm, n0), dot(nm, n1))) {
             tags[k2] = 2;
         }
     }
-    // 0x5a1aa0: each cluster's mean normal (zero stays zero, 0x4076d0),
-    // then each contact to the cluster it dots most with, five times over.
-    let means = |tags: &[usize]| {
-        let mut m = [Vec3::ZERO; 3];
+    // Each cluster's normal sum, each part added in the contacts' order.
+    let sums = |tags: &[usize]| {
+        let mut m = [[0.0f32; 3]; 3];
         for (i, &t) in tags.iter().enumerate() {
             if t < 3 {
-                m[t] += c[i].1;
+                m[t] = std::array::from_fn(|k| (w(nor[i][k]) + w(m[t][k])) as f32);
             }
         }
-        m.map(|v| v.normalize_or_zero())
+        m
     };
-    let mut m = means(&tags);
+    // 0x5a1aa0: the means (0x4076d0, zero stays zero), then each contact
+    // to the mean it dots most with, five times over.
+    let mut m = sums(&tags).map(|v| normalize(v).0);
     for _ in 0..5 {
         for (i, t) in tags.iter_mut().enumerate() {
             let (mut best, mut at) = (-f32::MAX, usize::MAX);
             for (k, mk) in m.iter().enumerate() {
-                let d = mk.dot(c[i].1);
-                if best - d < 0.0 {
+                let d = dot(*mk, nor[i]);
+                if ((w(best) - w(d)) as f32) < 0.0 {
                     (best, at) = (d, k);
                 }
             }
             *t = at;
         }
-        m = means(&tags);
+        m = sums(&tags).map(|v| normalize(v).0);
     }
     // 0x5a1cc0: a later cluster whose mean dots over 0.999 (the double at
     // 0x70b270) with an earlier one's joins it, off the means as they were.
     for i in 0..2 {
         for j in i + 1..3 {
-            if m[i].dot(m[j]) > 0.999 {
+            if w(dot(m[j], m[i])) > 0.999_000_012_874_603_3 {
                 tags.iter_mut().filter(|t| **t == j).for_each(|t| *t = i);
             }
         }
     }
-    // 0x5a1e40: the clusters' normal sums, each normalized and given two
+    // 0x5a1e40: each cluster's sum normalized (0x55f6e0) and given two
     // tangents off z, or off y when |z| is 0.5 or more (0x5a1d80).
-    let mut sums = [Vec3::ZERO; 3];
-    for (i, &t) in tags.iter().enumerate() {
-        if t < 3 {
-            sums[t] += c[i].1;
-        }
-    }
     let mut out = Vec::new();
-    for (k, sum) in sums.iter().enumerate() {
-        let nm = sum.normalize_or_zero();
-        let u = if nm.z.abs() < 0.5 { Vec3::Z } else { Vec3::Y };
-        let t1 = nm.cross(u).normalize_or_zero();
-        let t = [t1, nm.cross(t1).normalize_or_zero()];
+    for (k, sum) in sums(&tags).iter().enumerate() {
+        let (nm, _) = normalize(*sum);
+        let (a, b) = if nm[2].abs() < 0.5 {
+            (0.0, 1.0)
+        } else {
+            (1.0, 0.0)
+        };
+        let t1 = [
+            (w(nm[1]) * b - a * w(nm[2])) as f32,
+            (w(nm[2]) * 0.0 - b * w(nm[0])) as f32,
+            (a * w(nm[0]) - 0.0 * w(nm[1])) as f32,
+        ];
+        let (t1, _) = normalize(t1);
+        let (t2, _) = normalize(super::math::cross(nm, t1));
+        let t = [t1, t2];
         let (mut lo, mut hi) = ([f32::MAX; 2], [-f32::MAX; 2]);
         let (mut lo_at, mut hi_at) = ([usize::MAX; 2], [usize::MAX; 2]);
         let (mut deepest, mut deep_at) = (-f32::MAX, usize::MAX);
@@ -249,15 +272,19 @@ pub fn reduce(c: &[(Vec3, Vec3, f32)]) -> Vec<usize> {
             if tags[i] != k {
                 continue;
             }
-            // The float at 0x70b87c, 0.01, on the squared distance.
+            // The float at 0x70b87c (0x3c23d70b, a hair over 0.01f32) on
+            // the squared distance.
             for j in i + 1..n {
-                if tags[j] == k && (c[j].0 - c[i].0).length_squared() < 0.01 {
-                    tags[j] = usize::MAX;
+                if tags[j] == k {
+                    let d = sub(pos[j], pos[i]);
+                    if dot(d, d) < f32::from_bits(0x3c23_d70b) {
+                        tags[j] = usize::MAX;
+                    }
                 }
             }
             members += 1;
             for a in 0..2 {
-                let p = t[a].dot(c[i].0);
+                let p = dot(t[a], pos[i]);
                 if lo[a] > p {
                     (lo[a], lo_at[a]) = (p, i);
                 }

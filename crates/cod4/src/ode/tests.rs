@@ -709,3 +709,48 @@ fn a_flat_model_launches_as_a_cube_and_lies_as_its_bounds() {
     assert_eq!(b.mass, Mass::cylinder_total(6.0, 3, 4.0, 3.0));
     assert_eq!(b.pos, [10.0, 20.0, 33.0]);
 }
+
+/// A tyre (`physGeoms` type 4 in a transform turning its axis onto z,
+/// radius 11.95, `+0x54` 3.5, mass 18) let go 10 over a floor brush in
+/// world 0 steps through its cylinder collider and comes to rest on its
+/// cap a unit under its half height (`phys_csl`'s surface layer), asleep.
+#[test]
+fn a_tyre_dropped_on_a_floor_rests_on_its_cap() {
+    use super::collide::tests::{Brushes, cuboid};
+    use super::obj::{ObjPreset, Part, PartKind};
+    use super::phys::{PhysWorld, WorldId};
+    use super::world::PhysDvars;
+    let floor = Brushes(vec![cuboid([-256.0, -256.0, -32.0], [256.0, 256.0, 0.0])]);
+    let dv = PhysDvars::default();
+    let p = ObjPreset {
+        sound: 0,
+        mass: 18.0,
+        bounce: 0.1,
+        friction: 0.8,
+        cylinder: false,
+    };
+    let mut pw = PhysWorld::new(WorldId::Dynent);
+    let id = pw.obj_create([0.0, 0.0, 10.0], &IDENTITY, [0.0; 3], &p, &dv);
+    let part = Part {
+        kind: PartKind::Cylinder {
+            direction: 1,
+            radius: 11.95,
+            length: 3.5,
+        },
+        transform: Some([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]]),
+    };
+    pw.add_part(id, 18.0, &part, [0.0; 3]);
+    let contact = super::collide::Dvars::default();
+    let mut asleep = None;
+    for frame in 1..=300 {
+        pw.run_to_time(frame * 17, &dv, &contact, &floor, &mut |_| {})
+            .expect("the cylinder has its collider");
+        if pw.world.body(id).flags & super::body::DISABLED != 0 {
+            asleep = Some(frame);
+            break;
+        }
+    }
+    let z = pw.world.body(id).pos[2];
+    assert!(asleep.is_some(), "still awake at z {z}");
+    assert!((2.4..2.6).contains(&z), "rests at {z}");
+}
