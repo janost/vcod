@@ -171,6 +171,23 @@ const CTF_RETURN_NEAR: f32 = 1000.0;
 const PICKUP_REACH: f32 = 48.0;
 /// How far round the pickup a bot steps for another try.
 const PICKUP_RING: f32 = 40.0;
+/// The pickup's own point and eight sides round it ([`pickup_side`]).
+pub(crate) const PICKUP_SIDES: u32 = 9;
+
+/// Where a bot stands for its `k`th try at a retrieval pickup whose
+/// trigger's middle is `aim`: on it, then [`PICKUP_RING`] off it every 45
+/// degrees from east.
+pub(crate) fn pickup_side(aim: [f32; 3], k: u32) -> [f32; 3] {
+    if k == 0 {
+        return aim;
+    }
+    let a = (k as f32 - 1.0) * 45f32.to_radians();
+    [
+        aim[0] + PICKUP_RING * a.cos(),
+        aim[1] + PICKUP_RING * a.sin(),
+        aim[2],
+    ]
+}
 /// Use held this long with no link means the plant or defuse never
 /// started (not touching, not on the ground, the aim off the trigger).
 const START_TICKS: u32 = 20;
@@ -465,18 +482,13 @@ impl Bot {
     /// back along his likely way once, then to the goal.
     fn retrieval_target(&self, view: &BotView, re: &ReView) -> Option<ObjTarget> {
         let o = &re.objectives;
-        let nearest = |at: fn(&ReObjView) -> Option<[f32; 3]>| {
-            o.iter()
-                .filter_map(at)
-                .min_by(|a, b| dist_sq(view.origin, *a).total_cmp(&dist_sq(view.origin, *b)))
-        };
         match re.role {
             ObjRole::Attack => {
                 if let Some(m) = o.iter().find(|m| m.mine) {
                     return Some(ObjTarget::Deliver(m.goal));
                 }
-                // A dropped one the run cannot reach before it goes back:
-                // wait where it comes back.
+                // A dropped one the run cannot reach before it goes back, or
+                // nobody can take: wait where it comes back.
                 if let Some(at) = Self::returns_first(view, o) {
                     return Some(ObjTarget::Guard {
                         at,
@@ -484,22 +496,27 @@ impl Bot {
                         hold: GuardHold::Near,
                     });
                 }
-                if let Some(aim) = nearest(|m| m.pickup) {
+                if let Some((aim, m)) = o
+                    .iter()
+                    .filter(|m| !m.buried)
+                    .filter_map(|m| Some((m.pickup?, m)))
+                    .min_by(|a, b| dist_sq(view.origin, a.0).total_cmp(&dist_sq(view.origin, b.0)))
+                {
                     // Each tap that took nothing tries the next side: the
                     // use key's pick traces from the eye to the trigger's
                     // middle, and a table or crate can stand in the way.
-                    let from = match self.obj.pick % 9 {
-                        0 => aim,
-                        k => {
-                            let a = (k as f32 - 1.0) * 45f32.to_radians();
-                            [
-                                aim[0] + PICKUP_RING * a.cos(),
-                                aim[1] + PICKUP_RING * a.sin(),
-                                aim[2],
-                            ]
-                        }
+                    // The sides whose eye sees the middle go first, if any.
+                    let seen: Vec<u32> = (0..PICKUP_SIDES)
+                        .filter(|k| m.sides & 1 << k != 0)
+                        .collect();
+                    let k = match seen.len() {
+                        0 => self.obj.pick % PICKUP_SIDES,
+                        n => seen[self.obj.pick as usize % n],
                     };
-                    return Some(ObjTarget::Pickup { aim, from });
+                    return Some(ObjTarget::Pickup {
+                        aim,
+                        from: pickup_side(aim, k),
+                    });
                 }
                 if let Some(at) = Self::carrier(view, o).filter(|_| re.escort) {
                     return Some(ObjTarget::Escort(at));
@@ -522,11 +539,13 @@ impl Bot {
                     });
                 }
                 // A dropped one guarded where it comes back once the walk
-                // to it would outlast its clock.
+                // to it would outlast its clock, or nobody can take it.
                 let lying: Vec<[f32; 3]> = o
                     .iter()
                     .filter_map(|m| match m.returns {
-                        Some((home, left)) if Self::outruns(view, m.pickup?, left) => Some(home),
+                        Some((home, left)) if m.buried || Self::outruns(view, m.pickup?, left) => {
+                            Some(home)
+                        }
                         _ => m.pickup,
                     })
                     .collect();
@@ -548,7 +567,8 @@ impl Bot {
     }
 
     /// The spot a dropped objective goes back to, when no other lies
-    /// there to take and the run to where it lies would outlast its clock.
+    /// there to take and the run to where it lies would outlast its clock,
+    /// or it lies buried ([`ReObjView::buried`]).
     fn returns_first(view: &BotView, o: &[ReObjView]) -> Option<[f32; 3]> {
         let mut lying = o.iter().filter(|m| m.pickup.is_some());
         let m = lying.next()?;
@@ -556,7 +576,7 @@ impl Bot {
             return None;
         }
         let (home, left) = m.returns?;
-        Self::outruns(view, m.pickup?, left).then_some(home)
+        (m.buried || Self::outruns(view, m.pickup?, left)).then_some(home)
     }
 
     /// A straight run at [`RUN_SPEED`] to `at` takes longer than `left`
@@ -1702,6 +1722,50 @@ mod tests {
             v.re.as_mut().unwrap().objectives[0].returns = Some((home, 3.0));
             assert_eq!(bot.goal(&v), Goal::To(home), "{role:?}");
         }
+    }
+
+    /// A dropped objective whose trigger's middle is buried in a brush:
+    /// with time on its clock, both sides wait where it goes back to
+    /// (mp_pavlov seed 11, bot-objectives.md 4.2.2).
+    #[test]
+    fn a_buried_objective_is_awaited_at_its_start() {
+        let home = [-2000.0, 0.0, 72.0];
+        for role in [ObjRole::Attack, ObjRole::Defend] {
+            let bot = Bot::new("allies", true, 1);
+            let mut v = re_view(role);
+            v.origin = [1030.0, 0.0, 64.0];
+            let o = &mut v.re.as_mut().unwrap().objectives[0];
+            o.returns = Some((home, 50.0));
+            assert_eq!(bot.goal(&v), Goal::To([30.0, 0.0, 72.0]), "{role:?}");
+            v.re.as_mut().unwrap().objectives[0].buried = true;
+            assert_eq!(bot.goal(&v), Goal::To(home), "{role:?}");
+        }
+    }
+
+    /// Each tap that took nothing moves to the next side whose eye sees the
+    /// pickup's middle, skipping the rest; with none seen, every side in
+    /// turn (bot-objectives.md 4.2.2).
+    #[test]
+    fn the_taps_go_round_the_sides_that_see_the_pickup() {
+        let mut bot = Bot::new("allies", true, 1);
+        let mut v = re_view(ObjRole::Attack);
+        v.re.as_mut().unwrap().objectives[0].sides = 1 | 1 << 5;
+        let from = |bot: &Bot, v: &BotView| match bot.objective_target(v) {
+            Some(ObjTarget::Pickup { from, .. }) => from,
+            t => panic!("{t:?}"),
+        };
+        assert_eq!(from(&bot, &v), [30.0, 0.0, 72.0]);
+        bot.obj.pick = 1;
+        let west = from(&bot, &v);
+        assert!(
+            (west[0] + 10.0).abs() < 1e-3 && west[1].abs() < 1e-3,
+            "west {west:?}"
+        );
+        bot.obj.pick = 2;
+        assert_eq!(from(&bot, &v), [30.0, 0.0, 72.0]);
+        v.re.as_mut().unwrap().objectives[0].sides = 0;
+        bot.obj.pick = 1;
+        assert_eq!(from(&bot, &v), [70.0, 0.0, 72.0], "east");
     }
 
     /// Past the first by rank, a defender goes after a carried objective:
