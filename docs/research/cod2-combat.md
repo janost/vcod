@@ -1249,8 +1249,8 @@ Open:
   `pmove/weapon.rs`);
 - the corpse's startsolid re-trace (6.2);
 - `g_maxDroppedWeapons`, the no-slot touch, the contents clear (6.3);
-- `radiusDamage`'s callback order, and its `CanDamage` probes past the
-  static models and script models (7);
+- `radiusDamage`'s callback order (7). Its `CanDamage` probes past the
+  static models and script models closed in 372324ec3 (7, `cod2_blast::passed`);
 - the look-at trace's smoke test (9.2);
 - the aim block's leftovers (9.6).
 
