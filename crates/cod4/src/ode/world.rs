@@ -317,6 +317,21 @@ impl World {
         }
     }
 
+    /// The world's joints (`dxWorld` +0xc), contacts included.
+    pub fn joint_count(&self) -> usize {
+        self.joint_list.len()
+    }
+
+    /// The contact group's contacts.
+    pub fn contact_count(&self) -> usize {
+        self.contacts.len()
+    }
+
+    /// The contact group, in the order made.
+    pub fn contacts(&self) -> &[JointId] {
+        &self.contacts
+    }
+
     /// The world's bodies, first visited first.
     pub fn bodies(&self) -> &[BodyId] {
         &self.body_list

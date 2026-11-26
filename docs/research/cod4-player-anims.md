@@ -1162,6 +1162,199 @@ put at (207, 2291, 296) by `setviewpos` and killed by `kill`, at
   resting body's angular jitter is what keeps a 1.7 ragdoll awake to
   `ragdoll_max_life`. VERIFIED (the captures against 10.2).
 
+### 10.6 The ragdoll world's contacts as ported
+
+`vcod_cod4::ode::collide` ports what makes world 2's contacts: IW's capsule
+colliders over the clip map, the near callback and its contact pass, and
+the self collision hook. Addresses are iw3mp.exe 1.7's, read with
+`objdump`. The triangle test is ODE 0.5's (`collision_trimesh_ccylinder.cpp`,
+Alen Ladavac's) as IW rebuilt it; that the functions are that file's is
+INFERRED (their shape against the source), the rest is labelled per claim.
+Not wired into the ragdoll yet.
+
+- **The geom.** 0x5a8110 dispatches class 14 (the byte table at 0x5a89b0,
+  the jumps at 0x5a8998) to its capsule arm 0x5a8721: kind 5 into the
+  context (+0x34), the geom's +0x4c into the context's +4 (the rotation
+  column that is the axis, the columns at +0x44), its radius (+0x50) into
+  +0x8c and +0x90 and its +0x54 into +0x94, the half length of the
+  segment; the box the walk takes is a cube of the larger of `r` and
+  `2 r + h` (the double 2.0 at 0x70ae50) grown by 1 round the geom's
+  position (0x5a8370), narrow when `2 r` is under
+  `phys_narrowObjMaxLength`, which no capsule collider reads. VERIFIED
+  (the instructions). 0x59e870 builds the colliders' block from the
+  context: the segment's ends `c + h a` and `c - h a` (each `(-a) (-+h) +
+  c` stored), the centre, `-a`, `r`, `r^2`, `h + r`, `h`. VERIFIED (the
+  stores at 0x59e87a..0x59e92d). `Capsule`, `capsule::Seg`.
+- **The walk** (`ClipMap::world_pieces`). Of each leaf `CM_BoxLeafnums`
+  gives (0x4f2c60, up to 0x400): with its brush contents under the mask
+  (0x2806c91, 0x5a882c), its bounds strictly over the box's (0x5a7bc0)
+  and its brush tree walked by 0x5a7a60, each brush whose contents and
+  bounds meet the box in the order the tree reaches them: a node's
+  straddlers first, then the side above `dist` (when `dist` is not over
+  the box's top), then the one below (when `dist` is not under the box's
+  bottom, else the side above alone); then, with its terrain contents
+  under the mask, each AABB tree whose root material's contents meet it
+  (0x5a7ea0), nodes culled by 0x5a7c40 (the box's half size plus the
+  node's under the distance from the geom's position to the node's
+  centre on an axis), children in order, each partition once by a check
+  count (0x5a7d8e), with its leaf node's material's surface flags
+  (0x5a7dc4). VERIFIED (the instructions). A brush reached from two
+  leaves is collided twice: 0x5a7a60 keeps no check count. VERIFIED (the
+  instructions). 0x5a79b0 calls the brush collider only while the
+  contacts have room; 0x59ed10 returns at once when they have none.
+  VERIFIED (the compares at 0x5a79bd, 0x59ed2a). vcod's `world_solids`
+  (cod4-gsc.md 3.6.1) sorts and dedups the brushes and triangles, which
+  the box collider keeps; the capsule's walk is its own.
+- **Brush faces.** A brush's faces are its six axial ones in 0x596ae0's
+  order (`-x <= -mins.x`, `x <= maxs.x`, then y and z; face `i` reads
+  `[i & 1][i >> 1]` of the brush's tables) and its sides. Each face's
+  neighbours are a run of the zone's brush edges from the brush's
+  `baseAdjacentSide` (+0x30), the axial faces' first and count at +0x34
+  and +0x40, a side's at +8 and +0xa; a neighbour under 6 is an axial
+  face, else side `i - 6`. VERIFIED (0x5998e3..0x599923). The winding
+  (0x5998e0) is the meet of the face's plane with each pair of
+  neighbours in turn, the last and the first meeting first, by Cramer's
+  rule with each cross part, product, the determinant and its inverse
+  stored; a meet whose determinant reads under 0.001 (0x70b278) is
+  skipped, a corner within a unit of the last kept (the squared distance
+  0x403310 against the float 1.0 at 0x6be570) is overwritten by the next,
+  the last goes when it is within a unit of the first, fewer than three
+  give none, and a face with more neighbours than the caller's room
+  (0x100 from 0x59ea10) none either. VERIFIED (0x599a04..0x599c86). On
+  mp_crash 53931 of the 54109 faces with edges wind clockwise seen from
+  outside and the other 178 give none (`crashs_brush_windings_run_clockwise_from_outside`).
+  VERIFIED (the test, ours). `BrushFaces`.
+- **Against a brush** (0x59ea10). Each face's depth 0x59e940, the
+  lesser of the segment's ends' `n . e - d - r`, or `-FLT_MAX` (0x70af5c)
+  when the centre lies behind it; a depth of 0 or more ends the collide
+  with no contact. The deepest face with edges is the reference (a later
+  one only when strictly deeper); none, or a segment that neither crosses
+  its plane nor comes within `r` of it with its nearer end (0x59e790),
+  ends it too. VERIFIED (the instructions, 0x59ea70..0x59ebb3). Its
+  winding goes to the triangle colliders as `(w0, w2, w1)` with three
+  corners (0x59dd90), else as a fan: ends `(w0, w2, w1)` and
+  `(w[n-3], w[n-1], w[n-2])` (0x59e130), `(w0, w[k], w[k-1])` for `k`
+  from 3 to `n - 2` between (0x59e4a0), each with the reference's plane
+  and surface flags (0x5a7970: the axial material at +0x24 or the side's,
+  the material's +0x40), then one 0x59c710. VERIFIED (the pushes at
+  0x59ec31..0x59ecda). The last end starts at `w[n-3]` (`eax` is
+  `&w[n-3]` at 0x59ecc0), not `w0`, so a fan of four or more covers its
+  face as two ears and the triangles between, open on their inner edges.
+  VERIFIED (the instructions); that it is a slip is INFERRED.
+- **Against triangles** (0x59ed10). Each triangle `t` of the partition:
+  its plane `(t2 - t0) x (t1 - t0)` normalized by 0x4076d0 and its
+  distance at `t0` (0x5a18c0), out of 0x596c70, which also culls it
+  against a sphere of the context's +0x30 round the centre; with the
+  capsule touching the plane (0x59e790) it goes to 0x59dd90 as
+  `(t0, t2, t1)`; the partition's contacts go through one 0x59c710.
+  VERIFIED (the calls and pushes at 0x59edfc..0x59ee35). The cull is not
+  ported: its sphere holds the whole capsule, so it drops nothing that
+  can touch. INFERRED (its radius, the box's half diagonal, 0x5a88cf).
+- **The triangle test.** 0x59cd70 tests ODE's 19 axes in IW's order: 11,
+  then 2 to 7, 10, 9, 8, 12 to 19 and the face's normal negated (1, not
+  flipped) last; 0x59d4a0 (a fan's end) the normal first, then 3, 4, 6, 7,
+  9, 10, 12, 13, 15, 16, 18, 19, leaving out the edge `v0 v1` and the
+  corner `v0`; 0x59d9c0 (between) the normal, 3, 6, 9, 12, 15, 18, the
+  edge `v1 v2` and the corner `v1` alone. VERIFIED (the ids pushed at
+  each call to 0x59ca70). ODE's squared length gate of 1e-6 before each
+  axis is gone; 0x59ca70 skips an axis under 1e-6 long (the double at
+  0x70b508, where 0.5 has 1e-5f), stores the length, its inverse and the
+  normalized axis, takes the capsule's reach `|a . n| h + r` and the
+  triangle's centre and half extent, separates when their sum is under
+  the centre's size, and keeps a strictly deeper overlap, turned to the
+  triangle when its centre is negative and the axis may flip. VERIFIED
+  (the instructions). The segment pushed out by `r` along the best
+  normal (0x59dce0) is clipped (0x59c910: the meet `a - (a - b) t` over
+  the end behind) behind the face and inside the triangle's edges, all
+  three for 0x59dd90, `v1 v2` and `v2 v0` for an end, `v1 v2` alone
+  between, each edge plane 1e-6 out (the float at 0x70b930; the far
+  edge's distance less the double 1e-6); each end left is a local
+  contact, its depth along the normal past the triangle's near side, at
+  least 0 (0x4093c0), with the surface flags. VERIFIED (the instructions,
+  0x59dd90..0x59e127, 0x59e130..0x59e490, 0x59e4a0..0x59e784).
+- **Local contacts.** 32 of 0x24 bytes at 0xcc53f80 (0x59c5a6), emptied
+  by each brush and each partition. 0x59c710 with two or more drops, of
+  each pair whose positions and normals are within 0.001 on every axis
+  (the squared difference against the double at 0x70b300), the shallower
+  one (the first on a tie, 0x59c600), and copies the rest into the
+  `dContactGeom`s while there is room, each normal and position's fourth
+  float 0, the surface flags at +0x2c. VERIFIED (the instructions).
+  0x5a95a0, the `dCollide` the near callback calls with the body's geom
+  as `o1`, turns every normal round when the class pair's entry is
+  reversed (0x5a9603..0x5a972d). VERIFIED (the instructions). That the
+  capsule and world pair is reversed, as ODE's `dCreateGeomClass` sets a
+  user class's colliders, is INFERRED; so the ported normals point out of
+  the world into the capsule, as the joint pushing `b1` needs.
+- **The near callback** (0x5a5f20, `near_world`). Bodies joined by a
+  joint other than a contact do not collide (0x5a5f60..0x5a5f85). The
+  collide has room for 0x80; none sets the lone body's state 2
+  (0x5a612d). `mu` is `(friction1 + 0) + friction2` times
+  `phys_frictionScale` (userdata +0x44, 0x5a6085), bounce the least of 1
+  and each body's +0x48 (0x409400), `mu2` 0, `bounce_vel` 0.1 (0x6b72dc),
+  mode 0x301c, and world 2's soft ERP and CFM `phys_contact_erp_ragdoll`
+  and `_cfm_ragdoll` (0.3, 0.001), the others' `phys_contact_erp` and
+  `_cfm` (0.8, 1e-5) (0x5a603d..0x5a6075). Five or more contacts go
+  through 0x5a2320's cut (cod4-gsc.md 3.6.1, at most 15). VERIFIED (the
+  instructions, the registrations). A ragdoll bone's preset has bounce
+  0 and the bone's friction (0x5bc980..0x5bc9b6). VERIFIED (the stores).
+  The impact callback after the pass (0x5a5de0) is not ported.
+- **The contact pass** (0x5a2760, `contact_pass`). 0x5a2280 sets both
+  bodies' state 1 when two contacts' stored normal dot is under -0.99
+  (the double at 0x70b268); with `b1` in state 1, else `b2`, 0x5a25d0
+  keeps one of each facing pair by that body's position; each contact
+  whose point a body in state 1 is leaving (`dBodyGetPointVel` 0x5b70d0,
+  normalized by 0x5b7460, along the normal over 0.01 at 0x6df494) is
+  skipped. VERIFIED (cod4-gsc.md 3.6.1, the instructions). A contact joint
+  is made only while the world holds under 0x1000 joints (`dxWorld` +0xc,
+  0x5a2a34) and its group under 0x1000 contacts (0x5a2a43); past either
+  the pass prints `Maximum number of ODE physics contact points
+  exceeded.` (0x6f7300) and returns. VERIFIED (the instructions). The
+  jitter (0x5a23e0) is not ported. Under `phys_noIslands` (0xcc54410,
+  default 0) the pass makes body pairs another way, not ported.
+  VERIFIED (the registration at 0x5a3799).
+- **Self collision** (0x5bd9c0, `selfcol`). For each ragdoll of the pool
+  in state 3 or 4 and each `ragdoll_selfpair` of its def (+0xe88, two
+  bytes each at +0xe8c): each bone's segment from its body's position
+  moved by its object's offset in the body's frame (0x5a4740) along the
+  body's x axis for its length (0x5bd800); their nearest points by Dan
+  Sunday's clamped solve (0x5bd4e0: parallel under a determinant of 1e-6,
+  a numerator under 1e-4 at 0x70b000 reads 0); each bone's radius (def
+  bone +0x30) times `ragdoll_self_collision_scale` (1.2); with the points
+  no farther apart than the two radii (equal counts, 0x5bdb99) and not
+  closer than `sqrt(0.002)` (0x70b070, 0x5bd8df), one contact along
+  `pb - pa`, half the overlap deep, at `pa` plus the normal times
+  `r_a - depth`, `mu` bone `a`'s friction (def bone +0x40) with no
+  `phys_frictionScale`, bounce 0, `phys_contact_erp` and `_cfm`, `b1`
+  bone `b`'s body and `b2` bone `a`'s, through the contact pass
+  (0x5a2b50 into 0x5a2760). VERIFIED (the instructions, the bone fields
+  `ragdoll_bone` stores at 0x5babb3..0x5bac37).
+- **Precision.** Each port stores where the binary writes a DWORD and
+  keeps the x87's 53 bits between (10.4); the three-term dots load in
+  orders that differ only in their first two terms, so each is
+  `(p0 + p1) + p2`. VERIFIED (the instructions). The 0x5a2320 cut is
+  `physics::reduce`'s, in `f32` (cod4-gsc.md 3.6.1).
+- **Tests** (`ode::collide::tests`, `capsule_world`, ours): a level
+  capsule half a unit into a box brush's top gives the segment's two ends
+  0.5 deep along +z; across the box's edge, the outer one on the edge; on
+  two triangles of a 30 degree slope, three contacts along the slope's
+  normal (the segment cut at the shared edge, the two there one); the cut
+  keeps 15 of 18 contacts in three clusters; two bones at their scaled
+  radii touch at depth 0 and a hair farther do not; a capsule dropped on
+  a floor brush in the ragdoll world at 17 ms rests 3.93 over it (radius
+  5, the 1 unit surface layer and the soft CFM let it sink) and sleeps on
+  the 53rd step its sleep test found it still; on mp_crash a level
+  capsule under each flat `mp_tdm_spawn` floor meets it straight up, and
+  terrain a tenth of a unit under a floor brush by spawn (1504, 512)
+  adds contacts of its own. VERIFIED (the tests, ours). No retail capture
+  gates these contacts yet.
+- **For the glue** (phase 3): a ragdoll body's geom is class 14 made at
+  0x5a8e10 with the axis column, radius and half length the bone gives;
+  the near callback runs per awake body against the world each step
+  before the island pass, the self hook once per step, and
+  `World::empty_contacts` after. Which geom field holds the axis index,
+  and the phys object's offset 0x5bd800 reads (userdata +0), are not
+  traced. INFERRED.
+
 ## 11. The anim sampler
 
 - `DObjCalcAnim` (`cod4_lnxded` 0x81b4c8c) masks out the bones not asked
