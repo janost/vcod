@@ -5,7 +5,7 @@
 //! 1.7: the world collider's box arm (0x5a8237), a brush (0x59a610 with its
 //! clips 0x597fd0, 0x59a2b0 and the narrow pass 0x59a500) and a partition's
 //! triangles (0x59c500 into 0x5b1620, ODE 0.5's box against a triangle list,
-//! `collision_trimesh_box.cpp`, as IW rebuilt it); cod4-gsc.md 3.6.4.
+//! `collision_trimesh_box.cpp`, as IW rebuilt it); cod4-gsc.md 3.6.5.
 
 use glam::Vec3;
 
@@ -24,7 +24,7 @@ pub const NARROW_MAX_LENGTH: f32 = 4.0;
 
 /// A box geom as the world collider's context holds it (0x5a8110,
 /// 0x5a8237): its position (+0x38), its axes, the rotation's columns
-/// (+0x44), the rotation by rows (+0x68), the half sides (+0x8c), its
+/// (+0x44, the rows at +0x68 the same matrix), the half sides (+0x8c), its
 /// body's position (+0x98) and the narrow flag (+0xa4).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BoxGeom {
@@ -570,8 +570,8 @@ fn sqrt_st(x: f32) -> f32 {
     w(x).sqrt() as f32
 }
 
-/// 0x5b1620's collider block (the box, the triangle's edges and normal,
-/// the best axis), ODE 0.5's globals gathered into one.
+/// Of 0x5b1620's collider block, ODE 0.5's globals gathered into one: the
+/// best axis so far, the triangle's edges and its normal.
 struct Tri {
     best_normal: V3,
     best_depth: f32,

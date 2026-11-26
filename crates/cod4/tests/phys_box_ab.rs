@@ -1,4 +1,4 @@
-//! The box collider (`ode::collide::boxes`, cod4-gsc.md 3.6.4) against
+//! The box collider (`ode::collide::boxes`, cod4-gsc.md 3.6.5) against
 //! retail 1.7's `dCollide` in the world 0 and 1 captures
 //! (`fixtures/phys/`, 3.6.2): every class 1 geom's collide fed the body's
 //! captured pose gives the capture's contacts, and 0x5a2320's cut of them
@@ -196,12 +196,8 @@ const TOL: f32 = 1e-4;
 
 /// Collides whose pose the capture does not hold to the bit: the sweep
 /// after the frame (0x5a6930) put the body where vcod's trace lands an ulp
-/// off retail's (3.6.4).
+/// off retail's (3.6.5).
 const POSE_ULP: &[(&str, u32, u32)] = &[("watermelon-mp_bog-1.7.txt", 28, 4)];
-
-/// Cuts `cut` gives in another order than 0x5a2320 on contacts equal to
-/// the bit: its f32 dots tie the third seed differently (3.6.4).
-const CUT_ORDER: &[(&str, u32, u32)] = &[("watermelon-mp_bog-1.7.txt", 13, 5)];
 
 #[derive(Default, Debug)]
 struct Tally {
@@ -275,7 +271,7 @@ fn run(name: &str, clip: &ClipMap) -> Tally {
             } else {
                 println!("{name} step {} body {}: cut", c.step, c.body);
                 print("cut", &port_cut, cap_cut);
-                if ok && !CUT_ORDER.contains(&key) {
+                if ok {
                     bad.push(key);
                 }
             }

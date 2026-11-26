@@ -73,12 +73,18 @@ pub struct PhysGeom {
 }
 
 /// A `physGeoms` brush in the model's frame: `BrushWrapper`'s bounds and
-/// its side planes (normal, dist), solid where every `n . p <= dist`.
+/// its plane array at +0x4c (normal, dist), solid where every
+/// `n . p <= dist`, empty where the walker dropped it; each side's own
+/// plane, which the brush colliders read; and each face's neighbours as
+/// they wind it, faces `0..6` the axial ones in 0x596ae0's order, then
+/// the sides.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PhysBrush {
     pub mins: [f32; 3],
     pub maxs: [f32; 3],
     pub planes: Vec<[f32; 4]>,
+    pub side_planes: Vec<[f32; 4]>,
+    pub adjacent: Vec<Vec<u8>>,
 }
 
 /// `XModelCollSurf_s`, 0x2C: its triangles (0x30 each: plane, `svec`,
@@ -334,14 +340,42 @@ fn phys_geom_list<R: BufRead>(w: &mut W<R>) -> Result<PhysGeomList> {
 pub(crate) fn brush_wrapper<R: BufRead>(w: &mut W<R>) -> Result<PhysBrush> {
     let b = w.load(0x50)?;
     let sides = b.u32(28) as usize;
-    if w.inline_only(b.ptr(32), 4)? {
-        brush_sides(w, sides)?;
-    }
-    if w.inline_only(b.ptr(48), 1)? {
-        w.bulk(1, b.u32(72) as usize)?;
-    }
+    let (side_bytes, side_planes) = if w.inline_only(b.ptr(32), 4)? {
+        brush_sides_planes(w, sides)?
+    } else {
+        Default::default()
+    };
+    let edges = if w.inline_only(b.ptr(48), 1)? {
+        w.bulk_kept(1, b.u32(72) as usize)?
+    } else {
+        Vec::new()
+    };
+    // Each face's run of the edges: the axial ones' first (+0x34) and
+    // count (+0x40) at `[i & 1][i >> 1]`, a side's at +8 and +0xa.
+    let mut runs: Vec<(i16, u8)> = (0..6)
+        .map(|i| {
+            let j = 3 * (i & 1) + (i >> 1);
+            (b.i16(0x34 + 2 * j), b.u8(0x40 + j))
+        })
+        .collect();
+    runs.extend(
+        side_bytes
+            .as_chunks::<0xC>()
+            .0
+            .iter()
+            .map(|s| (i16::from_le_bytes([s[8], s[9]]), s[10])),
+    );
+    let adjacent = runs
+        .iter()
+        .map(|&(first, k)| {
+            usize::try_from(first)
+                .ok()
+                .and_then(|f| edges.get(f..f + usize::from(k)))
+                .map_or_else(Vec::new, <[u8]>::to_vec)
+        })
+        .collect();
     // A shared plane array may start inside another brush's.
-    let planes = w
+    let planes: Vec<[f32; 4]> = w
         .shared(b.ptr(76), 4, 0x14 * sides, "brush planes", false)?
         .map(|p| {
             let f = |o: usize| crate::walk::f32_at(&p, o);
@@ -357,23 +391,47 @@ pub(crate) fn brush_wrapper<R: BufRead>(w: &mut W<R>) -> Result<PhysBrush> {
                 .collect()
         })
         .unwrap_or_default();
+    let side_planes = (0..sides)
+        .filter_map(|i| {
+            side_planes
+                .get(i)
+                .copied()
+                .flatten()
+                .or(planes.get(i).copied())
+        })
+        .collect();
     Ok(PhysBrush {
         mins: b.vec3(0),
         maxs: b.vec3(16),
         planes,
+        side_planes,
+        adjacent,
     })
 }
 
 /// `cbrushside_t`, 0xC, `n` of them, each plane inline or shared.
 /// Returns the sides as stored.
 pub(crate) fn brush_sides<R: BufRead>(w: &mut W<R>, n: usize) -> Result<Vec<u8>> {
+    Ok(brush_sides_planes(w, n)?.0)
+}
+
+/// The sides as stored and each side's plane (normal, dist) when inline.
+type SidesPlanes = (Vec<u8>, Vec<Option<[f32; 4]>>);
+
+/// [`brush_sides`] and each side's inline plane.
+fn brush_sides_planes<R: BufRead>(w: &mut W<R>, n: usize) -> Result<SidesPlanes> {
     let a = w.load(0xC * n)?;
+    let mut planes = Vec::with_capacity(n);
     for i in 0..n {
-        if let Follow::Inline = w.follow(a.elem(i, 0xC).ptr(0), 4)? {
-            w.load(0x14)?;
-        }
+        planes.push(match w.follow(a.elem(i, 0xC).ptr(0), 4)? {
+            Follow::Inline => {
+                let p = w.load(0x14)?;
+                Some([p.f32(0), p.f32(4), p.f32(8), p.f32(12)])
+            }
+            _ => None,
+        });
     }
-    Ok(a.b)
+    Ok((a.b, planes))
 }
 
 /// `XAnimParts`, 0x58.

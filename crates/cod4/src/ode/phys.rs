@@ -11,6 +11,7 @@ pub use super::geom::{Geom, GeomClass, Unported};
 
 use super::Body;
 use super::body::DISABLED;
+use super::collide::brushgeom::{self, BrushGeom, NARROW_MAX_LENGTH};
 use super::collide::{self, Capsule, Obj, Pieces};
 use super::math::{M3, V3};
 use super::world::{BodyId, Params, PhysDvars, World};
@@ -266,6 +267,23 @@ impl PhysWorld {
                 continue;
             }
             let Some(o) = self.obj(id) else { continue };
+            if let Some(Geom::Brush { brush, offset }) = o.geom() {
+                let (brush, offset, mut obj) = (brush.clone(), *offset, o.obj);
+                let g = BrushGeom::new(&brush, offset, body.pos, &body.r, NARROW_MAX_LENGTH);
+                brushgeom::near_world(
+                    &mut self.world,
+                    id,
+                    &mut obj,
+                    &g,
+                    clip,
+                    contact,
+                    self.id.index(),
+                );
+                if let Some(o) = self.obj_mut(id) {
+                    o.obj = obj;
+                }
+                continue;
+            }
             // Only the capsule has its colliders (P3 of the world 0/1 port);
             // a body of any other class refuses the frame.
             let cap = match o.geom() {
