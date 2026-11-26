@@ -2372,6 +2372,41 @@ The custom class tests build `custom1` off the stats `cac_getdata` reads
   0.5f)`, cod4-netfields.md 2), yaw `101.765` as 101.7664 (the angle
   writer's half short). VERIFIED (`cod4::wire_ab`).
 
+#### 7.5.1 A spectator's `pm_type`
+
+What 1.7 writes into `ps.pm_type` (ps+4) for a client off the field.
+VERIFIED (the instructions) where no label says otherwise:
+
+- `ClientBegin` (0x80a7700) sets `pers.connected` 2 (+0x2f8c) and
+  `pm_type` 4 (0x80a7731) before its notify (0x80a776c). The name is
+  INFERRED (the `begin` it notifies, vcod's `begin`).
+- `ClientSpawn`'s memset (0x80a7cc9) leaves 0 for every session; a
+  spectator's 4 comes from the spawn's own think.
+- `SpectatorThink` (the block at 0x80a4ef6) sets 4 for a spectator not
+  following (`otherFlags` bit 2 clear, 0x80a4eea), `speed` 400 or 0 by the
+  free-flight bit of +0x3004 (0x80a4efd..0x80a4f10).
+- `SpectatorClientEndFrame` (0x80a49f0) never writes it. A killcam
+  (`archivetime` set) and a follow both take the archived playerstate
+  whole (`SV_GetArchivedClientInfo` 0x81795e2, the 0x2f64-byte copy at
+  0x80a4bd7), so they send the watched client's: 0 while it plays, 7 once
+  it is dead. The float leaves what the last think left.
+- 0x80a4c76 writes 5 (0x80a4cab), INFERRED the intermission's end frame.
+  The dead read 7, 8 linked (9). INFERRED.
+- The captures agree. Every killcam reads `pm_type` 0 with `otherFlags` 2
+  and the shooter's `clientNum` (`play-1.7-kill-target.txt` from 50000;
+  `kcent`, `csb0corpse`, `csb0drag`, `prone` and `score` targets); the
+  walker's follow of its mate reads 0 with `otherFlags` 0xa
+  (`play-1.7-walk.txt` 46800, above); a spectator floating or in the team
+  menu reads 4 with `otherFlags` 0 or 8 (`play-1.7-spec.txt` and every
+  probe before its team). VERIFIED live.
+- vcod-server writes the same: 4 at `connect`, `begin`, a spectator spawn
+  and each free spectator's think; the copy in `watch` and the killcam;
+  5 at the intermission's end frame. The damage soak's spectators at
+  `pm_type` 0 are in their killcams, as retail's are. VERIFIED (a
+  `SOAK_REPORT` run, ours). The client predicts and draws the native HUD
+  off `otherFlags` 2 and `clientNum`, not `pm_type` (`play::cod4::cmd`).
+  INFERRED (the code).
+
 ### 7.6 Open
 
 Nothing left. 1.7 sends no PVS cull (cod4-pmove.md 15); pmove writes

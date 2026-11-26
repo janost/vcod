@@ -569,7 +569,7 @@ impl Replay<'_> {
         };
         let d = &defs[weapon as usize];
         assert!(
-            pmove::weapon::take_ammo(ps, d, weapon, rounds),
+            pmove::weapon::take_ammo(ps, d, weapon, rounds) > 0,
             "nothing taken"
         );
     }

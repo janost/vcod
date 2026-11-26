@@ -260,6 +260,107 @@ fn a_spectators_new_attachment_tag_takes_its_index() {
     assert_ne!(tag, 0, "tag_inhand took no index");
 }
 
+/// 800 ms on, the frozen `slot` stood on the item it dropped, wherever the
+/// drop's `crandom`s put it, and 1200 ms more.
+fn stand_on_the_drop(sv: &mut Cod4Server, now: &mut Instant, slot: usize) {
+    run(sv, now, 800);
+    let level = sv.game.level.as_mut().unwrap();
+    // The eye 59 over the item puts the feet of a standing body on it.
+    let at = level.rt.host.cod4().items[0].origin + glam::Vec3::Z * 59.0;
+    level.set_view_pos(slot, at.to_array(), [0.0; 3]);
+    run(sv, now, 1200);
+}
+
+/// `G_TouchTriggers` (0x80a5352) on a dropped weapon: every frame the
+/// dropper stands on it the item and the dropper are notified `"touch"`,
+/// though his own item is not his for 1000 ms; then, the same weapon held
+/// with an empty reserve, he takes its rounds, the item is notified
+/// `"trigger"` with him and no drop, and goes (cod4-combat.md 6.2.1).
+#[test]
+fn a_dropped_weapon_is_notified_touch_then_trigger() {
+    let Some((mut sv, mut now)) = level("mp_crash", "war", 100) else {
+        return;
+    };
+    let slot = sv.add_bots(1, false)[0];
+    run(&mut sv, &mut now, 8000);
+    let rt = &mut sv.game.level.as_mut().unwrap().rt;
+    let me = rt.client_entity(slot).unwrap();
+    rt.install_for_test(
+        "drop(p)\n{\n\tw = p getCurrentWeapon();\n\tp freezeControls(true);\n\titem = p dropItem(w);\n\titem itemWeaponSetAmmo(30, 60);\n\tp giveWeapon(w);\n\tp setWeaponAmmoStock(w, 0);\n\tlevel.wakes = 0;\n\tlevel.touches = 0;\n\titem thread once();\n\titem thread count();\n\titem thread taken();\n\tp thread mine(item);\n}\n\
+         once()\n{\n\tself waittill(\"touch\", who);\n\tlevel.wakes++;\n\tlevel.toucher = who;\n}\n\
+         count()\n{\n\tfor(;;)\n\t{\n\t\tself waittill(\"touch\", who);\n\t\tlevel.touches++;\n\t}\n}\n\
+         taken()\n{\n\tself waittill(\"trigger\", who, dropped);\n\tlevel.taker = who;\n\tlevel.no_drop = !isDefined(dropped);\n\tlevel.touches_at_take = level.touches;\n}\n\
+         mine(item)\n{\n\tself waittill(\"touch\", other);\n\tlevel.mine = other == item;\n}\n",
+    );
+    let entry = rt.entry_for_test().to_string();
+    rt.start_script_thread_for_test(&entry, "drop", None, |_| vec![vcod_gsc::Value::Entity(me)]);
+    stand_on_the_drop(&mut sv, &mut now, slot);
+    let level = sv.game.level.as_mut().unwrap();
+    let rt = &mut level.rt;
+    let aborts = rt.aborts();
+    assert!(aborts.is_empty(), "script errors:\n{}", aborts.join("\n"));
+    let int = |rt: &mut crate::game::script::ScriptRuntime, n: &str| match rt.level_field(n) {
+        vcod_gsc::Value::Int(i) => i,
+        v => panic!("level.{n}: {v:?}"),
+    };
+    assert_eq!(int(rt, "wakes"), 1);
+    assert!(matches!(rt.level_field("toucher"), vcod_gsc::Value::Entity(e) if e == me));
+    assert_eq!(int(rt, "mine"), 1, "the dropper's touch names the item");
+    assert!(matches!(rt.level_field("taker"), vcod_gsc::Value::Entity(e) if e == me));
+    assert_eq!(int(rt, "no_drop"), 1);
+    // A touch each frame he stood on it while it was not his to take.
+    let touches = int(rt, "touches_at_take");
+    assert!(touches >= 4, "{touches} touches");
+    assert!(rt.host.cod4().items.is_empty(), "the item is still there");
+    assert!(level.pm_state(slot).unwrap().ammo.iter().sum::<i32>() > 0);
+}
+
+/// `Touch_Item`'s ammo-only take (0x8060dd4, 0x8091d44): a dropped weapon
+/// not held, with a held one on its ammo slot, gives its stock and not its
+/// clip, is notified `"trigger"`, and stays with the rest (cod4-combat.md
+/// 6.2.1).
+#[test]
+fn a_weapon_on_the_same_ammo_slot_takes_the_stock_only() {
+    let Some((mut sv, mut now)) = level("mp_crash", "war", 100) else {
+        return;
+    };
+    let slot = sv.add_bots(1, false)[0];
+    run(&mut sv, &mut now, 8000);
+    let level = sv.game.level.as_mut().unwrap();
+    let w = level.pm_state(slot).unwrap().weapon as usize;
+    let defs = &level.rt.host.cod4().table.defs;
+    let twin = (1..defs.len())
+        .find(|&k| k != w && defs[k].ammo_slot == defs[w].ammo_slot && defs[k].alt != w)
+        .map(|k| defs[k].name.clone())
+        .expect("a weapon sharing the ammo slot");
+    let rt = &mut level.rt;
+    let me = rt.client_entity(slot).unwrap();
+    rt.install_for_test(
+        "drop(p, twin)\n{\n\tw = p getCurrentWeapon();\n\tp freezeControls(true);\n\titem = p dropItem(w);\n\titem itemWeaponSetAmmo(30, 60);\n\tp takeWeapon(w);\n\tp giveWeapon(twin);\n\tp setWeaponAmmoStock(twin, 0);\n\tlevel.item = item;\n\titem thread taken();\n}\n\
+         taken()\n{\n\tself waittill(\"trigger\", who);\n\tlevel.taken = 1;\n}\n",
+    );
+    let entry = rt.entry_for_test().to_string();
+    rt.start_script_thread_for_test(&entry, "drop", None, |cx| {
+        vec![
+            vcod_gsc::Value::Entity(me),
+            vcod_gsc::Value::String(cx.intern_exact(&twin)),
+        ]
+    });
+    stand_on_the_drop(&mut sv, &mut now, slot);
+    let level = sv.game.level.as_mut().unwrap();
+    let aborts = level.rt.aborts();
+    assert!(aborts.is_empty(), "script errors:\n{}", aborts.join("\n"));
+    assert!(matches!(
+        level.rt.level_field("taken"),
+        vcod_gsc::Value::Int(1)
+    ));
+    let items = &level.rt.host.cod4().items;
+    assert_eq!(items.len(), 1, "the item went");
+    assert_eq!((items[0].clip, items[0].stock), (30, 0));
+    let ammo = level.pm_state(slot).unwrap().ammo;
+    assert_eq!(ammo[level.rt.host.cod4().table.defs[w].ammo_slot], 60);
+}
+
 /// A restart into a gametype with no script tears the level down and fails:
 /// the fatal is kept for the loop, the cvar table (`+set`s, rcon's
 /// password) survives, and a good map loads over it.
