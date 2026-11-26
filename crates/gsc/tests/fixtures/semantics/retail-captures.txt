@@ -162,6 +162,18 @@ PROBE cast_float_tail 16
 PROBE at cast_int_word
 PROBE_FATAL cannot cast "abc" to int
 
+# probe_closer
+PROBE lsq_small 14
+PROBE lsq_frac 4.3125
+PROBE lsq_one_round 2
+PROBE closer_near 1
+PROBE closer_far 0
+PROBE closer_tie 0
+PROBE closer_second_unrounded 1
+PROBE closer_first_rounds 1
+PROBE closer_diff_rounds 0
+PROBE closer_done 1
+
 # probe_cmp
 PROBE at eq_int_float
 PROBE eq_int_float 1

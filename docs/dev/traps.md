@@ -35,6 +35,10 @@ by doc and section. Grep `Trap:` in the subsystem doc you were sent to.
   pixels (GPU kit pack 8). Keep a new position term off the other outputs'
   operations; `renderer::tests::the_entity_position_reads_no_world_normal_operation`
   holds it for the normal.
+- One builtin can round differently per build: `closer` keeps 1.1d's second
+  distance on the x87 stack, rounds both on 1.5b, UO and CoD2, and neither
+  on CoD4 (`CloserRounding`, cod11-gsc-object-model.md 9.2). Read every
+  build's handler before binding a shared one by name.
 
 ### Script host and VM
 
@@ -790,6 +794,16 @@ otherwise.
   UO number under `EV_FOREIGN` (`EV_UO_*`). Its sprinting, winded and
   overheated `pm_flags` sit above bit 23 (`PMF_*_V22`), so a 1.1 handler
   never fires on one (`coduo-diff.md` 19).
+
+### UO map cycle and script
+
+- UO's `map` reads `<map>_<gametype>.cfg` before the load and runs it after:
+  the file goes ahead of the console queue (`Server::exec_file`), so its
+  `set`s miss the level's init. The gametype is the running one, not
+  `cfg.gametype`, which already holds a latched `set` (coduo-diff.md 26).
+- 1.1 and 1.5 refuse to compile a script naming a UO-only builtin, so a
+  probe shared with them cannot log `getTurretHeat`; UO's measurements of
+  such builtins go in a UO-only probe (`probe_turretheat`).
 
 ### Movement and weapons
 

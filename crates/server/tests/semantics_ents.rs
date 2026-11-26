@@ -10,8 +10,8 @@
 //! satisfies `semantics_ab.rs`'s `every_probe_file_and_capture_section_are_paired`
 //! guard, which checks this file's text for the name.
 //!
-//! `probe_vectordot` is claimed here for the same reason as `probe_cvar`
-//! below: it calls a builtin only this crate answers.
+//! `probe_vectordot` and `probe_closer` are claimed here for the same
+//! reason as `probe_cvar` below: they call builtins only this crate answers.
 //!
 //! `probe_cvar` and `probe_not_string` are claimed here for a different
 //! reason: they call `getCvar`/`setCvar`/`getCvarInt`/`getCvarFloat`/
@@ -299,6 +299,46 @@ fn probe_vectordot_matches_retail() {
         .unwrap_or_else(|e| panic!("probe_vectordot main errored: {e:?}"));
 
     assert_eq!(host.script_log, retail_probe_lines("probe_vectordot"));
+}
+
+/// `probe_closer` measures `lengthSquared` and `closer` on 1.1d, whose
+/// `closer` keeps the second distance and the differences unrounded.
+#[test]
+fn probe_closer_matches_retail() {
+    let (mut vm, main) = install("probe_closer");
+    let mut host = GameHost::new(
+        &vcod_server::game::profile::COD1_11,
+        vec![String::new(); 2048],
+    );
+    vm.call_now(&mut host, main, None, Vec::new())
+        .unwrap_or_else(|e| panic!("probe_closer main errored: {e:?}"));
+
+    assert_eq!(host.script_log, retail_probe_lines("probe_closer"));
+}
+
+/// `probe_closer` on UO: 1.5b and UO 1.51b logged 0, 0, 1 for the three
+/// rounding lines, each difference and distance a float
+/// (cod11-gsc-object-model.md 9.2).
+#[test]
+fn probe_closer_matches_retail_uo() {
+    let (mut vm, main) = install("probe_closer");
+    let mut host = GameHost::new(
+        &vcod_server::game::profile::COD1_UO,
+        vec![String::new(); 2048],
+    );
+    vm.call_now(&mut host, main, None, Vec::new())
+        .unwrap_or_else(|e| panic!("probe_closer main errored: {e:?}"));
+
+    let uo: Vec<String> = retail_probe_lines("probe_closer")
+        .into_iter()
+        .map(|l| match l.as_str() {
+            "PROBE closer_second_unrounded 1" => "PROBE closer_second_unrounded 0".into(),
+            "PROBE closer_first_rounds 1" => "PROBE closer_first_rounds 0".into(),
+            "PROBE closer_diff_rounds 0" => "PROBE closer_diff_rounds 1".into(),
+            _ => l,
+        })
+        .collect();
+    assert_eq!(host.script_log, uo);
 }
 
 /// `probe_not_string` measures unary `!` on a `getCvar` read.

@@ -651,6 +651,62 @@ vcod: `builtins::math::vector_dot`, bound by name for every game
 whose products of two floats are exact; the 80-bit stack can differ from
 it only by a double rounding (INFERRED).
 
+### 9.2 `lengthSquared` and `closer`
+
+VERIFIED (the instructions, `tools/re/dump_builtins.py` and
+`tools/re/annotate_func.py`): `functions` rows 47 and 48 on 1.1d name
+`lengthsquared` at 0x5e920 and `closer` at 0x5e960 (rows 49 and 50 on
+1.5b, 0x5fbfd and 0x5fc46; rows 52 and 53 on UO, 0x6b8ec and 0x6b935).
+CoD2's are 0x811418c and 0x81141ba (`dump_cod2_gsc.py`), CoD4 1.7's
+0x80c1c1c and 0x80c206e (`cod4_builtins.py`).
+
+- `lengthSquared(v)`: one `Scr_GetVector`, the three squares multiplied
+  and added on the x87 stack (1.1d 0x5e934..0x5e949), one `fstp DWORD`
+  into `Scr_AddFloat` (0x5e951). 1.5b (0x5fc22..0x5fc38), UO
+  (0x6b911..0x6b927) and CoD2 (through 0x81187bc, `fstp` at 0x81141b0)
+  are the same. VERIFIED (the instructions).
+- `closer(ref, a, b)`: three `Scr_GetVector`s, `VectorDistanceSquared(a,
+  ref)` and `(b, ref)`, then 1 to `Scr_AddInt` when the second is greater
+  than the first (`fcomp`/`fucompp`, `fnstsw`, `and`/`test ah, 0x45`,
+  `sete`), so a tie and a NaN are 0. VERIFIED (the instructions, 1.1d
+  0x5e996..0x5e9c5, UO 0x6b980..0x6b9c0).
+- The roundings differ. 1.1d's `VectorDistanceSquared` (0x3d830) keeps
+  each difference on the stack (`fst`, not `fstp`, at 0x3d840..0x3d85c) and
+  returns the sum unrounded; `closer` stores the first result as a float
+  (`fstp DWORD [ebp-0x28]`, 0x5e9a0) and compares the second straight off
+  the stack (0x5e9b6). 1.5b's (0x32dfc..0x32e3b) and UO's (0x3a03e)
+  `VectorDistanceSquared` store each difference as a float first (`fstp`
+  at 0x3a04e, 0x3a061, 0x3a074), and their `closer` stores both results
+  (UO 0x6b992, 0x6b9a7) before the compare. CoD2's is UO's shape (its
+  `VectorSubtract` into memory at 0x80a4130, `fstp` at 0x811420b and
+  0x8114220). CoD4's subtracts, squares and compares on the stack with no
+  store (0x80c20ad..0x80c20fc, `fucomip`, `seta`). VERIFIED (the
+  instructions).
+
+VERIFIED, live (retail 1.1d, 1.5b and UO 1.51b, 2026-11-26,
+`probe_closer`): all three log `lengthSquared((1, 2, 3))` 14,
+`(0.5, 0.25, 2)` 4.3125 and `lengthSquared((4096, 1, 1)) - 16777216` 2,
+one rounding as `vectorDot`'s; `closer` 1 for the nearer first, 0 for the
+farther and 0 for a tie. The rounding lines split the builds:
+
+| Line | Call | 1.1d | 1.5b, UO |
+|---|---|---|---|
+| `closer_second_unrounded` | `closer((0,0,0), (4096,0,0), (4096,1,0))` | 1 | 0 |
+| `closer_first_rounds` | `closer((0,0,0), (4096,1,0), (4096,0.5,0))` | 1 | 0 |
+| `closer_diff_rounds` | `closer((16777216,0,0), (-1,0,0), (33554432,4096,4096))` | 0 | 1 |
+
+`closer_first_rounds` is 1 on 1.1d although `a` is the farther: 2^24 + 1
+stored as a float is 2^24, under the unrounded 2^24 + 0.25. On 1.5b and UO
+`closer_diff_rounds` is 1: the difference 2^24 + 1 rounds to 2^24 first.
+
+vcod: `builtins::math::length_squared` and `builtins::math::closer`,
+bound by name for CoD1 and CoD2 (CoD4 keeps its own `lengthSquared`); the
+profile's `CloserRounding` picks 1.1d's, 1.5b's (and UO's and CoD2's) or
+CoD4's rounding. Each sums in `f64`, which can differ from the 80-bit
+stack only by a double rounding (INFERRED). `semantics_ents`'s
+`probe_closer_matches_retail` and `probe_closer_matches_retail_uo` replay
+the capture; CoD4's rounding rests on the instructions alone.
+
 ## 10. `getEntArray` returns ascending entity number, VERIFIED
 
 `Scr_GetEntArray` (0x61980) walks `esi` from 0 to `level.num_entities`

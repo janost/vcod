@@ -30,7 +30,48 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("dodamage", do_damage),
     ("dodamagemod", do_damage_mod),
     ("spawntriggermount", spawn_trigger_mount),
+    ("getturretheat", get_turret_heat),
+    ("getturretoverheating", get_turret_overheating),
 ];
+
+/// The turret record behind `getTurretHeat` and `getTurretOverheating`:
+/// both test the receiver's classname against `misc_mg42` and
+/// `misc_turret` and read `pTurretInfo` (`ent+0x168`) (coduo-diff.md 21.3.1).
+fn turret_of<'h>(
+    host: &'h mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+) -> Result<&'h crate::game::turret::TurretRecord, ErrorKind> {
+    let id = entity_receiver(recv)?;
+    let classname = crate::game::link::classname(host, cx, id);
+    match host.turrets.get(&id) {
+        Some(rec) if matches!(classname.as_str(), "misc_mg42" | "misc_turret") => Ok(rec),
+        _ => Err(ErrorKind::Custom(
+            "Can only call turret script functions on misc_mg42 or misc_turret".into(),
+        )),
+    }
+}
+
+/// `getTurretHeat()` (0x69aec): the barrel heat (`rec+0x40`) as a float.
+pub fn get_turret_heat(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    Ok(Value::Float(turret_of(host, cx, recv)?.heat))
+}
+
+/// `getTurretOverheating()` (0x69b60): the overheat latch (`rec+0x44`)
+/// through `Scr_AddBool`.
+pub fn get_turret_overheating(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    Ok(Value::Int(i32::from(turret_of(host, cx, recv)?.overheated)))
+}
 
 /// `getFullClipAmmo(weapon)` (0x6782e): the weapon file's `clipSize`.
 pub fn get_full_clip_ammo(
