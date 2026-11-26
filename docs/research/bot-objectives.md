@@ -2020,7 +2020,8 @@ stops boarding and gets a seated bot out (`SeatView::off`, 10.4).
   `dguo*` and `it_bot_vehicles_uo` match the base recording
   (cod11-map-cycle.md 4.9).
 - The goal is the brain's own (`Bot::goal`): an enemy, the objective or a
-  roam, which picks a node a hull fits on at least 1200 away.
+  roam, which picks a node a hull fits on at least 1200 away. A jeep's
+  driver leaves the route for an enemy on foot near ahead (10.12).
 - `rightmove` steers both kinds toward the waypoint's bearing past 6
   degrees (positive lowers the yaw: `physics::targets`, the port of
   0x7d709, raises it for `rightmove < 0`);
@@ -2469,6 +2470,40 @@ the stock script lines, read out of `pakuo01.pk3`.
   empty `wrecks`. INFERRED (the vehicle pool is filled only by a
   `script_vehicle` spawn with the vehicle files loaded, `game/spawn.rs`).
 
+### 10.10.1 A wrecked tank's duplicate read as a wreck, 2026-11-26
+
+- `tank_respawn` (`_tankdrive_gmi.gsc` 142-160) waits `self.delay`
+  after the `death`, then `spawnduplicate`s the hull where it spawned
+  and threads `wait_for_safe_respawn` on the duplicate, which unlinks it
+  and only after `scr_tank_respawn_wait` and a clear `verifyposition`
+  runs `init_tank` (223). `init_tank` threads `init_tank_hud`, whose
+  first lines set `health` to 2900 (549-554), and `tank_death` and
+  `tank_respawn`, the hull's `death` waiters, in the same call.
+  VERIFIED (the stock files, `pakuo01.pk3`).
+- `uo_tdm_games_that_stalled_or_never_sprinted` seed 13 on this branch:
+  Panzer IV 186 died at 51.3 s, 38 units off its spawn point; its
+  duplicate 307 took `MOD_COLLISION` 329999 at 61.4 s with `health` 0,
+  before its `init_tank`. `vehicle_damage` raised its `death` (nobody
+  waited on it) and set `Vehicle::dead`, and nothing cleared it: the
+  script then gave 307 its health and it stood usable, but
+  `ParkedVehicles` recorded it as a burning hull at its spawn for the
+  rest of the game. Bot 4, walking to board it, met the wreck's reach:
+  inside it its goal was away from the hull, just outside the goal was
+  the hull itself, which reads as a hold inside a reach (10.10). Each
+  hold reset the flight's plan, so it turned on the reach's edge, 12 s
+  within 150 units of (4353, -1919, 27). VERIFIED (per-tick traces of
+  the bot's goal, the vehicles it saw and the wreck records).
+- Now a hull struck to 0 before the script gave it health is not
+  `dead`: the `death` notify and the riders' exits stand as before,
+  only the bots' wreck flag waits for a hull with health. Seed 13
+  passes; `a_wrecked_tanks_duplicate_is_no_wreck` (`tests/bot_vehicles.rs`)
+  wrecks mp_cassino's first tank and finds no wreck 30 s on, where
+  before the fix the duplicate stood as one at (4676, -1979). VERIFIED
+  (the runs).
+- The run-over numbers in 10.12 were measured before this fix. Whether
+  retail's duplicate, unlinked, takes that collision at all is not
+  checked. Open.
+
 ### 10.11 A tank's shell over the hull it aimed at, 2026-11-23
 
 Retail has no bots; this section is measured on vcod-server only.
@@ -2542,6 +2577,42 @@ Retail has no bots; this section is measured on vcod-server only.
   the first shot, so a seed's row moves both ways; the totals are the
   measure. Kills and gun kills rose, stuck drivers and teammate crushes
   fell, and the seated ticks and distance driven fell 2 % and 3 %.
+
+### 10.12 A jeep's driver runs an enemy over, 2026-11-26
+
+The first step on the vehicle leftovers (no vehicle graph, no seat
+changes, no turret skill). Before it a four-wheel's driver followed its
+route to an enemy goal and crushed whoever stood on it. Now, with an
+enemy on foot in sight within 500 units and 90 degrees of the bonnet,
+it steers at him instead of the route's waypoint, ahead along his
+velocity by the time the hull takes to reach him at its speed (no less
+than 150 units/s), the throttle open (`vehicle::run_over`). A tank
+keeps its hold for the gun (10.3); the crowd rule still lets the keys go
+for a teammate.
+
+VERIFIED (measured, ours, release, UO stock paks, `bot_vehicles
+ON_ONLY=1 VEH_LOG=1 MAP=mp_kharkov`, `tdm`, 6 bots, 3 min, seeds 1 to
+239 odd, 120 games; crush kills off the `K;` lines with
+`MOD_CRUSH_JEEP`):
+
+| | kills | jeep crush kills, enemy / teammate | jeep crush hits, enemy / teammate | gun kills | stuck kills | boardings | units driven |
+|---|---|---|---|---|---|---|---|
+| route only | 783 | 3 / 2 | 12 / 6 | 73 | 13 | 1295 | 2 058 831 |
+| run-over | 787 | 13 / 2 | 10 / 7 | 69 | 11 | 1290 | 2 088 615 |
+
+- The run-overs a jeep kills with go from 3 to 13 in 120 games, with
+  teammates crushed and drivers stuck as before. Kills overall move by
+  4, inside the spread: a jeep's driver has no gun, so a run-over is
+  the one kill it makes, and its enemy was the route's goal already.
+  VERIFIED (the table). Kept.
+- mp_kharkov's `tdm` runs jeeps beside its Panzer IV, Elefant and
+  SU-152 (the crush lines' weapons), which is why it, not mp_cassino,
+  measured this. VERIFIED (the `VEH_LOG` lines). The run-over is rare
+  on any map: under one kill in eight games.
+- Left: a graph of the hull's own, seat changes (`G_VEH_CycleSlot`,
+  coduo-vehicles.md 11.3: a gunner left in an undriven hull gets out
+  rather than move to the wheel) and an aim error by skill on the seat
+  guns. Open.
 
 ## 11. CoD2's `sd`, `ctf` and `hq`
 

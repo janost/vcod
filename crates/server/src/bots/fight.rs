@@ -454,6 +454,15 @@ impl Bot {
         ]
     }
 
+    /// Ticks the trigger stays up past a burst or a tap's spacing
+    /// ([`Skill::fire_pause`]); no draw where the level has none.
+    fn fire_pause(&mut self) -> u32 {
+        match self.skill.fire_pause {
+            (least, 0) => least,
+            (least, spread) => least + self.rand_below(spread),
+        }
+    }
+
     /// Semi-autos tap, at least `fireTime` apart (combat doc 1.4); automatics
     /// hold the bit for a burst, shorter at range.
     /// Inside the cone the trigger goes down; past it, with a chance that
@@ -472,6 +481,7 @@ impl Bot {
             self.burst_ticks = 0;
             return;
         }
+
         let reach = if view.automatic {
             REACH_AUTO
         } else if view.fire_time_ms >= BOLT_MS {
@@ -488,7 +498,7 @@ impl Bot {
                 self.burst_ticks = 0;
             }
             if self.burst_ticks == 0 {
-                self.fire_cooldown = 3 + self.rand_below(4);
+                self.fire_cooldown = 3 + self.rand_below(4) + self.fire_pause();
             }
             return;
         }
@@ -514,7 +524,7 @@ impl Bot {
             // Rounded up, and never under two ticks: the bit has to come up
             // between taps for the next to read as a press.
             let ticks = ((fire + FRAME_MS - 1) / FRAME_MS).max(2) as u32;
-            self.fire_cooldown = ticks + self.rand_below(3);
+            self.fire_cooldown = ticks + self.rand_below(3) + self.fire_pause();
         }
     }
 
@@ -958,6 +968,24 @@ mod tests {
             }
         }
         assert!(count >= 3, "a semi-auto tapped {count} times in 3 s");
+    }
+
+    /// Easy lets the trigger up past a semi-auto's tap spacing; normal
+    /// taps again as soon as it allows.
+    #[test]
+    fn an_easy_bot_lets_the_trigger_up_between_taps() {
+        let least_gap = |level: u8| {
+            let (mut bot, v) = engaged(9);
+            bot.skill.fire_pause = Skill::level(level).fire_pause;
+            let taps: Vec<u32> = (0..200u32)
+                .filter(|_| bot.think(&v).buttons & BUTTON_ATTACK != 0)
+                .collect();
+            assert!(taps.len() >= 3, "level {level} tapped {}", taps.len());
+            taps.windows(2).map(|w| w[1] - w[0]).min().unwrap()
+        };
+        let spacing = (engaged(9).1.fire_time_ms / FRAME_MS).max(2) as u32;
+        assert!(least_gap(0) >= spacing + 4, "{}", least_gap(0));
+        assert!(least_gap(1) < spacing + 4, "{}", least_gap(1));
     }
 
     #[test]

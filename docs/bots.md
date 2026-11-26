@@ -120,9 +120,11 @@ long it remembers a lost enemy, how far it hears and how wide it sees:
 - A higher level also moves on its sights more often (a slow strafe, a
   bolt rifle's back-off, a lie-down at range) and remembers a lost enemy
   and a heard shot longer.
-- The levels change only these numbers. Routes, objective play and
-  choices are the same at every level: an expert is faster and sharper,
-  not smarter.
+- Easy also lets the trigger up for a moment after every burst or shot,
+  so it fires a fifth fewer rounds (bot-combat.md section 3.2).
+- Otherwise the levels change only these numbers. Routes, objective
+  play and choices are the same at every level: an expert is faster and
+  sharper, not smarter.
 - `vc_bot_skill` changes every bot without its own level at once,
   mid-fight included. To mix levels, give each `addbot` its own:
 
@@ -218,7 +220,7 @@ Each tick a bot does the first of these that applies:
 - A new target costs a reaction delay. It fires before its aim settles,
   and on CoD1 and CoD2 it aims by where the gun points, pulling sway and
   recoil back late and in part, as a hand does (section 18).
-- Around the shooting it strafes, takes cover and leans, retreats when
+- Around the shooting it strafes, takes cover behind low walls, retreats when
   hurt, and peeks for or hunts an enemy it lost (sections 4, 5 and 10).
 - It throws frags at an enemy behind cover or one just lost, and runs
   from a live frag near it. With friendly fire on it throws none that
@@ -277,9 +279,10 @@ Behaviour differs by game, never by map.
 - UO vehicles: a bot with nothing nearer to do boards a vehicle near it.
   Drivers head for the objective or an enemy and wait for a teammate
   walking up. A tank stops to shell enemies, and in `bas` the other
-  side's bases. Gunners fire the machine gun, and a bot on foot fires a
-  rocket launcher at an enemy-crewed vehicle (bot-objectives.md section
-  10).
+  side's bases. A jeep's driver runs over an enemy on foot in front of
+  it. Gunners fire the machine gun, and a bot on foot fires a rocket
+  launcher at an enemy-crewed vehicle (bot-objectives.md sections 10 and
+  10.12).
 - A bot on foot keeps out of a burning hull's reach until its second
   blast (section 10.10).
 
@@ -289,7 +292,7 @@ Cannot:
   itself. Its crew gets out before the engine's stuck kill, but a tank
   sliding into a wall with nobody aboard still destroys itself (sections
   10.3 and 10.4).
-- Change seats, use the hatch, or run an enemy over.
+- Change seats or use the hatch.
 - Fetch a rocket launcher outside `bas`.
 - Throw a satchel or call artillery at a `bas` base.
 
@@ -342,8 +345,9 @@ Kills and accuracy measured on CoD2 and CoD4:
 - A bot picks cover against the one enemy it fights; another may still
   see it there. It takes no cover while planting, carrying or holding a
   capture zone, nor within 300 units of the enemy.
-- In cover it swaps between the spot's two ways out (both lean sides, or
-  standing and a crouched lean) from one peek to the next, and sometimes
+- Cover is a low wall it ducks behind, never a corner it leans round
+  (bot-combat.md section 4.7). It swaps between standing and a crouched
+  lean from one peek to the next where the spot has both, and sometimes
   moves to the next spot while it reloads. Once its enemy is out of
   sight it holds the spot for a time set by its skill. To chase a lost
   enemy it heads for a nearby spot that looks onto where he was, and
