@@ -250,13 +250,14 @@ impl Cod4Server {
     /// and its lines are CoD2's (`crate::engine::rotation`), the strings
     /// 1.7's own.
     pub(super) fn map_rotate(&mut self, out: &mut Redirect) -> anyhow::Result<()> {
-        use crate::engine::rotation::{End, Words};
+        use crate::engine::rotation::{End, Keywords, Words};
         let rotation = self.game.cvars().get("sv_mapRotation").to_string();
         let mut current = self.game.cvars().get("sv_mapRotationCurrent").to_string();
         out.print("map_rotate...\n\n");
         out.print(&format!("\"sv_mapRotation\" is:\"{rotation}\"\n\n"));
         out.print(&format!("\"sv_mapRotationCurrent\" is:\"{current}\"\n\n"));
-        let walk = crate::engine::rotation::rotate(&rotation, &mut current, Words::Cod2);
+        let walk =
+            crate::engine::rotation::rotate(&rotation, &mut current, Words::Cod2, Keywords::Base);
         self.set_cvar("sv_mapRotationCurrent", &current);
         for w in &walk.unknown {
             out.print(&format!("Unknown keyword '{w}' in sv_mapRotation.\n"));
