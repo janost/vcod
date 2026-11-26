@@ -279,9 +279,10 @@ Behaviour differs by game, never by map.
 - UO vehicles: a bot with nothing nearer to do boards a vehicle near it.
   Drivers head for the objective or an enemy and wait for a teammate
   walking up. A tank stops to shell enemies, and in `bas` the other
-  side's bases. Gunners fire the machine gun, and a bot on foot fires a
-  rocket launcher at an enemy-crewed vehicle (bot-objectives.md section
-  10).
+  side's bases. A jeep's driver runs over an enemy on foot in front of
+  it. Gunners fire the machine gun, and a bot on foot fires a rocket
+  launcher at an enemy-crewed vehicle (bot-objectives.md sections 10 and
+  10.12).
 - A bot on foot keeps out of a burning hull's reach until its second
   blast (section 10.10).
 
@@ -291,7 +292,7 @@ Cannot:
   itself. Its crew gets out before the engine's stuck kill, but a tank
   sliding into a wall with nobody aboard still destroys itself (sections
   10.3 and 10.4).
-- Change seats, use the hatch, or run an enemy over.
+- Change seats or use the hatch.
 - Fetch a rocket launcher outside `bas`.
 - Throw a satchel or call artillery at a `bas` base.
 

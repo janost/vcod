@@ -1645,6 +1645,23 @@ mod tests {
         v
     }
 
+    /// A jeep's driver steers off its route at an enemy on foot ahead, and
+    /// keeps the route for one behind it (bot-objectives.md 10.12).
+    #[test]
+    fn a_jeep_driver_runs_an_enemy_ahead_over() {
+        let mut v = driving(Crowd::default());
+        let seat = v.seat.as_mut().unwrap();
+        (seat.tank, seat.gun_yaw, seat.gun_speed) = (false, None, 0.0);
+        let mut bot = Bot::new("allies", false, 1);
+        assert_eq!(bot.think(&v).right, 0, "the route");
+        v.enemy = engaged(1).1.enemy;
+        v.enemy.as_mut().unwrap().origin = [300.0, 200.0, 64.0];
+        let cmd = bot.think(&v);
+        assert_eq!((cmd.forward, cmd.right), (127, -127), "toward him");
+        v.enemy.as_mut().unwrap().origin = [-300.0, 0.0, 64.0];
+        assert_eq!(bot.think(&v).right, 0, "behind: the route");
+    }
+
     /// A driver remembers a noise as a bot on foot does: its goal holds on
     /// the ticks the noise is not heard, and the hull's route with it
     /// (bot-objectives.md 10.8).

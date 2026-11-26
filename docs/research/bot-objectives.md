@@ -2020,7 +2020,8 @@ stops boarding and gets a seated bot out (`SeatView::off`, 10.4).
   `dguo*` and `it_bot_vehicles_uo` match the base recording
   (cod11-map-cycle.md 4.9).
 - The goal is the brain's own (`Bot::goal`): an enemy, the objective or a
-  roam, which picks a node a hull fits on at least 1200 away.
+  roam, which picks a node a hull fits on at least 1200 away. A jeep's
+  driver leaves the route for an enemy on foot near ahead (10.12).
 - `rightmove` steers both kinds toward the waypoint's bearing past 6
   degrees (positive lowers the yaw: `physics::targets`, the port of
   0x7d709, raises it for `rightmove < 0`);
@@ -2542,6 +2543,42 @@ Retail has no bots; this section is measured on vcod-server only.
   the first shot, so a seed's row moves both ways; the totals are the
   measure. Kills and gun kills rose, stuck drivers and teammate crushes
   fell, and the seated ticks and distance driven fell 2 % and 3 %.
+
+### 10.12 A jeep's driver runs an enemy over, 2026-11-26
+
+The first step on the vehicle leftovers (no vehicle graph, no seat
+changes, no turret skill). Before it a four-wheel's driver followed its
+route to an enemy goal and crushed whoever stood on it. Now, with an
+enemy on foot in sight within 500 units and 90 degrees of the bonnet,
+it steers at him instead of the route's waypoint, ahead along his
+velocity by the time the hull takes to reach him at its speed (no less
+than 150 units/s), the throttle open (`vehicle::run_over`). A tank
+keeps its hold for the gun (10.3); the crowd rule still lets the keys go
+for a teammate.
+
+VERIFIED (measured, ours, release, UO stock paks, `bot_vehicles
+ON_ONLY=1 VEH_LOG=1 MAP=mp_kharkov`, `tdm`, 6 bots, 3 min, seeds 1 to
+239 odd, 120 games; crush kills off the `K;` lines with
+`MOD_CRUSH_JEEP`):
+
+| | kills | jeep crush kills, enemy / teammate | jeep crush hits, enemy / teammate | gun kills | stuck kills | boardings | units driven |
+|---|---|---|---|---|---|---|---|
+| route only | 783 | 3 / 2 | 12 / 6 | 73 | 13 | 1295 | 2 058 831 |
+| run-over | 787 | 13 / 2 | 10 / 7 | 69 | 11 | 1290 | 2 088 615 |
+
+- The run-overs a jeep kills with go from 3 to 13 in 120 games, with
+  teammates crushed and drivers stuck as before. Kills overall move by
+  4, inside the spread: a jeep's driver has no gun, so a run-over is
+  the one kill it makes, and its enemy was the route's goal already.
+  VERIFIED (the table). Kept.
+- mp_kharkov's `tdm` runs jeeps beside its Panzer IV, Elefant and
+  SU-152 (the crush lines' weapons), which is why it, not mp_cassino,
+  measured this. VERIFIED (the `VEH_LOG` lines). The run-over is rare
+  on any map: under one kill in eight games.
+- Left: a graph of the hull's own, seat changes (`G_VEH_CycleSlot`,
+  coduo-vehicles.md 11.3: a gunner left in an undriven hull gets out
+  rather than move to the wheel) and an aim error by skill on the seat
+  guns. Open.
 
 ## 11. CoD2's `sd`, `ctf` and `hq`
 
