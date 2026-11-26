@@ -13,7 +13,6 @@ use super::Builtin;
 pub const NAMES: &[(&str, Builtin)] = &[
     ("getfullclipammo", get_full_clip_ammo),
     ("isvalidplayer", is_valid_player),
-    ("distancesquared", distance_squared),
     ("iprintlnbold", iprint_line_bold),
     ("getweaponslotammo", get_weapon_slot_ammo),
     ("getweaponslotclipammo", get_weapon_slot_clip_ammo),
@@ -145,20 +144,6 @@ pub fn is_valid_player(
         _ => false,
     };
     Ok(Value::Int(i32::from(valid)))
-}
-
-/// `distanceSquared(a, b)` (0x6b83d), `VectorDistanceSquared` as a float.
-pub fn distance_squared(
-    _host: &mut GameHost,
-    _cx: &mut Cx,
-    _recv: Option<Target>,
-    args: &[Value],
-) -> Result<Value, ErrorKind> {
-    let (Some(Value::Vector(a)), Some(Value::Vector(b))) = (args.first(), args.get(1)) else {
-        return Err(ErrorKind::BadType("distanceSquared takes two vectors"));
-    };
-    let d: f32 = (0..3).map(|i| (a[i] - b[i]) * (a[i] - b[i])).sum();
-    Ok(Value::Float(d))
 }
 
 /// `iPrintLnBold(...)`, the function (0x66e86) to everyone and the player

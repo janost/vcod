@@ -9,7 +9,7 @@ use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V2
 use vcod_gsc::VmProfile;
 
 use crate::defs::{self, Defs};
-use crate::game::builtins::math::CloserRounding;
+use crate::game::builtins::math::{CloserRounding, MathRounding};
 use crate::game::builtins::set::BuiltinSet;
 use crate::game::fields::{self, Route};
 use crate::game::trigger::{self, TriggerKind};
@@ -137,6 +137,9 @@ pub struct HostProfile {
     pub model_change_updates_client: bool,
     /// Where `closer()` rounds (`builtins::math::closer`).
     pub closer: CloserRounding,
+    /// How the distance, length, normalize, `anglesTo*` and trig builtins
+    /// round (`builtins::math`).
+    pub math: MathRounding,
 }
 
 /// `G_Say`'s rules (`game::say`).
@@ -400,6 +403,11 @@ const fn cod1(
         } else {
             CloserRounding::Floats
         },
+        math: if v1 {
+            MathRounding::Kept
+        } else {
+            MathRounding::Stored
+        },
     }
 }
 
@@ -491,6 +499,7 @@ pub static COD2: HostProfile = HostProfile {
     head_icon_spectator: false,
     model_change_updates_client: false,
     closer: CloserRounding::Floats,
+    math: MathRounding::Float,
 };
 
 /// CoD2's and CoD4's combat rules: 1.1's where the CoD1 code reads them.
@@ -592,6 +601,7 @@ pub static COD4: HostProfile = HostProfile {
     head_icon_spectator: false,
     model_change_updates_client: false,
     closer: CloserRounding::None,
+    math: MathRounding::Float,
 };
 
 impl HostProfile {

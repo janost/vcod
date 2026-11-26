@@ -707,6 +707,114 @@ stack only by a double rounding (INFERRED). `semantics_ents`'s
 `probe_closer_matches_retail` and `probe_closer_matches_retail_uo` replay
 the capture; CoD4's rounding rests on the instructions alone.
 
+### 9.3 The other math builtins
+
+VERIFIED (`tools/re/dump_builtins.py`): the handlers sit at
+
+| Builtin | 1.1d | 1.5b | UO 1.51b |
+|---|---|---|---|
+| `sin` | 0x5e5dc | 0x5f862 | 0x6b551 |
+| `cos` | 0x5e618 | 0x5f8ac | 0x6b59b |
+| `tan` | 0x5e654 | 0x5f8f6 | 0x6b5e5 |
+| `asin` | 0x5e6d0 | 0x5f978 | 0x6b667 |
+| `acos` | 0x5e768 | 0x5fa0f | 0x6b6fe |
+| `atan` | 0x5e804 | 0x5faa6 | 0x6b795 |
+| `distance` | 0x5e848 | 0x5faf6 | 0x6b7e5 |
+| `distanceSquared` | 0x5e890 | 0x5fb4e | 0x6b83d |
+| `length` | 0x5e8d8 | 0x5fba6 | 0x6b895 |
+| `vectorNormalize` | 0x5ea28 | 0x5fd38 | 0x6ba27 |
+| `vectorToAngles` | 0x5ea70 | 0x5fd8d | 0x6ba7c |
+| `anglesToUp` | 0x5eaa8 | 0x5fdd5 | 0x6bac4 |
+| `anglesToRight` | 0x5eae4 | 0x5fe2d | 0x6bb1c |
+| `anglesToForward` | 0x5eb20 | 0x5fe85 | 0x6bb74 |
+
+No build has a `vectorScale`. Each handler reads its arguments with
+`Scr_GetFloat` or `Scr_GetVector` and returns through one `fstp DWORD`
+into `Scr_AddFloat`, or a vector through `Scr_AddVector`. Where the
+builds round (VERIFIED (the instructions), `tools/re/annotate_func.py`):
+
+- `distance` and `distanceSquared` call `VectorDistance` and
+  `VectorDistanceSquared` (1.1d 0x3d7ec and 0x3d830, 1.5b 0x32d79 and
+  0x32dee, UO 0x39fc9 and 0x3a03e). 1.1d's keep each difference on the
+  stack (`fst`, not `fstp`, 0x3d7fc..0x3d818), add the squares
+  `(dx² + dy²) + dz²` and take `fsqrt` there (0x3d823); 1.5b's and UO's
+  store each difference as a float (`fstp` at 0x32d95, 0x32da8, 0x32dbb),
+  sum the squares on the stack and pass the sum to libm's `sqrt` as a
+  double (`fstp QWORD`, 0x32dd4). `VectorDistanceSquared` stops before
+  the root and returns the sum on the stack; the handler's store is its
+  one rounding.
+- `length` squares and sums inside the handler, then `fsqrt` on 1.1d
+  (0x5e909) and `sqrt` of the double on 1.5b (0x5fbe1) and UO (0x6b8d0).
+- `vectorNormalize` copies the vector, calls the in-place
+  `VectorNormalize` and drops its length: 1.1d 0x3d8d8 stores the length
+  and multiplies by its unrounded reciprocal, 1.5b 0x32f73 and UO 0x3a1c3
+  store the squares' sum, the length and the reciprocal each as a float
+  (`fstp` at 0x32fb3, 0x32fc1, 0x32fe3). A zero vector is left as it went
+  in.
+- `vectorToAngles` is `vectoangles` (1.1d 0x3de94, 1.5b 0x33b9d, UO
+  0x3aded); 1.1d's uses `fpatan`, the others libm's `atan2`, and all three
+  store the flat length and each angle as a float.
+- `anglesToForward`, `anglesToRight` and `anglesToUp` call `AngleVectors`
+  (1.1d 0x5eb3f, UO 0x6bbb6) for one of its three vectors.
+- `sin` and `cos` take the radians as `x * M_PI / 180` on the stack (the
+  doubles at 1.1d `.rodata` 0x78a90 and 0x78a98). 1.1d hands them to
+  `fsin` and `fcos` unrounded (0x5e600, 0x5e63c); 1.5b and UO store them
+  as a double for libm's `sin` and `cos` (UO 0x6b57f, 0x6b5c9).
+- `tan` stores the radians as a float and takes `fsincos` of it, the
+  sine and cosine stored as floats (1.1d 0x5e68a, UO's through 0x6f0f7),
+  then divides.
+- `asin`, `acos` and `atan` are `fpatan` on 1.1d (`asin` of `x` over
+  `sqrt(1 - x*x)`, stored as a double, 0x5e737..0x5e739) and libm's
+  `asin`, `acos` and `atan` on 1.5b and UO. The radians are stored as a
+  float, then times the float 180 over the double `M_PI` on the stack and
+  stored once (1.1d 0x5e742..0x5e756, UO 0x6b6d7..0x6b6ea).
+
+VERIFIED, live (retail 1.1d, 1.5b and UO 1.51b, 2026-11-26,
+`probe_math`): each value is logged as its exact float,
+`<24-bit mantissa>p<exponent>`. 1.5b and UO logged the same 36 lines.
+Against 1.1d:
+
+| Line | Call | 1.1d | 1.5b, UO |
+|---|---|---|---|
+| `dist_one_round` | `distance((0,0,0), (0,1.5,4096))` | 4096 + 2^-11 | 4096 + 2^-11 |
+| `dist_diff_kept` | `distance((16777216,3,0), (-1,0,0))` | 2^24 + 2 | 2^24 |
+| `dsq_one_round` | `distanceSquared((0,0,0), (4096,1,1))` | 2^24 + 2 | 2^24 + 2 |
+| `dsq_diff_kept` | `distanceSquared((16777216,0,0), (-1,0,0))` | 2^48 + 2^25 | 2^48 |
+| `len_one_round` | `length((0,1.5,4096))` | 4096 + 2^-11 | 4096 + 2^-11 |
+| `norm_a` | `vectorNormalize((0,0,1234.5))[2]` | 1 | 1 - 2^-24 |
+| `norm_b` | `vectorNormalize((0,2,8191))[2]` | 1 - 2^-24 | 1 |
+| `sin_180` | `sin(180)` | 1.2246064e-16 | 1.2246469e-16 |
+| `cos_90` | `cos(90)` | 6.123032e-17 | 6.123234e-17 |
+| `sin_1e24` | `sin(1e24)` | 1.7453293e22 | -0.7216 |
+
+A float at every step, as vcod rounded them before and still does for
+CoD2 and CoD4, logs 4096 for `dist_one_round` and `len_one_round` and
+2^24 for `dsq_one_round`: the 2.25 or 2 that a float sum at 2^24 drops. `vectorToAngles`, the three `anglesTo*`,
+`tan`, `asin`, `acos` and `atan` log the same bits on all three builds.
+
+`sin_180` and `cos_90` on 1.1d are the FPU's: `fsin` reduces by a 66-bit
+pi, `0x3.243f6a8885a308d3`, 4.0e-21 under pi, so `sin(M_PI)` comes back
+that pi minus `M_PI`, the published Intel value, and `sin(36000)` is
+-2.4492e-14 where libm gives 3.93e-15 for the double radians. At 2^63
+radians and over `fsin` leaves its operand alone (C2 set), so 1.1d's
+`sin(1e24)` is the radians themselves. VERIFIED, live; the 66-bit
+constant is INFERRED from the two measured values, which it reproduces to
+the bit.
+
+Retail's `==` on two numbers holds within a tolerance: `1e-16 == 0`,
+`1e-16 == 0.0` and `1 == 1.0000001` are 1, `0.000001 == 0` is 0, while
+`1e-16 > 0` is 1 (VERIFIED, live, a scratch probe on 1.1d, 2026-11-26).
+`probe_math` tests zero by order for that reason. vcod's `values_equal`
+compares exactly.
+
+vcod: `builtins::math`, bound by name for CoD1 and CoD2. The profile's
+`MathRounding` picks 1.1d's (`Kept`), 1.5b's and UO's (`Stored`), or a
+float at every step for CoD2 and CoD4 (`Float`, unverified against their
+binaries). `x87::F80` carries 1.1d's stack, and `F80::fsin` and
+`F80::fcos` reduce by the 66-bit pi. `semantics_ents`'s
+`probe_math_matches_retail` and `probe_math_matches_retail_uo` replay the
+capture.
+
 ## 10. `getEntArray` returns ascending entity number, VERIFIED
 
 `Scr_GetEntArray` (0x61980) walks `esi` from 0 to `level.num_entities`
