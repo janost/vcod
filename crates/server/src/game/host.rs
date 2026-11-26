@@ -1096,7 +1096,7 @@ pub struct GameHost {
     /// bots' cmds and of `G_RunFrame`, and `SV_PacketEvent` ahead of each
     /// client packet (`cod_lnxded` 0x0808cdf8, 0x0808c870, 0x080c4eb8), so
     /// a bone, and every bone above it, keeps the pose the stamp first asked
-    /// for (movers doc 15, "A bone asked for before the anim update").
+    /// for (movers doc 15.9).
     pub dobj_posed: Vec<crate::game::combat::DobjStamps>,
     /// `level+0x29f0`, the one-shot latch `map_restart` and `exitLevel`
     /// share (docs/research/cod11-map-cycle.md section 1): 0 until one of
@@ -1503,7 +1503,7 @@ impl GameHost {
     /// fields: a mover's `r.currentOrigin`, which runs a frame ahead of what
     /// script reads (movers doc, section 8). Every link first snaps
     /// `.angles` (`r.currentAngles`) as `SV_LinkEntity` does, linked or not
-    /// (the profile's `link_snap`, movers doc 12, "The snap on every link").
+    /// (the profile's `link_snap`, movers doc 12.2).
     pub fn link_entity_at(&mut self, cx: &mut Cx, id: EntId, pose: Option<([f32; 3], [f32; 3])>) {
         use crate::game::entity::LinkKind;
         let Some(e) = self.ents.get(id) else {
@@ -2763,7 +2763,7 @@ impl GameHost {
 
     /// `G_TempEntity` (0x67938): the event takes its number from `G_Spawn`
     /// (0x67947), so it shares the free list with every script spawn
-    /// (combat doc 14.7, "Entity numbers"). Dropped when the table is full.
+    /// (combat doc 14.7.3). Dropped when the table is full.
     pub fn add_temp_entity(&mut self, cx: &mut Cx, te: crate::game::temp_entity::TempEntity) {
         match self.ents.spawn(cx) {
             Ok(id) => self.temp_entities.push(crate::game::temp_entity::LiveTemp {

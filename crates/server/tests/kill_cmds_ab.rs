@@ -8,12 +8,11 @@
 //! a second cmd in the same frame finishes that raise, weapon 0's
 //! `raiseTime` being 0, and reads 0. `ClientEndFrame` then makes the player
 //! dead and the dead arm of `PM_Weapon` keeps whatever state was left
-//! (combat doc 9.2, "The death frame's `weaponstate`").
+//! (combat doc 9.2.1).
 //!
 //! The `killtimers` captures (`-killtimers{,-1.5,-uo}.txt`) also log the
 //! anim timers: the death's hold, the clip + 50, is set on the last cmd
-//! ahead of the `kill` and the cmds behind it run it down (combat doc 16.4,
-//! "The dying body").
+//! ahead of the `kill` and the cmds behind it run it down (combat doc 16.4.1).
 //!
 //! Each gate returns early unless `COD_DIR` is the install its capture came
 //! from.
@@ -220,7 +219,7 @@ fn a_kills_death_frame_matches_uo_by_its_cmds() {
 
 /// The `killtimers` captures log the timers too: the death's hold is set at
 /// the `kill`, on the last cmd ahead of it, and each cmd behind runs it
-/// down (cod11-combat.md 16.4, "The dying body").
+/// down (cod11-combat.md 16.4.1).
 #[test]
 fn a_kills_death_timers_match_11d_by_its_cmds() {
     let Some(fs) = vcod_common::testing::game_fs_11() else {

@@ -1,7 +1,7 @@
 //! The order a frame runs the threads the touch pass woke, ours against
 //! retail 1.1d's, 1.5b's and UO 1.51b's runs of
 //! `client-probes/probe_touchorder` on mp_pavlov
-//! (docs/research/cod11-combat.md 14.7, "The touch pass";
+//! (docs/research/cod11-combat.md 14.7.3.1;
 //! docs/research/cod11-gsc-language.md, "Engine notifies and the trigger
 //! queue"). One client stands where minefields 101 and 102 overlap beside
 //! three spawned items for a fifth of a second per phase; the script logs

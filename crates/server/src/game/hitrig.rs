@@ -134,7 +134,7 @@ impl HitRigs {
     /// A bone of the assembly's rig by name, case-blind, as
     /// `DObjGetBoneIndex` finds it: the first of that name, else an
     /// attachment's own root bone, which the rig merged into the bone the
-    /// attachment hangs on (cod11-movers.md 16, "A tag on an attached model").
+    /// attachment hangs on (cod11-movers.md 16.4).
     pub fn bone(
         &mut self,
         fs: &dyn AssetSource,

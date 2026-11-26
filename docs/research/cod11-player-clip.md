@@ -249,6 +249,16 @@ INFERRED: the 0.5 at 0x80cd42c is the dispatcher's half height. The
 dispatcher picks which of the two spheres and the cylinder to trace from the
 z relation of the two capsules; its branch conditions are not read in full.
 
+### 2.3 A step does not climb a player
+
+VERIFIED: `PM_StepSlideMove` (0x34fbc) compares the down trace's
+`entityNum` (the u16 at trace+0x28, the 48-byte layout in `cod11-combat.md`
+3.2) against 0x3f at 0x3533a. INFERRED, off the branch: when the down pass
+lands on an entity below 64, a client, the move restores the plain slide's
+origin and velocity and returns, with no revert test, no ground snap and no
+step event. So a walker pressed into a prone player is not stepped onto its
+top sphere. Section 9.1's prone head-on rows capture it.
+
 ### 2.4 The capsule sweep's rounding on 1.1d
 
 VERIFIED, `cod_lnxded` 1.1d `CM_TransformedBoxTrace` (0x80568d8): the
@@ -329,16 +339,6 @@ every snapshot of both runs exact, rebased and free, with the port
 does the f32 world-frame one. The 1.5b and UO fixtures carry `fJumpPeak`
 (`jump_peak=`), and the replay takes the penalty's `pm_time` with no flag
 (cod15-movement.md 2), as `predict::from_wire` does.
-
-### 2.3 A step does not climb a player
-
-VERIFIED: `PM_StepSlideMove` (0x34fbc) compares the down trace's
-`entityNum` (the u16 at trace+0x28, the 48-byte layout in `cod11-combat.md`
-3.2) against 0x3f at 0x3533a. INFERRED, off the branch: when the down pass
-lands on an entity below 64, a client, the move restores the plain slide's
-origin and velocity and returns, with no revert test, no ground snap and no
-step event. So a walker pressed into a prone player is not stepped onto its
-top sphere. Section 9.1's prone head-on rows capture it.
 
 ## 3. Bounds and the link
 

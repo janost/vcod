@@ -515,7 +515,7 @@ fn ours_pair_run(
     // 1.5's and UO's thrower sends the net probe's cmds, three a frame from
     // each snapshot's time: how far he falls before the script's next
     // `setOrigin` check decides whether it puts him back (cod11-combat.md
-    // 2.1, "The thrower's slide"). So does 1.1's where the capture logs his
+    // 2.1.1.1). So does 1.1's where the capture logs his
     // cmds; the older 1.1 captures log neither client's.
     let framed = proto.transport.version != PROTOCOL_V1.transport.version || target_log.is_some();
     let aim = || common::ProbeHold {
@@ -1144,7 +1144,7 @@ fn a_frag_rolls_up_terrain_like_retail_on_15() {
 /// target's prone body on the grade before the terrain, and that strike
 /// lands 0.007 off retail's: this capture logged neither client's cmds,
 /// and his body rides where his drop onto the grade settled
-/// (cod11-combat.md 3.1, "The pose on 1.5 and UO"), so its states are held
+/// (cod11-combat.md 3.1.2), so its states are held
 /// to retail's type and ground and to 0.01.
 /// [`a_frag_strikes_a_prone_body_on_a_grade_like_retail_on_uo`] replays a
 /// rerun's cmds to the bit. Runs only with `COD_DIR` at a UO install.
@@ -1254,8 +1254,7 @@ fn shooter_origins(lines: &[String]) -> Vec<[f32; 3]> {
 
 /// mp_carentan on 1.5b: each frag leaves from the thrower's unsnapped
 /// origin plus the eye's 60, untruncated, where 1.1d truncates the origin
-/// and the point (docs/research/cod11-combat.md 2.1, "United Offensive and
-/// 1.5"). The thrower spawns where retail's did, lands on its grade
+/// and the point (docs/research/cod11-combat.md 2.1.1). The thrower spawns where retail's did, lands on its grade
 /// moving and slides off the site to retail's float (2.1, "The thrower's
 /// slide"), so both frags leave from retail's point. Each frag rests with
 /// retail's ground (12.6). Runs only with `COD_DIR` at a 1.5 install.
@@ -1272,7 +1271,7 @@ fn a_frag_leaves_15s_untruncated_muzzle() {
 
 /// Where a thrower's spawn left him on retail, for the captures that log
 /// no `PROBE thrower` line, read off the throw captures' runs
-/// (cod11-combat.md 2.1, "The thrower's slide"): 1.5b's spawn at (976,
+/// (cod11-combat.md 2.1.1.1): 1.5b's spawn at (976,
 /// -864) lands moving and slides him to (1368.03, 2608.14, -23.8748), as
 /// `-prone-rest-1.5.txt`'s `PROBE shooter` reads; a level spawn lands him
 /// still, and he settles at -23.852, as `-prone-1.5.txt`'s and

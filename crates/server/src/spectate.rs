@@ -314,8 +314,7 @@ pub struct ClientSim {
     /// `None` with no script client behind the sim, where `dead` stands
     /// in. `ClientEndFrame` keys its arms on the session, not the health,
     /// so a `suicide()` that leaves `playing` keeps `pm_type` 0 and stays
-    /// on the wire (docs/research/cod11-combat.md 5.1, "A suicide that
-    /// stays playing").
+    /// on the wire (docs/research/cod11-combat.md 5.1.2).
     pub session: Option<crate::follow::SessionState>,
     /// The last move ran the dead arm, whose `PM_CheckDuck` targets
     /// `deadViewHeight`.
@@ -2078,7 +2077,7 @@ impl ClientSim {
     /// anims, and retail picks among them with one draw.
     /// `now_ms` is the frame clock the death clip's phase starts on,
     /// `cmd_ms` the client's last processed cmd's serverTime, which its
-    /// timers count from (combat doc 16.4, "The dying body").
+    /// timers count from (combat doc 16.4.1).
     pub fn take_damage(
         &mut self,
         op: &SimOp,
@@ -3213,7 +3212,7 @@ mod tests {
 
     /// The spawn's think runs the aim block on the spawn's own yaw, 180 as
     /// given where the cmd's view reads -180, so the sway's last view is it
-    /// (combat doc 15.3, "The spawn's view").
+    /// (combat doc 15.3.1).
     #[test]
     fn the_spawn_think_aims_along_the_spawns_yaw() {
         let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);

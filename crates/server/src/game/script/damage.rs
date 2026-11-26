@@ -273,7 +273,7 @@ impl ScriptRuntime {
     /// (a zero direction, coduo-vehicles.md 11.6). `None` reaches the
     /// callback undefined (`Scr_PlayerDamage`, game.mp 0x5ca18), and an
     /// undefined direction makes the stock gametypes add
-    /// `DAMAGE_NO_KNOCKBACK` (cod11-movers.md 21, "The sine crush").
+    /// `DAMAGE_NO_KNOCKBACK` (cod11-movers.md 21.7).
     #[expect(clippy::too_many_arguments)]
     pub fn deliver_unowned_hit(
         &mut self,

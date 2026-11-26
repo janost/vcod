@@ -39,8 +39,7 @@ const BONE_NEAR: f32 = 0.005;
 const POINT_NEAR: f32 = 0.5;
 /// How far a round's direction may sit from retail's, on each axis:
 /// retail logs six figures, and the aim block's turns round as the game
-/// module's `AngleVectors` (docs/research/cod11-movers.md 22, "pmove's
-/// turns").
+/// module's `AngleVectors` (docs/research/cod11-movers.md 22.2.1.1).
 const DIR_NEAR: f32 = 0.0000003;
 
 /// One retail capture of the probe and the join times its recipe gave.

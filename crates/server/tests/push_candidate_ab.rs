@@ -4,8 +4,7 @@
 //! clear, two stacked on one spot, two overlapping by half a box and one
 //! sunk into the floor. The trace is a full `trap_Trace` that must name the
 //! pusher, so the world or another player met first keeps a player off the
-//! list and the slab passes through him (docs/research/cod11-movers.md 12,
-//! "The candidate trace"). A spectator joins first, as on retail, which
+//! list and the slab passes through him (docs/research/cod11-movers.md 12.5). A spectator joins first, as on retail, which
 //! keeps `StuckInClient` off and the stacked pair stacked. Where the slab
 //! names itself first a pair it cannot place stalls it on every frame,
 //! the last frame of its move included (section 12, "A blocked mover").
@@ -19,8 +18,7 @@
 //!
 //! The same recipe on 1.5b (`-1.5.txt`) and UO (`-uo.txt`): there the
 //! spectator does not keep `StuckInClient` off, so the stacked and half
-//! pairs are shoved apart before the slab moves (movers doc 12, "The
-//! candidate trace"). Which way rides retail's `rand()`, so ours draws each
+//! pairs are shoved apart before the slab moves (movers doc 12.5). Which way rides retail's `rand()`, so ours draws each
 //! push's jitter from glibc's `rand()` under the seed recovered off the
 //! capture's `RIDE` lines (`Server::pin_stuck_rand`, player-clip doc 13.4).
 //!

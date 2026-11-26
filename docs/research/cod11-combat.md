@@ -1349,7 +1349,7 @@ VERIFIED, vcod measurement 2026-11-14. On our own clock (about 13.7 s
 behind) the offsets read up to 1.03 apart, the sway model's and the two
 snaps' error.
 
-#### United Offensive and 1.5
+#### 2.1.1 United Offensive and 1.5
 
 Neither truncates. VERIFIED, 1.5b `game.mp.i386.so` `CalcMuzzlePoint`
 (0x7e91f; Ghidra's addresses, image base 0x10000): the muzzle is
@@ -1424,7 +1424,9 @@ read the thrower at (1368, 2608, -23.875) and its frags at z 0x42108002,
 36.125 and two float steps. INFERRED: his z was -23.874992, which six
 significant digits print as -23.875.
 
-**The thrower's slide.** VERIFIED, `game.mp.i386.so` 1.5b player
+##### 2.1.1.1 The thrower's slide
+
+VERIFIED, `game.mp.i386.so` 1.5b player
 `setOrigin` (0x3e148) and UO 1.51b's (0x467a4): unlink, `ps.origin` set
 to the argument, z plus the rodata constant, `eFlags` 0x8 flipped,
 `BG_PlayerStateToEntityState`, `r.currentOrigin` copied, link. Neither
@@ -1508,7 +1510,9 @@ muzzle across the view (impacts are whole units, truncated toward zero):
   `the_jeep_passenger_s_round_lands_as_on_retail`). From his eye (60) ours
   lands at (-3815, 928, -9). VERIFIED (capture, gate).
 
-**The street placement.** After the gametype's `setOrigin` (900, 1930,
+##### 2.1.1.2 The street placement
+
+After the gametype's `setOrigin` (900, 1930,
 -38) retail's body rests at (900, 1930, -42.944004) with no velocity, 0.18
 over the grade, which the slope its later strafes cross puts at about
 -43.122 under that spot: the ground trace caught it inside its 0.25 reach
@@ -1776,7 +1780,9 @@ product on the x87 stack. 1.5b's `Bullet_Endpos` (0x6de56) keeps 8192.
 Every UO `Bullet_Fire` and the artillery strike go through it
 (cod11-turrets.md 13.8). vcod: `CombatRules::bullet_range`.
 
-**The rounding.** VERIFIED, 1.1d `Bullet_Endpos` (0x69624): `fptan` of
+#### 2.2.1 The rounding
+
+VERIFIED, 1.1d `Bullet_Endpos` (0x69624): `fptan` of
 `spread * pi / 180` (.rodata 0x79cf8, 0x79d00) is stored as a double and
 then a float (0x6964d, 0x69653); `k = tan * 8192` and the two offsets
 `x * k`, `y * k` stay on the x87 stack (the `fst` at 0x69683 and 0x69688
@@ -2116,7 +2122,7 @@ the PVS anyway.
 
 VERIFIED: `Bullet_Endpos` is `0x69624`, 0xcf bytes, and nothing in the
 combat path above calls it. Its arithmetic is the spread cone's end point
-(2.2, "The rounding"); which 1.1d function calls it is open.
+(2.2.1); which 1.1d function calls it is open.
 
 ### 2.7 What a `bulletTrace` clips
 
@@ -2353,8 +2359,7 @@ of 1.5b `cod_lnxded`'s `SV_Trace` (0x8099fd1, reached for
 `trap_LocationalTrace` through syscall 0x2e with no `mins` or `maxs`):
 a point trace walks the entities (0x805f48a) and keeps the trace they
 leave, and `SV_ClipMoveToEntity` (0x8099732) writes the end point only
-when a body or model lowers the fraction (0x8099b18, 3.1, "The
-arithmetic on 1.5 and UO"); otherwise the end point stays
+when a body or model lowers the fraction (0x8099b18, 3.1.1); otherwise the end point stays
 `CM_BoxTrace`'s (`collision::cm_endpos`, `cod15-movement.md` 7). The
 box path's own rewrite (0x809a44d..0x809a4d4) is never reached by a
 locational trace. VERIFIED, live (retail 1.5b and UO 1.51b, gdb on
@@ -2669,7 +2674,7 @@ the engine derives the sphere from them at load, since the file carries nothing
 else. INFERRED, off the broad phase (UO 0x80c77f1): `radius` at `+0x24` is
 compared against a squared distance, so it holds the radius squared.
 
-#### The arithmetic on 1.5 and UO
+#### 3.1.1 The arithmetic on 1.5 and UO
 
 1.5b's and UO's engines (gcc 3.2.3, unoptimized) store every float
 assignment, where 1.1d's keeps them on the x87 stack. VERIFIED, the
@@ -2741,7 +2746,7 @@ sit 1 to 3 steps off in z. That bit was two errors cancelling: the end
 point's stored move against a turned body's frame, next section's
 "The prone strike on mp_carentan".
 
-#### The pose on 1.5 and UO
+#### 3.1.2 The pose on 1.5 and UO
 
 The bones a 1.5b or UO trace meets are not a normalized pose. VERIFIED,
 read out of a live UO 1.51b server under gdb (`client-probes/probe_pronebones` with `probe_rays 1`, the prone target
@@ -2823,8 +2828,7 @@ controllers, `PoseBuffer::stored_worlds` (the build), read by the stored
 bone trace and by a parent's tag in `linkTo`, a client's
 (`link::client_bone_stored`) or any other entity's bind records
 (`link::model_bone_stored`), `G_CalcTagParentAxis` through the parent's
-stored `AnglesToAxis` and `Frame::within_stored` (cod11-movers.md 16,
-"The tag on 1.5 and UO").
+stored `AnglesToAxis` and `Frame::within_stored` (cod11-movers.md 16.5).
 
 VERIFIED, vcod measurement (`pronepose_ab`'s `probe_rays` gates, the
 target's own cmds replayed): on UO the target's origin, eight bone marks
@@ -2835,7 +2839,7 @@ retail's bits, and since the clip's float time below so is every ray.
 Before that the rays sat within 3 steps (1.5b's prone idle moves, and
 the dump's locals up to 8 steps off ours where a key is lerped).
 
-#### The pose on 1.1
+#### 3.1.3 The pose on 1.1
 
 1.1d's `cod_lnxded` runs the anim calc, the skeleton build and the bone
 trace of 1.5b and UO (the sections above) in the same calls and on the
@@ -2918,7 +2922,7 @@ it lies in that replay's inputs, not the walk). On UO no gate tells the
 two orders apart; cod11-turrets.md 13.6 narrows that input to the run
 clip's on a plain run.
 
-#### The clip's float time
+#### 3.1.4 The clip's float time
 
 The frame a 1.5b or UO clip is sampled at is not its seconds times its
 frame rate. VERIFIED, `cod_lnxded` 1.5b 0x80c84f0 (UO `coduo_lnxded`
@@ -3019,7 +3023,7 @@ VERIFIED, vcod measurement: `pronepose_ab`'s 1.5b mp_brecourt rays, the
 origin and the eight marks are retail's bits; the 1.5b mp_carentan prone rest stays one step off, as it was
 on seconds (next section).
 
-#### The setter on a weighted node
+#### 3.1.5 The setter on a weighted node
 
 1.5b's and UO's player anim setter (game.mp 0x28ced, UO 0x2ce5f; the
 cgames' 1.5 0x30003870 and UO 0x30003a90 make the same calls, VERIFIED) differs from
@@ -3031,7 +3035,7 @@ cgames' 1.5 0x30003870 and UO 0x30003a90 make the same calls, VERIFIED) differs 
   `trap_XAnimSetCompleteGoalWeight`, and calls `trap_XAnimSetTime` with
   the phase only when that weight equals 0.0 (the float at 1.5b 0x83ccc,
   file offset 0x73ccc, and UO 0xa95ec, file 0x995ec). 1.1d's 0x2a600 sets the phase whenever the anim
-  has a `moveSpeed` (cod11-movers.md 15, "The phase").
+  has a `moveSpeed` (cod11-movers.md 15.7.1).
 - VERIFIED, the same calls: the goal weight call's restart argument is
   `!legs` (`legs` is `lf == ci+0x380`, 1.5b 0x28ced's first compare), so
   the torso setter restarts its node and the legs setter does not. 1.1d
@@ -3087,13 +3091,12 @@ both servers the run's bones then go on from the run's own time:
 `legs_ab`'s `a_body_stopping_and_going_is_posed_like_retail_on_15` /
 `_on_uo` match every row from the first stop on to 0.05 units and 0.3
 degrees (and the settle and the first run too, with
-the spawn idle dated as cod11-movers.md 15, "The spawn idle on 1.5 and
-UO", has it), and with `animclock::restart_weighted_nodes` forcing 1.1's
+the spawn idle dated as cod11-movers.md 15.7.7, has it), and with `animclock::restart_weighted_nodes` forcing 1.1's
 restart the same replays miss 83 (1.5b) and 78 (UO) rows from the first
 go on, up to 29 units and 97 degrees. A strafe swap (right, 150 ms
 left, right) takes the right strafe back the same way.
 
-#### The prone strike on mp_carentan
+#### 3.1.6 The prone strike on mp_carentan
 
 VERIFIED, live (retail 1.5b and UO 1.51b,
 `probe_scriptmodel`'s prone part with both clients' cmds logged,
@@ -3446,7 +3449,7 @@ the lean:
 - The clock the grid poses at. VERIFIED, `game.mp.i386.so`: `G_RunFrame`'s
   first `Scr_RunCurrentThreads` (0x50653) runs before
   `trap_DObjInitServerTime` and `G_DObjUpdateServerTime` (0x5069f,
-  0x506ed; cod11-movers.md 15, "A bone asked for before the anim update").
+  0x506ed; cod11-movers.md 15.9).
   VERIFIED, `cod_lnxded`: the time step 0x080bbab0 adds `dtime * rate *
   frequency` to a node's old time (`+0x2c`, copied from the time by the
   weight step 0x080bb130 first) for every node whose weight is not 0,
@@ -3550,7 +3553,7 @@ replays on the `PROBE_IN` lines rather than the logged inputs.
   ours. The shooter spawned at yaw 180 and the hold turned him to 0; the
   spawn's own think fed retail's sway a last view of 180 that ours never
   saw, and the turn off it decayed to -1 65536th by the cmd the scope froze
-  the sway on (15.3, "The spawn's view"). VERIFIED, vcod measurement: with
+  the sway on (15.3.1). VERIFIED, vcod measurement: with
   ours' spawn think running the block, 11 rounds leave within 2e-7 of
   retail's direction with no offset. `t_prone` (3.5e-5 low in z) and
   `t_right` (4.4e-5 in y, 3e-5 in z) stay off: ours read the hold's exact
@@ -3629,7 +3632,9 @@ cell gap; on the plain 50 ms windows every standing and crouched origin
 row reads 0.1036 under retail's. So an older run's 0.0402 was that run's
 split of the drop.
 
-**The leaning eye's PVS.** VERIFIED, live (retail 1.1d, mp_carentan tdm, `client-probes/probe_leanpvs`, fixture
+#### 3.6.1 The leaning eye's PVS
+
+VERIFIED, live (retail 1.1d, mp_carentan tdm, `client-probes/probe_leanpvs`, fixture
 `crates/server/tests/fixtures/leanpvs/mp_carentan-leanpvs.txt`): an allies
 watcher held at (1368, 2608, -23.875) facing 90 and an axis target at
 (1080, 3488, -23.875), the watcher's lean driven in two-second phases
@@ -4118,7 +4123,9 @@ list below. INFERRED: the numbering and every condition in it.
 and the corpse are the gametype script's job, through `self.sessionstate` and
 the `clonePlayer` method.
 
-**The two suicides.** `Cmd_Kill_f` (`0x495c8`) and the `suicide` player
+#### 5.1.1 The two suicides
+
+`Cmd_Kill_f` (`0x495c8`) and the `suicide` player
 method (`0x45358`, entry 26 of `player_methods` at `0x733dc`, per
 `tools/re/dump_builtins.py`) make the same `player_die` call.
 
@@ -4156,7 +4163,9 @@ method (`0x45358`, entry 26 of `player_methods` at `0x733dc`, per
   `--probe-target` sends `kill` every 45 s, logged
   `K;0;;vcod;0;;vcod;none;100000;MOD_SUICIDE;none` at 0:22 and 1:07.
 
-**A suicide that stays playing.** `player_die` writes no `pm_type` (step
+#### 5.1.2 A suicide that stays playing
+
+`player_die` writes no `pm_type` (step
 list above) and `ClientEndFrame` writes 6 only off `sessionState == 1`
 (0x41057..0x41079), with the contents, `takedamage` and `SVF_NOCLIENT`
 beside it (5.4 below). INFERRED, off those stores: a killed callback that
@@ -4825,7 +4834,7 @@ times.
   `Tried to set a read only entity field`, so the slow and once flags are
   only reachable through a map's key or `spawn`'s third argument.
 
-#### `START_OFF`, `hurt_use` and the read-only fields
+#### 5.9.1 `START_OFF`, `hurt_use` and the read-only fields
 
 `SP_trigger_hurt` (1.1d 0x64ef8, 1.5b 0x7a6ac, UO 0x86981) stores
 `hurt_use` as the entity's `use` on every hurt and `hurt_touch` as its
@@ -4875,7 +4884,7 @@ The captures are `client-probes/probe_hurtfall` under `probe_use` and
   process (SIGABRT), as a builtin's error does there
   (`cod11-gsc-language.md`, "Runtime errors below developer 1").
 
-#### The model-0 touch, `life`, and `useBy` on the other entities
+#### 5.9.2 The model-0 touch, `life`, and `useBy` on the other entities
 
 The captures are on retail 1.1d, 1.5b and UO 1.51b, ports 34761-34770
 (`crates/server/tests/fixtures/triggers/`, each with a `-1.5`
@@ -4927,7 +4936,7 @@ unlinked one, and `SP_func_static` (1.1d 0x5820c, 1.5b 0x699ef, UO
 `func_pendulum`; `SP_misc_spawner` stores `misc_spawner_use` (0x53468,
 which arms `misc_spawner_think` 100 ms on) at 0x534d8.
 
-#### `useBy` on a gun, a sine mover and a `misc_spawner`
+#### 5.9.3 `useBy` on a gun, a sine mover and a `misc_spawner`
 
 The captures are `client-probes/probe_useby` under `probe_sine`,
 `probe_spawner` and `probe_turret`, on retail 1.1d, 1.5b and UO 1.51b,
@@ -5437,7 +5446,7 @@ set, each with its pin:
   `a_player_killed_earlier_in_the_frame_stops_no_later_round`
   (`tests/combat.rs`).
 - **The killed callback on a suicide.** Retail's `K;` ends
-  `none;100000;MOD_SUICIDE;none` (5.1, "The two suicides"), `vDir`
+  `none;100000;MOD_SUICIDE;none` (5.1.1), `vDir`
   undefined. Both `kill` and `suicide()` pass damage 100000, `"none"` and an
   undefined `vDir`; the sim's damage stays 0 (VERIFIED, 8.1: damage fields 0
   across every `kill` death). Pinned by the `K;` check in
@@ -5464,22 +5473,24 @@ set, each with its pin:
   `pm_type` is the one its end frame wrote (`ClientSim::end_frame`), with the
   wire's `viewHeightTarget` off the last move's arm. Pinned by
   `the_kill_commands_death_frame_is_retails` (`tests/combat.rs`).
-- **The death frame's `weaponstate`.** VERIFIED, run: `--probe-kill-cmds
-  1,3` sends each `kill` with exactly one or three cmds behind it, one
-  message each, then no cmd for 150 ms. On 1.1d, 1.5b and UO 1.51b
-  (`mp_carentan-dm-hit-target-killcmds{,-1.5,-uo}.txt`, 7, 10 and 10 kills) a
-  kill with one cmd reads `weaponstate` 1 and one with three reads 0, kept
-  until the respawn; the events are `EV_DEATH`, `EV_RAISE_WEAPON` (UO's
-  `EV_REMOVE_WEAPON_ATTACHMENTS` between them) either way. VERIFIED:
-  `PM_Weapon`'s dead arm stores only `ps->weapon` 0: 1.1d `.so` 0x390fe, 1.5b
-  `game.mp.i386.so` 0x303fc (behind `cmpl $0x5,0x4(%eax)` at 0x303ec), UO
-  `game.mp.uo.i386.so` 0x372bb (`ps+0xd8`, behind 0x372ab); `player_die`
-  stores no `weaponstate` on any. INFERRED: the first cmd's putaway to empty
-  hands raises weapon 0 (state 1); a second live cmd before `ClientEndFrame`
-  ends that raise (weapon 0's `raiseTime` is 0) and reads 0. The unscripted
-  captures' mix (the `tdm` hit target: one death in five reads 1) is where
-  the kill fell in the frame. Pinned by `tests/kill_cmds_ab.rs` at each
-  install.
+#### 9.2.1 The death frame's `weaponstate`
+
+VERIFIED, run: `--probe-kill-cmds
+1,3` sends each `kill` with exactly one or three cmds behind it, one
+message each, then no cmd for 150 ms. On 1.1d, 1.5b and UO 1.51b
+(`mp_carentan-dm-hit-target-killcmds{,-1.5,-uo}.txt`, 7, 10 and 10 kills) a
+kill with one cmd reads `weaponstate` 1 and one with three reads 0, kept
+until the respawn; the events are `EV_DEATH`, `EV_RAISE_WEAPON` (UO's
+`EV_REMOVE_WEAPON_ATTACHMENTS` between them) either way. VERIFIED:
+`PM_Weapon`'s dead arm stores only `ps->weapon` 0: 1.1d `.so` 0x390fe, 1.5b
+`game.mp.i386.so` 0x303fc (behind `cmpl $0x5,0x4(%eax)` at 0x303ec), UO
+`game.mp.uo.i386.so` 0x372bb (`ps+0xd8`, behind 0x372ab); `player_die`
+stores no `weaponstate` on any. INFERRED: the first cmd's putaway to empty
+hands raises weapon 0 (state 1); a second live cmd before `ClientEndFrame`
+ends that raise (weapon 0's `raiseTime` is 0) and reads 0. The unscripted
+captures' mix (the `tdm` hit target: one death in five reads 1) is where
+the kill fell in the frame. Pinned by `tests/kill_cmds_ab.rs` at each
+install.
 - **The respawn frame's `legsAnim` 634.** VERIFIED, `game.mp.i386.so`:
   `ClientSpawn` ends in `ClientThink_real` (0x42a82) on a zeroed cmd stamped
   `level.time` (0x42a2f, 0x42a42), 100 ms past the `commandTime` it set
@@ -5930,7 +5941,7 @@ server ran.
 - UNVERIFIED: the meaning of bit `0x10` of the trace word at offset 32, which
   makes a bullet continue through a surface at full damage.
 - UNVERIFIED: which 1.1d function calls `Bullet_Endpos` (`0x69624`). Its
-  arithmetic is the spread cone's end point (2.2, "The rounding").
+  arithmetic is the spread cone's end point (2.2.1).
 - Settled: every jump adds 64 to `ps.aimSpreadScale`, capped at 255
   (`PM_CheckJump` 0x2edc6-0x2edf3, `cod11-mantle.md`, "Jumps"; the 255 once
   attributed to the ground jump was the prone dive's block). VERIFIED: both
@@ -6289,7 +6300,7 @@ INFERRED: the ordering and the conditions in it.
 - VERIFIED, `game.mp.i386.so` read with `tools/re/annotate_func.py`: the
   snap's trace (the call at 0x542a4) pushes `bulletPriorityMap` (0x54285),
   `r.ownerNum` and `ent->clipmask` like the move trace, so it scores a
-  player's posed bones too. VERIFIED, live (12.4, "Resting on a player"):
+  player's posed bones too. VERIFIED, live (12.4.1):
   a frag on a prone player's back snaps to his bones, not past them to the
   floor. vcod runs the snap through the same body, script model and world
   trace as the move (`Missile::full_trace`).
@@ -6522,7 +6533,9 @@ segment scores the posed bones under `bulletPriorityMap` (3.1), the
 `trace_t` normal is the struck box face's (3.2, `+16`), and that normal is
 what the soft damping above reflects about.
 
-**Resting on a player.** VERIFIED, `game.mp.i386.so`: the
+#### 12.4.1 Resting on a player
+
+VERIFIED, `game.mp.i386.so`: the
 `groundEntityNum` store at 0x5388a takes the word at `tr+0x28`
 (`tr.entityNum`), behind the `tr.normal[2] > 0.7` test at 0x53879.
 VERIFIED, live (retail 1.1d, mp_carentan,
@@ -6823,7 +6836,7 @@ with 0; the snapshot after the script moves him it reads `trType` 5 with
 its base unchanged and ground still 0, and it falls to the floor and rests
 there with 1022. The same capture's throws leave from z 36.148 where
 1.1's leave from 37.0 on the same spot: 1.1 truncates the muzzle point and
-1.5 does not (2.1, "United Offensive and 1.5").
+1.5 does not (2.1.1).
 
 vcod: `Missile::falls`, set for 1.5 and UO, runs the test through the
 missile's own trace (`a_frag_left_hanging_falls_on_15_and_uo_only`). Ours'
@@ -7143,7 +7156,7 @@ themselves are gated off the full-precision sky frag capture (12.7).
 VERIFIED, off the same lines: the exploded entity stays on the wire for about
 300 ms after the event frame. Retail's `G_RunEntity` frees a
 `freeAfterEvent` entity on its first turn more than 300 ms past its event
-(0x50309; 14.7, "Entity numbers"); vcod's missile pass does the same
+(0x50309; 14.7.3); vcod's missile pass does the same
 (`EVENT_VALID_MS`).
 
 VERIFIED: the lone capture's second throw comes to rest at `z` 179.3 while its
@@ -7198,7 +7211,7 @@ mp_carentan: a spawn read 299, the call, a spawn 302; one spawn a
 frame after it read 303..309 through +350, 300 at +400, 310..315 through
 +700, 301 at +750 and 316 on. INFERRED: the temp entity took 300 and the
 concussion entity 301; the first went back to the free list on the +350
-pass (the temp entity rule of 14.7, "Entity numbers") and the second on the
+pass (the temp entity rule of 14.7.3) and the second on the
 +700 one (`Concussive_think` passes `+0x274` on +600 and frees on +700).
 
 vcod: `builtins::fx::grenade_explosion_effect` raises the temp entity through
@@ -7227,7 +7240,9 @@ still facing +x, slid back 1.6, 1.1 and 0.4 on x over the three snapshots
 from the shot's, then stopped. INFERRED: that is 64 units/s spent by
 ground friction.
 
-**The direction's bits.** VERIFIED, 1.1d (0x68c40..0x68cf4): the tangent
+#### 13.6.1 The direction's bits
+
+VERIFIED, 1.1d (0x68c40..0x68cf4): the tangent
 goes through a double and a float (0x68c62, 0x68c70) as in
 `Bullet_Endpos`, and `k`, both offsets and each component's
 `forward * 16 + right * x' + up * y'` stay on the x87 stack until the
@@ -8024,7 +8039,7 @@ every builtin row above as retail did;
 `a_grenade_walk_meets_a_victim_where_an_earlier_callback_moved_it`
 (`crates/server/tests/combat.rs`) the grenade case (the trap: reaching the
 parked victim at the spot it left). The probe's grenade half measures the
-walk's link order; 14.7, "The frame's links before the walk", has that run
+walk's link order; 14.7.1, has that run
 on both servers.
 
 ### 14.6 Turrets, and the other entities with `takedamage`
@@ -8255,7 +8270,9 @@ and slot 1 is wholly below it, so 0 is walked first whatever the
 `setOrigin` order; line 2's two straddle it and were set down 3 then 2, so 2
 comes first until `player_die` puts 3 at the head.
 
-**The frame's links before the walk.** VERIFIED, `game.mp.i386.so`, the
+#### 14.7.1 The frame's links before the walk
+
+VERIFIED, `game.mp.i386.so`, the
 call sites in `G_RunFrame` (0x50478): the touch queue's
 `Scr_RunCurrentThreads` at 0x50653, `Scr_SetTime` at 0x5070c, and the
 entity loop at 0x50930..0x50975, which calls `G_RunEntity` (0x502bc) at
@@ -8354,7 +8371,9 @@ calling it again from the same place.
 `a_blast_meets_the_links_below_its_grenade_s_number_only`
 (`crates/server/tests/combat.rs`) is the probe's two-client form.
 
-**The pass runs after the threads.** VERIFIED, `client-probes/probe_entnum`
+#### 14.7.2 The pass runs after the threads
+
+VERIFIED, `client-probes/probe_entnum`
 on retail, mp_carentan, no client: a `script_origin` spawned and
 `delete()`d at 2500 read `isdefined` 1 at 2500, 2550 and 2600 and 0 at 2650.
 The `delete` method (0x5da14) arms `G_FreeEntity` 100 ms out
@@ -8374,7 +8393,7 @@ with the mover's fields evaluated a frame back to fake the lag; the same
 probe against it read `isdefined` 0 a frame early (2550, the delete at
 2450).
 
-#### Entity numbers
+#### 14.7.3 Entity numbers
 
 VERIFIED, `game.mp.i386.so`: `G_Spawn` (0x667e0) pops the head of a free
 list at `level+0x10` (0x668c8..0x668e1), the next link at `ent+0x304`,
@@ -8498,7 +8517,9 @@ which is why vcod links those alone (`GameHost::link_shootable`). A `trigger_hur
 link filed it and the walk tests its 0x405c0008; a `trigger_use` the same
 with 0x200000. A `notSolid` brush model stays linked with contents 0.
 
-**The touch pass.** VERIFIED, `G_TouchTriggers` (0x3f88c): the walk at
+##### 14.7.3.1 The touch pass
+
+VERIFIED, `G_TouchTriggers` (0x3f88c): the walk at
 0x3f925 with mask 0x405c0008, then one loop over the list in its order
 (0x3f9aa..0x3faa2). Per entity: it skips one whose `touch` (`+0x20c`) is
 null when the player's is null too (0x3f9cd..0x3f9e0); tests `eType` 3
@@ -9078,7 +9099,9 @@ and no gun angles. INFERRED, from the position of the block ahead of
 `viewangles` included, so a shot goes along the view of the cmd before the
 one that pulled the trigger.
 
-**The cmd that fires.** `client-probes/probe_leanhit`'s hold calls
+#### 15.1.1 The cmd that fires
+
+`client-probes/probe_leanhit`'s hold calls
 `setPlayerAngles` every frame, so the view a round reads is one of two:
 
 - VERIFIED, vcod measurement (the six `leanhit` captures with `probe_fall`,
@@ -9250,7 +9273,9 @@ reads below, and the constants; INFERRED: the conditions.
   ease` through a shellshock and 1.0 otherwise, so the shellshock key is a
   client-side thing.
 
-**The spawn's view.** VERIFIED, 1.1d `ClientSpawn` (`0x4268c`): the
+#### 15.3.1 The spawn's view
+
+VERIFIED, 1.1d `ClientSpawn` (`0x4268c`): the
 `__bzero` of the whole `0x22c4`-byte client at `0x42804` clears the sway
 state at `client+0x2278` and the playerstate's weapon with it,
 `SetClientViewAngle` (`0x429e2`) writes the spawn's angles into
@@ -9468,7 +9493,9 @@ screen through prediction, as `PM_UpdateViewAngles` writes
 `viewangles[2]` from `cmd.angles[2] + delta_angles[2]` like the other two
 axes (`docs/protocol-1.1.md`, "View angles").
 
-**The frame a shot kicks.** VERIFIED, the `CG_FireWeapon` call sites:
+#### 15.7.2 The frame a shot kicks
+
+VERIFIED, the `CG_FireWeapon` call sites:
 `CG_EntityEvent` (`0x3001dc10`) reaches it at `0x3001e2c8`-`0x3001e31c`
 only behind a test of its stack argument (`0x3001e2b7`, `[esp+0x24]`), and
 that argument is 1 only from `0x30028be0` (`push 0x1` at `0x30028c2d` and
@@ -10168,7 +10195,9 @@ samples and reach the entity through `BG_PlayerStateToEntityState`
 bodies with the entity's copy. Player `eFlags` 0x400, which narrows the
 torso clamp to 45, is 16.5.
 
-**The dying body.** VERIFIED, `game.mp.i386.so`: `ClientEndFrame` arms the
+#### 16.4.1 The dying body
+
+VERIFIED, `game.mp.i386.so`: `ClientEndFrame` arms the
 controller hook (`ent+0x220` = 0x416c0, 0x41261) on every `eType` 1 entity,
 a dead session's included, and `BG_Player_DoControllers` (0x2b7f8) returns
 early only on `eFlags & 0xc000`; its one test of `eFlags & 1` (0x2b9f5..)

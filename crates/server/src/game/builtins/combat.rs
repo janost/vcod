@@ -939,8 +939,7 @@ fn bullet_entities(
 /// fraction. A body counts while its link carries `CONTENTS_BODY`, the
 /// trace's mask, not while it has health: a `suicide()` that stays
 /// `playing` is a corpse from `player_die`'s relink and a body again once
-/// its end frame links it (combat doc 5.1, "A suicide that stays
-/// playing"; `ClientSim::hit_body`).
+/// its end frame links it (combat doc 5.1.2; `ClientSim::hit_body`).
 fn body_hit(
     host: &mut GameHost,
     start: Vec3,

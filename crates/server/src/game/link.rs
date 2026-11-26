@@ -111,8 +111,7 @@ impl Frame {
     /// 0x3e350, 1.5b 0x37100): pitch and yaw `vectoangles` of the forward;
     /// the left turned back by `-yaw` then `-pitch`, each angle's radians
     /// `(float)(-a * pi / 180)`, its `fsincos` and each component stored; the roll `vectosignedpitch` of that (UO 0x3ad1d) and its
-    /// sign by the turned left's y (cod11-movers.md 16, "The tag on 1.5
-    /// and UO").
+    /// sign by the turned left's y (cod11-movers.md 16.5).
     pub fn angles_stored(&self) -> [f32; 3] {
         let st = |x: f64| x as f32;
         let [fwd, left, _] = self.axis;
@@ -386,8 +385,7 @@ fn model_bone(
 /// [`model_bone`] as 1.5b's and UO's skeleton build leaves it
 /// (`PoseBuffer::stored_worlds` over the bind [`Record`]s a DObj with no
 /// anim tree holds): its origin and its matrix's axes in model space. 1.1d's
-/// tags match it to the print too (cod11-movers.md 16, "The tag on 1.5 and
-/// UO").
+/// tags match it to the print too (cod11-movers.md 16.5).
 ///
 /// [`Record`]: vcod_common::skeleton::Record
 fn model_bone_stored(
@@ -508,7 +506,7 @@ fn tag_frame(
         return Ok(Frame::from_quat(o, r).within(&base));
     }
     // CoD1's DObj with no anim tree holds its bind records; 1.1d's tag
-    // reads them too (cod11-movers.md 16, "The tag on 1.5 and UO").
+    // reads them too (cod11-movers.md 16.5).
     let (o, axis) = model_bone_stored(host, cx, &model, parent, tag).ok_or_else(no_tag)?;
     if !cod1_stored(host) {
         return Ok(Frame { axis, origin: o }.within(&base));
@@ -791,7 +789,7 @@ fn run_one(host: &mut GameHost, cx: &mut Cx, links: &Links, id: EntId, fresh: bo
         && let Some((Some(p), _)) = host.movers.pose_at(parent, level_ms)
     {
         // The angles stay the field's, `r.currentAngles`, which can sit a
-        // quantization off `apos` (movers doc 12, "The residual yaw").
+        // quantization off `apos` (movers doc 12.1).
         base.origin = p;
     }
     let frame = tag_frame(host, cx, parent, base, link.tag.as_deref(), true).unwrap_or(base);

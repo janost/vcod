@@ -402,7 +402,7 @@ pub fn spawn_scripted_hurt(host: &mut GameHost, cx: &mut Cx, id: EntId, spawnfla
 /// `SP_trigger_multiple` and `SP_trigger_once` for a script `spawn`: no
 /// keys, so `wait` 0.5 (a `trigger_once` always -1), and no `model`, so
 /// inline model 0, a copy of the world at the origin, as
-/// [`spawn_scripted_hurt`] links (cod11-combat.md 5.9, "useBy").
+/// [`spawn_scripted_hurt`] links (cod11-combat.md 5.9.3).
 pub fn spawn_scripted_multi(
     host: &mut GameHost,
     cx: &mut Cx,
