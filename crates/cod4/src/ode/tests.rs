@@ -522,3 +522,123 @@ fn friction_at_either_stop_presses_into_it() {
     assert_eq!(torque_on_body1(2), [0.0, 0.0, 10.0]);
     assert_eq!(torque_on_body1(1), [0.0, 0.0, -10.0]);
 }
+
+/// `msecStep` off the awake count: 17 up to 32, then `(awake - 32) / 18`
+/// of the way to the world's ceiling, truncated: 67 for worlds 0 and 1,
+/// 34 for world 2 (0x71e7a4, 0x71e7b0).
+#[test]
+fn each_worlds_msec_step_follows_its_awake_count() {
+    use super::phys::{WorldId, msec_step};
+    for w in [WorldId::Dynent, WorldId::Fx] {
+        let got: Vec<i32> = [0, 32, 33, 41, 49, 50, 512]
+            .iter()
+            .map(|&n| msec_step(w, n))
+            .collect();
+        assert_eq!(got, [17, 17, 19, 42, 64, 67, 67], "{w:?}");
+    }
+    let got: Vec<i32> = [0, 32, 33, 41, 49, 50, 512]
+        .iter()
+        .map(|&n| msec_step(WorldId::Ragdoll, n))
+        .collect();
+    assert_eq!(got, [17, 17, 17, 25, 33, 34, 34]);
+}
+
+/// 0x5a62f0: worlds 0 and 1 scale both velocities by `1 - drag dt`
+/// (floored at 0), world 2 only damps the spin by a hundredth, and a
+/// sleeping body is neither touched nor counted.
+#[test]
+fn the_drag_arm_is_worlds_zero_and_ones_and_the_damping_world_twos() {
+    use super::body::DISABLED;
+    use super::phys::{WorldId, drag};
+    use super::world::PhysDvars;
+    let dv = PhysDvars::default();
+    let moving = || {
+        let mut w = World::new();
+        let id = w.create_body();
+        let b = w.body_mut(id);
+        b.lvel = [100.0, 0.0, -50.0];
+        b.avel = [0.0, 100.0, 0.0];
+        b.clone()
+    };
+    let dt = 0.017;
+    for w in [WorldId::Dynent, WorldId::Fx] {
+        let mut b = moving();
+        assert!(drag(w, &mut b, dt, &dv));
+        let kl = (1.0 - 0.03f32 as f64 * dt as f64) as f32;
+        let ka = (1.0 - 0.5 * dt as f64) as f32;
+        assert_eq!(b.lvel, [100.0 * kl, 0.0, -50.0 * kl]);
+        assert_eq!(b.avel, [0.0, 100.0 * ka, 0.0]);
+    }
+    let mut b = moving();
+    assert!(drag(WorldId::Ragdoll, &mut b, dt, &dv));
+    assert_eq!(b.lvel, [100.0, 0.0, -50.0]);
+    // 100 less its stored hundredth, -1
+    assert_eq!(b.avel, [0.0, 99.0, 0.0]);
+    // a step past 1 / drag stops the body dead, never reverses it
+    let mut b = moving();
+    drag(WorldId::Fx, &mut b, 40.0, &dv);
+    assert_eq!((b.lvel, b.avel), ([0.0, 0.0, -0.0], [0.0; 3]));
+    let mut b = moving();
+    b.flags |= DISABLED;
+    assert!(!drag(WorldId::Dynent, &mut b, dt, &dv));
+    assert_eq!(b.lvel, [100.0, 0.0, -50.0]);
+}
+
+/// `Phys_ObjAddForce` (0x5a5900): the push times `1000 / msecStep` goes on
+/// the force, its moment about the centre on the torque
+/// (`dBodyAddForceAtPos` 0x5b7000), and the body wakes.
+#[test]
+fn a_push_lands_as_a_force_over_one_step_at_its_point() {
+    use super::body::DISABLED;
+    use super::phys::obj_add_force;
+    let mut w = World::new();
+    let id = w.create_body();
+    let b = w.body_mut(id);
+    b.pos = [10.0, 0.0, 0.0];
+    b.flags |= DISABLED;
+    b.adis_timeleft = 0.0;
+    obj_add_force(b, 20, [10.0, 2.0, 0.0], [0.0, 0.0, 3.0]);
+    assert_eq!(b.facc, [0.0, 0.0, 150.0]);
+    // (0, 2, 0) x (0, 0, 150)
+    assert_eq!(b.tacc, [300.0, 0.0, 0.0]);
+    assert!(b.enabled());
+    assert_eq!(b.adis_timeleft, b.adis.idle_time);
+    // world 0's 67 ms step at its most bodies spreads the same push thinner
+    let mut b = b.clone();
+    b.facc = [0.0; 3];
+    let at = b.pos;
+    obj_add_force(&mut b, 67, at, [0.0, 0.0, 3.0]);
+    assert_eq!(
+        b.facc,
+        [0.0, 0.0, (3.0 * (1000.0f64 / 67.0) as f32 as f64) as f32]
+    );
+}
+
+/// `Phys_ObjBulletImpact` (0x5a5a20) through the centre of a resting body:
+/// no lever, so `J = speed m scale / (m + 0.5)` along the direction tipped
+/// up by `phys_bulletUpBias`, pushed over the named world's step.
+#[test]
+fn a_bullet_through_the_centre_pushes_without_spin() {
+    use super::phys::obj_bullet_impact;
+    use super::world::PhysDvars;
+    let mut w = World::new();
+    let id = w.create_body();
+    let b = w.body_mut(id);
+    let mut m = Mass::unit();
+    m.adjust(2.0);
+    b.set_mass(m);
+    let dv = PhysDvars {
+        bullet_up_bias: 0.0,
+        ..PhysDvars::default()
+    };
+    obj_bullet_impact(b, 20, [0.0; 3], [1.0, 0.0, 0.0], 100.0, 0.5, &dv);
+    let j = (100.0f64 * (2.0 * 0.5) / 2.5) as f32;
+    assert_eq!(b.facc, [(j as f64 * 50.0) as f32, 0.0, 0.0]);
+    assert_eq!(b.tacc, [0.0; 3]);
+    // a body already closing faster than the round is left alone
+    let mut b2 = b.clone();
+    b2.facc = [0.0; 3];
+    b2.lvel = [150.0, 0.0, 0.0];
+    obj_bullet_impact(&mut b2, 20, [0.0; 3], [1.0, 0.0, 0.0], 100.0, 0.5, &dv);
+    assert_eq!(b2.facc, [0.0; 3]);
+}

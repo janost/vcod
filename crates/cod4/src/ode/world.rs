@@ -7,6 +7,7 @@
 
 use super::body::{AutoDisable, Body, DISABLED, Node};
 use super::joint::Joint;
+use super::phys::WorldId;
 use super::quickstep;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -59,12 +60,16 @@ impl Default for Params {
     }
 }
 
-/// The registered defaults of the dvars `Phys_RunFrame` (0x5a6440) writes
-/// into the ragdoll world before each step.
+/// The registered defaults of the `phys_` dvars the frame glue reads
+/// (`ode::phys`): what `Phys_RunFrame` (0x5a6440) writes into a world
+/// before each step, the drag (0x5a62f0) and the bullet push (0x5a5990).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PhysDvars {
     pub erp: f32,
     pub cfm: f32,
+    /// `phys_mcv` (0xcc78160) for worlds 0 and 1, `phys_mcv_ragdoll`
+    /// (0xcc54470) for world 2 (0x5a64bc).
+    pub mcv: f32,
     pub mcv_ragdoll: f32,
     pub csl: f32,
     pub qsi: u32,
@@ -72,6 +77,10 @@ pub struct PhysDvars {
     pub auto_disable_linear: f32,
     pub auto_disable_angular: f32,
     pub auto_disable_time: f32,
+    pub drag_linear: f32,
+    pub drag_angular: f32,
+    pub bullet_up_bias: f32,
+    pub bullet_spin_scale: f32,
 }
 
 impl Default for PhysDvars {
@@ -79,6 +88,7 @@ impl Default for PhysDvars {
         PhysDvars {
             erp: 0.8,
             cfm: 1e-4,
+            mcv: 20.0,
             mcv_ragdoll: 1000.0,
             csl: 1.0,
             qsi: 15,
@@ -86,22 +96,28 @@ impl Default for PhysDvars {
             auto_disable_linear: 20.0,
             auto_disable_angular: 1.0,
             auto_disable_time: 0.9,
+            drag_linear: 0.03,
+            drag_angular: 0.5,
+            bullet_up_bias: 0.5,
+            bullet_spin_scale: 3.0,
         }
     }
 }
 
 impl Params {
-    /// What `Phys_RunFrame` stores into world 2 each step: ERP (+0x20), CFM
-    /// (+0x24), `phys_mcv_ragdoll` as the contacts' most correcting velocity
-    /// (+0x34), `phys_csl` as their surface layer (+0x38), `phys_qsi`
-    /// (+0x28), the sleep speeds squared and its time (+0x3c..+0x44), and
-    /// gravity down at `-phys_gravity`. `Phys_Init` (0x5a2d1f) leaves the
-    /// sleep on for new bodies and its steps at 0, so the sleep is time
-    /// alone.
-    pub fn apply_phys_frame(&mut self, d: &PhysDvars) {
+    /// What `Phys_RunFrame` stores into a world each step: ERP (+0x20), CFM
+    /// (+0x24), the world's `phys_mcv` as the contacts' most correcting
+    /// velocity (+0x34), `phys_csl` as their surface layer (+0x38),
+    /// `phys_qsi` (+0x28), the sleep speeds squared and its time
+    /// (+0x3c..+0x44), and gravity down at `-phys_gravity`.
+    pub fn apply_phys_frame(&mut self, d: &PhysDvars, world: WorldId) {
         self.cfm = d.cfm;
         self.erp = d.erp;
-        self.contact_max_vel = d.mcv_ragdoll;
+        self.contact_max_vel = if world == WorldId::Ragdoll {
+            d.mcv_ragdoll
+        } else {
+            d.mcv
+        };
         self.contact_min_depth = d.csl;
         self.qs_iterations = d.qsi;
         let sq = |x: f32| (x as f64 * x as f64) as f32;
@@ -112,16 +128,23 @@ impl Params {
         self.gravity = [0.0, 0.0, -t];
     }
 
-    /// World 2 after `Phys_Init` and one `Phys_RunFrame` at the dvars'
-    /// defaults.
-    pub fn ragdoll() -> Params {
+    /// A world after `Phys_Init` and one `Phys_RunFrame` at the dvars'
+    /// defaults. `Phys_Init` leaves the sleep on for new bodies and its
+    /// steps at 0 in every world (0x5a2d75, 0x5a2d83), so the sleep is time
+    /// alone.
+    pub fn phys_init(world: WorldId) -> Params {
         let mut p = Params {
             adis_flag: true,
             ..Params::default()
         };
         p.adis.idle_steps = 0;
-        p.apply_phys_frame(&PhysDvars::default());
+        p.apply_phys_frame(&PhysDvars::default(), world);
         p
+    }
+
+    /// World 2's [`Params::phys_init`].
+    pub fn ragdoll() -> Params {
+        Params::phys_init(WorldId::Ragdoll)
     }
 }
 

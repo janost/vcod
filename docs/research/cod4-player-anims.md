@@ -678,7 +678,8 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   `(outer^2 - d^2) / (outer^2 - inner^2)` past the inner radius, along the
   impulse or away from the blast (level for a cylinder) with
   `ragdoll_explode_upbias` added to its z and normalized, as a force at
-  the centre (`Phys_ObjAddForce`, which scales it by `1000 / msecStep`).
+  that jittered centre (`Phys_ObjAddForce`, which scales it by `1000 /
+  msecStep`; the point VERIFIED in 10.7.1).
   The three `flrand` draws are the LCG `* 0x343fd + 0x269ec3` at
   0x5bddf2..0x5bde7e, VERIFIED (the instructions); the rest INFERRED.
 - `ragdoll_bullet_force` (global 0xcc789d4) and `ragdoll_bullet_upbias`
@@ -690,7 +691,8 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   script words) and `Cod4Players::explode` hands it to the pool
   (`Ragdolls::explode`): a held ragdoll is rebuilt first (10.7), and
   each body's share goes in as `Phys_ObjAddForce` puts it, times `1000 /
-  msecStep` of the last post step (0x5a5900), the body woken; its jitter
+  msecStep` of the last post step (0x5a5900) at the jittered centre, the
+  body woken; its jitter
   draws run the same LCG. VERIFIED (ours against the instructions).
   vcod-server sends
   `physicsExplosionSphere` and `physicsExplosionCylinder` (event 57 and
@@ -1551,6 +1553,120 @@ slept, and `kill-mp_crash-1.7-maxlife.txt`, which ran to
   fall and lie, at `com_maxfps 0` and `com_maxfps 20`: it should fold at
   the joints within their limits, settle without sliding, and the head,
   wrists and ankles ease towards their base pose over a second or two.
+
+### 10.7.1 The frame glue per world
+
+The steps above are one `Phys_*` layer that all three worlds run through,
+indexed by world. I moved it out of `ragdoll::pool` into `ode::phys`
+(`PhysWorld`, one per world), so worlds 0 and 1 can step on the ODE port
+as world 2 does. The ragdoll pool keeps its slots and the self collision
+hook and calls `PhysWorld::run_to_time` for world 2.
+
+- **Per world.** `g_phys_msecStep` (0x71e798) is 17, 17, 17 at load, in
+  `.data`, outside the 0x23cd0 bytes from 0xcc54478 that `Phys_Init`
+  clears through 0x67c4a0 (0x5a2cf6); its floor (0x71e7a4) is 17, 17, 17
+  and its ceiling (0x71e7b0) 67, 67, 34. VERIFIED (the tables, the
+  call's arguments). That 0x67c4a0 is `memset` is INFERRED. `Phys_PostStep` indexes
+  both by its world (`[ebx*4+0x71e7a4]`, `[ebx*4+0x71e7b0]` at 0x5a6791,
+  0x5a679c), so worlds 0 and 1 step 17 ms up to 32 awake bodies, 42 at
+  41 and 67 from 50. VERIFIED (the instructions). `Phys_Init`'s loop
+  (0x5a2d1f..0x5a2d9b) gives every world the sleep on for new bodies
+  (`dxWorld` +0x4c = 1) and 0 idle steps (+0x48), and zeroes the clock's
+  start and time (the block's +0, +4). VERIFIED (the instructions). The
+  lerp (+8) starts at 0 through the clear; the port's does too. INFERRED
+  (the clear's identity).
+- **The world's dvars.** `Phys_RunFrame` stores the step's seconds at the
+  world's block +0x50 (0x5a6458) and the contacts' most correcting
+  velocity off `phys_mcv` (0xcc78160, 20) for worlds 0 and 1 and
+  `phys_mcv_ragdoll` (0xcc54470, 1000) for world 2 (the `cmp [esp+0x20],2`
+  at 0x5a64bc). Its world hook is the pointer at the block's +0x90
+  (0x5a65e6), which `Phys_Init` clears (0x5a2d86). VERIFIED (the
+  instructions). That only the ragdoll code sets a hook is INFERRED.
+- **The drag arm** (`Phys_DoBodyOncePerFrame` 0x5a62f0, called from
+  `Phys_PostStep` at 0x5a6720 with the world and the block's +0x50): a
+  disabled body returns 0 and is not counted. Worlds other than 2 scale
+  the linear velocity by `max(1 - phys_dragLinear dt, 0)` and the
+  angular by `max(1 - phys_dragAngular dt, 0)`, each factor stored and
+  floored through 0x4093c0 (`b` when `a - b` stored is under 0, else
+  `a`), each product stored (0x5a6310..0x5a63cf). World 2 takes the
+  damping of 10.2 (0x5a63d0..0x5a6429). VERIFIED (the instructions).
+  `phys_dragLinear` is the dvar at 0xcc54414, registered 0.03 (the float
+  at 0x70bc24, name 0x6f7c90, 0x5a3fe0..0x5a40a0), `phys_dragAngular`
+  0xcc54464, 0.5 (0x6be648, name 0x6f7cd0, 0x5a4091..0x5a4151). VERIFIED
+  (the registrations).
+- **The sweep size per class.** 0x5a6930 sizes its box off 0x5a9a20 on
+  the body's first geom, which switches on the class through the byte
+  table at 0x5a9b08: class 1 (box) takes half its least side (0x5a9a44,
+  the double 0.5 at 0x70ace8), class 6 (transform) its inner geom
+  (0x5aed10), classes 11..14 go to 0x5a67d0, the rest leave the box
+  unset. VERIFIED (the tables). 0x5a67d0's arms (the table at 0x5a6918):
+  11 and 12 scale the geom's bounds by the double at 0x70afb8 and go on
+  to 0x561910, 13 (cylinder) takes `min(r * 0.70710677, +0x54)`
+  (0x5a688b), 14 (capsule) `r * 0.70710677` (the double at 0x70ae70)
+  unless `2 r + h` (the double 2.0 at 0x70ae50, `h` at +0x54) is less
+  (0x5a68b7). The box is `-m..m` on each axis for 1, 13 and 14.
+  VERIFIED (the instructions). The capsule's arm is the one in the port;
+  `Geom::Unported` stands for the others until their geoms are ported,
+  and `run_to_time` returns its class as an error. vcod's.
+- **The sweep box.** With `m` the box's top x: `m` under `2 phys_csl`
+  (the sum stored) sweeps a point (corners -0.001 and 0.001, 0x70b460,
+  0x70b278); else the box at 0.2 of the bounds (the double at 0x70b3e8,
+  each corner stored), unless `m` less that box's top x, unstored, is
+  under `2 phys_csl`, when it is `max(m - 2 phys_csl, 0.001)` each way
+  (0x5a6a0a..0x5a6a4c). A point sweep's fraction loses `0.5 m` times
+  0x403a90's inverse root of the move's squared length, computed as
+  `(x / 2)` stored, then `y (1.5 - (x / 2) y y)` on the stack, stored
+  (0x403a90..0x403acc), floored at 0 by 0x4093c0. The sweep runs when
+  the body moved or the object's state is 0 or 1 (0x5a6a79..0x5a6ab2).
+  VERIFIED (the instructions). I ported those three points as read: the
+  constants as their widened floats, the unstored compare and the
+  stack's inverse root. On both captures of 10.5 every body word on
+  every step came out bit for bit as before the move. VERIFIED (the
+  runs, ours).
+- **`Phys_ObjAddForce`** (0x5a5900, the world in `esi`, the body as its
+  argument, the force in `ecx`, the point in `edx`): `1000 / msecStep`
+  of that world (`fild [esi*4+0x71e798]`, `fdivr` the double at
+  0x70af28) stored, each force word times it stored, z first, then
+  `dBodyAddForceAtPos` and the wake of cod4-gsc.md 3.6. VERIFIED (the
+  instructions). `dBodyAddForceAtPos` (0x5b7000) adds each force word to
+  +0x98..+0xa0 and `(p - x) x f` to the torque +0xa8..+0xb0, each
+  component `(q1 f2 - q2 f1) + t0` and kin on the stack, stored once.
+  VERIFIED (0x5b7000..0x5b70b7). That this is upstream ODE 0.5's
+  `dBodyAddForceAtPos` with `dCROSS(tacc, +=, q, f)` is INFERRED (the
+  upstream source); `Body::add_force_at_pos` ports it.
+- **The blast's point.** `Ragdoll_ExplosionEvent` passes 0x5a5900 the
+  bone's jittered centre: the body's position (+0xe0) copied to
+  `[esp+0x44]`, each axis's `flrand` draw added and stored
+  (0x5bddcc..0x5bde90), the pointer in `edx` at 0x5bdfab. VERIFIED (the
+  instructions). 10.1 has the force at the centre; with the move the
+  port pushes at the jittered point, so a blast now spins a bone by `j x
+  F`, `j` the jitter. vcod's. How a thrown corpse looks is pending a
+  hand check.
+- **`Phys_ObjBulletImpact`** (0x5a5a20; arguments world, body, speed,
+  scale on the stack, the direction in `eax`, the contact in `ecx`): the
+  formula of cod4-gsc.md 3.6 at the binary's store points. 0x5a5990
+  adds `phys_bulletUpBias` (0xcc54408) to the direction's z, stored,
+  normalizes it (0x4076d0), and moves the contact out by `(p - x) *
+  phys_bulletSpinScale` (0xcc54434), each product and sum stored
+  (0x5a5990..0x5a5a1b). Then `v . dir` stored, `speed` less it stored,
+  `r = p - x` stored, `n = r x dir` stored and normalized with its length
+  `L` (0x5a5b5d); the body's `dMass` (17 words from +0x20, 0x5a5ab4) and
+  rotation (+0x100) copied; `u = R n` stored, `I u` stored, `w . n`
+  stored; the closing speed `cl - (w . n) L` stored; at or below 0 it
+  returns (0x5a5d0a; a NaN goes on). `den = m + 0.5` stored, and when
+  `L` is not 0 (0x5a5d21) `den + (L L m / 2) / (u . I u)` with `u . I u`
+  stored; `J = cl m scale / den` stored, `J dir` stored, to 0x5a5900 at
+  the moved point. VERIFIED (0x5a5a20..0x5a5db4). `phys::obj_bullet_impact`
+  ports it. Nothing calls it yet: worlds 0 and 1 still run on
+  `vcod_cod4::physics`. vcod's.
+- **0x5a2320's cut** moved with it: `physics.rs` and the capsule's near
+  callback both call `ode::collide::reduce`. vcod's.
+- **Gates**: `ragdoll_ab` (unchanged), and the unit tests
+  `ode::tests::each_worlds_msec_step_follows_its_awake_count`,
+  `the_drag_arm_is_worlds_zero_and_ones_and_the_damping_world_twos`,
+  `a_push_lands_as_a_force_over_one_step_at_its_point` and
+  `a_bullet_through_the_centre_pushes_without_spin`. VERIFIED (the runs,
+  ours).
 
 ## 11. The anim sampler
 

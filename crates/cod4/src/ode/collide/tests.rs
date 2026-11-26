@@ -321,3 +321,40 @@ fn a_capsule_dropped_on_a_floor_rests_and_sleeps() {
     let z = world.body(b).pos[2];
     assert!((3.9..4.0).contains(&z), "rests at {z}");
 }
+
+#[test]
+fn five_or_more_contacts_keep_each_clusters_extremes_and_deepest() {
+    let at = |x: f32, y: f32, z: f32, n: Vec3, depth: f32| (Vec3::new(x, y, z), n, depth);
+    // A floor (one corner deepest, one a near twin of another), a wall
+    // facing +x and one facing +y. The seed is contact 104729 % 10 = 9
+    // (+y), then the floor's first (most against it), then the +x
+    // wall's first (most against both).
+    let c = [
+        at(0.0, 0.0, 0.0, Vec3::Z, 0.1),
+        at(0.05, 0.0, 0.0, Vec3::Z, 0.1),
+        at(10.0, 0.0, 0.0, Vec3::Z, 0.1),
+        at(10.0, 10.0, 0.0, Vec3::Z, 0.3),
+        at(0.0, 10.0, 0.0, Vec3::Z, 0.1),
+        at(0.0, 2.0, 1.0, Vec3::X, 0.1),
+        at(0.0, 5.0, 4.0, Vec3::X, 0.1),
+        at(0.0, 8.0, 2.0, Vec3::X, 0.1),
+        at(3.0, 0.0, 2.0, Vec3::Y, 0.1),
+        at(6.0, 0.0, 5.0, Vec3::Y, 0.1),
+    ];
+    // The +y wall's tangents are x and -z, the floor's -x and -y, the
+    // +x wall's -y and -z: of each the least along both, the most along
+    // both and the deepest, each once. The floor's twin and its corner
+    // at (0, 10) go.
+    assert_eq!(reduce(&c), [8, 9, 2, 3, 0, 7, 6, 5]);
+    // A normal within 0.999 of another's mean joins its cluster: the
+    // floor's tipped corner is one of its extremes, not a cluster.
+    let tipped = Vec3::new(0.0, 0.01, 1.0).normalize();
+    let floor = [
+        at(0.0, 0.0, 0.0, Vec3::Z, 0.1),
+        at(10.0, 0.0, 0.0, Vec3::Z, 0.1),
+        at(10.0, 10.0, 0.0, tipped, 0.1),
+        at(0.0, 10.0, 0.0, Vec3::Z, 0.1),
+        at(5.0, 5.0, 0.0, Vec3::Z, 0.1),
+    ];
+    assert_eq!(reduce(&floor), [1, 2, 0]);
+}

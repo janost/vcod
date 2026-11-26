@@ -97,9 +97,11 @@ CoD4 1.7's formats and wire.
 - `ragdoll.rs`: the client ragdoll (`ragdoll.cfg`'s defs, the 1.7 dvars, the
   solver `play::cod4_players` runs on a corpse).
 - `ode/`: ODE 0.5 as iw3mp.exe 1.7 built it (cod4-player-anims.md 10.4),
-  the ragdoll's rigid body core, and `ode/collide/` its world's contacts
+  the ragdoll's rigid body core, `ode/collide/` its world's contacts
   (IW's capsule colliders, the near callback, the self collision hook,
-  10.6); not wired in yet.
+  0x5a2320's cut, 10.6), and `ode/phys.rs` the frame glue per world
+  (stepping, drag, the after-frame sweep, the pushes, 10.7.1). World 2
+  (the ragdolls) runs on it; worlds 0 and 1 still run on `physics.rs`.
 - `physics.rs`: a `physicsLaunch`ed part's rigid body (its preset, shape and
   the solver `play::cod4_physics` runs on it).
 - `collision/`: the clip map from a clipMap_t; `pieces.rs` the world
