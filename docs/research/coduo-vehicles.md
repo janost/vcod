@@ -2018,8 +2018,9 @@ hull".
   slid down the tank's right side 0.1 off the wall, and the wall's -0.045
   lost to the deck's 0.152 (VERIFIED, replay). vcod's posed hull keeps
   each surface's run, bone frame and bounds
-  (`vehiclepose::posed_collision_surfs`, `collision::clip_model_surfs`);
-  script models still clip every triangle at once.
+  (`vehiclepose::posed_collision_surfs`, `collision::clip_model_surfs`),
+  and a script model takes the same clip at its bind (cod11-combat.md
+  2.7.1).
 - **A rider and a blast.** A rider takes a tenth of a blast, a fifth in
   artillery (`G_VehicleOccupantRadiusDamageScale` 0x8ba86), and a tank's
   driver nothing whose inflictor is not his own tank

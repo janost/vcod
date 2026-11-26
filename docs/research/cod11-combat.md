@@ -2366,6 +2366,58 @@ product and the sum apart gives -22.75. vcod's builtin reads the trace's
 `endpos` for the world and keeps `combat::trace_point` for a script model or
 a body.
 
+### 2.7.1 A script model's surfaces
+
+**The walk.** VERIFIED (the instructions), 1.1d `cod_lnxded`: the model
+clip `0x80c52c0` copies the trace's fraction (`0x80c52f2`) and calls
+`0x80c203c` once per entry of the model's list at `+0x18` (count, a byte,
+at `+0x16`, `0x80c5313..0x80c5374`), handing it a pointer into a 64-byte
+per-bone matrix array. `0x80c203c` walks that entry's collision surfaces
+(records of 0x2c bytes from `+0x40`, count `+0x44`, `0x80c2058..0x80c2077`):
+it skips a surface whose contents (`+0x24`) miss the mask (`0x80c2080`),
+moves `start` and `end` into the frame of the surface's bone (index
+`+0x20`; less the matrix's row at `+0x30`, then dotted with its rows at
+`+0x0`, `+0x10`, `+0x20`, `0x80c2089..0x80c2196`), and tries the surface's
+triangles only when the slab walk `0x805a788` finds that segment entering
+the surface's stored `mins`/`maxs` (`+0x8`, `+0x14`) short of the best
+fraction so far (`0x80c2199..0x80c21b5`). 1.5b's entity clip calls its
+DObj clip `0x80d2854` for `svFlags & 4` (`0x8099a46`), which walks the same
+way at `0x80cf4fe` (contents `+0x24` at `0x80cf565`, bone `+0x20` at
+`0x80cf574`, slab walk `0x805e553` at `0x80cf65d`); UO's calls `0x80c7be8`
+(`0x809aa3e`), which walks at `0x80c4892` (`coduo-vehicles.md` 13.4)
+(VERIFIED, the instructions). INFERRED: a script model, never animated,
+takes its bones at their bind pose (1.1d's model base, 1.5b's and UO's
+DObj default pose). So a triangle on a surface walked later loses to an
+earlier surface's hit when the segment enters the later surface's bounds
+past that hit, though its own fraction, backed off 0.125 units, is smaller.
+
+**Measured.** VERIFIED, live (retail 1.1d, 1.5b and UO 1.51b, 2026-11-26,
+mp_brecourt, `client-probes/probe_scriptmodel`'s surfs part, fixtures
+`mp_brecourt-scriptmodel-surfs{,-1.5,-uo,-panzeriv-uo}.txt`, recipe in
+each header): a `vehicle_german_kubelwagen` (17 surfaces, each on its own
+bone) and, on UO, an `mp_vehicle_panzeriv` (5) are spawned 300 over a
+spawn point at yaw 0 and then 90, and `bulletTrace`s run along segments
+that end just past two of their surfaces where they meet. Each of the 8
+Kübelwagen and 6 Panzer IV segments stops where a clip a surface at a
+time under the stored bounds stops it: the Kübelwagen's segment 2 at
+0.135279 (a clip of every triangle at once: 0.115893, another face), the
+Panzer's rear plates at 0.249905 and 0.281139 (at once: 0.136806 and
+0.230898). The three builds log the same Kübelwagen rows to the digit.
+The two controls a model (one surface in the way) and every segment with
+the model deleted (the world alone, fraction 1) agree on all three.
+
+vcod: `props::bind_collision_surfs` gives a script model's triangles their
+surfaces at the bind of their bones, and `PlacedModel::clip` runs
+`collision::clip_model_surfs` on them, the clip a posed UO vehicle takes,
+for `bulletTrace`, rounds, swings, missiles and `CanDamage` alike.
+`scriptmodel_ab::a_script_model_clips_surface_by_surface{,_on_15,_on_uo}`
+replay the part, each fraction within 5e-4 and each hit's normal and
+position within 0.015; ours read 0.115893 on the Kübelwagen's segment 2
+before. Not ported: 1.1d's static models (`misc_model`) take the same
+`0x80c203c` (`cod11-mantle.md`, "Static models are clipped as a
+segment"), and vcod's static walk still tries each triangle of a
+placement on its own.
+
 ---
 
 ## 3. Hit locations

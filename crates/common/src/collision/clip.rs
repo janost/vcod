@@ -556,8 +556,9 @@ pub struct ModelSurf {
     pub maxs: Vec3,
 }
 
-/// [`clip_model_tris`] a surface at a time, as the engine's posed xmodel
-/// clip walks them (`coduo_lnxded` 0x80c4892): a surface whose contents
+/// [`clip_model_tris`] a surface at a time, as the engine's xmodel clip
+/// walks them (1.1d `cod_lnxded` 0x80c203c, 1.5b 0x80cf4fe, `coduo_lnxded`
+/// 0x80c4892; docs/research/cod11-combat.md 2.7.1): a surface whose contents
 /// meet the mask is tried only when the segment, moved into its bone's
 /// frame, enters its stored bounds before the best fraction so far
 /// (0x805e387, no epsilon). A triangle a later surface carries can then

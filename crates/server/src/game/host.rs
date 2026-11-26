@@ -15,7 +15,7 @@ use crate::game::slot::ClientSlot;
 use crate::server::MAX_CLIENTS;
 use std::collections::HashMap;
 use std::rc::Rc;
-use vcod_common::collision::ModelTri;
+use vcod_common::collision::{ModelSurf, ModelTri};
 use vcod_common::net::msg::{MAX_OBJECTIVES, Objective};
 use vcod_common::net::protocol::CsLayout;
 use vcod_common::pmove::weapon::NUM_AMMO;
@@ -1232,10 +1232,11 @@ pub struct GameHost {
     /// `objective_add` and `objective_delete` write, so a fresh table starts
     /// there rather than at the zeroed field's 0.
     pub objectives: [Objective; MAX_OBJECTIVES],
-    /// Each xmodel's collision triangles in its own frame, by `.model` name,
-    /// loaded through `fs` the first time a trace meets an entity carrying
-    /// it; `None` for a name that did not load or has no collision.
-    pub xmodel_collision: HashMap<String, Option<std::sync::Arc<[ModelTri]>>>,
+    /// Each xmodel's collision triangles in its own frame and their
+    /// surfaces, by `.model` name, loaded through `fs` the first time a
+    /// trace meets an entity carrying it; `None` for a name that did not
+    /// load or has no collision.
+    pub xmodel_collision: HashMap<String, Option<ModelClip>>,
     /// Each xmodel's descriptor bounds by `.model` name, for the box a
     /// `script_model` is filed in the area tree under; `None` for a name
     /// that did not load.
@@ -1284,13 +1285,17 @@ pub struct GameHost {
 /// A `mins`, `maxs` pair.
 pub type Bounds = ([f32; 3], [f32; 3]);
 
+/// An xmodel's collision triangles in its own frame with its surfaces over
+/// them ([`vcod_common::props::bind_collision_surfs`]).
+pub type ModelClip = (std::sync::Arc<[ModelTri]>, std::sync::Arc<[ModelSurf]>);
+
 /// [`GameHost`]'s xmodel caches, which [`crate::game::script::Carry`]
 /// hands a restart: `xmodel_collision`, `xmodel_bounds` and the vehicles'
 /// rigs. Loaded again after a `bas` restart they held the bot pass's first
 /// model gather 20 to 27 ms (map-cycle doc 4.9).
 #[derive(Clone, Default)]
 pub struct ModelCaches {
-    pub collision: HashMap<String, Option<std::sync::Arc<[ModelTri]>>>,
+    pub collision: HashMap<String, Option<ModelClip>>,
     pub bounds: HashMap<String, Option<Bounds>>,
     pub rigs: HashMap<String, Option<Rc<crate::game::vehicle::seat::Rig>>>,
     /// The flagged reads behind each `collision` and `bounds` entry.
@@ -2027,7 +2032,7 @@ impl GameHost {
 
     /// `xmodel_collision`'s entry for `name` (the `.model` value, `xmodel/`
     /// prefix and all), loading it on first use.
-    pub fn xmodel_tris(&mut self, name: &str) -> Option<std::sync::Arc<[ModelTri]>> {
+    pub fn xmodel_tris(&mut self, name: &str) -> Option<ModelClip> {
         if let Some(t) = self.xmodel_collision.get(name) {
             let t = t.clone();
             if let (Some(paths), Some(fs)) =
@@ -2040,17 +2045,8 @@ impl GameHost {
         let (tris, paths) = logged(|| {
             self.fs.as_ref().and_then(|fs| {
                 let model = vcod_common::model::load(&**fs, name.strip_prefix("xmodel/")?).ok()?;
-                let at_rest = vcod_common::props::Placement {
-                    model: String::new(),
-                    origin: glam::Vec3::ZERO,
-                    angles: glam::Vec3::ZERO,
-                    scale: glam::Vec3::ONE,
-                    precalc: glam::Vec3::ONE,
-                    keys: Default::default(),
-                };
-                let mut out = Vec::new();
-                vcod_common::props::placed_collision_tris(&at_rest, &model, &mut out);
-                (!out.is_empty()).then(|| std::sync::Arc::from(out))
+                let (tris, surfs) = vcod_common::props::bind_collision_surfs(&model);
+                (!tris.is_empty()).then(|| (tris.into(), surfs.into()))
             })
         });
         self.xmodel_collision.insert(name.to_string(), tris.clone());
@@ -2075,7 +2071,7 @@ impl GameHost {
             if self.ents.get(id).is_none_or(|e| e.unlinked) {
                 continue;
             }
-            let Some(tris) = self.xmodel_tris(name) else {
+            let Some((tris, surfs)) = self.xmodel_tris(name) else {
                 continue;
             };
             let bounds = self
@@ -2086,7 +2082,7 @@ impl GameHost {
                 origin: vec(self.get_field(cx, id, origin)),
                 axis: vcod_common::props::rotation(vec(self.get_field(cx, id, angles))),
                 tris,
-                surfs: Default::default(),
+                surfs,
                 owner: None,
                 takes_damage: self.script_takedamage.contains(&id),
                 body: self
