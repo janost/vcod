@@ -1793,10 +1793,10 @@ those anims.
   and a `killcamentity` killcam are gated against retail captures (15),
   which tolerate nothing: their `GAPS` are empty. The tag and trace read
   gates' few rows are cod4-server-gaps.md's Open list.
-- The use key's weapon swap is gated live on ours (cod4-gsc.md 9.1); its
-  retail capture (9.1.1) shows ours swapping unlike 1.7, so its A/B gate
-  is `#[ignore]`d (cod4-server-gaps.md 1). The mounted SAW's pair is
-  gated, a few ulps in its `GAPS` (cod4-gsc.md 9.2.1).
+- The use key's weapon swap is gated against its retail capture
+  (cod4-gsc.md 9.1.1, 9.1.2), the killcam's archived angles in its
+  `GAPS`; the mounted SAW's pair is gated, a few ulps in its `GAPS`
+  (cod4-gsc.md 9.2.1).
 - The terrain triangle normal's last bit.
 - The corpse's drag uses CoD2's yaw turn shape; no 1.7 capture of a death
   anim whose root turns. No retail capture holds a shellshock's torso

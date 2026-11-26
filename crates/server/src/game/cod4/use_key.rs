@@ -11,7 +11,9 @@ use glam::Vec3;
 use vcod_cod4::net::delta::ENTITYNUM_NONE;
 use vcod_gsc::{EntId, Host, Value};
 
+use super::combat::{EV_ITEM_PICKUP, Item4};
 use super::level::{Cod4Level, PsExt, ps};
+use super::missile::TR_STATIONARY;
 use crate::game::trigger::TriggerKind;
 
 const USE_BUTTONS: u32 = crate::game::use_list::USE_BUTTONS as u32;
@@ -597,26 +599,21 @@ impl Cod4Level {
             .host
             .engine_notifies
             .push((id, "trigger", vec![Value::Entity(client)]));
-        // `G_FreeEntity` drops it from every hint that names it.
-        for p in self.players.iter_mut().flatten() {
-            if p.ps.word(ps!("cursorHintEntIndex")) == id.0 {
-                p.ps.set(ps!("cursorHintEntIndex"), ENTITYNUM_NONE);
-            }
-        }
+        self.drop_from_hints(id);
         self.free_missile(id);
     }
 
-    /// `Touch_Item` with `touched` 0 on a dropped weapon: with two
-    /// primaries held and the item a primary, the weapon in hand (a
-    /// primary) goes into the world with its clip and reserve as
-    /// `dropItem` launches one; the item's weapon is given on the item's
-    /// camo (`index >> 7`, `cod4_lnxded` 0x8092286..0x8092291, given at
-    /// 0x8092415) with the item's clip and reserve on top of what its ammo
-    /// slot holds, switched to
-    /// (`a <weapon>`), and the item freed. INFERRED: vcod's CoD2 swap's
-    /// rule (`game::item::touch`); 1.7's `Touch_Item` is not read
-    /// (cod4-gsc.md 9.1). `None` for nothing taken, else the item dropped
-    /// in the swap, if one was. The item is freed at the next entity pass.
+    /// `Touch_Item` (`cod4_lnxded` 0x8091ffc) with `touched` 0 on a dropped
+    /// weapon the player may take (cod4-gsc.md 9.1.2). A primary taken with
+    /// two primaries held swaps for the primary in hand (an alt mode's
+    /// parent): `Drop_Weapon` launches it, then it is set at rest where the
+    /// item lay ([`Self::place_swapped`]); with none in hand to give up
+    /// nothing is taken. The item's weapon is given on its camo, its clip
+    /// set and its stock added (`Add_Ammo`); the given-up gun's stock that
+    /// a weapon still held shares goes back to the taker. Then
+    /// `EV_ITEM_PICKUP` with the weapon, `a <weapon>` and the item freed.
+    /// `None` for nothing taken, else the item dropped in the swap, if one
+    /// was.
     fn swap_weapon(&mut self, slot: usize, id: EntId) -> Option<Option<EntId>> {
         let it = self
             .rt
@@ -627,18 +624,6 @@ impl Cod4Level {
             .find(|i| i.id == id)
             .cloned()?;
         let w = it.weapon as usize;
-        let (held, primaries, primary, held_primary) = {
-            let c4 = self.rt.host.cod4();
-            let l = &c4.clients[slot].loadout;
-            let inv = |w: usize| c4.table.get(w).map_or(-1, |d| d.inventory_type);
-            let primaries = l.held().filter(|&h| inv(h) == INV_PRIMARY).count();
-            (
-                l.weapon,
-                primaries,
-                inv(w) == INV_PRIMARY,
-                inv(l.weapon) == INV_PRIMARY,
-            )
-        };
         if l_has(self, slot, w) {
             return None;
         }
@@ -653,54 +638,168 @@ impl Cod4Level {
                 format!("Weapon;{guid};{slot};{who};{weapon}\n"),
             );
         }
-        let mut dropped = None;
-        if primary && primaries >= 2 && held_primary && held != 0 {
-            let (clip, stock) = {
-                let c4 = self.rt.host.cod4();
-                let l = &c4.clients[slot].loadout;
-                c4.table
-                    .get(held)
-                    .map_or((0, 0), |d| (l.ammoclip[d.clip_slot], l.ammo[d.ammo_slot]))
-            };
-            let launched = self.rt.with_host(|host, cx| {
-                crate::game::builtins::cod4_combat::launch_weapon(
-                    host,
-                    cx,
-                    slot,
-                    held,
-                    None,
-                    Some(id),
-                )
-                .ok()
-                .flatten()
-            });
-            if let Some(d) = launched
-                && let Some(i) = self.rt.host.cod4_mut().items.iter_mut().find(|i| i.id == d)
-            {
-                i.clip = clip;
-                i.stock = stock;
+        // The weapon to give up, if the swap needs one (0x8092264..0x8092768).
+        let give_up = {
+            let c4 = self.rt.host.cod4();
+            let l = &c4.clients[slot].loadout;
+            let inv = |w: usize| c4.table.get(w).map_or(-1, |d| d.inventory_type);
+            let primaries = l.held().filter(|&h| inv(h) == INV_PRIMARY).count();
+            if inv(w) != INV_PRIMARY {
+                None
+            } else if l.weapon != 0 && !l.has(l.weapon) {
+                return None;
+            } else if primaries < 2 {
+                None
+            } else {
+                let mut cur = l.weapon;
+                if inv(cur) == INV_ALTMODE {
+                    cur = c4.table.get(cur).map_or(0, |d| d.alt);
+                }
+                if cur == 0 || !l.has(cur) || inv(cur) != INV_PRIMARY {
+                    // `GAME_CANT_GET_PRIMARY_WEAP_MESSAGE` (0x8092314).
+                    return None;
+                }
+                Some(cur)
             }
-            dropped = launched;
-            let c4 = self.rt.host.cod4_mut();
-            let table = std::mem::take(&mut c4.table);
-            c4.clients[slot].loadout.take(&table, held);
-            c4.table = table;
-        }
+        };
+        let dropped = give_up.and_then(|held| self.drop_for_swap(slot, held, &it));
         let c4 = self.rt.host.cod4_mut();
         let table = std::mem::take(&mut c4.table);
         let l = &mut c4.clients[slot].loadout;
         if l.give(&table, w, it.model).is_some()
             && let Some(d) = table.get(w)
         {
-            l.ammoclip[d.clip_slot] = it.clip.clamp(0, d.clip_size);
-            let max = l.ammo_max(&table, w);
-            l.ammo[d.ammo_slot] = (l.ammo[d.ammo_slot] + it.stock.max(0)).min(max);
+            if it.clip >= 0 {
+                l.ammoclip[d.clip_slot] = it.clip;
+            }
+            l.add_ammo(&table, w, it.stock, it.clip == -1);
+        }
+        // `Add_Ammo` of the given-up gun's stock (0x80925eb): only a held
+        // weapon on its ammo slot takes any.
+        if let Some(d) = dropped
+            && let Some(drop) = c4.items.iter_mut().find(|i| i.id == d)
+            && let Some(dd) = table.get(drop.weapon as usize)
+            && l.held()
+                .any(|h| table.get(h).is_some_and(|o| o.ammo_slot == dd.ammo_slot))
+        {
+            let before = l.ammo[dd.ammo_slot] + l.ammoclip[dd.clip_slot];
+            l.add_ammo(&table, drop.weapon as usize, drop.stock, false);
+            drop.stock -= l.ammo[dd.ammo_slot] + l.ammoclip[dd.clip_slot] - before;
         }
         c4.table = table;
         c4.items.retain(|i| i.id != id);
         c4.free_next.push(id);
+        self.drop_from_hints(id);
+        if let Some(p) = self.players[slot].as_mut() {
+            let mut pm = vcod_cod4::pmove::PlayerState::from_wire(&p.ps);
+            pm.add_event(EV_ITEM_PICKUP, w as u32);
+            pm.write_wire(&mut p.ps);
+        }
         self.rt.host.command_to(slot, format!("a {w}"));
         Some(dropped)
+    }
+
+    /// `Drop_Weapon(ent, held, weaponmodels[held], 0)` (0x8091642) for a
+    /// swap: the held gun's item launched as `LaunchItem` launches one (its
+    /// three `crandom`s drawn), its clip and the stock its ammo slot cannot
+    /// keep without it put in the item, the gun taken; then
+    /// [`Self::place_swapped`] on `taken`'s spot.
+    fn drop_for_swap(&mut self, slot: usize, held: usize, taken: &Item4) -> Option<EntId> {
+        let (clip, stock) = {
+            let c4 = self.rt.host.cod4();
+            let l = &c4.clients[slot].loadout;
+            c4.table.get(held).map_or((0, 0), |d| {
+                (
+                    l.ammoclip[d.clip_slot],
+                    (l.ammo[d.ammo_slot] - l.kept_without(&c4.table, held)).max(0),
+                )
+            })
+        };
+        let launched = self.rt.with_host(|host, cx| {
+            crate::game::builtins::cod4_combat::launch_weapon(
+                host,
+                cx,
+                slot,
+                held,
+                None,
+                Some(taken.id),
+            )
+            .ok()
+            .flatten()
+        });
+        let c4 = self.rt.host.cod4_mut();
+        let table = std::mem::take(&mut c4.table);
+        c4.clients[slot].loadout.take(&table, held);
+        c4.table = table;
+        let d = launched?;
+        let at = self.place_swapped(taken);
+        let i = self
+            .rt
+            .host
+            .cod4_mut()
+            .items
+            .iter_mut()
+            .find(|i| i.id == d)?;
+        i.clip = clip;
+        i.stock = stock;
+        // `G_SetOrigin`, `G_SetAngle` (0x80ca218, 0x80ca276): at rest.
+        i.tr_type = TR_STATIONARY;
+        i.start_ms = 0;
+        i.duration_ms = 0;
+        i.base = at;
+        i.delta = Vec3::ZERO;
+        i.origin = at;
+        i.angles = taken.angles;
+        i.ground = taken.ground;
+        Some(d)
+    }
+
+    /// Where `Touch_Item` sets the given-up gun (0x809285b..0x8092a2a): a
+    /// trace of the item's box 2 up from the taken item's origin
+    /// (0x820964c), then back down to it, the end each time `start + (end -
+    /// start) * fraction` on the x87 stack; the origin itself when the
+    /// first starts all in solid.
+    fn place_swapped(&self, taken: &Item4) -> Vec3 {
+        use super::item::{ITEM_MAXS, ITEM_MINS, MASK_ITEM};
+        let o = taken.origin;
+        let Some(c) = self.rt.host.cod4().clip.as_deref() else {
+            return o;
+        };
+        let world = super::clip::Cod4Clip {
+            clip: c,
+            bodies: &[],
+            brushes: self.brushes(),
+        };
+        let lerp = |a: Vec3, b: Vec3, f: f32| {
+            ((b.as_dvec3() - a.as_dvec3()) * f64::from(f) + a.as_dvec3()).as_vec3()
+        };
+        let trace = |a: Vec3, b: Vec3| {
+            vcod_cod4::pmove::PmWorld::trace(
+                &world,
+                a,
+                b,
+                ITEM_MINS,
+                ITEM_MAXS,
+                ENTITYNUM_NONE,
+                MASK_ITEM,
+            )
+        };
+        let up = Vec3::new(o.x, o.y, (f64::from(o.z) + 2.0) as f32);
+        let tr = trace(o, up);
+        if tr.allsolid {
+            return o;
+        }
+        let top = lerp(o, up, tr.fraction);
+        lerp(top, o, trace(top, o).fraction)
+    }
+
+    /// `G_FreeEntity`'s hint clear: every hint naming `id` names none.
+    fn drop_from_hints(&mut self, id: EntId) {
+        for p in self.players.iter_mut().flatten() {
+            if p.ps.word(ps!("cursorHintEntIndex")) == id.0 {
+                p.ps.set(ps!("cursorHintEntIndex"), ENTITYNUM_NONE);
+            }
+        }
     }
 
     /// A player's `linkTo` and `unlink` onto its playerstate

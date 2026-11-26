@@ -75,7 +75,7 @@ const MASK_MELEE: u32 = 0x280_6891;
 
 /// `EV_ITEM_PICKUP` (cod4-netfields.md 9), what retail sends for the touch
 /// of a dropped weapon already held (cod4-combat.md 6).
-const EV_ITEM_PICKUP: u32 = 9;
+pub(super) const EV_ITEM_PICKUP: u32 = 9;
 
 pub use vcod_cod4::collision::MASK_SHOT;
 /// `iDFlags` 4.
