@@ -1557,9 +1557,9 @@ The gates:
   makes from its spawn: the gate hands ours that velocity on the drop frame
   (`test_set_client_velocity`), and every row matches from there.
 
-## 12. Divergences and not modelled
+## 12. What the jump, fall and walk gates pinned, and what stays open
 
-Closed, kept for the traps they name:
+Closed; each keeps the retail fact and its pin:
 
 - **The jump port** (section 9.4). The three kinds of `GAPS` row were pmove
   differences a jump into the target exposed, none a clipping one.
@@ -1619,24 +1619,18 @@ Closed, kept for the traps they name:
     points `(1246, 1806, -28)` and `(1247, 1804, 32)`, grown by the radius,
     stops a capsule at the sphere's height, and that plane's normal,
     `(-0.99986, 0, 0.0167)`, has the rise that lifts the player off the
-    ground on each push. VERIFIED, vcod: clipping the render soup of brush
-    1656's faces as facets too rests the player at 1230.875 on 1022 at
-    `0,0,0`, because their axial bevel at x 1246, grown by the radius, holds
-    the capsule's top 0.28 short; with the capsule's top below z 42 the same
-    trace stops at 1231.156. Retail collides model 0 through its brushes and
-    lump 24 alone ("Terrain is a swept sphere, a patch is a facet" in
-    `cod11-mantle.md`), and `CollisionWorld::build` clips the patches' own
+    ground on each push. Retail collides model 0 through its brushes and lump 24 alone
+    ("Terrain is a swept sphere, a patch is a facet" in `cod11-mantle.md`);
+    clipping the render soup's faces as facets too rests the player at
+    1230.875 on 1022 instead, their axial bevel at x 1246 holding the
+    capsule's top 0.28 short. `CollisionWorld::build` clips the patches' own
     facets, built as retail builds them (`bsp-ibsp59-format.md`, "Patch
-    collision"), not the soups. VERIFIED, vcod, with that and
-    `PM_ClipVelocity` rounded as retail rounds it (8.9): the rest reads
-    retail's two states to the printed thousandth, lifted at `(1231.152,
-    1815.125, -26.263)` on 1023 at `0,0,1` and landed at `(1231.146,
-    1815.125, -26.285)` on 1022 at `-1,0,0` (the soup clip has the lifted one
-    at -26.266). With the trace end point, the terrain and brush clips, the
-    slide and the walk rounded as retail rounds them, ours holds the lifted
-    state for retail's runs and every row of the capture matches, the south
-    wall's 1815.128 rows and the jitter's air frames included; `fall_ab`
-    gates them row by row.
+    collision"). VERIFIED, vcod, with `PM_ClipVelocity` rounded as retail
+    rounds it (8.9): the rest reads retail's two states to the printed
+    thousandth, lifted at `(1231.152, 1815.125, -26.263)` on 1023 at `0,0,1`
+    and landed at `(1231.146, 1815.125, -26.285)` on 1022 at `-1,0,0`;
+    `fall_ab` gates every row of the capture, the south wall's 1815.128 rows
+    and the jitter's air frames included.
   - **The walk capture's corpse** (8.12). The capture's server stalled at
     the fatal landing: `ClientThink_real`'s 200 ms clamp held `commandTime`
     at 52150 and the dead player walked on until the end frame. `fall_ab`

@@ -365,6 +365,15 @@ otherwise.
 - `game[]` and `pers[]` survive only `map_restart(1)` / `exitLevel(1)`, and
   entity handles inside `game[]` never survive. `dm` passes 0, `sd`
   passes 1.
+- A configstring change goes out as a `d` ahead of the client commands
+  that name it: the announcer's `s 4` needs `d 528` first. Retail sends
+  `iprintln` as `f` (to all, or to the receiver alone), and the serverinfo
+  slot 0 is rewritten whenever a `--set` or script write touches a cvar it
+  carries, so replay the `--set` list through `Server::set_cvar`, not
+  before it (map-cycle doc 8.2).
+- A client's `ClientBegin` runs inside `SV_ExecuteClientMessage`, before
+  `G_RunFrame` advances `level.time`. Dispatch the event a frame late and a
+  `wait 0` after `openMenu` swallows the menu answer (map-cycle doc 8.3).
 - Time and score limits are script. The engine has no `CheckExitRules`;
   nothing reads `g_intermissionDelay` or `nextmap`.
 

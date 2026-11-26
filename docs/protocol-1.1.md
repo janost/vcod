@@ -995,18 +995,14 @@ vcod's client runs the same clock (`crates/client/src/play/clock.rs`) for entiti
 
 `CL_CreateNewCommands` (CoDMP.exe `0x40b8d0`) builds one cmd a frame once `cls.state` is past 4. It takes `frame_msec` as the frame's `com_frameTime` step clamped to 200 (used only to scale the frame's input), bumps `cl.cmdNumber` and stores `CL_CreateCmd`'s (`0x40b720`) cmd at `cmdNumber & 63`, stamped by `CL_FinishMove` as above. VERIFIED (decompile). So a hitch or a forward RESET reaches the server as one cmd whose time steps forward by the whole gap. vcod ticks cmds every 8 ms (`play::cmds::CmdClock`); a frame owing more than 200 ms builds one cmd at its newest tick instead of a burst. The 200 ms bound is vcod's own, borrowed from `frame_msec`'s clamp; retail has no tick to collapse.
 
-Measured 2026-10-09 with `vcod --net-probe ADDR --probe-clock --probe-cmd-ms 8` (frame time 8 ms), which runs both clocks on the same arrivals. "Old vcod" is the clock vcod had before: 100 ms behind the newest snapshot, re-anchored on every arrival (an early one stepped the view forward, a late one froze it), cmds stamped off the newest snapshot plus elapsed time. "Behind" is newest snapshot time minus drawn time, min/mean/max ms; "past" the frames drawn at or past the newest snapshot; "held" the frames whose drawn time did not move; "jerk" the mean and largest |drawn step - local step| in ms.
+Measured 2026-10-09 with `vcod --net-probe ADDR --probe-clock --probe-cmd-ms 8` (frame time 8 ms), which runs the clock above on each link's arrivals. "Behind" is newest snapshot time minus drawn time, min/mean/max ms; "past" the frames drawn at or past the newest snapshot; "held" the frames whose drawn time did not move; "jerk" the mean and largest |drawn step - local step| in ms.
 
 | Link | Snapshot gaps | Clock | Behind | Past | Held | Jerk |
 |---|---|---|---|---|---|---|
 | retail 1.1d, loopback, 30 s | 50.0 +-4.6, max 74 | retail | -43/26.7/57 | 2.4% | 0% | 0.23/2 |
-| | | old vcod | 37/79.0/100 | 0% | 0.9% | 0.57/26 |
 | retail 1.1d, `VCOD_NETSIM=ping=100,jitter=20,loss=2`, 60 s | 51.0 +-12.1, max 141, 23 lost | retail | -86/27.9/70 | 5.0% | 0% | 0.23/2 |
-| | | old vcod | -33/77.2/100 | 0.1% | 4.9% | 1.34/26 |
 | vcod-server (debug build), same netsim, 60 s | 51.5 +-14.2, max 134, 35 lost | retail | -70/28.5/85 | 6.1% | 0% | 0.22/2 |
-| | | old vcod | -26/76.2/100 | 0.2% | 4.7% | 1.38/40 |
 | public TDM server over the internet, 40 s | 50.8 +-13.9, max 167, 13 lost | retail | -159/26.2/107 | 5.7% | 0% | 0.24/53 |
-| | | old vcod | -59/76.4/100 | 0.2% | 3.9% | 1.07/122 |
 
 VERIFIED, those runs. The public server's one 53 ms step is a FAST adjust right after the connect.
 
