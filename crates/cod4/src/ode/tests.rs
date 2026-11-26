@@ -642,3 +642,70 @@ fn a_bullet_through_the_centre_pushes_without_spin() {
     obj_bullet_impact(&mut b2, 20, [0.0; 3], [1.0, 0.0, 0.0], 100.0, 0.5, &dv);
     assert_eq!(b2.facc, [0.0; 3]);
 }
+
+/// A model flat on an axis with no `physGeoms`: launched (0x5a5710) it
+/// takes retail's -50..50 box (0x5a587a), as a dynamic entity (0x490240)
+/// its bounds as they are, or with the preset's +0x28 set a cylinder on
+/// z of half the larger level size and half the height (0x5a54a0). Each
+/// sits at its bounds' midpoint at the preset's mass.
+#[test]
+fn a_flat_model_launches_as_a_cube_and_lies_as_its_bounds() {
+    use super::geom::Geom;
+    use super::obj::ObjPreset;
+    use super::phys::{PhysWorld, WorldId};
+    use super::world::PhysDvars;
+    use crate::assets::model::XModel;
+    let flat = XModel {
+        mins: [-4.0, -2.0, 1.0],
+        maxs: [4.0, 2.0, 1.0],
+        ..XModel::default()
+    };
+    let p = ObjPreset {
+        sound: 3,
+        mass: 6.0,
+        bounce: 0.1,
+        friction: 0.5,
+        cylinder: false,
+    };
+    let dv = PhysDvars::default();
+    let at = [10.0, 20.0, 30.0];
+    let build = |world, f: &dyn Fn(&mut PhysWorld, BodyId)| {
+        let mut pw = PhysWorld::new(world);
+        let id = pw.obj_create(at, &IDENTITY, [0.0; 3], &p, &dv);
+        f(&mut pw, id);
+        let (b, o) = (pw.world.body(id).clone(), pw.obj(id).unwrap().clone());
+        (b, o)
+    };
+    let (b, o) = build(WorldId::Fx, &|pw, id| {
+        pw.set_collision_from_xmodel(id, &flat)
+    });
+    assert_eq!(o.geoms, [Geom::Box { sides: [100.0; 3] }]);
+    assert_eq!(b.mass, Mass::box_total(6.0, 100.0, 100.0, 100.0));
+    assert_eq!((b.pos, o.offset, o.sound), (at, [0.0; 3], 3));
+    let (b, o) = build(WorldId::Dynent, &|pw, id| {
+        pw.dynent_collision(id, &flat, false)
+    });
+    assert_eq!(
+        o.geoms,
+        [Geom::Box {
+            sides: [8.0, 4.0, 0.0]
+        }]
+    );
+    assert_eq!((b.pos, o.offset), ([10.0, 20.0, 31.0], [0.0, 0.0, -1.0]));
+    let tall = XModel {
+        mins: [-2.0, -4.0, 0.0],
+        maxs: [2.0, 4.0, 6.0],
+        ..XModel::default()
+    };
+    let (b, o) = build(WorldId::Dynent, &|pw, id| {
+        pw.dynent_collision(id, &tall, true)
+    });
+    let cyl = Geom::Cylinder {
+        direction: 3,
+        radius: 4.0,
+        half_height: 3.0,
+    };
+    assert_eq!(o.geoms, [cyl]);
+    assert_eq!(b.mass, Mass::cylinder_total(6.0, 3, 4.0, 3.0));
+    assert_eq!(b.pos, [10.0, 20.0, 33.0]);
+}

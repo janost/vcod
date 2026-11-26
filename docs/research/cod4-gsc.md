@@ -2047,6 +2047,195 @@ What the takes show:
 - Impact sounds over each take: 23 in the frag, 37 in the car, 6 in the
   watermelon, none in the round. VERIFIED (the captures).
 
+#### 3.6.3 Worlds 0 and 1's masses and geoms, as ported
+
+I ported how 1.7 builds a world 0 or 1 body off its model and preset
+into `ode::obj` (the creation, the parts, the sound row) and
+`ode::geom` (the geoms), P2 of the world 0/1 port. Addresses are
+`iw3mp.exe`'s (3.6).
+
+The creation:
+
+- `Phys_ObjCreate` (0x5a4fb0; the world in `edi`, the position in `esi`,
+  the velocity in `edx`, the preset in `ecx`, the axes on the stack)
+  fills a block for 0x5a4d90: position, the axes' nine floats, velocity,
+  zero spin and zero centre (+0x3c..+0x50), the preset's mass (+8 into
+  +0x54), friction (+0x10 into +0x58), bounce (+0xc into +0x5c), state 0
+  (+0x60), the world clock's time (+0x64, which 0x5a4d90 does not read),
+  the preset's +4 (+0x68) and an enable byte 1 (+0x6c). VERIFIED
+  (0x5a4fb0..0x5a507b).
+- 0x5a4d90 stores the world's sleep thresholds first: the dvars at
+  0xcc54450 and 0xcc54400 squared into `dxWorld` +0x3c and +0x40, the one
+  at 0xcc54430 into +0x44, the same three `Phys_RunFrame` stores
+  (0x5a64f0..0x5a6533). Then `dBodyCreate` (0x5b6b10; at the cap the
+  "more than %i" message of 0x200 at 0x5a4e10), in world 2 only the flags
+  less 3 and finite rotation (0x5a4e2e..0x5a4e39), a 0x5c-byte phys object
+  off the free list at 0xcc5ff00, cleared, into body +0xc; the position
+  (`dBodySetPosition` 0x5b6e40), velocity (+0x130), spin (+0x140), and the
+  rotation from the axes through 0x596b80 and `dBodySetRotation`
+  (0x5b6ec0). The object's offset (+0) takes the block's +0x48, then
+  0x5a4ab0 runs a type 0 block at the block's mass about the negated
+  +0x48; last the object gets the body (+0xc), the block's position
+  (+0x10) and axes (+0x1c), friction (+0x44), bounce (+0x48), state
+  (+0x4c) and sound row (+0x40), and an enable byte of 0 sets the
+  disabled bit. VERIFIED (0x5a4d90..0x5a4fab).
+- 0x5a4ab0 (world, body, mass, block; the centre in `eax`) clears a
+  `dMass`, moves the body (0x5a47c0), and switches on the block's +0
+  through the table at 0x5a4d70: 0 a sphere's mass of radius 1
+  (0x5b5c70) and no geom; 1 `dMassSetBox` (0x5b5e50) and `dCreateBox`
+  (0x5aa500) of the sides at +0x2c; 2 `PhysMass` (0x5a49d0) and class 11
+  (0x5a8d50) of a u16 at +0x2c; 3 `PhysMass` of the moments at +0x30 and
+  products at +0x3c and class 12 (0x5a8d90) of the `BrushWrapper` at
+  +0x2c; 4 0x5b5dc0 and class 13 (0x5a8dd0) of the axis (+0x2c), radius
+  (+0x30) and length (+0x34); 5 the capped cylinder of density 1
+  adjusted to the mass and class 14 (0x5a8e10). A geom whose block has
+  +4 set is wrapped in a class 6 transform (0x5aeb50): the inner geom
+  leaves its space (the space's vtable +0x14) and its body's list
+  (0x5a9850) but keeps the body's position and rotation pointers, the
+  transform takes the block's axes (+8) at +0x58 through 0x596b80 and
+  zeros at +0x88..+0x94. Last `dBodySetMass` (0x5b6f70). VERIFIED (the
+  table and each arm's instructions).
+- 0x5a47c0 (the body; the centre in `edi`): the model's origin is `pos +
+  R offset` (0x5a4740), the offset becomes the negated centre, the body
+  goes to `origin + R centre`, every class 6 geom on the body moves its
+  frame by `-offset - centre` (two stores a part), and the object's +0x10
+  takes the new position. No other class is touched: a geom outside a
+  transform sits at the body's point. VERIFIED (0x5a47c0..0x5a49c8).
+- `Phys_ObjSetCollisionFromXModel` (0x5a5710; the model in `eax`): with
+  `physGeoms` (+0xd8: count +0, geoms +4, `PhysMass` +8) each 0x44-byte
+  geom in order at the body's mass: one with a brush through 0x5a5420
+  (type 3, no transform, about the list's centre); type 1 through
+  0x5a52e0 (sides twice `halfLengths`, each stored, turned by
+  `orientation`, about `offset`); any other type through 0x5a55f0 (type
+  4, axis 1, radius `halfLengths` y at +0x3c, length `halfLengths` x at
+  +0x38, turned and about `offset` likewise). Then the list's `PhysMass`
+  at the body's mass, `dBodySetMass`, and the body moved to the list's
+  centre (0x5a57bd..0x5a57fc). VERIFIED (0x5a5710..0x5a580a). So a
+  `PhysGeomInfo` of type 0, 2, 3 or 5 would also become a cylinder.
+  VERIFIED (the compare at 0x5a5764). With no `physGeoms`, the bounds
+  box below on the model's bounds (+0xac, +0xb8), any axis whose bounds
+  are equal (`fucompp`, 0x5a5847..0x5a5878) making them -50..50.
+  VERIFIED.
+- 0x5a5240, a box on bounds: the midpoint `(mins + maxs) 0.5` and the
+  sides `maxs - mins`, each stored, a type 1 block with no transform at
+  the body's mass about the midpoint. 0x5a54a0, a dynamic entity's
+  cylinder: the same midpoint, a type 4 block on axis 3, radius half the
+  x size unless `x - y` stored is under 0 (then half the y), length half
+  the z size, in world 0. VERIFIED (0x5a5240..0x5a52da,
+  0x5a54a0..0x5a557d).
+- A dynamic entity (0x490240): with `physGeoms`, 0x5a5710 in world 0; a
+  brush model (def +0x26) through 0x5a53a0 (type 2, its `PhysMass` at
+  def +0x38); else its bounds (0x48fd00, a brush model's through
+  0x4ed9c0), the cylinder when the preset's +0x28 is set, the box
+  otherwise, no axis widened. VERIFIED (0x490240..0x4902ba). The launch
+  (0x434d49, 0x434d8d) and the FX models (0x4a21b9, 0x4a21cc) take
+  0x5a5710 in world 1. VERIFIED (the calls).
+
+The masses, each IW's taking the total mass where ODE 0.5's takes a
+density (INFERRED, the upstream source):
+
+- The sphere (0x5b5c70): `I = ((m 0.4) r) r` stored on the diagonal,
+  0.4 the float widened at 0x70b250. VERIFIED (the instructions).
+- The box (0x5b5e50): of the full sides, `(lz^2 + ly^2) (m / 12)`,
+  `(lz^2 + lx^2) (m / 12)` and `(ly^2 + lx^2) (m / 12)` on the stack,
+  12 the double at 0x70b238, each stored once. VERIFIED (the
+  instructions).
+- The cylinder (0x5b5dc0, the axis 1..3 in `edx`): `r^2` stored, the two
+  across `((1/12) L L + 0.25 r^2) m`, the axis's `(m 0.5) r^2`, each
+  stored (1/12 the float widened at 0x70b240, 0.25 at 0x70b058, 0.5 at
+  0x70ace8). The class 13 geom keeps the same `L` as its +0x54, which
+  0x5a688b's sweep size reads as a half height. VERIFIED (the
+  instructions).
+- `PhysMass` (0x5a49d0): each moment over 0 times the mass, else 100
+  (the float at 0x6f9e58, a NaN too); each product times the mass, not
+  negated, at `I01`/`I10`, `I02`/`I20` and `I12`/`I21`; the centre 0.
+  VERIFIED (the instructions).
+
+The geoms:
+
+- 0x5a9790 (space, placeable, body), the constructor every class takes:
+  vtable 0x6f81b4, class -1, flags 0xb or 0xf when placeable, the links
+  and the bounds 0, the category and collide bits -1, the geom put in
+  the space; a placeable one points at its body's position (+0xe0) and
+  rotation (+0x100) and goes first on the body's list (+0x1c, the geom's
+  +0x14 the old first). VERIFIED (0x5a9790..0x5a984d).
+- The box: class 1, vtable 0x6f822c, the sides at +0x4c..+0x54. Classes
+  11..14 (0x5a9970): IW's table at 0xcc78168, 0x14 bytes a class from
+  11, its +0x10 byte the placeable flag and +0 the bytes cleared from
+  +0x4c; vtable 0x6f81c4. Class 12 holds its `BrushWrapper` at +0x4c and
+  the centre the body moved to at +0x50, class 13 its axis, radius and
+  length at +0x4c..+0x54. VERIFIED (0x5aa500..0x5aa544,
+  0x5a8d90..0x5a8e01, 0x5a9970..0x5a99b6).
+- The transform (0x5aeb50): placeable on the body, vtable 0x6f823c, class
+  6, the inner geom (+0x4c) 0, `cleanup` (+0x50) 1, `infomode` (+0x54) 0,
+  the frame's rotation (+0x58) the identity and position (+0x88) 0, a
+  final rotation at +0x94 the identity and final position at +0xc4 0.
+  VERIFIED (0x5aeb50..0x5aec1d). 0x5aed10 points the inner geom at +0xc4
+  and +0x94 before sizing it (VERIFIED, 0x5aed1e..0x5aed37), so those are
+  the final pose, and the frame's position written as four words
+  (0x5a4d54, 0x5a4994) clears the final rotation's first word. VERIFIED
+  (the offsets; every captured transform reads 0 there). That the
+  recompute on the dirty bit (0x5aed13) always runs before a read is
+  INFERRED. Against ODE 0.5's `dxGeomTransform` (`obj`, `cleanup`,
+  `infomode`, `final_pos`, `final_R`) IW put the frame before the final
+  pose. INFERRED (the upstream layout).
+
+The impact sound row (the preset's +4, the object's +0x40):
+
+- 0x43e030 takes the loaded `PhysPreset`s (asset type 1, at most 0x32)
+  through 0x489120, which walks the asset hash's 0x8000 buckets
+  (0xe62a80) up, each chain from its head; a new asset goes to its
+  bucket's head (0x489442..0x489459). The bucket is 0x488fd0's: from the
+  type, `h = 31 h + c` for each character through 0x670945, a backslash
+  as `/`, the low 15 bits. For each preset 0x43dfb0 looks its
+  `sndAliasPrefix` (+0x1c) up among the rows so far (0x571a90, length
+  0x7fffffff) and stores the match's index at +4, or makes a new row
+  (0x43de60, 0x74 bytes from 0x84db98) and stores its index. VERIFIED
+  (the instructions). That 0x670945 lowers and 0x571a90 compares without
+  case is INFERRED (the call shapes).
+
+What the port matches:
+
+- `phys_create::fixture_bodies_build_word_for_word` builds every body
+  of the four takes of 3.6.2 at its captured pose through
+  `PhysWorld::obj_create` and `set_collision_from_xmodel` or
+  `dynent_collision`. All 24 equal the capture word for word: the 17
+  `dMass` words, the 13 of the inverse, the object's offset, sound row,
+  friction, bounce and state, the geom's words from +4 to its class's
+  last field, the inner geom's and the brush's bounds. VERIFIED (the
+  run, ours). The model: a dynamic entity's is the def at the origin
+  the capture's pose and offset give; a car part's the one among the
+  sedans' parts that builds it, the silver sedan's named (the other
+  colours' build alike, and both tyres are `_wheel_lf`); an FX chunk's
+  the one watermelon visual that builds it (the FX system picks the
+  visual at random). VERIFIED (the run).
+- The sound rows come out of the hash order over the zones loaded
+  (`code_post_gfx_mp`, `localized_code_post_gfx_mp`, `common_mp`,
+  `localized_common_mp`, the map) on all three maps: mp_crash's
+  cinderblock 0, shards 4, crates, bottle and can 5, tyres 12;
+  mp_backlot's parts 2, doors 3, tyres 11; mp_bog's chunks 7. VERIFIED
+  (the run against the captures).
+- No take holds a type 1 `physGeoms` box in a transform, a flat model's
+  -50..50 box or a dynamic entity's cylinder; the unit tests in
+  `ode::tests` pin the last two as read. Class 11 is not ported: vcod
+  leaves brush dynamic entities out.
+- `run_frame` refuses a body whose first geom is not a capsule, so
+  nothing on worlds 0 or 1 steps until the colliders (P3) come.
+
+The census (`phys_create::the_stock_zones_phys_geoms_are_brushes_boxes_and_cylinders`,
+every zone of the client's `zone/english/`, one copy of a model for
+every zone): 72 zones, 200 models with `physGeoms`; 95 brush geoms (each
+of type 0), 72 of type 1, 82 of type 4, no other type. The lists: 175
+of one geom, 10 of two, 10 of three, 2 of four, 2 of five and one of six
+(`vehicle_mi17_woodland_d_piece02_low`, six brushes). VERIFIED (the
+run). So no stock model reaches 0x5a5710's cylinder arm with a type
+other than 4.
+
+For the colliders: a body carries up to six geoms, newest first. A
+brush geom sits at the body's point while its brush is in the model's
+frame: its +0x50 is what to take off a brush point before turning it by
+the body. INFERRED (the build above).
+
 ## 4. The load
 
 - Zones: `code_post_gfx_mp`, `common_mp`, then the map's: the three names
