@@ -632,12 +632,6 @@ impl Vm {
                 matches,
             })) => {
                 if let Some(idx) = self.thread_index(id) {
-                    self.notify_index
-                        .waits
-                        .entry((target, event))
-                        .or_default()
-                        .push(id);
-                    self.notify_index_pushed();
                     self.threads[idx].frames = frames;
                     self.threads[idx].state = ThreadState::WaitingNotify {
                         target,
@@ -647,6 +641,14 @@ impl Vm {
                         parked: self.next_wait,
                     };
                     self.next_wait += 1;
+                    // Parked first: a rebuild this push sets off reads the
+                    // threads' states, and would drop a waiter not yet parked.
+                    self.notify_index
+                        .waits
+                        .entry((target, event))
+                        .or_default()
+                        .push(id);
+                    self.notify_index_pushed();
                 }
             }
             Ok(Step::Running) => {
@@ -1570,6 +1572,29 @@ later() { wait 0.05; return 9; }"#;
             "the waiter was left for the next pass"
         );
         assert_eq!(vm.thread_count(), 0);
+    }
+
+    /// A `waittill` whose own index entry sets off the notify index's
+    /// rebuild is still woken. The rebuild once ran before the thread was
+    /// parked and dropped it: CoD4's stock killcam then never ended, its
+    /// `waittill("end_killcam")` deaf to `waitKillcamTime`.
+    #[test]
+    fn a_waittill_that_rebuilds_the_notify_index_is_still_woken() {
+        // 4096 endons, then the `waittill` as the push past the threshold.
+        let mut vm = vm_with(
+            r#"waiter() { for (i = 0; i < 4096; i++) level endon("never"); level waittill("go"); seen(); }
+            notifier() { wait 1; level notify("go"); }"#,
+        );
+        let mut host = TestHost::default();
+        let waiter = vm.func_ref("test/script", "waiter");
+        let notifier = vm.func_ref("test/script", "notifier");
+        vm.start_thread(&mut host, waiter, None, vec![]);
+        vm.start_thread(&mut host, notifier, None, vec![]);
+        vm.run_frame(&mut host, 1050);
+        assert!(
+            host.calls.iter().any(|(n, _)| n == "seen"),
+            "the waiter missed the notify"
+        );
     }
 
     /// A `wait 0` reached inside a frame's pass resumes before the frame is

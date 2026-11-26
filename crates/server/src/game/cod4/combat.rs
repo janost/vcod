@@ -1625,44 +1625,53 @@ impl Cod4Level {
         }
     }
 
-    /// `Touch_Item` for the weapons at rest: a living player whose box
-    /// meets the item's and who holds the same weapon takes its stock and
-    /// clip into the reserve ([`vcod_cod4::pmove::weapon::take_ammo`]) and
-    /// the item goes. Picking up a weapon not held is the use key's swap,
-    /// not run (cod4-combat.md 6). Retail's touch differs (6.2, open).
-    pub(super) fn touch_items(&mut self) {
+    /// `G_TouchTriggers`' items for `slot` (`cod4_lnxded` 0x80a5352,
+    /// cod4-combat.md 6.2.1): a client at `pm_type` 1 or under with health
+    /// touches every item, falling or at rest, that `BG_CanItemBeGrabbed`
+    /// leaves it (not its dropper's) and [`super::item::player_touches`]
+    /// meets. It takes the stock and clip of a weapon it holds into the reserve
+    /// ([`vcod_cod4::pmove::weapon::take_ammo`]) and the item goes. Picking
+    /// up a weapon not held is the use key's swap (cod4-gsc.md 9.1.2).
+    pub(super) fn touch_items(&mut self, slot: usize) {
+        /// `pm_flags` bit `BG_CanItemBeGrabbed` refuses on (0x8053051).
+        const PMF_NO_GRAB: u32 = 0x10_0000;
+        if self.rt.host.cod4().items.is_empty() {
+            return;
+        }
+        let Some(mut ps) = self.pm_state(slot) else {
+            return;
+        };
+        if ps.pm_type > vcod_cod4::pmove::pm_type::NORMAL_LINKED
+            || self.rt.client_vitals(slot).health < 1
+            || ps.weap_flags & 0x80 != 0
+            || ps.pm_flags & PMF_NO_GRAB != 0
+        {
+            return;
+        }
+        let now = self.level_time();
+        let height = vcod_cod4::pmove::wire::body_height(ps.pm_flags);
         let items = self.rt.host.cod4().items.clone();
         let mut taken = Vec::new();
-        for it in items.iter().filter(|i| i.resting()) {
-            let Some(d) = self.combat.defs.get(it.weapon as usize).cloned() else {
+        for it in &items {
+            if it.owner == ps.client_num || !super::item::player_touches(it, ps.origin, height, now)
+            {
+                continue;
+            }
+            let Some(def) = self.combat.defs.get(it.weapon as usize) else {
                 continue;
             };
-            for slot in 0..self.players.len() {
-                if !self.playing(slot) || self.rt.client_vitals(slot).health < 1 {
-                    continue;
-                }
-                let Some(mut ps) = self.pm_state(slot) else {
-                    continue;
-                };
-                let lo = ps.origin + Vec3::new(-15.0, -15.0, 0.0);
-                let hi = ps.origin + Vec3::new(15.0, 15.0, 70.0);
-                let meets = (0..3).all(|a| it.base[a] + 1.0 >= lo[a] && it.base[a] - 1.0 <= hi[a]);
-                let rounds = it.stock.max(0) + it.clip.max(0);
-                if !meets || !vcod_cod4::pmove::weapon::take_ammo(&mut ps, &d, it.weapon, rounds) {
-                    continue;
-                }
-                let after = ps.ammo[d.ammo_index];
-                let p = self.players[slot].as_mut().unwrap();
-                ps.write_wire(&mut p.ps);
+            let rounds = it.stock.max(0) + it.clip.max(0);
+            if vcod_cod4::pmove::weapon::take_ammo(&mut ps, def, it.weapon, rounds) {
                 let l = &mut self.rt.host.cod4_mut().clients[slot].loadout;
-                l.ammo[d.ammo_index] = after;
+                l.ammo[def.ammo_index] = ps.ammo[def.ammo_index];
                 taken.push(it.id);
-                break;
             }
         }
         if taken.is_empty() {
             return;
         }
+        let p = self.players[slot].as_mut().unwrap();
+        ps.write_wire(&mut p.ps);
         self.rt
             .host
             .cod4_mut()

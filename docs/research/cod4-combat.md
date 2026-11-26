@@ -1215,12 +1215,58 @@ from its `PICKUPS` row (the item's rounds as above), through
 `vcod_cod4::pmove::weapon::take_ammo`, the server's own take. VERIFIED
 (the gate).
 
-Open in vcod: `Cod4Level::touch_items` still takes only resting items,
-after the frame's item moves, inside a 15-unit box over the item's base,
-with no dropper's cut. 1.7's bounds, timing and cut stall
-`cod4_damage_survives_every_transition` at its `KillInKillcam(1)` step
-(the victim never leaves spectator; the bounds alone do it), not yet
-understood. The item's link box, which the area query reads, is unread.
+vcod's touch had taken only resting items, after the frame's item
+moves, inside a 15-unit box over the item's base, with no dropper's cut.
+1.7's rules are ported (6.2.1).
+
+#### 6.2.1 The port
+
+vcod: `Cod4Level::touch_items`, run for each client from
+`Cod4Level::touch_triggers` at `run_frame`'s start, after that client's
+triggers; the box test is `game::cod4::item::player_touches`, held by
+`a_player_touches_an_item_within_1_7_s_reach`. VERIFIED (the test, ours).
+
+- The gates are 6.2's: `pm_type` 1 or under (0x80a5367), the dropper's
+  `clientNum` and `weapFlags` bit 7 and `pm_flags` 0x100000
+  (0x805302d..0x8053055), and `Touch_Item`'s health above 0
+  (0x8092008..0x8092043, cod4-gsc.md 9.1.2). VERIFIED (the instructions).
+  A dead player (`pm_type` 7), a spectator (4) and the intermission camera
+  (5) touch nothing.
+- `BG_PlayerTouchesItem` (0x8053910..0x805399b) takes `ps.origin` (ps+0x1c)
+  less the item's `pos` at `level.time` (0x836f8ac, pushed at 0x80a5516),
+  each axis an `fsubs` on the x87 stack: false when x or y is above 36
+  (0x42100000 at 0x820aab8) or below -36 (0xc2100000 at 0x820aabc), or z
+  above 18 (0x41900000 at 0x820a314); true when z is -88 (0xc2b00000 at
+  0x820aac0) or more. VERIFIED (the instructions, the rodata words). vcod
+  takes the difference in doubles, exact as the stack's.
+- The area query's boxes. `G_TouchTriggers` grows the toucher's `absmin`
+  and `absmax` by 20 (0x41a00000 at 0x8209654). `SV_LinkEntity`
+  (0x817e3f0) sets `absmin` and `absmax` to `r.currentOrigin` plus `mins`
+  and `maxs` (0x817e60e..0x817e67b) and then less and plus the `fld1` it
+  loaded at 0x817e424 (0x817e67e..0x817e6ca), so both boxes grow 1.
+  VERIFIED (the instructions, the straight path). The item's box is ±1
+  (6.1), linked at its `r.currentOrigin`. So the area cut binds in z for a
+  crouched or prone player, an item linked up to 73 or 53 above the
+  origin, and `BG_PlayerTouchesItem` binds otherwise. VERIFIED (the
+  arithmetic of the above).
+- Order: retail walks one `CM_AreaEntities` list, triggers and items mixed
+  in the tree's order; vcod's items are not in its area tree, so a client's
+  items come after its triggers. INFERRED. The two `"touch"` notifies on an
+  item and its toucher (6.2) are not raised for items.
+- `cod4_damage_survives_every_transition` stalled with these rules at
+  `KillInKillcam(1)`'s check: the shooter, killed there, never left its
+  killcam. The cause was the script VM's notify index, not the
+  touch. Its `waittill` pushed the waiter's entry before parking the
+  thread, and a push that crossed the index's rebuild threshold rebuilt it
+  from the threads' states, so the rebuild dropped the one waiter not yet
+  parked. The stock `_killcam::killcam`'s `waittill("end_killcam")` was
+  that push; `waitKillcamTime`'s notify 4.5 s later found no waiter and
+  its endon ended the helper threads, leaving the killcam's thread parked
+  for good. VERIFIED (a traced run of ours: the one rebuild at a
+  `waittill` was that thread's, at 442050). The ammo takes only moved the
+  push count onto that `waittill`. `vcod_gsc`'s `waittill` now parks the
+  thread first (`a_waittill_that_rebuilds_the_notify_index_is_still_woken`).
+  VERIFIED (the test, the gate).
 
 ## 7. The killcam
 
