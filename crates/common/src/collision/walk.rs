@@ -6,7 +6,7 @@
 use super::clip::NEAR_TIE;
 use super::clip::{
     Capsule, TIE_WINDOW, capsule_sweep, clip_brush_box, clip_brush_capsule, clip_patch,
-    clip_segment_model, patch_meets, sight_meets_brush,
+    patch_meets, sight_meets_brush,
 };
 use super::{CollisionWorld, Prim, Trace};
 use crate::leafwalk::{Item, LeafWalk, Listing};
@@ -50,7 +50,7 @@ impl CollisionWorld {
             self.trace_node(0, &mut walk, false, trace);
         }
         // A sweep that meets a patch starts over: model 0 in retail's leaf
-        // order, then the submodels and the static models as before. So
+        // order, then the submodels as before. So
         // does one whose contact nearly ties another, as a capsule standing
         // across two floor brushes, a brush and a terrain partition or two
         // partitions within the terrain's back-off do, and one stopped at
@@ -163,9 +163,7 @@ impl CollisionWorld {
         let mut stack = crate::leafwalk::WalkStack::new(0u32);
         while let Some(i) = stack.pop() {
             let node = &self.nodes[i as usize];
-            if !sw.statics && i == self.models_root
-                || !(lo.cmple(node.hi).all() && hi.cmpge(node.lo).all())
-            {
+            if i == self.models_root || !(lo.cmple(node.hi).all() && hi.cmpge(node.lo).all()) {
                 continue;
             }
             if node.count == 0 {
@@ -210,9 +208,8 @@ impl CollisionWorld {
     /// while `walk.logged` is not `usize::MAX`.
     pub(super) fn trace_node(&self, i: u32, walk: &mut Walk, brushes: bool, trace: &mut Trace) {
         let sw = &walk.sweep;
-        // The brush walk enters the static models' subtree only to log it
-        // for the partition pass of a trace that clips them.
-        if !sw.statics && i == self.models_root {
+        // The static pass clips the static models after the world.
+        if i == self.models_root {
             return;
         }
         let node = &self.nodes[i as usize];
@@ -311,7 +308,6 @@ impl CollisionWorld {
             maxs,
             capsule,
             mask,
-            statics,
             skip,
             world_only,
             boxed,
@@ -379,27 +375,12 @@ impl CollisionWorld {
                 }
                 clip_patch(trace, start, end, capsule, patch, self.arith(), prim);
             }
-            Prim::Model(t) => {
-                let mt = &self.model_tris[t as usize];
-                if !statics || mt.contents & mask == 0 {
-                    return;
-                }
-                // `SV_Trace` clips the static models after the world and
-                // before the entities, each pass taking only a nearer
-                // fraction, so a static model wins a tie with a submodel
-                // and loses one with model 0 (bsp-ibsp59-format.md, "The
-                // leaf walk").
-                let entity_hit = match trace.hit {
-                    Some(Prim::Brush(b)) => self.brushes[b as usize].model != 0,
-                    Some(Prim::Terrain(p)) => self.terrain_model[p as usize] != 0,
-                    Some(Prim::Patch(p)) => self.patches[p as usize].model != 0,
-                    _ => false,
-                };
-                clip_segment_model(trace, start, end, mt, prim, entity_hit);
-            }
+            // The static pass clips these (`clip_statics`); the walk never
+            // enters their subtree.
+            Prim::Static(_) => unreachable!("static models clip after the walk"),
             // Never stored in world.prims; only movetrace.rs and the world
             // clip construct them.
-            Prim::Body(_) | Prim::Clip(_) => unreachable!(),
+            Prim::Model(_) | Prim::Body(_) | Prim::Clip(_) => unreachable!(),
         }
     }
 
@@ -583,7 +564,6 @@ pub(super) struct TraceInput {
     pub(super) maxs: Vec3,
     pub(super) capsule: Capsule,
     pub(super) mask: u32,
-    pub(super) statics: bool,
     pub(super) skip: Option<usize>,
     /// Model 0's brushes and the terrain alone: a world copy's clip.
     pub(super) world_only: bool,
@@ -601,13 +581,13 @@ pub(super) struct TraceInput {
 
 impl TraceInput {
     /// A prim nothing meets off its box, so [`Self::misses`] may cull it:
-    /// a model triangle or a terrain partition. A model-0 patch's leaf-walk
+    /// a static model or a terrain partition. A model-0 patch's leaf-walk
     /// clip met mp_carentan's patch 9 56 units outside its box, and a
     /// brush notes a near tie (`note_contact`) for a segment 160 units off
     /// its box, which sends the trace through retail's leaf order: culling
     /// either changed which surface a trace named.
     pub(super) fn tight(prim: Prim) -> bool {
-        matches!(prim, Prim::Model(_) | Prim::Terrain(_))
+        matches!(prim, Prim::Static(_) | Prim::Terrain(_))
     }
 
     /// The box the sweep covers up to `fraction`, padded a unit.
@@ -623,7 +603,7 @@ impl TraceInput {
     /// contact lands just past the hit cannot cut the trace, but clipped
     /// it notes the near tie that sends the sweep through retail's leaf
     /// order (`note_contact`), where it may be met first.
-    fn reach(&self, fraction: f32) -> (Vec3, Vec3) {
+    pub(super) fn reach(&self, fraction: f32) -> (Vec3, Vec3) {
         self.bounds((f64::from(fraction) + TIE_WINDOW).min(1.0) as f32)
     }
 
@@ -637,7 +617,7 @@ impl TraceInput {
     /// spares a long ray (the 15000-unit look-at trace, a sight line) the
     /// prims its box takes in off its line. Only [`Self::tight`] prims
     /// are culled.
-    fn misses(&self, lo: Vec3, hi: Vec3) -> bool {
+    pub(super) fn misses(&self, lo: Vec3, hi: Vec3) -> bool {
         const LONG: f32 = 256.0;
         let d = self.end - self.start;
         if d.length_squared() < LONG * LONG {
@@ -693,6 +673,6 @@ pub(super) struct Walk {
     /// then clips in retail's leaf order instead.
     pub(super) patch_met: std::cell::Cell<bool>,
     /// After that leaf walk: clips only what it does not, the submodels'
-    /// brushes and the static models.
+    /// brushes.
     pub(super) rest: bool,
 }

@@ -514,6 +514,11 @@ otherwise.
 - A 1.1 shot, swing or throw starts at the truncated eye over the truncated
   origin. 1.5's and UO's start at the unsnapped origin's eye plus the walk
   bob, never truncated (`combat::muzzle_point_in`, combat doc 2.1).
+- A static or script model clips a surface at a time, each culled by its
+  stored bounds grown 0.001 (`xmodel-v14-format.md` 2.1). A flat surface's
+  bounds have no thickness without the growth, and the slab test never
+  enters a box whose two faces meet: a cage light's plate goes
+  transparent (combat doc 2.7.2).
 - `trap_SightTraceToEntity` (the `trigger_damage` walks) clips a brush
   with no `SURFACE_CLIP_EPSILON`: a round's end 1/16 short of a face
   misses. Test it with `collision::sight_meets_brush`, never a trace

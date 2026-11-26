@@ -9,7 +9,7 @@ use super::masks::{
     CONTENTS_WATER, NO_ENTITY_CONTENTS,
 };
 use super::walk::TraceInput;
-use super::{BrushPlanes, CollisionWorld, ModelTri, Prim, WorldClip, WorldPatch};
+use super::{BrushPlanes, CollisionWorld, ModelTri, Prim, StaticModels, WorldClip, WorldPatch};
 use crate::leafwalk::{Item, LeafWalk};
 use crate::mapworld::{MapWorld, Partition};
 use crate::net::protocol::ENTITYNUM_WORLD;
@@ -169,9 +169,15 @@ impl Tris {
 }
 
 impl CollisionWorld {
-    /// `model_tris` are the placed props' collision triangles
-    /// (`props::collision_tris`), clipped the way retail clips static
-    /// models: by a point trace's segment, never by a movement trace.
+    /// [`Self::with_statics`] over `model_tris` clipped a triangle at a
+    /// time ([`StaticModels::loose`]).
+    pub fn build(bsp: &MapWorld, model_tris: &[ModelTri]) -> Self {
+        Self::with_statics(bsp, &StaticModels::loose(model_tris))
+    }
+
+    /// `statics` are the placed static models (`props::static_models`),
+    /// clipped the way retail clips them: by a locational trace's segment,
+    /// a surface at a time, never by a movement trace.
     ///
     /// Every model's brushes enter (submodels translated by the entity origin
     /// from the entities lump), except those of `trigger*` entities: their
@@ -180,7 +186,7 @@ impl CollisionWorld {
     /// engine's own triangles, swept as a sphere, and its patches as
     /// `CM_GeneratePatchCollide`'s facets. No render soup collides: retail
     /// clips model 0 through its brushes and lump 24 alone.
-    pub fn build(bsp: &MapWorld, model_tris: &[ModelTri]) -> Self {
+    pub fn with_statics(bsp: &MapWorld, statics: &StaticModels) -> Self {
         let mut brushes = Vec::new();
         let mut water = Vec::new();
         let mut nodrop = Vec::new();
@@ -398,30 +404,24 @@ impl CollisionWorld {
                 model,
             });
         }
-        let mut model_tris_out = Vec::with_capacity(model_tris.len());
-        for mt in model_tris {
-            let [a, b, c] = mt.tri;
-            if (b - a).cross(c - a).length_squared() < 1e-6 {
-                continue;
-            }
-            t.prims.push((
-                Prim::Model(model_tris_out.len() as u32),
-                a.min(b).min(c) - Vec3::splat(0.25),
-                a.max(b).max(c) + Vec3::splat(0.25),
-            ));
-            model_tris_out.push(*mt);
-        }
+        let (static_prims, placed) = super::statics::static_prims(statics);
+        let split = t.prims.len();
+        t.prims.extend(static_prims);
 
-        // The static models sit in a subtree of their own under the root:
-        // movement traces never clip them, and mixed in they widen every box
-        // a player's sweep enters.
+        // The static models sit in a subtree of their own under the root,
+        // which the world's walk never enters: the static pass clips them
+        // after it, and mixed in they widen every box a player's sweep
+        // enters. A world of static models alone is that subtree.
         let mut nodes = Vec::new();
-        let split = t.prims.partition_point(|p| !matches!(p.0, Prim::Model(_)));
-        let models_root = if split == 0 || split == t.prims.len() {
+        let models_root = if split == t.prims.len() || split == 0 {
             if !t.prims.is_empty() {
                 build_bvh(&mut t.prims, 0, &mut nodes);
             }
-            u32::MAX
+            if split == 0 && !t.prims.is_empty() {
+                0
+            } else {
+                u32::MAX
+            }
         } else {
             nodes.push(BvhNode {
                 lo: Vec3::ZERO,
@@ -524,7 +524,9 @@ impl CollisionWorld {
         CollisionWorld {
             brushes,
             tris: t.tris,
-            model_tris: model_tris_out,
+            model_tris: statics.tris.clone(),
+            static_surfs: statics.surfs.clone(),
+            statics: placed,
             tris_surf: t.surf,
             tris_contents: t.contents,
             terrain: t.terrain,

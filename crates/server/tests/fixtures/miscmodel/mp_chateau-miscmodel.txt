@@ -1,0 +1,10 @@
+# Retail CoD 1.1d, 1.5b and UO 1.51b dedicated servers, 2026-11-26: the PROBE lines of
+# client-probes/probe_miscmodel on mp_chateau (no client); the three builds log the same rows.
+# COD_VERSION=1.1 COD_DIR=<1.1 install> PROBE_UNTIL='PROBE mdone' tools/run_probe.sh client-probes/probe_miscmodel mp_chateau
+# COD_VERSION=1.5 COD_DIR=<stock 1.5 + UO tree> PROBE_UNTIL='PROBE mdone' tools/run_probe.sh client-probes/probe_miscmodel mp_chateau
+# COD_VERSION=uo COD_DIR=<stock 1.5 + UO tree> PROBE_UNTIL='PROBE mdone' tools/run_probe.sh client-probes/probe_miscmodel mp_chateau
+# Each static-model hit is the one a surface-by-surface clip under each surface's grown stored bounds finds.
+PROBE mtrace 1050 0 -1 0.777516 (0.00, -0.00, 1.00) (1575.00, 637.00, 191.61)
+PROBE mtrace 1050 1 -1 0.650676 (-0.00, 0.08, 1.00) (-281.00, 1099.00, 183.47)
+PROBE mtrace 1050 2 -1 0.432496 (0.66, 0.75, 0.00) (1585.75, 587.71, 224.82)
+PROBE mdone 1050

@@ -229,7 +229,6 @@ impl CollisionWorld {
                 maxs,
                 capsule,
                 mask,
-                statics: false,
                 skip: None,
                 world_only,
                 boxed: true,
@@ -348,7 +347,6 @@ impl CollisionWorld {
                 maxs: Vec3::ZERO,
                 capsule: Capsule::of(Vec3::ZERO, Vec3::ZERO),
                 mask,
-                statics: false,
                 skip: None,
                 world_only: true,
                 boxed: false,
@@ -468,24 +466,26 @@ impl CollisionWorld {
             Capsule::of(mins, maxs)
         };
         self.trace_world_clip(start, end, mins, maxs, mask, &mut trace);
-        self.walk_tree(
-            TraceInput {
-                start,
-                end,
-                mins,
-                maxs,
-                capsule,
-                mask,
-                statics,
-                skip: skip_model,
-                world_only: false,
-                boxed,
-                sphere: capsule.offset,
-                sight: false,
-            },
-            &mut trace,
-        );
+        let sw = TraceInput {
+            start,
+            end,
+            mins,
+            maxs,
+            capsule,
+            mask,
+            skip: skip_model,
+            world_only: false,
+            boxed,
+            sphere: capsule.offset,
+            sight: false,
+        };
+        self.walk_tree(sw, &mut trace);
+        // Retail's static clip writes its own end point (`cod_lnxded`
+        // 0x8051a5b..0x8051ab9), as an entity's does.
         let world_fraction = trace.fraction;
+        if statics {
+            self.clip_statics(&sw, &mut trace);
+        }
         self.trace_posed(
             start,
             end,
@@ -547,10 +547,11 @@ impl CollisionWorld {
             Prim::Model(t) => {
                 let mt = &self.model_tris[t as usize];
                 format!(
-                    "xmodel tri {t} cf={:#x} sf={:#x} at {:?}",
+                    "xmodel tri {t} cf={:#x} sf={:#x} at {:?} in its model's frame",
                     mt.contents, mt.surface_flags, mt.tri[0]
                 )
             }
+            Prim::Static(p) => format!("static model {p}"),
             Prim::Body(e) => format!("body {e}"),
             Prim::Clip(cf) => format!("world clip cf={cf:#x}"),
         }

@@ -60,8 +60,8 @@ impl FlameProbe {
                 .map(|(r, _)| (r, EntityScene::new()));
         }
         if let Ok(bsp) = vcod_common::mapworld::find(fs, map) {
-            let tris = vcod_common::props::collision_tris(fs, &bsp.entities);
-            self.world = Some(Box::new(CollisionWorld::build(&bsp, &tris)));
+            let statics = vcod_common::props::static_models(fs, &bsp.entities);
+            self.world = Some(Box::new(CollisionWorld::with_statics(&bsp, &statics)));
         }
         println!(
             "FLAME: {} weapons, collision {}, nozzles {}",

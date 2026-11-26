@@ -478,6 +478,7 @@ impl BrushSides<'_> {
 /// holds an entity's contact, which retail clips after the static models).
 /// Retail leaves a fraction under zero as it is, which pmove reads the same
 /// as zero (it moves the origin only for a positive one); ours clamps.
+/// Whether the hit replaced the trace's.
 pub(super) fn clip_segment_model(
     trace: &mut Trace,
     start: Vec3,
@@ -485,17 +486,17 @@ pub(super) fn clip_segment_model(
     mt: &ModelTri,
     prim: Prim,
     takes_tie: bool,
-) {
+) -> bool {
     let [a, b, c] = mt.tri;
     let n = (b - a).cross(c - a).normalize();
     let d1 = n.dot(start - a);
     let d2 = n.dot(end - a);
     if !(d2 < 0.0 && d1 >= 0.0) {
-        return;
+        return false;
     }
     let f = (d1 - SURFACE_CLIP_EPSILON) / (d1 - d2);
     if f > trace.fraction || f == trace.fraction && !takes_tie {
-        return;
+        return false;
     }
     let p = start + (end - start) * (d1 / (d1 - d2));
     // Barycentrics of `p` in the triangle's plane: p = a + u (c - a) + v (b - a).
@@ -504,18 +505,19 @@ pub(super) fn clip_segment_model(
     let (dw1, dw2) = (w.dot(e1), w.dot(e2));
     let det = d11 * d22 - d12 * d12;
     if det.abs() < 1e-12 {
-        return;
+        return false;
     }
     let u = (d22 * dw1 - d12 * dw2) / det;
     let v = (d11 * dw2 - d12 * dw1) / det;
     if u < -MODEL_BARY_EPS || v < -MODEL_BARY_EPS || u + v > 1.0 + MODEL_BARY_EPS {
-        return;
+        return false;
     }
     trace.fraction = f.max(0.0);
     trace.enter = f;
     trace.normal = n;
     trace.surface_flags = mt.surface_flags;
     trace.hit = Some(prim);
+    true
 }
 
 /// The nearest hit closer than `fraction` of a point segment on one model's
@@ -576,6 +578,26 @@ pub fn clip_model_surfs(
         fraction,
         ..Trace::clear(end)
     };
+    clip_surfs(&mut trace, start, end, tris, surfs, mask, false);
+    trace
+        .hit
+        .map(|_| (trace.fraction, trace.normal, trace.surface_flags))
+}
+
+/// The walk of [`clip_model_surfs`] into `trace`, `surfs`' runs indexing
+/// `tris` and each hit naming its triangle as [`Prim::Model`]. With
+/// `takes_tie` the first hit may tie the trace's fraction, the rest must
+/// beat it. Whether any hit replaced the trace's.
+pub(super) fn clip_surfs(
+    trace: &mut Trace,
+    start: Vec3,
+    end: Vec3,
+    tris: &[ModelTri],
+    surfs: &[ModelSurf],
+    mask: u32,
+    mut takes_tie: bool,
+) -> bool {
+    let mut hit = false;
     for s in surfs {
         let Some(first) = tris.get(s.tris.start) else {
             continue;
@@ -588,19 +610,20 @@ pub fn clip_model_surfs(
             continue;
         }
         for i in s.tris.clone() {
-            clip_segment_model(
-                &mut trace,
+            if clip_segment_model(
+                trace,
                 start,
                 end,
                 &tris[i],
                 Prim::Model(i as u32),
-                false,
-            );
+                takes_tie,
+            ) {
+                hit = true;
+                takes_tie = false;
+            }
         }
     }
-    trace
-        .hit
-        .map(|_| (trace.fraction, trace.normal, trace.surface_flags))
+    hit
 }
 
 /// `coduo_lnxded` 0x805e387 (1.1d `cod_lnxded` 0x805a788, 1.5b 0x805e553):

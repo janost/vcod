@@ -153,10 +153,10 @@ impl TriggerProbe {
             });
         }
         self.visited = vec![false; self.boxes.len()];
-        let tris = vcod_common::props::collision_tris(fs, &bsp.entities);
-        self.world = Some(Box::new(vcod_common::collision::CollisionWorld::build(
-            &bsp, &tris,
-        )));
+        let statics = vcod_common::props::static_models(fs, &bsp.entities);
+        self.world = Some(Box::new(
+            vcod_common::collision::CollisionWorld::with_statics(&bsp, &statics),
+        ));
         println!("TRIGGERS: {} trigger brushes to walk", self.boxes.len());
     }
 
