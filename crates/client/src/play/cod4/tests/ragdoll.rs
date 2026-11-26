@@ -177,8 +177,9 @@ fn open_floor_spots(
 /// falls is the test's, not a fight's. Each corpse whose entity takes
 /// `startRagdoll`'s type runs its ragdoll, which goes to sleep before
 /// `ragdoll_max_life` (or, for under half of them, freezes there),
-/// every point clear of the world, each that slept resting on what is
-/// under it, every def bone's segment clear (cod4-player-anims.md 10).
+/// every capsule clear of the world but for the layer its contacts sink
+/// into, each that slept resting on what is under it, every def bone's
+/// segment clear (cod4-player-anims.md 10, 10.7).
 /// Returns at once without an install.
 #[test]
 fn cod4_live_corpses_ragdoll_onto_the_floor() {
@@ -230,11 +231,10 @@ fn cod4_live_corpses_ragdoll_onto_the_floor() {
             dvars: Dvars::default(),
         });
         let mut loaded = None;
-        // Per corpse (number, client, teleport bit): the last of its
-        // ragdoll seen (its state, ms run, points), and whether its
-        // entity ever read a ragdoll type.
-        type Shape = (Vec<(Vec3, f32)>, Vec<(Vec3, Vec3, bool)>);
-        type Seen = (Option<(State, f32, Shape)>, bool, bool);
+        // Per corpse (number, client, teleport bit): its ragdoll's state,
+        // the ms it simulated and its capsules on its last step, and
+        // whether its entity ever read a ragdoll type or was refused.
+        type Seen = (Option<(State, i32, Vec<(Vec3, Vec3, f32)>)>, bool, bool);
         let mut corpses: BTreeMap<(u32, i32, i32), Seen> = BTreeMap::new();
         let t0 = clk_now();
         while since(t0) < Duration::from_secs(40) {
@@ -266,9 +266,17 @@ fn cod4_live_corpses_ragdoll_onto_the_floor() {
                 let e = corpses.entry(key).or_insert((None, false, false));
                 e.1 |= v.ragdoll;
                 e.2 |= players.ragdoll_refused(*n);
-                if let Some(r) = players.ragdoll_of(*n) {
-                    let shape = (r.swept_spheres().collect(), r.segments().collect());
-                    e.0 = Some((r.state, r.msec(), shape));
+                if let Some((r, id)) = players.ragdoll_of(*n)
+                    && let Some(state) = r.state(id)
+                {
+                    let caps = r.capsules(id);
+                    match &mut e.0 {
+                        Some(seen) if caps.is_empty() => seen.0 = state,
+                        seen if state == State::Simulating => {
+                            *seen = Some((state, r.msec(id), caps))
+                        }
+                        _ => {}
+                    }
                 }
             }
         }
@@ -321,10 +329,7 @@ fn cod4_live_corpses_ragdoll_onto_the_floor() {
     assert!(asleep.len() >= 2, "{corpses:#?}");
     // Retail freezes a body still moving at `ragdoll_max_life` too:
     // counted, and held to under half.
-    let timed_out = asleep
-        .iter()
-        .filter(|(_, (_, ms, _))| *ms >= 4500.0)
-        .count();
+    let timed_out = asleep.iter().filter(|(_, (_, ms, _))| *ms >= 4500).count();
     println!("{timed_out} frozen at their max life");
     assert!(
         timed_out * 2 <= asleep.len(),
@@ -332,20 +337,30 @@ fn cod4_live_corpses_ragdoll_onto_the_floor() {
         asleep.len()
     );
     let mut problems = Vec::new();
-    let mut started_through = 0;
     let z = Vec3::ZERO;
-    for (key, (_, ms, (points, bones))) in &asleep {
-        for &(p, r) in points.iter() {
-            let e = Vec3::splat((r - 0.5).max(0.0));
-            if clip.trace(p, p, -e, e, CLIP_MASK).startsolid {
-                problems.push(format!("{key:?}: point {p} (radius {r}) in the world"));
+    for (key, (_, ms, caps)) in &asleep {
+        // A capsule rests sunk into what holds it: `phys_csl`'s unit
+        // surface layer and the soft contacts (cod4-player-anims.md 10.6;
+        // retail's captured ends sit up to 1.8 under their floor, these
+        // up to 2.6 where an end presses into a corner, 10.7), so each
+        // end's box less 3 units stays clear.
+        for &(a, b, r) in caps {
+            for p in [a, b] {
+                let e = Vec3::splat((r - 3.0).max(0.0));
+                if clip.trace(p, p, -e, e, CLIP_MASK).startsolid {
+                    let clear = (0..=40)
+                        .map(|k| r * k as f32 / 40.0)
+                        .take_while(|&c| {
+                            !clip
+                                .trace(p, p, -Vec3::splat(c), Vec3::splat(c), CLIP_MASK)
+                                .startsolid
+                        })
+                        .last();
+                    problems.push(format!(
+                        "{key:?}: capsule end {p} (radius {r}, clear to {clear:?}) in the world"
+                    ));
+                }
             }
-        }
-        // A bone the death anim's pose already put through the world
-        // is the anim's (the root motion vcod-server leaves out,
-        // cod4-combat.md 5), not the ragdoll's.
-        started_through += bones.iter().filter(|b| b.2).count();
-        for &(a, b, _) in bones.iter().filter(|b| !b.2) {
             let t = clip.trace(a, b, z, z, CLIP_MASK);
             if t.startsolid || t.fraction < 1.0 {
                 problems.push(format!("{key:?}: bone {a} {b} through the world"));
@@ -356,16 +371,18 @@ fn cod4_live_corpses_ragdoll_onto_the_floor() {
         // One frozen at `ragdoll_max_life` holds wherever it was,
         // mid-fall too (`Ragdoll_CheckIdle`, cod4-player-anims.md
         // 10): a body that slid off a ledge late froze 9 units up.
-        let rests = *ms >= 4500.0
-            || points.iter().any(|&(p, r)| {
-                let e = Vec3::splat(r);
-                clip.trace(p, p - Vec3::Z * 2.0, -e, e, CLIP_MASK).fraction < 1.0
-            });
+        let rests = *ms >= 4500
+            || caps
+                .iter()
+                .flat_map(|&(a, b, r)| [(a, r), (b, r)])
+                .any(|(p, r)| {
+                    let e = Vec3::splat(r);
+                    clip.trace(p, p - Vec3::Z * 2.0, -e, e, CLIP_MASK).fraction < 1.0
+                });
         if !rests {
             problems.push(format!("{key:?}: rests on nothing"));
         }
     }
-    println!("{started_through} bones started through the world");
     assert!(problems.is_empty(), "{problems:#?}");
 }
 
@@ -660,20 +677,15 @@ fn cod4_live_a_frag_flings_the_maps_clutter_and_breaks_a_plate() {
     }
 }
 
-/// One step of a ragdoll: the ms run, its state and each def bone's
-/// ends and rotation.
-type RagStep = (
-    f32,
-    vcod_cod4::ragdoll::State,
-    Vec<(Vec3, Vec3, glam::Quat)>,
-);
-/// One corpse's ragdoll: each frame its steps moved it, the last
-/// frame it was seen asleep, and every step's fastest point.
+/// One frame of a simulating ragdoll: the ms it has simulated and each
+/// def bone's ends and body turn.
+type RagStep = (i32, Vec<(Vec3, Vec3, glam::Quat)>);
+/// One corpse's ragdoll: each frame it simulated, and its drawn pose on
+/// every frame it held still (idle).
 #[derive(Default)]
 struct RagRun {
     pub(super) steps: Vec<RagStep>,
-    asleep: Option<RagStep>,
-    speeds: Vec<(f32, f32)>,
+    held: Vec<Vec<(Vec3, glam::Quat)>>,
 }
 /// Per corpse (number, client, teleport bit), its ragdoll.
 type RagFrames = BTreeMap<(u32, i32, i32), RagRun>;
@@ -684,7 +696,7 @@ type RagFrames = BTreeMap<(u32, i32, i32), RagRun>;
 /// ragdoll recorded on each frame its step moved it.
 fn live_ragdoll_frames(frame_ms: u64) -> Option<RagFrames> {
     use crate::play::cod4_players::{Cod4Players, RagdollWorld};
-    use vcod_cod4::ragdoll::Dvars;
+    use vcod_cod4::ragdoll::{Dvars, State};
     use vcod_server::cod4::{Cod4Config, Cod4Server};
     let install = vcod_cod4::testing::cod4_install()?;
     let root = install.root().to_path_buf();
@@ -755,13 +767,12 @@ fn live_ragdoll_frames(frame_ms: u64) -> Option<RagFrames> {
             );
             for (n, v) in views.iter().filter(|(_, v)| v.corpse) {
                 let key = (*n, v.frame.client_num, v.frame.eflags & 2);
-                if let Some(r) = players.ragdoll_of(*n) {
+                if let Some((r, id)) = players.ragdoll_of(*n) {
                     let e = out.entry(key).or_default();
-                    if e.steps.last().is_none_or(|l| l.0 != r.msec()) {
-                        e.steps.push((r.msec(), r.state, r.frames().collect()));
-                        e.speeds = r.step_speeds().to_vec();
-                    } else if r.state == vcod_cod4::ragdoll::State::Idle {
-                        e.asleep = Some((r.msec(), r.state, r.frames().collect()));
+                    match r.state(id) {
+                        Some(State::Simulating) => e.steps.push((r.msec(id), r.frames(id))),
+                        Some(State::Idle) => e.held.push(r.pose(id).unwrap_or_default().to_vec()),
+                        _ => {}
                     }
                 }
             }
@@ -803,7 +814,7 @@ fn turn_deg(q: glam::Quat) -> f32 {
 }
 
 /// How far a corpse's neck twisted against its upper spine over the
-/// shortest turn of its axis from its first step, degrees.
+/// shortest turn of its axis from its first frame, degrees.
 fn ragdoll_twist(steps: &[RagStep]) -> f32 {
     // ragdoll.cfg's def 1: bones 0..2 the pelvis and spine, 3 the neck.
     let (spine, neck) = (2, 3);
@@ -814,30 +825,26 @@ fn ragdoll_twist(steps: &[RagStep]) -> f32 {
             r * f[neck].2,
         )
     };
-    let (d0, rel0) = in_spine(&steps[0].2);
+    let (d0, rel0) = in_spine(&steps[0].1);
     steps
         .iter()
         .map(|s| {
-            let (d, rel) = in_spine(&s.2);
+            let (d, rel) = in_spine(&s.1);
             turn_deg((glam::Quat::from_rotation_arc(d0, d) * rel0).inverse() * rel)
         })
         .fold(0.0, f32::max)
 }
 
 /// The corpses of [`live_ragdoll_frames`] at 250 and at 10 frames a
-/// second, held to what 1.7's sleep rule promises
-/// (cod4-player-anims.md 10.2): each is asleep by `ragdoll_max_life`,
-/// at 4 ms frames every one before it and at 100 ms at least half (the
-/// rest freeze at it, which the rule allows); over the 900 ms before a
-/// body sleeps (`phys_autoDisableTime`) every step's fastest point
-/// stays under `phys_autoDisableLinear`; once asleep no point moves. How far a body
-/// slides as it slows through that speed the rule does not bound. None
-/// twists its neck past `ragdoll.cfg`'s 30 degrees (its limit 2's x,
-/// which 1.7 holds in an angular motor). Prints each corpse's numbers.
+/// second (cod4-player-anims.md 10.7): each goes idle, asleep or at
+/// `ragdoll_max_life`, its pose then held frame after frame. Prints each
+/// corpse's numbers, the neck's twist against the upper spine among them
+/// (retail's max-life capture turns it 108 degrees by the same measure:
+/// the joints' limits are the base pose's, not the death anim's).
 /// Returns at once without an install.
 #[test]
 fn cod4_live_ragdolls_hold_still_once_down() {
-    use vcod_cod4::ragdoll::{Dvars, State};
+    use vcod_cod4::ragdoll::Dvars;
     let d = Dvars::default();
     for frame_ms in [4, 100] {
         let Some(runs) = live_ragdoll_frames(frame_ms) else {
@@ -846,52 +853,34 @@ fn cod4_live_ragdolls_hold_still_once_down() {
         assert!(runs.len() >= 4, "{frame_ms} ms: {} ragdolls", runs.len());
         let (mut problems, mut frozen) = (Vec::new(), 0);
         for (key, run) in &runs {
+            if run.steps.is_empty() {
+                problems.push(format!("{frame_ms} ms {key:?}: never simulated"));
+                continue;
+            }
             let twist = ragdoll_twist(&run.steps);
-            let &(ms, state, ref at_sleep) = run.steps.last().unwrap();
-            let window: Vec<f32> = run
-                .speeds
-                .iter()
-                .filter(|s| s.0 > ms - d.sleep_ms)
-                .map(|s| s.1)
-                .collect();
-            let fastest = window.iter().copied().fold(0.0f32, f32::max);
-            let after = run.asleep.as_ref().map(|a| {
-                a.2.iter()
-                    .zip(at_sleep)
-                    .map(|(x, y)| x.0.distance(y.0).max(x.1.distance(y.1)))
+            let ms = run.steps.last().unwrap().0;
+            let moved = run.held.first().map(|first| {
+                run.held
+                    .iter()
+                    .flat_map(|h| h.iter().zip(first).map(|(x, y)| x.0.distance(y.0)))
                     .fold(0.0f32, f32::max)
             });
             println!(
-                "{frame_ms} ms {key:?}: {state:?} at {ms:.0} ms; neck twist {twist:.1} deg; fastest point over its last {} steps {fastest:.1}/s; moved {after:?} asleep",
-                window.len()
+                "{frame_ms} ms {key:?}: idle after {ms} ms simulated; neck twist {twist:.1} deg; moved {moved:?} while held"
             );
-            if twist > 30.0 {
-                problems.push(format!("{frame_ms} ms {key:?}: neck twist {twist}"));
+            match moved {
+                None => problems.push(format!("{frame_ms} ms {key:?}: never idle")),
+                Some(m) if m > 0.0 => {
+                    problems.push(format!("{frame_ms} ms {key:?}: moved {m} held"))
+                }
+                _ => {}
             }
-            if state != State::Idle {
-                problems.push(format!("{frame_ms} ms {key:?}: {state:?} at {ms} ms"));
-                continue;
-            }
-            if after != Some(0.0) {
-                problems.push(format!("{frame_ms} ms {key:?}: moved {after:?} asleep"));
-            }
-            if ms > d.max_life_ms as f32 {
+            if ms >= d.max_life_ms {
                 frozen += 1;
-                continue;
-            }
-            if window.is_empty() || fastest >= d.sleep_speed {
-                problems.push(format!(
-                    "{frame_ms} ms {key:?}: slept with a point at {fastest}/s in its last {} steps",
-                    window.len()
-                ));
             }
         }
+        println!("{frame_ms} ms: {frozen} of {} at max life", runs.len());
         assert!(problems.is_empty(), "{problems:#?}");
-        assert!(
-            frozen * 2 <= runs.len() && (frame_ms > 4 || frozen == 0),
-            "{frame_ms} ms: {frozen} of {} froze at max life",
-            runs.len()
-        );
     }
 }
 
@@ -1010,8 +999,9 @@ fn cod4_live_blasts_push_the_ragdolls() {
 /// The retail kill capture's corpse (64) as its shooter saw it: its
 /// entity turns ragdoll at 49550 (cod4-combat.md 5.1), when the death
 /// anim has put its hand into the wall it fell against, so the tunnel
-/// test refuses the ragdoll and the corpse keeps its death anim's pose
-/// (cod4-player-anims.md 10). Fixed 60 Hz frames, so it repeats.
+/// test refuses the ragdoll at its build two frames on and the corpse
+/// keeps its death anim's pose (cod4-player-anims.md 10, 10.7). Fixed
+/// 60 Hz frames, so it repeats.
 #[test]
 fn the_kill_captures_corpse_fails_the_tunnel_test() {
     use crate::play::cod4_players::{Cod4Players, RagdollWorld};
@@ -1054,8 +1044,15 @@ fn the_kill_captures_corpse_fails_the_tunnel_test() {
         if players.ragdoll_refused(64) {
             refused_at.get_or_insert(scene.server_time);
         }
-        assert!(players.ragdoll_of(64).is_none(), "a ragdoll ran");
+        if let Some((r, id)) = players.ragdoll_of(64) {
+            assert!(r.pose(id).is_none(), "a ragdoll ran");
+        }
     }
+    // The slot waits for the corpse's DObj, takes two snapshots a frame
+    // apart and builds on the second: refused within those frames.
     assert_eq!(flipped_at, Some(49_550));
-    assert_eq!(refused_at, Some(49_550));
+    assert!(
+        refused_at.is_some_and(|t| (49_550..=49_650).contains(&t)),
+        "{refused_at:?}"
+    );
 }

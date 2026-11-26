@@ -17,7 +17,7 @@ recipe; the parsers skip `#` lines (`vcod_cod4::net::capture::parse` for
 | `pins` | Not retail: the pmove model's own step lines behind each self-pin digest, written by the lib tests under `PIN_DUMP=1` (`src/pmove/pin.rs`); a `#` line of field names, then a line of values a step | `src/pmove/pin.rs`, on a digest miss |
 | `tapes` | Not retail: a trace tape, every trace a `moves_ab` replay asked of mp_crash's clip and the answer it got, the weapon list's move scales in its header, written under `RECORD_TAPES=1` at `COD4_DIR` (docs/dev/testing.md, "Trace tapes") | `tests/moves_ab.rs` |
 | `skel` | `cod4_lnxded` under gdb, a pose or anim dump per header | `tests/skel_ab.rs`, `crates/common/src/playerpose.rs` |
-| `ragdoll` | Not the server: the Windows client `iw3mp.exe` under Wine and gdb (`tools/cod4_wine/run.sh` with `tools/re/cod4_ragdoll_gdb.py`, docs/dev/retail.md, "A ragdoll from spawn to rest"), its own player killed on mp_crash and its corpse's ragdoll dumped step by step to rest; format below | `tools/re/cod4_ragdoll_summary.py`; the oracle for a port of 1.7's solver (`cod4-player-anims.md` 10.5) |
+| `ragdoll` | Not the server: the Windows client `iw3mp.exe` under Wine and gdb (`tools/cod4_wine/run.sh` with `tools/re/cod4_ragdoll_gdb.py`, docs/dev/retail.md, "A ragdoll from spawn to rest"), its own player killed on mp_crash and its corpse's ragdoll dumped step by step to rest; format below | `tools/re/cod4_ragdoll_summary.py`; `ragdoll_ab`, the gate of the ODE port (`cod4-player-anims.md` 10.5, 10.7) |
 
 ## `ragdoll/` lines
 
@@ -39,6 +39,13 @@ built to the step it goes idle. Every float is its IEEE bits in hex
   root, 1 and 2 the spine, 3 the neck, 4 and 5 the left upper and lower
   arm, 6 and 7 the right's, 8 and 9 the left thigh and shin, 10 and 11
   the right's).
+- `bone SLOT BONE PARENT LEN DT | MASS | CUR | PREV` (the max-life take
+  only, after each `start`): the slot bone's parent (+0) and length (+0xc),
+  the time between the two pose snapshots (slot +0x30), the body's `dMass`
+  (+0x20: mass, `c[4]`, `I[12]`), and the two snapshots the build read
+  (0x2e0 each from slot +0x2f4, +0x2f0 the latest): each bone's origin and
+  IW quaternion (`x y z w`). The latest is read after the build frame's
+  state 4 saved its pose over it (0x5bc4f0).
 - `step N msec M sim T to E seed S next M2`: after world 2's `N`th step
   since the first body (0x5a6e69 in `Phys_RunToTime`): its length, the
   world's clock after it, the time the frame runs it to, the seed after
