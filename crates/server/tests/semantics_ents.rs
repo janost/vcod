@@ -10,6 +10,9 @@
 //! satisfies `semantics_ab.rs`'s `every_probe_file_and_capture_section_are_paired`
 //! guard, which checks this file's text for the name.
 //!
+//! `probe_vectordot` is claimed here for the same reason as `probe_cvar`
+//! below: it calls a builtin only this crate answers.
+//!
 //! `probe_cvar` and `probe_not_string` are claimed here for a different
 //! reason: they call `getCvar`/`setCvar`/`getCvarInt`/`getCvarFloat`/
 //! `getTime`/`randomInt`, which need the real `Cvars` table this crate
@@ -280,6 +283,22 @@ fn probe_cvar_matches_retail() {
         .unwrap_or_else(|e| panic!("probe_cvar main errored: {e:?}"));
 
     assert_eq!(host.script_log, retail_probe_lines("probe_cvar"));
+}
+
+/// `probe_vectordot` measures `vectorDot`, a builtin `crates/gsc`'s
+/// `ProbeHost` does not answer. 1.1d, 1.5b and UO logged the same four
+/// lines; `dot_one_round` is 2 because the sum rounds once.
+#[test]
+fn probe_vectordot_matches_retail() {
+    let (mut vm, main) = install("probe_vectordot");
+    let mut host = GameHost::new(
+        &vcod_server::game::profile::COD1_11,
+        vec![String::new(); 2048],
+    );
+    vm.call_now(&mut host, main, None, Vec::new())
+        .unwrap_or_else(|e| panic!("probe_vectordot main errored: {e:?}"));
+
+    assert_eq!(host.script_log, retail_probe_lines("probe_vectordot"));
 }
 
 /// `probe_not_string` measures unary `!` on a `getCvar` read.

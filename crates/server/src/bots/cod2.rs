@@ -1512,7 +1512,6 @@ pub(crate) fn cover_body(
     Some(super::driver::CoverBody {
         origin: me.ps.origin,
         threat_eye: eye(&threat.ps),
-        lean: 0.5,
         mask: vcod_cod2::pmove::MASK_PLAYERSOLID,
     })
 }

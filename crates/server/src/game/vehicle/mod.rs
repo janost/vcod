@@ -199,9 +199,9 @@ pub struct Vehicle {
     /// `nextthink`, and whether `Scr_Vehicle_Init` has run.
     pub next_think: i32,
     pub initialized: bool,
-    /// Its health ran out and its `death` went to the script: the hull
-    /// burns until `_tankeffects_gmi`'s second blast deletes it
-    /// (coduo-vehicles.md 15.2), what bots keep clear of.
+    /// Its health, once the script set it, ran out and its `death` went to
+    /// the script: the hull burns until `_tankeffects_gmi`'s second blast
+    /// deletes it (coduo-vehicles.md 15.2), what bots keep clear of.
     pub dead: bool,
     /// `takedamage` (+0x17d): set by the spawn (0x7c935), written by
     /// `setTakeDamage`; `G_Damage` and `G_RadiusDamage` skip a vehicle
@@ -1262,7 +1262,11 @@ pub fn vehicle_damage(
     if left < 1 {
         notifies.push(("death", vec![Value::Entity(attacker)]));
         host.vehicles.deaths.push(die::Death { id, attacker, dir });
-        if let Some(v) = host.vehicles.live.get_mut(&id) {
+        // A hull struck before its `init_tank` gave it health has no
+        // `death` waiter yet and burns nowhere (bot-objectives.md 10.10.1).
+        if health >= 1
+            && let Some(v) = host.vehicles.live.get_mut(&id)
+        {
             v.dead = true;
         }
     } else {

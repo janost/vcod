@@ -329,6 +329,30 @@ fn a_bot_fires_rockets_at_an_enemy_tank() {
     assert_eq!(sv.script_aborts(), Vec::<String>::new());
 }
 
+/// A wrecked tank's duplicate, spawned where it stood and struck by it
+/// before `init_tank` gives it health, is no wreck once the first is gone:
+/// no bot keeps clear of a live tank (bot-objectives.md 10.10.1).
+#[test]
+#[ignore = "runs mp_cassino UO through a tank's wreck and respawn, 30 s of game time; run with --ignored"]
+fn a_wrecked_tanks_duplicate_is_no_wreck() {
+    let Some((mut sv, mut now)) = uo_server(1, false) else {
+        eprintln!("COD_DIR has no uo/: skipping");
+        return;
+    };
+    run(&mut sv, &mut now, 100);
+    let tank = sv.test_vehicles()[0];
+    assert!(sv.test_damage_vehicle(tank.num, 10000));
+    run(&mut sv, &mut now, 20);
+    assert_eq!(sv.test_wrecks().len(), 1, "the tank burns");
+    run(&mut sv, &mut now, 600);
+    assert!(
+        !sv.test_vehicles().iter().any(|v| v.num == tank.num),
+        "the first tank is gone"
+    );
+    assert_eq!(sv.test_wrecks(), Vec::<[f32; 3]>::new());
+    assert_eq!(sv.script_aborts(), Vec::<String>::new());
+}
+
 /// A lone bot set down 600 units behind a tank as it is wrecked hears the
 /// hull's first blast and walks to it, and stays out of the second one
 /// `tank_death` sets off ten seconds on (bot-objectives.md 10.10): no

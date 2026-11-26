@@ -863,9 +863,9 @@ side in the decompile (VERIFIED). UO adds two arguments:
   lie-down call (9th argument 0).
 
 VERIFIED: with the 14th argument 0 the trace mask is 0x810031, 1.5b's
-0x810011 plus water. A feet or chest sample that lands in water skips the
-steep test, and a chest sample more than 24 (0x9a9e0, a double) off the
-origin plus 6 refuses. `PM_VerifyPronePosition` (0x2e3b0) passes the 14th
+0x810011 plus water. A feet or chest sample that lands in water misses
+before the steep test (17.1), and a chest sample more than 24 (0x9a9e0, a
+double) off the origin plus 6 refuses. `PM_VerifyPronePosition` (0x2e3b0) passes the 14th
 as 0, so the prone move's check sees water.
 
 VERIFIED, rodata: the bend test after the chest sample (the legs' pitch,
@@ -902,6 +902,48 @@ floor, and the bend reads -49.7 at y 599.9 to -49.9 at 600.34: inside
 and the pillar run matches all 372 snapshots (`moves_ab.rs`,
 `the_predictor_replays_walks_against_patches`, no gap rows;
 `pmove::tests::prone::a_uo_body_refuses_legs_bent_up_past_45_degrees`).
+
+### 17.1 Water in the prone check
+
+VERIFIED (the instructions), `game.mp.uo.i386.so`: `BG_CheckProneValid`
+picks its mask at 0x2171b, 0x810031 when the 14th argument
+(`[ebp+0x3c]`) is 0 and 0x820011 otherwise, and every one of its 10 traces
+takes it (`[ebp-0xc]`). Its two callers pass 0: `BG_CheckProne` (0x22ff3)
+forwards its own 14th, which its eight pmove callers (0x28474 to 0x2e4c5)
+set to 0, and the direct call at 0x331ec sets 0 (`[esp+0x34]` at
+0x3310a). 1.1d's (0x2d4c2) and 1.5b's (0x1d055) masks carry no 0x20.
+
+VERIFIED (the instructions), the three tests of the trace's `+0x20`
+(contents) for 0x20:
+
+- The lie-down trace, 10 up from the origin (0x217f1..0x2180b): contents
+  0x20 and `startsolid` (`+0x2f`) refuses, before the `allsolid` test
+  (`+0x2e`, 0x21810).
+- The feet sample (0x22615..0x22631) and the chest sample
+  (0x227a4..0x227c0): a fraction under 1.0 (0x9a9bc) with contents 0x20
+  jumps to the shared miss (0x22f9b), which refuses an on-ground caller
+  and lays the body flat for the rest. Both tests come before the steep
+  test (0x22636, 0x227c5).
+
+The hips sample and the leg sweeps have no such test: a trace under the
+mask stops on a water surface like a floor (INFERRED, off the mask).
+
+VERIFIED, the field: 1.1d `cod_lnxded`'s brush clip epilogue stores the
+brush's contents at `tw+0xe4` (0x805556c), the trace at `tw+0xc4`, so
+`+0x20`; `allsolid` and `startsolid` at `tw+0xf2`/`+0xf3` (0x805558f,
+0x8055578). 0x20 is `CONTENTS_WATER` (`bsp-ibsp59-format.md`, "Content
+flags", census). INFERRED: UO's engine keeps the layout, since its game
+module reads the same offsets. INFERRED: which contents a trace that
+starts in water and stops on a floor reports depends on the engine's brush
+order; vcod reports water.
+
+vcod: under UO's rules `pmove::check_prone` traces with
+`MASK_DEADSOLID | CONTENTS_WATER`, and `MoveWorld::box_trace` clips the
+water volumes for a mask holding the bit (`CollisionWorld::clip_water`,
+the capsule brush arm; the hit is `Prim::Clip(CONTENTS_WATER)`, taped as
+`w`). `pmove::tests::prone::a_uo_chest_or_feet_sample_on_water_misses`
+and `a_uo_lie_down_refuses_a_body_starting_in_water`. Not measured: no
+capture lies down in water on UO.
 
 ## 18. The stance box
 

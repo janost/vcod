@@ -796,6 +796,10 @@ otherwise.
   the mount triggers (`MoveWorld::with_boxes`); the client's never do.
 - UO has a grenade cook, started only by the sight button's edge on a pulled
   grenade (`weapon::cook`, `coduo-movement.md` 12).
+- UO's prone check traces water (mask 0x810031): a body can't start in it
+  and a feet or chest sample on it misses. Water stays out of the world's
+  brushes, so only a `MoveWorld` trace whose mask holds 0x20 meets it
+  (`coduo-movement.md` 17.1).
 
 ### Vehicles
 

@@ -243,7 +243,8 @@ pub fn push_vec3(out: &mut String, v: glam::Vec3) {
 ///
 /// - `t sx sy sz ex ey ez mins maxs mask pass = fraction endpos normal
 ///   surfaceflags flags entity`, where `flags` is `s` (startsolid), `a`
-///   (allsolid) and `b` (stopped on a body), `-` for none, and a trace
+///   (allsolid), `b` (stopped on a body) and `w` (on water, a mask with
+///   `CONTENTS_WATER`), `-` for none, and a trace
 ///   that reached `end` untouched answers `1`.
 /// - `c x y z = contents`.
 ///
@@ -251,7 +252,7 @@ pub fn push_vec3(out: &mut String, v: glam::Vec3) {
 /// decimal, `w` for the world and `n` for none.
 pub mod cod1 {
     use super::{Tape, push_f32 as f, push_vec3 as v3};
-    use crate::collision::{Prim, Trace};
+    use crate::collision::{CONTENTS_WATER, Prim, Trace};
     use crate::net::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD};
     use glam::Vec3;
     use std::fmt::Write as _;
@@ -349,12 +350,18 @@ pub mod cod1 {
         v3(&mut a, t.normal);
         let _ = write!(a, " {:x} ", t.surface_flags);
         let body = matches!(t.hit, Some(Prim::Body(_)));
-        for (on, c) in [(t.startsolid, 's'), (t.allsolid, 'a'), (body, 'b')] {
+        let water = t.hit == Some(Prim::Clip(CONTENTS_WATER));
+        for (on, c) in [
+            (t.startsolid, 's'),
+            (t.allsolid, 'a'),
+            (body, 'b'),
+            (water, 'w'),
+        ] {
             if on {
                 a.push(c);
             }
         }
-        if !(t.startsolid || t.allsolid || body) {
+        if !(t.startsolid || t.allsolid || body || water) {
             a.push('-');
         }
         ent(&mut a, entity);
@@ -397,7 +404,11 @@ pub mod cod1 {
             ENTITYNUM_NONE => t.fraction >= 1.0,
             _ => false,
         };
-        t.hit = (flags.contains('b') || !none).then_some(Prim::Body(entity));
+        t.hit = if flags.contains('w') {
+            Some(Prim::Clip(CONTENTS_WATER))
+        } else {
+            (flags.contains('b') || !none).then_some(Prim::Body(entity))
+        };
         Some(t)
     }
 
@@ -460,6 +471,9 @@ mod tests {
         lerped.endpos = Vec3::X.lerp(end, lerped.fraction);
         let mut at_end = hit();
         at_end.endpos = end;
+        let mut water = hit();
+        water.startsolid = false;
+        water.hit = Some(Prim::Clip(crate::collision::CONTENTS_WATER));
         let rec = Tape::record();
         let asked = [
             (Vec3::ZERO, hit()),
@@ -467,6 +481,7 @@ mod tests {
             (Vec3::X, lerped),
             (Vec3::ZERO, hit()),
             (Vec3::Y, at_end),
+            (Vec3::Z, water),
         ];
         let want: Vec<Trace> = asked.iter().map(|&(s, t)| ask(&rec, s, t)).collect();
         let c = cod1::contents(&rec, Vec3::Y, || 0x10001);

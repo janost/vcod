@@ -143,6 +143,10 @@ pub struct Skill {
     /// The most the walking view turns in one tick, degrees: the keys
     /// keep the path while it comes round ([`Bot::walk_turn`]).
     pub walk_turn_deg: f32,
+    /// Ticks the trigger stays up past each burst or tap, as (least,
+    /// spread): easy lets go between bursts, the one choice a level makes
+    /// that cuts its fire (bot-combat.md 3.2).
+    pub fire_pause: (u32, u32),
 }
 
 impl Default for Skill {
@@ -168,6 +172,7 @@ impl Default for Skill {
             hearing: 1.0,
             fov_deg: 120.0,
             walk_turn_deg: 24.0,
+            fire_pause: (0, 0),
         }
     }
 }
@@ -1638,6 +1643,23 @@ mod tests {
             off: false,
         });
         v
+    }
+
+    /// A jeep's driver steers off its route at an enemy on foot ahead, and
+    /// keeps the route for one behind it (bot-objectives.md 10.12).
+    #[test]
+    fn a_jeep_driver_runs_an_enemy_ahead_over() {
+        let mut v = driving(Crowd::default());
+        let seat = v.seat.as_mut().unwrap();
+        (seat.tank, seat.gun_yaw, seat.gun_speed) = (false, None, 0.0);
+        let mut bot = Bot::new("allies", false, 1);
+        assert_eq!(bot.think(&v).right, 0, "the route");
+        v.enemy = engaged(1).1.enemy;
+        v.enemy.as_mut().unwrap().origin = [300.0, 200.0, 64.0];
+        let cmd = bot.think(&v);
+        assert_eq!((cmd.forward, cmd.right), (127, -127), "toward him");
+        v.enemy.as_mut().unwrap().origin = [-300.0, 0.0, 64.0];
+        assert_eq!(bot.think(&v).right, 0, "behind: the route");
     }
 
     /// A driver remembers a noise as a bot on foot does: its goal holds on

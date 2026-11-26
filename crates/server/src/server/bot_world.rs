@@ -1362,7 +1362,6 @@ impl crate::bots::driver::BotWorld for Server {
         Some(crate::bots::driver::CoverBody {
             origin: me.ps.origin,
             threat_eye: threat.ps.view().eye,
-            lean: if me.ps.rules.v15() { 0.5 } else { 1.0 },
             mask: vcod_common::collision::MASK_PLAYERSOLID,
         })
     }

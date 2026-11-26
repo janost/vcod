@@ -250,13 +250,11 @@ pub(crate) struct Body {
 }
 
 /// What [`cover::find`] needs of the bot and its threat that only the game
-/// knows: the bot's feet, the threat's eye, the standing lean's fraction
-/// (1.1's full lean, 1.5's and CoD2's half) and the lean sphere's clip mask.
+/// knows: the bot's feet, the threat's eye and the lean sphere's clip mask.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CoverBody {
     pub(crate) origin: Vec3,
     pub(crate) threat_eye: Vec3,
-    pub(crate) lean: f32,
     pub(crate) mask: u32,
 }
 
@@ -1612,7 +1610,6 @@ impl CoverLook {
         let sight = cover::Sight {
             threat_eye: body.threat_eye,
             target: e.origin.into(),
-            lean: body.lean,
             clear: &clear,
             lean_room: &lean_room,
         };
