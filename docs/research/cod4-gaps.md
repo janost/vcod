@@ -19,8 +19,12 @@ Ranked by how much a player notices.
   contacts, its cylinders by 1.7's separating axes with vcod's points per
   feature, not ODE's own box colliders; a brush with sides meets the
   world on its points alone, and every geom keeps vcod's points beside
-  its collider (cod4-gsc.md 3.6, 3.6.1). The
-  ragdoll is a position-based solver (cod4-player-anims.md 10). M.
+  its collider (cod4-gsc.md 3.6, 3.6.1). M.
+- Ragdolls run on the ODE port as 1.7 runs them, gated on two retail
+  captures to within a fraction of a unit (cod4-player-anims.md 10.7);
+  the base pose they are built in is the model's, not under the corpse's
+  entity, and the bones the ragdoll does not set keep the death anim's
+  last locals. L.
 - Multichannel output: kira mixes stereo, so a 5.1 or 7.1 device gets
   the stereo mix on its front pair (cod4-sound.md 4.2, 5). The 139 alias
   rows whose curve no walked zone holds fall off straight. L.

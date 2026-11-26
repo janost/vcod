@@ -1706,11 +1706,13 @@ work.
 - So 1.7 steps 17 ms at most twice a frame: at 200 fps one step every
   third or fourth frame, at 10 fps two 50 ms steps; the bodies between
   steps are interpolated (`timeNowLerpFrac`). INFERRED (the loop).
-- vcod had stepped 1000/60 ms up to twelve times a frame. It now steps as
-  1.7 (17 ms, at most two a frame, the first `max(17, owed / 2)`, the
+- vcod had stepped 1000/60 ms up to twelve times a frame. It then stepped
+  as 1.7 (17 ms, at most two a frame, the first `max(17, owed / 2)`, the
   second the rest when a step is still owed), carrying a point's velocity
   across a longer step and the damping per sixtieth of a second, a step
-  capped at 100 ms (vcod's; a hitch loses time). At 200 fps the count is
+  capped at 100 ms (vcod's; a hitch loses time). Since the ODE port
+  (cod4-player-anims.md 10.7) world 2 steps as `Phys_RunToTime` does,
+  uncapped, its step's floor `msecStep` off the awake bodies. At 200 fps the count is
   as before; at lavapipe's 10-18 fps a third. The corpses' spin at rest
   and the head's twist are the solver's, not the step rule's
   (cod4-player-anims.md 10.2).

@@ -89,7 +89,7 @@ fn rec(line: &str) -> (usize, Rec) {
     )
 }
 
-/// The dump's lines (crates/cod4/tests/fixtures/README.md, "ragdoll/ lines").
+/// The dump's lines, as crates/cod4/tests/fixtures/README.md gives them.
 fn parse(text: &str) -> Dump {
     let mut d = Dump {
         seed: 0,
