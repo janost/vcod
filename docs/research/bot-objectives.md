@@ -2898,6 +2898,70 @@ guns.
 - Crushes are too few to read (2 to 9 a row). How a level plays from a
   seat against a human is a hand check.
 
+### 10.16 A hull's route keeps off the other vehicles, 2026-11-26
+
+Retail has no bots; this section is measured on vcod-server only. It
+takes the "Left" item of 10.13: no plan read another vehicle.
+
+- What a moving hull struck, counted on this branch with 10.15's rule
+  on (a temporary count of each strike in `Physics::collide`, by its
+  `HitEntity`: the world, a vehicle moving faster than 10 units/s, one
+  slower), 120 games a map: mp_cassino 5527 on the world, 254 on a
+  moving vehicle and 543 on a still one; mp_kharkov 8281, 1076 and 1101.
+  So 13 % and 21 % of the strikes are on a vehicle, about half of them a
+  still one. VERIFIED (the runs). A strike here is each think whose
+  probes meet something, so a hull pressed on a wall counts once a frame.
+- The rule: `plan_route` takes every live vehicle but the driver's own
+  where it stands at the plan (`Server::other_hulls`), with a reach of
+  its box's farthest corner across plus the driver's half width, 224 for
+  two Panzer IVs. Entering a node within that reach across and 128 up or
+  down (`OTHER_HULL_RISE`) costs `OTHER_HULL_STEPS` (2) grid steps more,
+  on top of 10.13's room costs. It is a cost, not a fit, so every route
+  found before is still found (`a_route_keeps_off_another_vehicle`). A
+  moving vehicle is planned round where it stood; the route goes again
+  on 10.3's clock (a goal moved 300, 5 s with no headway, 15 s).
+- VERIFIED (measured, ours, release, UO stock paks, `bot_vehicles
+  ON_ONLY=1`, `tdm`, 6 bots at level 1, 3 min, seeds 1 to 239 odd, 120
+  games a row, on 10.15; a temporary measuring arm, taken out before the
+  commit). "Back-offs" are a driver's stall and contact back-offs,
+  "stall exits", "contact" and "vehicle kills" as 10.13's; "stuck
+  drivers" are `bot_vehicles`' 12 s spells within 150 units of one spot
+  with no enemy in range.
+
+  mp_cassino:
+
+  | | strikes on the world | on a moving vehicle | on a still one | back-offs | stall exits | contact | stuck drivers | stuck kills | kills | vehicle kills |
+  |---|---|---|---|---|---|---|---|---|---|---|
+  | none | 5527 | 254 | 543 | 608 | 417 | 12.6 % | 5 | 10 | 3184 | 1387 |
+  | 2 steps | 6260 | 171 | 377 | 584 | 409 | 12.2 % | 6 | 13 | 3199 | 1411 |
+  | 4 steps | 6302 | 188 | 341 | 585 | 402 | 12.3 % | 5 | 13 | 3252 | 1414 |
+
+  mp_kharkov:
+
+  | | strikes on the world | on a moving vehicle | on a still one | back-offs | stall exits | contact | stuck drivers | stuck kills | kills | vehicle kills |
+  |---|---|---|---|---|---|---|---|---|---|---|
+  | none | 8281 | 1076 | 1101 | 1700 | 789 | 16.9 % | 3 | 16 | 740 | 180 |
+  | 2 steps | 8415 | 784 | 982 | 1604 | 774 | 16.1 % | 5 | 18 | 770 | 142 |
+  | 4 steps | 9104 | 779 | 916 | 1605 | 765 | 16.1 % | 2 | 20 | 754 | 141 |
+  | 2 steps, own side's and empty hulls only | 8384 | 784 | 979 | 1601 | 773 | 16.0 % | 5 | 18 | 767 | 140 |
+
+- Kept at 2 steps. The strikes on another vehicle fall by 31 % on
+  mp_cassino and 19 % on mp_kharkov, both the moving and the still ones;
+  back-offs fall 4 % and 6 %, and the contact share by under a point.
+  The strikes on the world move both ways by more than that (one game
+  pressed on a wall adds hundreds), so they read as spread. 4 steps
+  moves nothing past 2. Leaving out hulls with an enemy aboard changes
+  nothing: few plans meet one. VERIFIED (the tables).
+- mp_kharkov's vehicle kills fall from 180 to 142 under each variant
+  (its shell kills 161 to 130), two standard deviations of the
+  difference (a row's sum spreads by about 14); mp_cassino's rise from
+  1387 to 1411. Not traced: the variant that leaves enemy hulls out did
+  not bring them back. Open.
+- The cost: a loop over the live vehicles at a node's first pop, and the
+  detours' extra expansions. Not timed.
+- Left: a yield for a moving vehicle met on the way, which the plan sees
+  only where it stood. Open.
+
 ## 11. CoD2's `sd`, `ctf` and `hq`
 
 CoD2 bots (`crates/server/src/bots/cod2.rs`) play the three with the
