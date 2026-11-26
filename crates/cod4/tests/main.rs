@@ -21,6 +21,7 @@ mod moves_ab;
 mod net_decode;
 mod net_hostile;
 mod part_edges;
+mod ragdoll_ab;
 mod render_pins;
 mod skel_ab;
 mod sound_census;

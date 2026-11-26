@@ -131,8 +131,9 @@ The weapon byte is the client's own pick
   Aim pitch, lean and prone pitches bend the spine and head as 1.7's
   controllers and skeleton do (8).
 - Corpses go ragdoll on the server's `startRagdoll`: `ragdoll.cfg`'s
-  bodies under a position-based solver. Grenade, rocket and script
-  blasts push them; bullets do not, as on 1.7 (10).
+  capsules and joints on a port of the ODE 0.5 build 1.7 runs, gated on
+  retail's own ragdolls. Grenade, rocket and script blasts push them;
+  bullets do not, as on 1.7 (10, 10.7).
 - Dropped weapons, grenades and movers on their trajectories. Script
   models without their `hidePart` parts, so a damaged car draws intact or
   cracked glass, never both (cod4-client-view.md 15).
@@ -503,11 +504,11 @@ Ranked by how much a player notices. The research-side lists are
    not push it, as on 1.7; a round does. A map's props (bottles, crates,
    tyres, televisions) fly the same way, so they land elsewhere than on
    1.7, and a `physicsJitter` lifts a prop flat on the floor harder.
-   Ragdolls use vcod's position-based
-   solver, so corpses fall differently too
+   Ragdolls run on the ODE port, so corpses fall as on 1.7 to within a
+   fraction of a unit over their first second
    ([cod4-gsc.md](../research/cod4-gsc.md) 3.6,
    [cod4-world.md](../research/cod4-world.md) 13,
-   [cod4-player-anims.md](../research/cod4-player-anims.md) 10).
+   [cod4-player-anims.md](../research/cod4-player-anims.md) 10.7).
 4. **Stereo only.** A 5.1 or 7.1 device gets the stereo mix on its front
    pair ([cod4-sound.md](../research/cod4-sound.md) 5). 139 alias rows
    whose curve no zone holds fall off straight.

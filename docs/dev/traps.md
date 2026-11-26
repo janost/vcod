@@ -971,6 +971,11 @@ otherwise.
 
 - Inline: `cod4-gsc.md` 9 and 9.4 (the use key, the linked player's frame,
   `linkTo` on a tag).
+- A ragdoll's joints are built in the model's base pose, before the
+  bodies are placed at the snapshot, so their limits are the base pose's;
+  and the build's 15-times friction never reaches a step, state 4's
+  update resets it first: kept for the first step, it puts the bodies 60
+  times further off retail's capture (`cod4-player-anims.md` 10.7).
 
 ### CoD4 combat and items
 

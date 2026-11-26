@@ -554,10 +554,9 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   joint or a self pair, 7 for a limit, 3 for a base lerp bone), or naming
   a def over 1 is dropped with no print (0x5baac3, 0x5baaeb, 0x5badc0, 0x5bb050, 0x5baea1,
   0x5bb140). VERIFIED (the instructions). Def 1's 33 self pairs and 9
-  base lerp bones fill those two caps. VERIFIED (the file). vcod refuses
-  a def's lines past 32 bones, 32 joints, 64 self pairs and 32 base lerp
-  bones: its own caps, not 1.7's. VERIFIED (ours, `ragdoll::MAX_BONES`
-  and kin).
+  base lerp bones fill those two caps. VERIFIED (the file). vcod takes 1.7's
+  caps and drops the same lines (`ragdoll::MAX_BONES` and kin,
+  `ragdoll::tests::a_def_past_its_caps_stops_growing`). VERIFIED (ours).
 - `ragdoll_joint` reads the def, the bone (not 0: `Ragdoll: Joint
   referenced bone with no parent (0)`) and the type, one of `none`,
   `hinge` and `swivel` (the table at 0x71e708, matched in 0x5bad20), and
@@ -616,45 +615,33 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   passes 1700 by the stock max life. VERIFIED (the instructions, the
   dvars). The
   build sets each `FMax` to 15 times the friction (the double at
-  0x70b588, 0x5bcc89..0x5bccac), which holds until the first such frame.
-  INFERRED (the order of the build and the handler).
-- vcod's `vcod_cod4::ragdoll` keeps the def, the dvars, gravity, the
-  mask, the tunnel test and the sleep rule, and stands a position-based
-  solver in for ODE: each bone's two joints are points with half its
-  mass and its radius, the lengths and the attachments (a child rooted
-  off its parent's end held to both of the parent's points, mirrored
-  siblings to each other) are links, a joint's y and z limits clamp the
-  child's swing in the parent bone's bind frame (a hinge holds its other
-  axis still; an axis whose start pose reads outside the cfg's range and
-  inside the mirrored one is flipped, as ODE's axes need not match), the
-  self pairs keep their capsules apart, each point sweeps the clip map as
-  a sphere with Coulomb friction at its bone's friction (and static
-  friction at the end of a step, 10.2), and a bone that would close over
-  an edge is lifted off it. A bone with mirrored children takes its twist
-  from the line between their roots; any other bone keeps the twist it
-  started with against its parent (10.2). Every skeleton bone follows
-  its def bone's frame from the pose it started in; the base lerp bones
-  ease to their bind. The step is 1.7's (17 ms, at most two a frame,
-  cod4-client-perf.md 36); the iteration counts and the damping are
-  vcod's. A blast pushes it (10.1).
-- `play::cod4_players` starts it on the first frame a corpse reads a
-  ragdoll type with `ragdoll_enable` on, from the death anim's pose and
-  the last frame's pose as its velocities. The Options page's Ragdoll row
-  sets `ragdoll_enable` (cod4-front-end.md 9).
+  0x70b588, 0x5bcc89..0x5bccac), which no step sees: state 4's update
+  runs in the build's own frame and sets it again before
+  `Phys_RunToTime` (10.7). VERIFIED (the instruction order, and the
+  gate's first step).
+- vcod's `vcod_cod4::ragdoll` runs the def on the ODE port as 1.7 runs
+  it: the slots' states, the build, world 2's steps and the pose (10.7).
+  Until 2026-11-26 a position-based solver stood in for ODE (each bone's
+  two joints points, its links, limits and self pairs constraints, each
+  point swept as a sphere); 10.2's measurements are that solver's.
+  VERIFIED (ours, the commit history).
+- `play::cod4_players` takes a slot the first frame a corpse reads a
+  ragdoll type with `ragdoll_enable` on and feeds it the death anim's
+  pose until it simulates (10.7). The Options page's Ragdoll row sets
+  `ragdoll_enable` (cod4-front-end.md 9).
 - Live: `cod4_live_corpses_ragdoll_onto_the_floor` (vcod-server `war`
   on mp_crash, a spectator posing through `Cod4Players`, 40 s on the
   live tests' shared clock): eight bots held still are each put on a
   spot of open, level floor near a `mp_tdm_spawn` and killed there by
   `kill`, 3 s apart, so where a corpse falls is the test's and not a
-  fight's. All eight take the type and come to rest with every point
-  clear of the world and every bone that started clear still clear;
-  five to seven go to sleep on the floor, the rest freeze at max life,
-  which `Ragdoll_CheckIdle` does wherever the body is (with eight
-  shooting bots, about one run in 25 froze one mid-fall off a ledge, 9
-  units over the floor, so the rest check skips those). VERIFIED (the
-  test, ours). In the retail kill capture the corpse's hand is in the wall it
-  fell against when its type changes at 49550, and the tunnel test
-  refuses it (`the_kill_captures_corpse_fails_the_tunnel_test`); whether
+  fight's. All eight take the type and go idle with every capsule clear
+  of the world but for the layer its contacts sink into (10.7) and every
+  bone's segment clear; each that slept rests on what is under it, and
+  one of the eight ran to max life in the run. VERIFIED (the test,
+  ours). In the retail kill capture the corpse's hand is in the wall it
+  fell against when its type changes at 49550, and the tunnel test at
+  the build two frames on refuses it
+  (`the_kill_captures_corpse_fails_the_tunnel_test`); whether
   retail's refused it too is not measured, and no capture can measure
   it: the server sends only the corpse's trajectory types (pos 11, apos
   9 at 49550, cod4-combat.md 5.1) and the ragdoll and its tunnel test
@@ -663,8 +650,7 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   ragdoll state). That a ragdoll looks right is
   pending a human's look.
 - Left out: `physicsJolt` on the server, the killcam's
-  own ragdoll (`killcamRagdollHandle`), a twist that moves inside its
-  limit (vcod's bones keep their start twist, 10.2), entity collision
+  own ragdoll (`killcamRagdollHandle`), entity collision
   (`phys_collUseEntities` read as 0, INFERRED).
 
 ### 10.1 Blasts on a ragdoll
@@ -701,21 +687,25 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   VERIFIED (every reference to the two globals).
 - vcod: `cod4_players::explosion_of` builds the push off a fired event
   (the weapon's `explosionRadius`, `cod4_audio::WeaponAv`, or the
-  script words) and `Cod4Players::explode` hands it to every running or
-  sleeping ragdoll (`Ragdoll::explode`): each body's push, divided by its
-  `ragdoll_bone` mass, is one step's change of both its points'
-  velocity, and its jitter draws run the same LCG. The force's size in
-  the position solver is vcod's. vcod-server sends
+  script words) and `Cod4Players::explode` hands it to the pool
+  (`Ragdolls::explode`): a held ragdoll is rebuilt first (10.7), and
+  each body's share goes in as `Phys_ObjAddForce` puts it, times `1000 /
+  msecStep` of the last post step (0x5a5900), the body woken; its jitter
+  draws run the same LCG. VERIFIED (ours against the instructions).
+  vcod-server sends
   `physicsExplosionSphere` and `physicsExplosionCylinder` (event 57 and
   58, the outer radius as the parm, inner and magnitude in `lerp.u`
-  words 0 and 1). Gates: `ragdoll::tests::a_blast_wakes_a_sleeping_body_and_throws_it_away`,
+  words 0 and 1). Gates: `ragdoll::tests::pool::a_blast_wakes_a_held_figure_and_throws_it`,
   `cod4::hardpoint_tests::physics_launch_and_the_explosion_sphere_go_out`
   and the live `cod4_live_blasts_push_the_ragdolls` (eight bots' war on
-  mp_crash for 60 s: 4 explodes turned into 4 pushes that reached 10
-  ragdolls in its run). VERIFIED (ours). How a thrown body looks is
+  mp_crash for 60 s: 3 explodes turned into 3 pushes that reached 9
+  ragdolls in its run on the ODE port). VERIFIED (ours). How a thrown body looks is
   pending a hand check.
 
 ### 10.2 The spin at rest and the head's twist
+
+The vcod measurements and rules below are the position-based solver's,
+which 10.7's port replaced on 2026-11-26; the 1.7 facts stand.
 
 - `ragdoll.cfg`'s def 1 limits each swivel on all three axes: limit 2
   (the neck, joint `1 3 swivel`) x -30..30 ("Head turn"), y -30..30, z
@@ -944,8 +934,8 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
 ### 10.4 The ODE core as ported
 
 `vcod_cod4::ode` translates upstream ODE 0.5 (2004-05-29, under its BSD
-licence) and takes IW's changes from iw3mp.exe 1.7 alone. Not wired into
-the ragdoll yet. Upstream function names below are 0.5's; that the
+licence) and takes IW's changes from iw3mp.exe 1.7 alone; the ragdoll
+runs on it (10.7). Upstream function names below are 0.5's; that the
 binary's functions are those is INFERRED (their shape against the
 source), the rest is labelled per claim.
 
@@ -1094,7 +1084,8 @@ source), the rest is labelled per claim.
   per axis); every joint is made with the child bone first. The friction
   update (0x5be780) rewrites them with `fmax` the friction times
   `0.9 (1 - t)^2 + 0.1`, without the 15. VERIFIED (the instructions).
-  Which of the two a body's first step sees is not read.
+  A body's first step sees the update's, friction times 1 (10.7).
+  VERIFIED (the instruction order).
 - **Tests** (`ode::tests`, ours): the reorder's draws from the init seed
   against the formula by hand, SOR on a two-row LCP with a bound and on a
   friction row, a capsule's mass against its closed form, a hinge
@@ -1104,7 +1095,8 @@ source), the rest is labelled per claim.
   stopping in `v / (mu g)`, the sleep's 53rd step at 17 ms and the
   14-body split. VERIFIED (the tests, ours). Let go level, the chain's
   lower link whips past 39 rad/s and the clamp opens its ball by 1.4
-  units. VERIFIED (the run, ours). No retail capture gates the port yet.
+  units. VERIFIED (the run, ours). `ragdoll_ab` gates the port with its
+  glue on two retail captures (10.7).
 
 ### 10.5 A ragdoll step by step on 1.7
 
@@ -1137,10 +1129,12 @@ put at (207, 2291, 296) by `setviewpos` and killed by `kill`, at
   the joints make the ragdoll one island, which ODE's step disables or
   enables whole, is INFERRED (ODE's island walk).
 - The frame after, the slot turns idle (state 5). Its entry (0x5beb10)
-  saves the pose (0x5bc4f0) and destroys the joints (0x5bce20) and the
-  bodies (0x5bce80, `dBodyDestroy` 0x5b6d60), zeroing each bone's body
-  (0x5bced4). VERIFIED (the instructions; the capture's idle step lists no
-  body).
+  destroys the joints (0x5bce20) and the bodies (0x5bce80, `dBodyDestroy`
+  0x5b6d60), zeroing each bone's body (0x5bced4). VERIFIED (the
+  instructions; the capture's idle step lists no body). Its call to save
+  the pose (0x5bc4f0) runs only in states 3 and 4 and the state reads 5
+  by then, so the pose held is the one state 4 saved the frame before
+  (10.7). VERIFIED (the instruction order, 0x5bec5f before 0x5bec6b).
 - Six takes on 2026-11-26, each the first ragdoll after its map load.
   The start differs from take to take, the root by up to 44 units: the
   death anim and the moment the corpse turns ragdoll vary. Four slept,
@@ -1170,7 +1164,7 @@ the self collision hook. Addresses are iw3mp.exe 1.7's, read with
 `objdump`. The triangle test is ODE 0.5's (`collision_trimesh_ccylinder.cpp`,
 Alen Ladavac's) as IW rebuilt it; that the functions are that file's is
 INFERRED (their shape against the source), the rest is labelled per claim.
-Not wired into the ragdoll yet.
+The ragdoll's world steps them (10.7).
 
 - **The geom.** 0x5a8110 dispatches class 14 (the byte table at 0x5a89b0,
   the jumps at 0x5a8998) to its capsule arm 0x5a8721: kind 5 into the
@@ -1345,15 +1339,218 @@ Not wired into the ragdoll yet.
   the 53rd step its sleep test found it still; on mp_crash a level
   capsule under each flat `mp_tdm_spawn` floor meets it straight up, and
   terrain a tenth of a unit under a floor brush by spawn (1504, 512)
-  adds contacts of its own. VERIFIED (the tests, ours). No retail capture
-  gates these contacts yet.
+  adds contacts of its own. VERIFIED (the tests, ours). `ragdoll_ab`
+  gates them on retail's captures (10.7): the reorder's seed, which
+  moves once per row and iteration, holds retail's for the captures'
+  first 15 and 189 steps, so each of those steps made as many contact
+  rows as retail's. VERIFIED (the gate).
 - **For the glue** (phase 3): a ragdoll body's geom is class 14 made at
   0x5a8e10 with the axis column, radius and half length the bone gives;
   the near callback runs per awake body against the world each step
   before the island pass, the self hook once per step, and
-  `World::empty_contacts` after. Which geom field holds the axis index,
-  and the phys object's offset 0x5bd800 reads (userdata +0), are not
-  traced. INFERRED.
+  `World::empty_contacts` after. The geom's +0x4c is the axis column
+  1-based, 1 for a bone (x), and the phys object's offset (userdata +0)
+  is `(-L/2, 0, 0)` (10.7). VERIFIED (0x5a8e10, 0x5a47c0).
+
+### 10.7 The ragdoll as ported, and its gate
+
+`vcod_cod4::ragdoll::pool` runs CoD4 1.7's ragdolls on the ODE port
+(10.4, 10.6): the slots and their states, the build, world 2's steps and
+the pose, read off iw3mp.exe 1.7 with `objdump`. It replaced the
+position-based solver of 10 and 10.2 on 2026-11-26. Labels per claim.
+
+- **The frame.** `Ragdoll_Update` (0x5beca0) returns unless
+  `ragdoll_enable` is on and `cl_paused` (0x8c9400) is 0
+  (0x5beca1..0x5becc9), adds the frame's msec to the ragdoll clock
+  (0x5beccb), runs each live slot's state update until its state holds,
+  then adds one to its frames (+0x2c) and the msec to its time in state
+  (+0x28), and last stores the self collision hook 0x5bd9c0 at 0xcc54628
+  and calls `Phys_RunToTime(0, 2, clock)` (0x5bed16..0x5bed24). VERIFIED
+  (the instructions). The table at 0x71e658 holds an entry, an exit and an
+  update per state; 0x5bec30 runs the old state's exit (0 refuses), writes
+  the new state, runs its entry (0 puts the old one back) and zeroes the
+  two counters. VERIFIED (0x5bec30..0x5bec80). `Ragdolls::update`,
+  `transition`.
+- **The states.** VERIFIED (the handlers' instructions):
+  - 0, free: the entry (0x5be8d0) frees the joints and bodies and clears
+    the slot; the exit (0x5be900) takes the def's counts.
+  - 1, the DObj: the update (0x5beb90) gives up past 3 frames (`Ragdoll
+    activation timed out waiting for dobj 0x%x`, 0x6f8cb0) and moves on
+    once 0x5bc730 finds every def bone's names and every base lerp bone in
+    the DObj; the exit (0x5be940) keeps their bone indices.
+  - 2, the snapshots: the update (0x5be720) flips +0x2f0 and stores a
+    snapshot (0x5bc5b0: each def bone's and base lerp bone's origin and
+    raw quaternion, 0x5bbc30); on its second frame it keeps the time in
+    state as the time between them (+0x30, the first snapshot's frame's
+    msec) and goes to 3.
+  - 3, the build: the entry (0x5be600) builds the bodies (0x5bcdc0) and
+    the joints (0x5bcd60), places the bodies at the latest snapshot
+    (0x5bc670), sets their velocities (0x5be060), runs the tunnel test
+    (0x5be3a0) and the base lerp bones' first pose (0x5bbf90), then goes
+    to 4, or to 0 when the tunnel test failed.
+  - 4, simulating: the entry (0x5beb60) refuses while 0x5ba1f0's count of
+    slots in 3 or 4, this one among them, has reached
+    `ragdoll_max_simulating`, and sends the slot to 0 (to 5 from 5): at
+    the default 16 at most 15 simulate. The update (0x5bebe0) goes to 5
+    when 0x5be890 says idle (10), else saves the pose (0x5bc4f0) and sets
+    the joints' friction (0x5be780, 10).
+  - 5, idle: the entry (0x5beb10) frees the joints and bodies; the pose
+    held is the one state 4 saved the frame before (10.5). The exit
+    (0x5beaa0), to 2..4 only, needs the bones, room under the cap, and
+    rebuilds the bodies and joints (0x5bd4a0) at the pose held, with no
+    velocities and no tunnel test. Only a blast wakes a slot (0x5bdd5e,
+    10.1).
+  - The create (0x5ba270) refuses at the cap (0x5ba287) and binds def 1
+    (0x5ba317).
+- **The bodies** (0x5bc860, each def bone): its bone's base pose, the
+  model's `baseMat` (`models[0]` +0x1c, 0x57f480), under the entity's
+  origin and axes (0x5bbd50), the turn `Qent (x) Qbone` (0x5bb840), half
+  round z for a mirrored bone (`q (x) (0, 0, 1, 0)`, 0x71e648); the length
+  `L = |p1 - p0|` in that pose (0x5bca03..0x5bca2f). In world 2
+  (0x5a4d90): finite rotation (0x5b7170), the rotation through the
+  quaternion's axes (0x560fb0, 0x596b80, `dBodySetRotation`), a sphere's
+  mass of the bone's (0x5b5c70), then the capsule (0x5a56a0):
+  `dMassSetCappedCylinder(1, x, r, L/2)` adjusted to the bone's mass, a
+  class 14 geom with axis column 1 (1-based: x), radius `r` and half
+  length `L/2` (0x5a8e10), and the body moved from p0 by `R (L/2, 0, 0)`,
+  the phys object's offset left at `(-L/2, 0, 0)` (0x5a47c0). VERIFIED
+  (the instructions). So the mass's cylinder is half the bone, the
+  geom's segment all of it, and the body's centre the bone's middle along
+  its own x, which need not run through p1. VERIFIED (the same). The cog
+  lerp (def bone +0x38) is read by none of it. VERIFIED (0x5bc860..). vcod
+  takes the base pose off the rig's first model (its `baseMat`
+  normalized on load) under the entity's origin and turn as drawn: equal
+  but for rounding. INFERRED.
+- **The joints** (0x5bcb30, def order), built in the base pose before the
+  placement: body 1 the joint's bone's, body 2 its parent's (def bone
+  +0x44); the anchor `pos1 + R1 (-L/2, 0, 0)`, the bone's root (0x5a4740);
+  a joint with no limit takes z, -1.5707964..1.5707964 and friction 0,
+  written into the def (0x5bcbd4..0x5bcbff); each limit's axis turned by
+  R1 (0x5bcc08..0x5bcc7b); `FMax` 15 times the friction (0x5bcc89). A
+  hinge (0x5a7150): attach, anchor, axis, then the limit motor's
+  settings (0x5a70c0); a swivel: a ball at the anchor (0x5a7250) and an
+  Euler motor (0x5a7510), axis 2 the third limit's on body 2, axis 0 the
+  first's on body 1; every motor axis lo, hi, speed 0, `FMax`, fudge 0.9,
+  `phys_joint_cfm` 1e-4, `phys_joint_stop_cfm` 1e-4 and
+  `phys_joint_stop_erp` 0.8 (registered 0x5a3d2c..0x5a3f3e). VERIFIED
+  (the instructions, the registrations). A swivel with fewer than three
+  limits reads stack the build never wrote for the rest (0x5bcc08);
+  every stock swivel has three, and vcod reads zeros. VERIFIED (the
+  instructions, the cfg). The limits are the base pose's, so a death
+  anim's pose past one is pulled back: retail's max-life capture turns
+  the neck 108 degrees against the upper spine (the shortest-arc twist
+  from its first step). VERIFIED (the capture).
+- **The first step's friction.** The build's `FMax` reaches no step:
+  state 4's update in the build's own frame sets it to the friction
+  times 1 before `Phys_RunToTime`. VERIFIED (the instruction order). The
+  gate agrees: the 15 on the first step puts the bodies 0.012 units off
+  retail's after it, against 2e-4. VERIFIED (the run, ours).
+- **The placement and the velocities.** 0x5a5090 turns a body as its
+  bone's snapshot (flipped for a mirrored bone) and puts its centre at
+  `p0 - axes . offset`. 0x5be060, `dt` the time between the snapshots:
+  `inv = (float)(1000 / dt)`; the linear velocity the bone root's move
+  times `inv` (the root's, not the centre's); the earlier quaternion
+  negated when its dot with the later is under 0, both normalized
+  (0x5636e0), `dq = cur (x) prev*` normalized, its rotation vector
+  (0x5bbb00: `xyz * 2a / sin a`, `a = acos w`, 0 when `|sin a|` is 1e-6
+  or less), through 0x5bb8e0 (`(c (x) c*) (x) rv`) and times `inv *
+  ragdoll_rotvel_scale`, written into the body. VERIFIED (the
+  instructions, 0x5be06a..0x5be298).
+- **The tunnel test** (0x5be3a0) on the latest snapshot: each bone from
+  its root along its x for its length, and a bone that two or more bones
+  name as parent (6 read at most) from its middle to each one's root,
+  through `Ragdoll_BoneTrace` (10). A failure frees the slot, after the
+  velocities. VERIFIED (0x5be3a0..0x5be5f3, 0x5be600..0x5be711).
+- **The steps.** `Phys_RunToTime` (0x5a6d50) on world 2's clock
+  (0xcc5461c): when the clock is behind the target, the bodies' positions
+  and axes go into their phys objects (+0x10, +0x1c), then at most two
+  steps, each `max(msecStep, owed / steps left)` ms (an unsigned divide),
+  its seconds the msec times `0.001f` widened, until the clock reaches the
+  target; nothing owed carries and no step is capped. After a frame's
+  steps 0x5a6c10 checks each awake body, and the lerp
+  `timeNowLerpFrac = (target - last) / (now - last)` is stored.
+  VERIFIED (0x5a6d6d..0x5a6eb1). `Phys_RunFrame` (0x5a6440): the dvars
+  (10.4), the hook (the self pairs of each slot in 3 or 4), each geom of
+  world 2's space newest first whose body is awake into the near
+  callback (0x5aa100), the world's step. VERIFIED (0x5a6458..0x5a6625).
+  `Phys_PostStep` (0x5a6640): awake bodies' forces and torques cleared,
+  the contacts emptied, world 2's angular damping (10.2), and the next
+  step's length `17 + trunc(17 t)` for `t` the awake count less 32 over
+  18 clamped to 0..1: 17 ms up to 32 awake bodies. VERIFIED
+  (0x5a6665..0x5a67bb). A space collide between bodies runs only under
+  `phys_interBodyCollision` (default 0). VERIFIED (0x5a65b8).
+- **After a frame** (0x5a6c10, each awake body): a box sweep under the
+  ragdoll mask from where the frame began to where the body is, half
+  size off `r * 0.70710677` and `2 phys_csl` (0x5a6930), puts a body
+  that went through the world back where it met it, its velocities
+  zeroed when that is under 0.001 of the way; a body outside the world
+  model's bounds is put to sleep. VERIFIED (0x5a6930..0x5a6cb9).
+- **The pose** (0x5bc4f0, state 4 each frame before the steps): each def
+  bone's root and turn lerped by `timeNowLerpFrac` between the last
+  frame's start and end (0x5a6ec0), flipped back for a mirrored bone.
+  VERIFIED. A base lerp bone (0x5bbf90) is set under its ragdoll bone
+  (the cfg's fourth word, 0 when left out: the head, the wrists and the
+  ankles go under the pelvis): its pose there as last drawn eased
+  towards its base pose by the time in state over its msec (clamped to
+  0..1), or the base pose at once past 400 units. VERIFIED (the
+  instructions, 0x5bc050..0x5bc111 for the bones read). That the ease
+  compounds, reading back last frame's output, is INFERRED (0x4352e0's
+  skeleton). The DObj write (0x5bb580) sets those bones; that the rest
+  follow their parents with the anim's locals is INFERRED. vcod draws
+  the rest with the locals of the last pose fed, and lerps the
+  quaternions in `glam`. vcod's.
+- **The glue.** `play::cod4_players` keeps one pool per def and clip map
+  (a map load starts a new world 2, the seed back at 0x89abcdef), steps
+  it once a frame before the bodies pose, feeds a corpse's death anim
+  pose while its slot waits, snapshots or builds, and draws the slot's
+  pose once it simulates or holds. Its update runs before the frame's
+  poses, so a slot snapshots the pose fed the frame before: a frame
+  later than 1.7's, as far apart. vcod's.
+
+**The gate** (`ragdoll_ab`, `COD4_DIR`; the stock def, mp_crash's clip
+map, the base pose of `body_mp_usmc_assault`, whose def bone lengths
+every MP body shares). Two takes (10.5): `kill-mp_crash-1.7.txt`, which
+slept, and `kill-mp_crash-1.7-maxlife.txt`, which ran to
+`ragdoll_max_life` and carries the bone lines. VERIFIED (the runs, ours):
+
+| | slept | max life |
+|---|---|---|
+| asleep / idle, step | 79 / 80, retail's | none / 266, retail's |
+| seed retail's through step | 15 | 189 |
+| worst body, first step | 2e-4 units | 2e-4 |
+| worst body | 0.20 units, 4.1 deg | 0.012 to step 165; 0.33, 7.9 after |
+| flags (sleep bit, timer) | retail's every step | retail's every step |
+| rest root z | 239.075 (239.064) | 240.628 (240.652) |
+| rest centres' spread | 33.16 x 48.04 x 3.37 (33.20 x 48.09 x 3.36) | 42.51 x 34.27 x 5.28 (42.56 x 34.23 x 5.28) |
+
+- Each run starts from the take's start bits. The build off the max-life
+  take's snapshots lands within 3 float steps of retail's position, 11 of
+  its quaternion, 9e-4 u/s and 5e-5 rad/s of its velocities, and 1e-5 of
+  its mass (`the_build_off_retails_snapshots`). The dump's latest
+  snapshot is read after state 4 saved its pose over it, so it carries
+  that rounding. VERIFIED (the run, the dump's order).
+- Where it parts: from the first step by about 2e-4 units, through the
+  joints' anchors and turns at rest, built in a base pose rounded off the
+  model rather than under the corpse's entity. INFERRED. The parting
+  grows with each contact the two make differently: on the slept take
+  the seed parts after step 15 and the bodies' speeds by 1.7 u/s on step
+  16, where a step's contact rows first differ in number (the reorder
+  draws once per row swapped, 10.4). VERIFIED (the runs). The max-life
+  take's bodies jitter at rest over 1 rad/s and part slowly after step
+  165. VERIFIED (the runs).
+- At rest on mp_crash's floor retail's capsule ends sit up to 1.8 units
+  under it (the unit surface layer and the soft contacts, 10.6); in
+  `cod4_live_corpses_ragdoll_onto_the_floor` vcod's up to 2.6 where an
+  end presses into a corner. VERIFIED (the captures against the clip
+  map, the test).
+- In `cod4_live_ragdolls_hold_still_once_down` 2 of 6 corpses ran to
+  `ragdoll_max_life` at 4 ms frames and 3 of 6 at 100 ms, against 2 of
+  retail's six takes (10.5). VERIFIED (the run).
+- By eye (pending): on mp_crash or any map, kill a player standing in
+  the open (`kill` with `sv_cheats 1`, or a bot) and watch the corpse
+  fall and lie, at `com_maxfps 0` and `com_maxfps 20`: it should fold at
+  the joints within their limits, settle without sliding, and the head,
+  wrists and ankles ease towards their base pose over a second or two.
 
 ## 11. The anim sampler
 

@@ -2,14 +2,14 @@
 //! against the clip map ([`world`], [`capsule`]), the near callback that
 //! turns the contacts into contact joints (0x5a5f20 and its pass
 //! 0x5a2760) and the self collision hook (0x5bd9c0, [`selfcol`]);
-//! cod4-player-anims.md 10.6. Not wired into `ragdoll` yet.
+//! cod4-player-anims.md 10.6.
 
 pub mod capsule;
 pub mod selfcol;
 pub mod world;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use glam::Vec3;
 
