@@ -1721,12 +1721,18 @@ What 1.7 collides a part against:
   squared linear speed is at most +0xc8 and its squared angular speed at
   most +0xcc; an idle step takes one off the steps left (+0xdc) and the
   step size off the time left (+0xd8), any other resets them to +0xd4
-  and +0xd0; both under 0 sets the disabled bit (0x5b9c49). The world's
-  idle steps are 10 (0x5b7376, in 0x5b7350, which the start-up loop
-  calls for each world at 0x5a2d34). VERIFIED
-  (disassembly). That +0xc8..+0xd4 are the world's +0x3c..+0x48 the
-  frame stores (3.6's table) is INFERRED (ODE's body creation copying
-  them, 0x5b6d25).
+  and +0xd0; both under 0 sets the disabled bit (0x5b9c49). VERIFIED
+  (disassembly). 0x5b7350 sets a world's idle steps to 10 (0x5b7376),
+  but the start-up loop that calls it for each of the three worlds (at
+  0x5a2d34, the loop 0x5a2d32..0x5a2da1) then writes 0 over them
+  (0x5a2d83) and 1 to the auto-disable flag (+0x4c, 0x5a2d75). VERIFIED
+  (the instructions). A body copies the world's +0x3c..+0x48 into
+  +0xc8..+0xd4 when it is made, takes its auto-disable bit from +0x4c
+  and starts its time and steps left at +0xd0 and +0xd4
+  (0x5b6d07..0x5b6d48). VERIFIED (the instructions). So the steps left
+  go under 0 on the first idle step and the time alone decides: a body
+  sleeps on the idle step that takes its time left under 0. VERIFIED
+  (the instructions, 0x5b9c0a..0x5b9c49).
 
 vcod (`ClipMap::world_solids`, `physics::box_contacts`,
 `physics::cylinder_contacts`, `Body::sweep`):
@@ -1850,8 +1856,8 @@ vcod (`ClipMap::world_solids`, `physics::box_contacts`,
   does (28 / 17). As one whole impulse each moved it the same. VERIFIED
   (the runs, ours).
 - The sleep is ODE's rule above on the step's end speeds, `idle` the
-  time under both; ten idle steps take 170 ms, under
-  `phys_autoDisableTime`. vcod's: idle on a speed strictly under the
+  time under both, which is 1.7's rule too: 1.7 zeroes the idle steps
+  (0x5a2d83, above). vcod's: idle on a speed strictly under the
   threshold where ODE takes at most it.
 - The contacts go into the impulse solver with the points'. vcod's.
 - Measured: `cod4::part_edges` drops mp_backlot's sedan hood (its brush

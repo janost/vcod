@@ -533,12 +533,42 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   two and the elbows and knees hinges, neck, shoulders and hips
   swivels), 33 self collision pairs and 9 base lerp bones (head 2000 ms;
   wrists, ankles and the four twist bones 1000). VERIFIED (the file;
-  `ragdoll::tests::the_stock_cfg_builds_the_mp_def`). vcod refuses a
-  def's lines past 32 bones, 32 joints, 64 self pairs and 32 base lerp
-  bones, its own caps: no `iw3mp.exe` string names a count refusal.
-  VERIFIED (the strings). The corpse binds
+  `ragdoll::tests::the_stock_cfg_builds_the_mp_def`). The corpse binds
   def 1 whatever it is asked. INFERRED
   (`Ragdoll_CreateRagdollForDObj`).
+- 1.7's caps on a def: 14 bones (`cmp eax,0xe` at 0x5bab01 in
+  `ragdoll_bone`, 0x5baab0), 28 joints (0x5badfe in `ragdoll_joint`,
+  0x5badb0), 3 limit axes a joint (0x5baf2f in `ragdoll_limit`,
+  0x5bae90), 33 self pairs (0x5bb092 in `ragdoll_selfpair`, 0x5bb040)
+  and 9 base lerp bones (0x5bb182 in `ragdoll_baselerp_bone`, 0x5bb130,
+  a count `ragdoll_pin_bone` shares at 0x5bb2b2). Past one the handler
+  prints its string through 0x4fcbc0 and returns before the count goes
+  up, so the line is dropped: `Ragdoll: Too many ragdoll bones, max %d`
+  (0x6f8924), `Ragdoll: Too many ragdoll joints, max %d` (0x6f89f0),
+  `Ragdoll: Too many limit axes for joint %d, max %d` (0x6f8ab4),
+  `Ragdoll: Too many ragdoll self collision pairs, max %d` (0x6f8ae8),
+  `Ragdoll: Too many base pose lerping bones, max %d` (0x6f8b4c). A
+  `ragdoll_limit` line on a def that holds 28 joints prints the joints'
+  string too (0x5baed5). VERIFIED (the compares, the strings). A line
+  short of its words, the command's own counted (11 for a bone, 4 for a
+  joint or a self pair, 7 for a limit, 3 for a base lerp bone), or naming
+  a def over 1 is dropped with no print (0x5baac3, 0x5baaeb, 0x5badc0, 0x5bb050, 0x5baea1,
+  0x5bb140). VERIFIED (the instructions). Def 1's 33 self pairs and 9
+  base lerp bones fill those two caps. VERIFIED (the file). vcod refuses
+  a def's lines past 32 bones, 32 joints, 64 self pairs and 32 base lerp
+  bones: its own caps, not 1.7's. VERIFIED (ours, `ragdoll::MAX_BONES`
+  and kin).
+- `ragdoll_joint` reads the def, the bone (not 0: `Ragdoll: Joint
+  referenced bone with no parent (0)`) and the type, one of `none`,
+  `hinge` and `swivel` (the table at 0x71e708, matched in 0x5bad20), and
+  no word after them (0x5badb0..0x5bae7c), though the file's comment
+  gives the format as `<def> <bone index> <type> <axis> <low limit> <hi
+  limit>`. `ragdoll_limit` reads the def, the joint, the axis (`x`, `y`
+  or `z`, a leading `-` flipping it, 0x5ba920), the friction, then the
+  low and high angles in degrees: each times the double at 0x70b2d0
+  (pi/180 as a float) and clamped to -pi..pi (0x401070, called with the
+  floats at 0x70b710 and 0x70b4cc), 0x5baf5d..0x5bb026. VERIFIED (the
+  instructions, the strings).
 - The dvars, registered at iw3mp.exe 0x5ba330: `ragdoll_enable` bool 1
   (archived), `ragdoll_debug` 0, `ragdoll_fps` 20 (0..100),
   `ragdoll_max_life` 4500 ms, `ragdoll_max_simulating` 16 (0..32,
@@ -551,17 +581,43 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   20 (0x5a386f), `phys_autoDisableAngular` 1 (0x5a391c),
   `phys_autoDisableTime` 0.9 (0x5a39cd). VERIFIED (the registrations'
   immediates and float constants).
+- `ragdoll_jitter_scale` is registered and never read: its global
+  0xcc789dc is named only by the store at 0x5ba780, and its name string
+  (0x6f8790) only by the registration at 0x5ba753. The same holds for
+  `ragdoll_dump_anims` (global 0xcc789e0, stored at 0x5ba808). VERIFIED
+  (every reference: the disassembly and a byte search of the file for
+  each address).
 - `Ragdoll_BoneTrace` (0x5be2e0) traces a point from one end to the other
   under 0x2806c91 and, when that starts solid or hits, back; the tunnel
   test fails a bone blocked both ways. VERIFIED (the bytes: the three
   `push 0x2806c91` and the `vec3_origin` boxes). The tunnel test runs it
   along each bone and from the middle of a bone with several children
   to each child's root; a failure leaves the corpse on its death anim.
-  INFERRED (`Ragdoll_TunnelTest`). A body runs until every
-  rigid body sleeps or `ragdoll_max_life` passes, then holds its pose
-  (`Ragdoll_CheckIdle`); no new one starts past `ragdoll_max_simulating`;
-  the joints' friction falls from full to a tenth over
-  `ragdoll_jointlerp_time` (`Ragdoll_UpdateFriction`). INFERRED.
+  INFERRED (`Ragdoll_TunnelTest`). No new body starts past
+  `ragdoll_max_simulating`. INFERRED.
+- A body runs until every rigid body sleeps or `ragdoll_max_life`
+  passes, then holds its pose: the simulating state's handler 0x5bebe0
+  asks 0x5be890, which says yes when the body's clock (+0x28) is past
+  `ragdoll_max_life` (global 0xcc8c480) or every rigid body has its
+  disabled bit (flags +0x18, bit 2), and then calls 0x5bec30 with state
+  5. VERIFIED (the instructions, 0x5bebe0..0x5bec2b, 0x5be890..0x5be8ce).
+  0x5be890 is `Ragdoll_CheckIdle`. INFERRED.
+- Otherwise the handler sets the joints' friction (0x5be780, called at
+  0x5bec1d) every frame: each joint's motor force (`FMax`) is its limit
+  friction times `0.9 * (1 - t)^2 + 0.1`, t the clock over
+  `ragdoll_jointlerp_time` (`fild [eax+0x28]`, `fidiv` the dvar's
+  integer, the doubles 0.9 at 0x70b478 and 0.1 at 0x70b040), at motor
+  speed 0: a hinge's through 0x5a70c0, a swivel's three axes through
+  0x5a72f0 (10.2). VERIFIED (the instructions, 0x5be783..0x5be880).
+  Nothing clamps t, and nothing but the idle test above stops the calls:
+  past `ragdoll_jointlerp_time` the factor rises again. With the stock
+  3000 and 4500 ms it is 1 at the start, 0.1 at 3000 ms and back at
+  0.325 at 4500; with `ragdoll_jointlerp_time` at its floor of 100 it
+  passes 1700 by the stock max life. VERIFIED (the instructions, the
+  dvars). The
+  build sets each `FMax` to 15 times the friction (the double at
+  0x70b588, 0x5bcc89..0x5bccac), which holds until the first such frame.
+  INFERRED (the order of the build and the handler).
 - vcod's `vcod_cod4::ragdoll` keeps the def, the dvars, gravity, the
   mask, the tunnel test and the sleep rule, and stands a position-based
   solver in for ODE: each bone's two joints are points with half its
@@ -664,11 +720,36 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
 - `ragdoll.cfg`'s def 1 limits each swivel on all three axes: limit 2
   (the neck, joint `1 3 swivel`) x -30..30 ("Head turn"), y -30..30, z
   -10..30; the shoulders x -104..100 and -100..104 ("Shoulder twist"),
-  the hips x -45..45 ("Hip twist"). VERIFIED (the file). A swivel is a
-  ball joint with an angular motor over the limit axes, each with its
-  stops and its friction as the motor's force at speed 0; a hinge is a
-  hinge with one stop pair. INFERRED
-  (`Ragdoll_CreatePhysJoint`, `Ragdoll_UpdateFriction`).
+  the hips x -45..45 ("Hip twist"). VERIFIED (the file).
+- The joint build 0x5bcb30 joins the body of the joint's bone (body 1)
+  to the body of the bone that bone's entry names in its first word
+  (body 2), and turns the def's limit axes by body 1's rotation into
+  world axes (0x5bcb38..0x5bcb65, 0x5bcb75..0x5bcb9e,
+  0x5bcc08..0x5bcc7b). VERIFIED (the instructions). Body 2 is the
+  parent's. INFERRED (the entry's layout).
+  A swivel is a ball joint (0x5a7250, called at 0x5bccca; type 1 at
+  joint +0x14) and an angular motor (0x5a7510, called at 0x5bccf2; type
+  8) between the same two bodies. VERIFIED (the instructions). The motor
+  takes 3 axes (+0x40) in Euler mode (1 at +0x44, 0x5a756b..0x5a7589):
+  axis 0 is the first limit axis, anchored to body 1, and axis 2 the
+  third, anchored to body 2 (0x5b5860 called with axis 2 and rel 2 at
+  0x5a75c9, axis 0 and rel 1 at 0x5a75f8). VERIFIED (the instructions).
+  ODE's Euler mode makes axis 1 from those two. INFERRED (ODE 0.5's
+  `dxJointAMotor`).
+- Each motor axis i takes limit i's low and high angles as its stops,
+  speed 0 (the zeros at 0x69c69c), its friction as the force, fudge
+  factor 0.9 (the float at 0x70b264), and `phys_joint_cfm`,
+  `phys_joint_stop_erp` and `phys_joint_stop_cfm` (globals 0xcc54418,
+  0xcc5440c, 0xcc5445c): parameters 0 to 4 and 6 to 8 plus 0x100 times
+  i, 0x5a72f0..0x5a7503. VERIFIED (the instructions). Those numbers are
+  ODE's `dParamLoStop` to `dParamFudgeFactor` and `dParamCFM` to
+  `dParamStopCFM`. INFERRED (ODE 0.5's `common.h`). A hinge is a hinge
+  (0x5a7150, type 2) on the first limit axis with that limit's stop
+  pair, speed 0, fudge 0.9 and the same three dvars (0x5a70c0). VERIFIED
+  (the instructions). A joint with no `ragdoll_limit` line gets one z
+  axis, -pi/2..pi/2 and friction 0, written into the def
+  (0x5bcbd4..0x5bcbff); a `none` joint gets no ODE joint (0x5bcc8c..0x5bccb7).
+  VERIFIED (the instructions).
 - The ragdoll world's bodies lose a hundredth of their angular velocity
   each step and none of their linear: `Phys_DoBodyOncePerFrame`
   (iw3mp.exe 0x5a62f0, called from `Phys_RunFrame` at 0x5a6720) takes
@@ -684,8 +765,12 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   stores the squares of the first two and the time into the world each
   frame (iw3mp.exe 0x5a6505..0x5a6533, `[esi+0x3c]`, `[esi+0x40]`,
   `[esi+0x44]`). VERIFIED (disassembly). The test is per body, on the
-  squared speeds, over ten idle steps as well (0x5b9b70, cod4-gsc.md
-  3.6.1). VERIFIED (disassembly).
+  squared speeds (0x5b9b70, cod4-gsc.md 3.6.1). VERIFIED (disassembly).
+  It is time alone: ODE's idle steps count, 10 from 0x5b7350
+  (0x5b7376), is zeroed for each of the three worlds by the start-up
+  loop at 0x5a2d83, so a body's steps left go under 0 on its first idle
+  step and it sleeps on the idle step that takes its time left under 0.
+  VERIFIED (the instructions, 0x5a2d32..0x5a2da1, 0x5b9c0a..0x5b9c49).
 - Two traps, measured live on the earlier solver
   (`cod4_live_ragdolls_hold_still_once_down`: six held bots on mp_crash
   killed on open floor, a spectator posing them through `Cod4Players`,
@@ -762,6 +847,99 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   through the fall, never turning about itself; once down nothing should
   turn or slide, and no limb roll about its length. Check at a high frame
   rate (`com_maxfps 0`) and at a low one (`com_maxfps 20`).
+
+### 10.3 ODE's version and IW's changes
+
+- The physics is ODE built into iw3mp.exe: 0x5b775c passes the file
+  `.\physics\ode\src\odemath.cpp` (0x6f8388) and line 126 to the
+  message `vector has zero size (%s:%d)` (0x6f83a8). VERIFIED (the
+  pushes, the strings).
+- The tree is ODE 0.5 (the 2004-05-29 release) or a CVS tree from
+  before `dxPosR` came in. INFERRED (the marks below against the 0.5,
+  0.6, 0.7, 0.8 and 2006-02-10 snapshot sources).
+  - A geom points at its body's position and rotation: 0x5a9803..0x5a9814
+    stores body +0xe0 and +0x100 into geom +0x18 and +0x1c. VERIFIED
+    (the instructions). Those are 0.5's `pos` and `R` pointers; the 2006
+    snapshot and 0.6 on hold `dxPosR` pointers there. INFERRED (the
+    sources).
+  - The first user geom class is 11 (`lea edi,[edx+0xb]` at 0x5a9be8).
+    VERIFIED (the instructions). 11 is 0.5's and the snapshot's; 0.6
+    adds the convex class (12), 0.7 the heightfield (13). INFERRED (the
+    sources).
+  - 0x5b7350 sets gravity 0, ERP 0.2, CFM 1e-5, both sleep thresholds
+    1e-6, idle time 0, 10 idle steps, auto-disable off, 20 iterations,
+    SOR w 1.3, contact speed FLT_MAX and depth 0 (0x5b735f..0x5b73c1).
+    VERIFIED (the instructions, the floats). Those are 0.5's
+    `dWorldCreate` defaults (the thresholds 0.001 squared). INFERRED
+    (the source).
+  - `dBodySetMass` (0x5b6f70) copies the mass and inverts the inertia
+    with no mass check; its message is `inertia must be positive
+    definite (%s:%d)` (0x6f8328). VERIFIED (the instructions, the
+    string). 0.6 adds a `!` to the message, 0.8 the mass check.
+    INFERRED (the sources).
+  - `initColliders` (0x5a92e0) fills 13 pairs of a 16 by 16 table (0x800
+    bytes at 0xcc781d0, rows 0x80 apart): classes 0 and 0, 0 and 1, 0
+    and 4, 1 and 1, 1 and 4, 2 and 0, 2 and 1, 2 and 2, 2 and 4, 5 and
+    0, 5 and 1, 5 and 2, 5 and 4, then every pair of class 6
+    (0x5a9358..0x5a958b). VERIFIED (the instructions). Those are 0.5's
+    sphere, box, capped cylinder, plane and ray pairs and its geom
+    transform, less its trimesh pairs; 0.5's table is 15 by 15.
+    INFERRED (the source).
+- IW's changes. The field names below are ODE's. INFERRED.
+  - A body is 0x150 bytes, 512 of them in a pool at 0xd820b50
+    (0x5b6aa0..0x5b6ac6): flags +0x18, mass +0x20, inverse mass +0x94,
+    force +0x98, torque +0xa8, sleep thresholds, time and steps
+    +0xc8..+0xd4, time left +0xd8, steps left +0xdc, position +0xe0,
+    quaternion +0xf0 (1 at 0x5b6c29), rotation +0x100 (its diagonal 1s
+    at +0x100, +0x114, +0x128), linear velocity +0x130, angular velocity
+    +0x140 (0x5b6b50..0x5b6d48, 0x5b9b70, 0x5b9158..0x5b9284). VERIFIED
+    (the instructions). 0.5 has the position at +0x98 and the
+    accumulators after the velocities. INFERRED (the source).
+  - A joint keeps its type at +0x14 (0x5b71fa; 1 ball, 2 hinge, 8
+    angular motor at 0x5a72a0, 0x5a7191, 0x5a7549); its two body nodes
+    sit 0x10 apart from +0x1c (bodies at +0x20 and +0x30, 0x5b58ba,
+    0x5b586d), and the type's own fields start at +0x40 (the motor's
+    count, mode, `rel` +0x48 at 0x5b5881, axes +0x54 at 0x5b58ab, limit
+    motors +0x84, 0x2c apart, at 0x5a734e). Pools: 192 hinges, 160 balls
+    and 160 angular motors (`Physics: Out of hinge joints (%d max)` and
+    kin at 0x5a722a, 0x5a7288, 0x5a75a3). VERIFIED (the instructions, the
+    strings). 0.5 keeps a vtable pointer at +0x14, and its base, with
+    `lambda[6]`, ends at 0x50. INFERRED (the source).
+  - Three worlds of 0x10110 bytes from 0xd5ec6e0 (0x5b7352..0x5b7358),
+    made by the loop at 0x5a2d32..0x5a2da1 in 0x5a2cd0, which then turns
+    auto-disable on (+0x4c, 0x5a2d75) and zeroes the idle steps (+0x48,
+    0x5a2d83, 10.2). The world holds the iteration count at +0x28 (20
+    from 0x5b7389, then `phys_qsi` each frame at 0x5a6502), w at +0x2c
+    and a reorder seed at +0x30, set to 0x89abcdef (0x5b7396). 0x5a2cd0
+    returns at once while the byte at 0xd5ec4fb is set (0x5a2cd9, set at
+    0x5a4648), and 0x5a6ff0 clears it (0x5a70b0): the seed restarts at
+    each init after a shutdown and carries across every step of its
+    world between. VERIFIED (the instructions). That an init is a map
+    load is INFERRED.
+  - The world step 0x5b9d40 (called only at 0x5a6625) runs the sleep
+    test (0x5b9d6d), cuts islands (0x5b9cc0, at 0x5b9e51) and steps each
+    with the quick stepper 0x5b86e0 (0x5b9eef, its one call). 0x5b9cc0
+    trims an island to 14 bodies, then drops more from its end while it
+    holds 74 joints or more, clearing each dropped body's tag (+0x10,
+    0x5b9cc3..0x5b9d30). No instruction holds `dRand`'s constants
+    (0x19660d, 0x3c6ef35f). VERIFIED (the instructions).
+  - The quick step points the seed pointer 0xcc781cc at world +0x30
+    (0x5b86fa..0x5b870b). After SOR (0x5b8eed) and the forces it caps
+    each body's speeds (0x5b9294..0x5b93ab): angular over 40 rad/s (the
+    square against the double 1600 at 0x70b928) scaled to 39 (0x70b920),
+    linear over 1e6 (against 999999995904 at 0x70b918) to 999900
+    (0x70b910). VERIFIED (the instructions). 0.5's quick step has no
+    cap. INFERRED (the source).
+  - SOR_LCP (0x5b8080) fills the row order with the `findex < 0` rows
+    from the front and the rest from the back (0x5b82a1..0x5b82cb). Its
+    two iteration loops (0x5b7ad0, 0x5b7df0, picked at 0x5b82d3) reorder
+    when `(iteration & 7) == 7` (0x5b7af0, 0x5b7e24): m swaps of two rows
+    each, an index `((x >> 17) * m) >> 15` off `x = x * 0x343fd +
+    0x269ec3` (MSVC's `rand` constants), the seed read and stored
+    through 0xcc781cc (0x5b7b10..0x5b7b7d). VERIFIED (the instructions).
+    The fill from both ends is the one ODE ships from 0.8 on (0.5 to 0.7
+    fill from the front), and 0.5 and 0.9 shuffle when `(iteration & 7)
+    == 0`, with `dRandInt`. INFERRED (the sources).
 
 ## 11. The anim sampler
 
