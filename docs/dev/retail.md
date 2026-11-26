@@ -305,6 +305,50 @@ python3 -I tools/re/cod4_ragdoll_summary.py tmp/ragdoll.txt [another dump]
   600` before `+devmap` went through.
 - The format and the committed takes: `crates/cod4/tests/fixtures/README.md`.
 
+### Worlds 0 and 1 from the first push to rest
+
+`tools/re/cod4_phys_gdb.py` is the ragdoll driver's twin for the other
+two ODE worlds: 0 (the map's dynents) and 1 (launched parts and FX
+models), `cod4-gsc.md` 3.6.2. One run, one world, one scenario:
+
+```
+COD4_DIR=<1.7 install> PHYS_OUT=$PWD/tmp/phys.txt PHYS_WORLD=0 \
+    PHYS_SCENARIO=round PHYS_POS="1035 816.1 198.7 90" PHYS_PITCH=46.4 \
+    GDB_PY=$PWD/tools/re/cod4_phys_gdb.py \
+    tools/cod4_wine/run.sh +set sv_timeout 600 +set cl_timeout 600 \
+    +set cl_connectTimeout 600 +set sv_connectTimeout 600 \
+    +set scr_game_playerwaittime 1 +set scr_game_matchstarttime 1 \
+    +devmap mp_crash +set fixedtime 17
+python3 -I tools/re/cod4_phys_summary.py tmp/phys.txt [--trim OUT]
+```
+
+- The driver joins a team as `specops_mp,0` (the MP5: one round a frame),
+  turns `god` on, puts the eye at `PHYS_POS` with `setviewpos`, adds
+  `PHYS_PITCH` to the view's pitch by writing `cl.viewangles`
+  (0xc84fd8), and at `PHYS_AT` (frame 700) fires one round (`round`),
+  `PHYS_FIRE` frames of them (`burst`) or throws a frag held 30 frames
+  (`frag`).
+- `setviewpos x y z yaw` takes the eye's position, not the feet's, and
+  sets the pitch to 0. A player in `noclip` cannot fire: the first takes
+  floated with it and their rounds never reached `DynEntCl_EntityImpactEvent`
+  (the driver's `# frame F round leg` line). Without the two
+  `scr_game_*` dvars the round is still in its prematch at frame 700 and
+  the weapon does not fire.
+- `sv_connectTimeout` 600 as well: at its default 45 the loopback join
+  timed out during the map load on a loaded machine. Two clients at once
+  on one machine timed out even with it; run one at a time.
+- Pick a spot with `vcod_cod4::collision::ClipMap::trace` from the eye
+  to the prop's centre before a run: a run costs 5 to 10 minutes here,
+  and a blocked line costs a run.
+- It dumps from the first body of the world to `PHYS_QUIET` (30) steps
+  with every body asleep or gone, or `PHYS_STEPS` (600). The contact
+  breakpoints log only the steps in `PHYS_CONTACTS` (default 1-40),
+  counted from the first body or, with `PHYS_CONTACTS_FROM=launch` (any
+  creator the `made` lines name), from that creator's first body.
+  A world 0 body is destroyed the step after it sleeps, so its lines stop
+  there.
+- The format and the committed takes: `crates/cod4/tests/fixtures/phys/README.md`.
+
 ## Public servers and the master
 
 - vcod's browser and heartbeat use `master.cod.pm`, whose operator allowed

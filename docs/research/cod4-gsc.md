@@ -1935,6 +1935,118 @@ vcod (`ClipMap::world_solids`, `physics::box_contacts`,
   rows still pass: the parts slept within 2.3 s, and all 828 prop drops
   within the 60 s. VERIFIED (the runs, ours).
 
+#### 3.6.2 Worlds 0 and 1 on 1.7, captured
+
+Captured from the Windows client under Wine and gdb on 2026-11-26
+(docs/dev/retail.md, "Worlds 0 and 1 from the first push to rest"), each
+the first physics event after its map load, at `fixedtime` 17. The four
+takes are `crates/cod4/tests/fixtures/phys/` (its README: the recipes, the
+line format and each take's summary). Addresses are `iw3mp.exe`'s (3.6).
+
+Where the dump reads, and the layout it rests on:
+
+- The body list. `Phys_RunToTime` (0x5a6d50) walks its world from
+  `dxWorld` +0 through each body's +4, copying the body's position (+0xe0)
+  and rotation into its userdata (body +0xc, from +0x10)
+  (0x5a6d92..0x5a6df2). VERIFIED (the instructions). In all four takes
+  every body a `Phys_ObjCreate` call returned (its `eax` at the return
+  addresses 0x434d4e, 0x48dcc8, 0x4a21be) was in that list at the next
+  `Phys_RunToTime` entry, the list's length equalled the world's +8, and
+  each body's +0 held its world. VERIFIED (the captures). So the scope's
+  ODE 0.5 layout holds for these: `dxWorld` +0 the first body, +8 the body
+  count; a body's +0 its world, +4 the next body.
+- A body's geoms. Body +0x1c holds its first geom and the geom's +0x10
+  the body. VERIFIED (the captures, every geom). No captured body had a
+  second geom and every geom's +0x14 read 0, so the next-geom link at
+  +0x14 is INFERRED (ODE 0.5's `body_next`).
+- A geom: +4 its class, +0x18 and +0x1c pointers to its body's position
+  (+0xe0) and rotation (+0x100), +0x44 and +0x48 all ones. A box (class
+  1, vtable 0x6f822c) holds its three side lengths at +0x4c: the
+  cinderblock's bounds box reads 16.005, 8, 7.97. A class 12 geom (vtable
+  0x6f81c4) holds a `BrushWrapper` pointer at +0x4c. VERIFIED (the
+  captures).
+- Cylinders come wrapped. Every `physGeoms` cylinder in the takes (a
+  bottle, a can, four tyres) is a class 6 geom (vtable 0x6f823c) on the
+  body, whose +0x4c points to a class 13 geom with no body (+0x10 0) whose
+  position and rotation pointers are the body's own (+0xe0, +0x100). The
+  class 13 geom holds 1 at +0x4c, the radius at +0x50 and the half height
+  at +0x54 (the tyre: 11.95 and 3.5, `phys_dump`'s 11.947635 and 3.5).
+  The class 6 geom holds 1 at +0x50, 0 at +0x54, then a 3x4 rotation
+  from +0x58 (the tyre's a quarter turn about z) and a position near
+  zero at +0x88. VERIFIED (the captures). That +0x58 is the inner geom's
+  frame in the body's is INFERRED (the values).
+- The userdata (body +0xc, 0x50 bytes): +0xc points back to the body,
+  +0x40 is the impact sound row, +0x44 the friction and +0x48 the bounce:
+  the tyres read 0.8 and 0.8, the doors 0.5 and 0.1, `tire`'s and
+  `car_door`'s (3.6). The contact pass's surface (0x5a2760's fourth
+  argument) carries them: mode 0x301c, mu 0.3 and bounce 0.01 off the
+  cinderblock's +0x44 and +0x48, bounce velocity 0.1, soft ERP 0.8 and
+  CFM 1e-5. VERIFIED (the captures).
+- The collide. Each `dCollide` in the near callback (0x5a5f96) pairs a
+  body's geom with the world geom, class 15, which has no body. VERIFIED
+  (every take). With 5 or more raw contacts the pass gets 0x5a2320's cut
+  (0x5a6078..0x5a60f3). VERIFIED (the instructions). The cinderblock's 8
+  raw contacts on each of its first 40 steps came out as 6. VERIFIED (the
+  round take).
+- World 0's `dxWorld` is at 0xd5ec6e0 and world 1's at 0xd5fc7f0, 0x10110
+  on (section 1's stride). VERIFIED (the captures).
+
+What the takes show:
+
+- Each world's seed (+0x30) read 0x89abcdef at its first body in all
+  four takes. VERIFIED (the captures). Both worlds start from it, as
+  world 2 does (`cod4-player-anims.md` 10.5).
+- The seed held on the car's second step, with all nine parts awake and
+  seven in contact with the ground (1 to 6 contacts each into the pass), and on
+  every step with every body asleep; it changed on every other step.
+  VERIFIED (the car take). So a step with contacts does not always draw.
+  The round's fourth seed (0x29ad4fbf) is the frag's first: one sequence,
+  a varying number of draws a step. VERIFIED (the values). How many draws
+  a step takes is P4's to read.
+- `msecStep` stayed 17 on every step of all four, with at most nine
+  bodies awake. VERIFIED (the captures). That matches 3.6's rule, 17 at
+  32 awake or fewer.
+- A push lands before the first step: the bullet push (0x5a5db4, the
+  return from `Phys_ObjBulletImpact`'s 0x5a5900 call) and the blast's
+  (0x48eaa6) are logged at step 0, and each pushed body's first line has
+  zero velocity and the push in its force accumulator (+0x98). VERIFIED
+  (the round, frag and car takes). The FX chunks get no push: they start
+  with their velocities set, 109 to 380 u/s and 1.7 to 9.2 rad/s.
+  VERIFIED (the watermelon take).
+- Every body starts with flags 0x10 (auto-disable) and 0.9 s of idle
+  time. VERIFIED (the captures).
+- World 0 drops a body once it sleeps: the frag's bodies leave the list on
+  the step after the one that sets their disabled bit. VERIFIED (the frag
+  take; 13.2 read the destroy). World 1's sleeping parts stay in it: the
+  car's nine were still listed 600 steps after the last slept. VERIFIED
+  (the car take).
+- The round: one MP5 round into a cinderblock of mass 20, 60 units off;
+  it moved 1.9 units and slept on step 61 (1.02 s). VERIFIED (the round
+  take).
+- The frag: eight dynents woke (two plastic crates, a bottle, a can, two
+  barrel shards, two tyres) and slept between steps 74 and 140 (2.4 s).
+  An earlier take of the same throw woke the same eight and its bottle
+  slept only on step 455 (7.7 s). VERIFIED (the two takes). The push
+  points come off the shared random state (13.3), which other client code
+  also draws on, so takes of one throw differ. INFERRED.
+- The car: `_destructible.gsc` launched nine parts in one frame, 450
+  frames after the first round. Four bounds boxes of mass 6, three brush
+  parts (two of 25, one of 6) and the two tyres of 18. They slept between
+  steps 89 and 132 (2.2 s), the farthest 99.5 units from its launch.
+  VERIFIED (the car take).
+- The watermelon: one round broke it into six FX chunks of mass 1, each a
+  box. Four slept between steps 95 and 165. One was still rolling at 4
+  u/s and 2.2 rad/s on step 600 (10.2 s), past `phys_autoDisableAngular`.
+  Two fell through the ground near z -8 and came to rest at z -767.7.
+  VERIFIED (the watermelon take). Our clip trace finds no ground under
+  the first one's crossing, (3631.8, -124.8), down to -767.9, and ground
+  at -5.9 under the second's, (3673.3, -43.5). VERIFIED
+  (`ClipMap::trace`, ours). Why the second fell through is open: it
+  started at z 29.6, 14 units under the watermelon's centre, held within
+  2 units of that for 30 steps, then fell. VERIFIED (the take).
+- Impact sounds over each take: 23 in the frag, 37 in the car, 6 in the
+  watermelon, none in the round. VERIFIED (the captures).
+
 ## 4. The load
 
 - Zones: `code_post_gfx_mp`, `common_mp`, then the map's: the three names

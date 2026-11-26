@@ -97,7 +97,7 @@ The CoD1 view weapon: `cod11-combat.md` (its offsets), `xanim-v14-format.md` (th
 | [cod4-netfields.md](cod4-netfields.md) | Netfield tables, delta codec, gamestate end, snapshots, the move message |
 | [cod4-server-frame.md](cod4-server-frame.md) | `SV_Frame`'s order: cmds, zombies, archive, message order; `sv_fps` (8); vcod-server's tick cost, measured: slow ticks (9), full servers of every game (10), 32 bots (11), off-LAN pacing (12) |
 | [cod4-map-cycle.md](cod4-map-cycle.md) | `map`, `fast_restart`, `map_rotate`, the client's map change, votes, the menu answers' one-packet rule |
-| [cod4-gsc.md](cod4-gsc.md) | gsc: dialect over CoD2's, builtin tables, configstring slots, the `war` boot, callbacks, connect to spawn, menus, loadout, server commands and squash, follow, hardpoints, script traces, launched parts on the client |
+| [cod4-gsc.md](cod4-gsc.md) | gsc: dialect over CoD2's, builtin tables, configstring slots, the `war` boot, callbacks, connect to spawn, menus, loadout, server commands and squash, follow, hardpoints, script traces, launched parts on the client, ODE worlds 0 and 1 captured on 1.7 (3.6.2) |
 | [cod4-pmove.md](cod4-pmove.md) | Player movement: flags, ground, step, stance, jump, sprint, dvars, the moves A/B (`cod4_moves_ab`), the server's think and spawn, `placeSpawnPoint`, the walk replay (`cod4::wire_ab`) |
 | [cod4-combat.md](cod4-combat.md) | Combat on vcod-server: `WeaponDef`, `PM_Weapon`, the shot, hit boxes, antilag, damage, corpse, dropped weapons, killcam, the A/B (`cod4_combat_ab`), the capture gates (`capture_ab`), grenades, launcher, melee, `kill` |
 | [cod4-collision.md](cod4-collision.md) | The clip map: leaf brush trees, triangles, submodels, static model clip, the clip census |
