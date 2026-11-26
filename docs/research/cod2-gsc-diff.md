@@ -175,7 +175,8 @@ subset) that 1.1's families lack: `assert`, `assertex`,
 `switchtooffhand`, `getplayerangles`, `setweaponclipammo`, `getammocount`,
 `setnormalhealth`, `setteamfortrigger`, `clientclaimtrigger`,
 `clientreleasetrigger`, `setwaypoint`. vcod answers all 26
-(`builtins::cod2`, `BuiltinSet::cod2()`; 5.1, 5.2). `print`, `line` and the
+(`builtins::cod2`, `BuiltinSet::cod2()`; 5.1, 5.2); `vectordot` is now
+1.1's too (`builtins::math`, cod11-gsc-object-model.md 9.1). `print`, `line` and the
 asserts sit in developer blocks or are compiled out (section 3.3); the
 rumble, splitscreen, rank and party builtins are console features a PC
 server answers with nothing (5.1).

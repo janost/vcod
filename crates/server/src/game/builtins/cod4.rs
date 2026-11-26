@@ -40,7 +40,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("floor", floor),
     ("ceil", ceil),
     ("int", super::cod2::cast_int),
-    ("vectordot", super::cod2::vector_dot),
     ("setgameendtime", set_game_end_time),
     ("isstring", is_string),
     ("randomint", random_int),

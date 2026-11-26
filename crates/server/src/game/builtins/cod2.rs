@@ -66,7 +66,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("setweaponclipammo", set_weapon_clip_ammo),
     ("switchtooffhand", switch_to_offhand),
     ("updatescores", update_scores),
-    ("vectordot", vector_dot),
 ];
 
 /// `isSplitScreen()` (`Scr_IsSplitscreen` 0x8117918): pushes 0, VERIFIED.
@@ -612,23 +611,6 @@ pub(super) fn update_scores(
     host.client_commands.push(slot, format!("H {allies}"));
     host.client_commands.push(slot, format!("G {axis}"));
     Ok(Value::Undefined)
-}
-
-/// `vectorDot(a, b)` (`Scr_VectorDot` 0x8114240): the dot product on the
-/// x87 stack, stored as a float. VERIFIED.
-pub(super) fn vector_dot(
-    _host: &mut GameHost,
-    _cx: &mut Cx,
-    _recv: Option<Target>,
-    args: &[Value],
-) -> Result<Value, ErrorKind> {
-    const USAGE: &str = "vectorDot takes two vectors";
-    let (a, b) = (
-        vector(args.first(), USAGE)?.to_array(),
-        vector(args.get(1), USAGE)?.to_array(),
-    );
-    let dot: f64 = (0..3).map(|i| f64::from(a[i]) * f64::from(b[i])).sum();
-    Ok(Value::Float(dot as f32))
 }
 
 /// The type name a cast error spells (`var_typename`, the names 1.1 prints
@@ -1237,16 +1219,6 @@ mod tests {
                 Ok(Value::Int(7))
             );
             assert!(cast_int(&mut host, cx, None, &[Value::Vector([0.0; 3])]).is_err());
-            let dot = vector_dot(
-                &mut host,
-                cx,
-                None,
-                &[
-                    Value::Vector([1.0, 2.0, 3.0]),
-                    Value::Vector([4.0, 5.0, 6.0]),
-                ],
-            );
-            assert_eq!(dot, Ok(Value::Float(32.0)));
         });
     }
 

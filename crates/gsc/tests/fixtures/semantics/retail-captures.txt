@@ -720,6 +720,12 @@ PROBE int_into_unset_size 1
 PROBE at undef_into_unset
 PROBE_FATAL undefined is not an array
 
+# probe_vectordot
+PROBE dot_small 12
+PROBE dot_frac 3.75
+PROBE dot_one_round 2
+PROBE dot_done 1
+
 # probe_wait0_loop
 PROBE wait0_loop frame 0 i 1000
 PROBE wait0_loop frame 1 i 1000
