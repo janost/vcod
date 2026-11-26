@@ -111,6 +111,8 @@ Vehicles:
   end (coduo-diff.md 22.3, "Battle rank").
 - `sv_wwwDownload` redirects again after a failed www transfer, as UO's
   server does.
+- Each `map` runs `<map>_<gametype>.cfg` as UO's server does
+  ([usage](../usage.md#per-map-configs-uo), coduo-diff.md 26).
 
 Vehicles ([coduo-vehicles.md](../research/coduo-vehicles.md) 10-14):
 
@@ -172,6 +174,8 @@ no listen server, no PunkBuster, no levelshots, the UI DLL ignored, no
 authorize server, rcon's subset.
 
 - Audio has had little checking by ear, tank engines included.
+- `sv_mapRotation` reads `gametype` and `map` only: UO's `exec <cfg>`,
+  `allow_jeeps` and `allow_tanks` rotation words are skipped as unknown.
 
 ## Beyond retail
 

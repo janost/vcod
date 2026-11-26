@@ -790,6 +790,16 @@ otherwise.
   overheated `pm_flags` sit above bit 23 (`PMF_*_V22`), so a 1.1 handler
   never fires on one (`coduo-diff.md` 19).
 
+### UO map cycle and script
+
+- UO's `map` reads `<map>_<gametype>.cfg` before the load and runs it after:
+  the file goes ahead of the console queue (`Server::exec_file`), so its
+  `set`s miss the level's init. The gametype is the running one, not
+  `cfg.gametype`, which already holds a latched `set` (coduo-diff.md 26).
+- 1.1 and 1.5 refuse to compile a script naming a UO-only builtin, so a
+  probe shared with them cannot log `getTurretHeat`; UO's measurements of
+  such builtins go in a UO-only probe (`probe_turretheat`).
+
 ### Movement and weapons
 
 - UO's sprint button is `buttons` 0x8 (`msg::BUTTON_SPRINT_V22`), sent to a

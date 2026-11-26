@@ -52,6 +52,7 @@ pub const COMMANDS: &[&str] = &[
     "addbot",
     "removebot",
     "listbots",
+    "exec",
 ];
 
 /// The ones 1.5 and UO add.
@@ -68,12 +69,18 @@ pub const COMMANDS_15: &[&str] = &[
 pub enum Command {
     /// `SV_Map_f` (0x8083c68), registered as `map` and `devmap`: the map
     /// with a leading `mp/` or `mp\` cut, the bsp path the existence check
-    /// names, and whether it was `devmap`, which sets `sv_cheats`.
+    /// names, and whether it was `devmap`, which sets `sv_cheats`. UO's
+    /// skips the map's config when argument 2 is `noautoexec`
+    /// (coduo-diff.md 26).
     Map {
         map: String,
         bsp: String,
         cheats: bool,
+        noautoexec: bool,
     },
+    /// `Cmd_Exec_f` (UO 0x805fc9a): the file, `None` unless there is exactly
+    /// one argument, which prints the usage line.
+    Exec(Option<String>),
     MapRestart,
     MapRotate,
     /// `SV_Status_f` (0x80846b4).
@@ -171,6 +178,9 @@ impl Command {
                     map: map.to_string(),
                     bsp,
                     cheats: w == "devmap",
+                    noautoexec: argv
+                        .get(2)
+                        .is_some_and(|a| a.eq_ignore_ascii_case("noautoexec")),
                 }
             }
             Some("map_restart") => Command::MapRestart,
@@ -203,6 +213,7 @@ impl Command {
             Some("addbot") => Command::AddBot(argv[1..].to_vec()),
             Some("removebot") => Command::RemoveBot((argv.len() > 1).then(|| argv[1..].join(" "))),
             Some("listbots") => Command::ListBots,
+            Some("exec") => Command::Exec(one_arg()),
             Some(w @ ("tempbanuser" | "tempbanclient")) => Command::TempBan {
                 by_num: w == "tempbanclient",
                 arg: one_arg(),
@@ -472,7 +483,8 @@ mod tests {
             Command::Map {
                 map: "mp_ship".into(),
                 bsp: "maps/mp/mp_ship.bsp".into(),
-                cheats: false
+                cheats: false,
+                noautoexec: false
             }
         );
         // Retail's replies: `devmap` alone looks for `maps/mp/.bsp`, and an
@@ -482,7 +494,8 @@ mod tests {
             Command::Map {
                 map: String::new(),
                 bsp: "maps/mp/.bsp".into(),
-                cheats: true
+                cheats: true,
+                noautoexec: false
             }
         );
         assert_eq!(
@@ -490,9 +503,24 @@ mod tests {
             Command::Map {
                 map: "mp_carentan".into(),
                 bsp: "maps/mp/mp_carentan.bsp".into(),
-                cheats: true
+                cheats: true,
+                noautoexec: false
             }
         );
+        assert_eq!(
+            Command::parse("map mp_cassino NoAutoExec"),
+            Command::Map {
+                map: "mp_cassino".into(),
+                bsp: "maps/mp/mp_cassino.bsp".into(),
+                cheats: false,
+                noautoexec: true
+            }
+        );
+        assert_eq!(
+            Command::parse("exec my.cfg"),
+            Command::Exec(Some("my.cfg".into()))
+        );
+        assert_eq!(Command::parse("exec"), Command::Exec(None));
         assert_eq!(Command::parse("map_restart"), Command::MapRestart);
         assert_eq!(Command::parse("MAP_ROTATE"), Command::MapRotate);
         assert_eq!(
