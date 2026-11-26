@@ -284,25 +284,38 @@ impl PhysWorld {
                 }
                 continue;
             }
-            // Only the capsule has its colliders (P3 of the world 0/1 port);
-            // a body of any other class refuses the frame.
-            let cap = match o.geom() {
-                Some(&Geom::Capsule { radius, half_len }) => Capsule {
-                    centre: body.pos,
-                    axis: [body.r[0][0], body.r[1][0], body.r[2][0]],
-                    radius,
-                    half_len,
-                },
+            // A body of a class with no collider yet refuses the frame.
+            let contacts = match o.geom() {
+                Some(&Geom::Capsule { radius, half_len }) => {
+                    let cap = Capsule {
+                        centre: body.pos,
+                        axis: [body.r[0][0], body.r[1][0], body.r[2][0]],
+                        radius,
+                        half_len,
+                    };
+                    collide::collide_world(clip, &cap, CLIP_MASK, collide::MAX_CONTACTS)
+                }
+                Some(g @ (Geom::Cylinder { .. } | Geom::Transform(_))) => {
+                    collide::transform::collide_geom(
+                        clip,
+                        g,
+                        body.pos,
+                        &body.r,
+                        body.pos,
+                        NARROW_MAX_LENGTH,
+                        CLIP_MASK,
+                        collide::MAX_CONTACTS,
+                    )?
+                }
                 Some(g) => return Err(Unported(g.class())),
                 None => continue,
             };
             let mut obj = o.obj;
-            collide::near_world(
+            collide::near_contacts(
                 &mut self.world,
                 id,
                 &mut obj,
-                &cap,
-                clip,
+                contacts,
                 contact,
                 self.id.index(),
             );

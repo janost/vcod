@@ -51,6 +51,20 @@ impl Pieces for Brushes {
     }
 }
 
+/// The brushes' world swept: nothing in the way.
+impl crate::ode::phys::Clip for Brushes {
+    fn sweep(&self, _: Vec3, _: Vec3, _: Vec3, _: Vec3) -> crate::ragdoll::Sweep {
+        crate::ragdoll::Sweep {
+            fraction: 1.0,
+            normal: Vec3::Z,
+            startsolid: false,
+        }
+    }
+    fn bounds(&self) -> (Vec3, Vec3) {
+        (Vec3::splat(-4096.0), Vec3::splat(4096.0))
+    }
+}
+
 fn flat(cap: &Capsule, f: &BrushFaces) -> Vec<ContactGeom> {
     let mut out = Vec::new();
     brush(
@@ -357,4 +371,47 @@ fn five_or_more_contacts_keep_each_clusters_extremes_and_deepest() {
         at(5.0, 5.0, 0.0, Vec3::Z, 0.1),
     ];
     assert_eq!(reduce(&floor), [1, 2, 0]);
+}
+
+/// A cylinder of radius 10 and half height 3 half a unit into a floor
+/// brush's top: flat (axis z), the best axis is the normal and the cap
+/// (0x5a09a0) gives its eight rim points, the first at `x . r`; on its
+/// side (axis x), the side line's two ends (0x5a02b0). Each 0.5 deep
+/// along +z.
+#[test]
+fn a_cylinder_on_a_floor_meets_it_with_its_cap_or_its_side() {
+    use super::brushgeom::NARROW_MAX_LENGTH;
+    use super::cylinder::{Cylinder, collide_world};
+    let floor = Brushes(vec![cuboid([-256.0, -256.0, -32.0], [256.0, 256.0, 0.0])]);
+    let on = |direction: usize, z: f32| {
+        let cy = Cylinder::new(
+            [0.0, 0.0, z],
+            &IDENTITY,
+            direction,
+            10.0,
+            3.0,
+            [0.0, 0.0, z],
+            NARROW_MAX_LENGTH,
+        );
+        collide_world(&floor, &cy, crate::ragdoll::CLIP_MASK, MAX_CONTACTS)
+    };
+    let flat = on(3, 2.5);
+    assert_eq!(flat.len(), 8);
+    for c in &flat {
+        assert_eq!((c.normal, c.depth, c.pos[2]), ([0.0, 0.0, 1.0], 0.5, -0.5));
+        assert!(
+            (Vec3::from(c.pos).truncate().length() - 10.0).abs() < 1e-4,
+            "{c:?}"
+        );
+    }
+    assert_eq!(flat[0].pos, [0.0, 10.0, -0.5]);
+    let side = on(1, 9.5);
+    let ends: Vec<_> = side.iter().map(|c| (c.pos, c.normal, c.depth)).collect();
+    assert_eq!(
+        ends,
+        [
+            ([3.0, 0.0, -0.5], [0.0, 0.0, 1.0], 0.5),
+            ([-3.0, 0.0, -0.5], [0.0, 0.0, 1.0], 0.5)
+        ]
+    );
 }

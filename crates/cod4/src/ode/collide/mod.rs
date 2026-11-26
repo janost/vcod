@@ -4,9 +4,12 @@
 //! 0x5a2760) and the self collision hook (0x5bd9c0, [`selfcol`]);
 //! cod4-player-anims.md 10.6.
 
+pub mod boxes;
 pub mod brushgeom;
 pub mod capsule;
+pub mod cylinder;
 pub mod selfcol;
+pub mod transform;
 pub mod world;
 
 #[cfg(test)]
@@ -136,6 +139,18 @@ pub fn near_world(
     world_index: usize,
 ) {
     let contacts = collide_world(clip, cap, crate::ragdoll::CLIP_MASK, MAX_CONTACTS);
+    near_contacts(world, body, obj, contacts, dv, world_index);
+}
+
+/// The rest of 0x5a5f20 on a geom's `contacts` from its collide.
+pub fn near_contacts(
+    world: &mut World,
+    body: BodyId,
+    obj: &mut Obj,
+    contacts: Vec<ContactGeom>,
+    dv: &Dvars,
+    world_index: usize,
+) {
     if contacts.is_empty() {
         obj.state = 2;
         return;
@@ -193,7 +208,9 @@ pub fn reduce(c: &[(Vec3, Vec3, f32)]) -> Vec<usize> {
     if let Some(k1) = k1 {
         tags[k1] = 1;
         let n1 = nrm[k1];
-        if let Some(k2) = least(&|nm| dot(nm, n0).max(dot(nm, n1))) {
+        // 0x5a1a1a: the larger by 0x4093c0's rule.
+        let larger = |a: f32, b: f32| if ((w(a) - w(b)) as f32) < 0.0 { b } else { a };
+        if let Some(k2) = least(&|nm| larger(dot(nm, n0), dot(nm, n1))) {
             tags[k2] = 2;
         }
     }
@@ -262,10 +279,11 @@ pub fn reduce(c: &[(Vec3, Vec3, f32)]) -> Vec<usize> {
             if tags[i] != k {
                 continue;
             }
-            // The float at 0x70b87c, 0.01, on the squared distance.
+            // The float at 0x70b87c (0x3c23d70b, a hair over 0.01f32) on
+            // the squared distance.
             for j in i + 1..n {
                 let d = sub(pos[j], pos[i]);
-                if tags[j] == k && dot(d, d) < 0.01 {
+                if tags[j] == k && dot(d, d) < f32::from_bits(0x3c23_d70b) {
                     tags[j] = usize::MAX;
                 }
             }
