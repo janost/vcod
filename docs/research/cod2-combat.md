@@ -1306,22 +1306,53 @@ to the first server-side change (below). VERIFIED, the captures.
   `fWeaponPosFrac` on the x87 stack and rounds once at the store. Two
   float roundings leave 9 rows a bit off. VERIFIED, `rifle`, `smg`,
   `pistol`, `frag`.
-- The only rows `moves_ab` cannot replay are `frag`'s three after each
-  blast: the thrower's own grenade lands beside him and `G_Damage`'s
-  knockback (`pm_flags` 0x400, `pm_time`, the push) is server-side.
-  Their numbers are section 4's knockback: the pushes are 108, 100 and 96
-  long (to the float), `knockback * g_knockback / 250` for 27, 25 and 24,
-  with `pm_time` 54, 50 and 50 (48 clamped up), and `velocity[0]` stays 0.
-  VERIFIED, the capture's bits and the arithmetic. Each row is the first
-  snapshot after its blast and carries `pm_time` as set, so the push lands
-  after the frame's cmds and before the snapshot. INFERRED. The replay
-  could only apply it by running the blast: the missile's flight, the
-  `G_RadiusDamage` falloff, the gametype's damage callback and
-  `finishPlayerDamage`, all vcod-server's. The capture predates the
-  gametype's `PROBE damage` line, so not even the callback's damage is
-  logged. Closing the rows needs a server-side replay of a thrower's own
-  blast (`game::cod2_combat_ab` runs two clients, and compares the
-  target's knockback there, 9.2), not a pmove one.
+- `frag`'s three rows after each blast carry the server's knockback:
+  the thrower's own grenade lands beside him and `finishPlayerDamage`
+  pushes him (`pm_flags` 0x400, `pm_time`, the push). Their numbers are
+  section 4's knockback: the pushes are 108, 100 and 96 long (to the
+  float), `knockback * g_knockback / 250` for 27, 25 and 24, with
+  `pm_time` 54, 50 and 50 (48 clamped up), and `velocity[0]` stays 0.
+  VERIFIED, the capture's bits and the arithmetic. The replay writes the
+  push itself (9.1.1).
+
+#### 9.1.1 The server's writes in the replay
+
+`moves_ab` applies the one write the server makes into its capture's
+playerstate outside pmove, the blast's knockback, after the cmds of the
+snapshot it lands in (`server_writes`). With it every `frag` row is exact,
+263 of 263 free and resynced (118 free before). VERIFIED (the gate).
+
+- The store. `PlayerCmd_finishPlayerDamage` (`cod2_lnxded` 0x80fb170)
+  picks the share by stance off `pm_flags` (ps+0xc) bit 1 (0.02,
+  0x3ca3d70a), bit 2 (0.15, 0x3e19999a), else 0.3 (0x3e99999a)
+  (0x80fb38d..0x80fb3cb); `fildl` the damage, `fmuls` the share and
+  `fistpl` under a 0xc00 control word, so the extended product truncates
+  (0x80fb3ce..0x80fb3f5); at most 60 (0x80fb3fb); nothing for 0 or with
+  `eFlags` (ps+0xa0) & 0x300 (0x80fb408..0x80fb42b); `knock * g_knockback /
+  250` (0x437a0000) on the stack, stored once as `VectorScale`'s argument
+  (0x80fb44b..0x80fb464), the scaled direction added to the velocity
+  (ps+0x20, `VectorAdd` 0x80fde8a); with `pm_time` (ps+0x10) 0, `2 knock`
+  clamped to 50..200 into it and `pm_flags` | 0x400 (0x80fb49d..0x80fb518).
+  VERIFIED (the instructions). vcod: `vcod_cod2::pmove::knock_back`, which
+  `Cod2Level::damaged` and the replay both call. Trap: 0.02 as a float is
+  below 0.02, so 50 prone damage is 0.99999998 on the x87 stack and
+  truncates to 0, where an `f32` product rounds to 1. INFERRED (the
+  arithmetic); no capture holds a prone blast.
+- When. `G_RunFrame` runs the missiles after the cmds that arrived since
+  the last frame, and the snapshot follows the frame, so the push lands
+  after the row's cmds and before its snapshot. INFERRED; each row
+  carries `pm_time` as set and the replay meets it there. VERIFIED (the
+  gate).
+- The inputs, off the capture. The burst's point is the `e` line whose
+  delta raises `EV_GRENADE_EXPLODE` (188): its `pos.trBase`, the truncated
+  point `G_ExplodeMissile` hands `G_RadiusDamage` (section 7), (-299,
+  1179, 29) for the first. The direction is the body's origin less it,
+  raised 24, normalized by `Vec3NormalizeTo` as `finishPlayerDamage`
+  does (9.2). The damage is the frame's `damageCount` on a new
+  `damageEvent`: `P_DamageFeedback`'s `damage * 100 / maxhealth` is the
+  damage at a max health of 100 (`stats[2]`), 93, 84 and 81 here. The
+  health is no input: it regenerates off the wire, `stats[0]` taking it
+  only at the next damage (7, then 16 and 19). VERIFIED (the capture).
 
 ### 9.2 Two clients: damage and the end frame
 

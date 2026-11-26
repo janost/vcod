@@ -15,11 +15,14 @@
 //! move), on the weapon table the capture's `# weapons` line names
 //! (`probe_moves.gsc`'s kar98k at retail's index 3 without one), with
 //! `ammo[]` and `ammoclip[]` compared too.
+//! What the server writes into the playerstate outside pmove, the replay
+//! writes at the same point ([`server_writes`]).
 //! `MOVES_REPORT=1` prints every mismatching row; `MOVES_TRACE=walk:resync:120`
 //! prints that row's cmds and the state ours reached.
 
 use std::collections::BTreeMap;
 
+use glam::Vec3;
 use vcod_cod2::net::delta::field_index;
 use vcod_cod2::net::fields::PLAYER_STATE_FIELDS;
 use vcod_cod2::net::{PlayerState2, UserCmd2};
@@ -61,14 +64,10 @@ const WEAPON_CAPTURES: &[&str] = &["rifle", "smg", "bar", "pistol", "switch", "f
 /// The rows are exact: a fix that rights one fails the gate until the
 /// entry shrinks. Each reason names its section of
 /// docs/research/cod2-movement.md, or of cod2-combat.md where it says so.
-const GAPS: &[(&str, &str, usize, &str)] = &[
-    // The thrower's own frag lands beside him: its blast's knockback is
-    // `G_Damage`'s, server-side (cod2-combat.md 9.1).
-    ("frag", "pm_flags", 3, "cod2-combat.md 9.1"),
-    ("frag", "pm_time", 3, "cod2-combat.md 9.1"),
-    ("frag", "velocity[1]", 3, "cod2-combat.md 9.1"),
-    ("frag", "velocity[2]", 3, "cod2-combat.md 9.1"),
-];
+const GAPS: &[(&str, &str, usize, &str)] = &[];
+
+/// `EV_GRENADE_EXPLODE`, the burst's event (cod2-combat.md 7).
+const EV_GRENADE_EXPLODE: u32 = 188;
 
 /// The playerstate words pmove writes.
 const COMPARED: &[&str] = &[
@@ -147,6 +146,10 @@ const COMPARED_ARRAYS: &[&str] = &["ammo", "ammoclip"];
 pub(crate) struct Snap {
     pub(crate) server_time: i32,
     pub(crate) ps: PlayerState2,
+    /// Where this snapshot's grenades burst: each `EV_GRENADE_EXPLODE`
+    /// entity's `pos.trBase`, the truncated point `G_ExplodeMissile` hands
+    /// `G_RadiusDamage` (cod2-combat.md 7).
+    pub(crate) blasts: Vec<Vec3>,
 }
 
 pub(crate) struct Capture {
@@ -165,8 +168,10 @@ pub(crate) fn parse(text: &str) -> Capture {
     let mut weapons = None;
     let mut weapon = "kar98k_mp".to_string();
     let mut cmds = Vec::new();
-    let mut snaps = Vec::new();
+    let mut snaps: Vec<Snap> = Vec::new();
     let mut ps = PlayerState2::default();
+    // Each entity's fields as the `e` deltas left them.
+    let mut ents: BTreeMap<u32, BTreeMap<String, u32>> = BTreeMap::new();
     for line in text.lines() {
         let mut w = line.split_whitespace();
         match w.next() {
@@ -224,7 +229,29 @@ pub(crate) fn parse(text: &str) -> Capture {
                 snaps.push(Snap {
                     server_time,
                     ps: ps.clone(),
+                    blasts: Vec::new(),
                 });
+            }
+            // An entity's delta in the snapshot before it.
+            Some("e") => {
+                let n: u32 = w.next().unwrap().parse().unwrap();
+                let e = ents.entry(n).or_default();
+                let mut burst = false;
+                for kv in w {
+                    let (k, v) = kv.split_once('=').unwrap();
+                    let v = u32::from_str_radix(v, 16).unwrap();
+                    burst |= k.starts_with("events[") && v == EV_GRENADE_EXPLODE;
+                    e.insert(k.to_string(), v);
+                }
+                if burst && let Some(s) = snaps.last_mut() {
+                    let at = |k: usize| {
+                        f32::from_bits(e.get(&format!("pos.trBase[{k}]")).copied().unwrap_or(0))
+                    };
+                    s.blasts.push(Vec3::new(at(0), at(1), at(2)));
+                }
+            }
+            Some("e-") => {
+                ents.remove(&w.next().unwrap().parse().unwrap());
             }
             _ => {}
         }
@@ -328,6 +355,35 @@ fn show(name: &str, v: u32) -> String {
     }
 }
 
+/// The server's write into the body after snapshot `k`'s cmds, in the
+/// frame that built it: a grenade's burst beside the thrower knocks him
+/// back. `G_RunFrame` runs the missiles after the frame's cmds;
+/// `G_RadiusDamage` aims from the burst at the origin raised 24 and
+/// `finishPlayerDamage` normalizes that and pushes
+/// ([`pmove::knock_back`], `g_knockback` 1000). The damage is the frame's
+/// `damageCount` (`P_DamageFeedback`: `damage * 100 / maxhealth`, the
+/// damage itself at a max health of 100) on a new `damageEvent`: the
+/// captures predate the gametype's `PROBE damage` line, and the health
+/// regenerates off the wire (cod2-combat.md 9.1.1).
+fn server_writes(cap: &Capture, k: usize, ps: &mut PlayerState) {
+    let word = |p: &PlayerState2, n: &str| p.f[field_index(&PLAYER_STATE_FIELDS, n)];
+    let (snap, before) = (&cap.snaps[k].ps, &cap.snaps[k - 1].ps);
+    let &[at] = cap.snaps[k].blasts.as_slice() else {
+        return;
+    };
+    if word(snap, "damageEvent") == word(before, "damageEvent") {
+        return;
+    }
+    let taken = word(snap, "damageCount") as i32;
+    assert!(
+        snap.stats[2] == 100 && taken < 127,
+        "the count is not the damage"
+    );
+    let mut dir = ps.origin - at;
+    dir.z += 24.0;
+    pmove::knock_back(ps, taken, pmove::vec3_normalize_to(dir), 1000.0);
+}
+
 #[derive(Default)]
 struct Outcome {
     rows: usize,
@@ -392,6 +448,7 @@ fn replay(
                 defs,
             );
         }
+        server_writes(cap, k, &mut ps);
         if trace {
             eprintln!("  ours origin {:?} velocity {:?}", ps.origin, ps.velocity);
         }
