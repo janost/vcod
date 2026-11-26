@@ -439,6 +439,9 @@ Server:
 - The heartbeat to `master.cod.pm` has not been tried against the live
   master; tests heartbeat a loopback fake. If you try it, tell me how it
   went.
+- The master's `getchallenge` gets a `challengeResponse` at once. Retail
+  sends `getIpAuthorize` to the authorize server instead, so Activision's
+  master may not list a vcod server even with `sv_master2` naming it.
 - No anti-cheat.
 
 ## Beyond retail

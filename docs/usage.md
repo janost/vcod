@@ -180,7 +180,8 @@ three minutes, at most one packet a second to a master host:
 | CoD2 | `master.cod.pm:20710` |
 | CoD4 | `master.cod.pm:20810` |
 
-CoD1, UO and CoD2 send a flatline on Ctrl-C or `quit`.
+CoD1, UO and CoD2 send a flatline on Ctrl-C or `quit`. CoD1 1.5, UO and
+CoD2 also send each master a status every ten minutes, as retail does.
 
 `sv_master1` replaces the default master and `sv_master2`..`5` add
 more, in every game; each gets the game's master port.
@@ -195,6 +196,10 @@ server only when one of `sv_master2`..`5` names it:
 | UO | `--set sv_master2=coduomaster.activision.com` |
 | CoD2 | `--set sv_master2=cod2master.activision.com` |
 | CoD4 | `--set sv_master2=cod4master.activision.com` |
+
+A retail CoD1 or UO server answers the master's `getchallenge` through
+Activision's authorize server; vcod-server answers it directly, so a master
+that waits for that round may not list it.
 
 ### Bans
 

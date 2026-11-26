@@ -411,8 +411,8 @@ own label.
 vcod's port: `crates/server/src/master.rs`, `crates/server/src/rcon.rs`, the
 zombie half of `Server::drop_client`. vcod heartbeats `master.cod.pm`
 (`sv_master1`'s default; its operator allowed it) on the protocol's port,
-20510 or UO's 20610 (retail: always 20510), at most one packet per master host
-a second.
+20510 or UO's 20610 (retail 1.1 and 1.5: always 20510; UO's one master is
+on 20610, `coduo-diff.md` 25), at most one packet per master host a second.
 
 ### Master heartbeat (`SV_MasterHeartbeat`, 0x808ba0c)
 

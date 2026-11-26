@@ -118,6 +118,9 @@ pub struct Cod1Game {
     pub(super) dedicated: i32,
     /// `rconPassword`; empty refuses every rcon.
     pub(super) rcon_password: String,
+    /// `Cmd_Argv(1)` of the last line tokenized: the challenge of the status
+    /// 1.5 and UO push to the master (`Server::master_heartbeat`).
+    pub(super) argv1: String,
     /// The rcon output being collected, `Com_BeginRedirect` to
     /// `Com_EndRedirect`.
     pub(super) redirect: Option<crate::rcon::Redirect>,

@@ -55,6 +55,10 @@ impl Server {
         now: Instant,
         read: Instant,
     ) {
+        // A `connect` line is compressed; its tokenized userinfo is not kept.
+        if cmd != "connect" {
+            self.game.argv1 = oob_argv(raw, 1);
+        }
         match cmd {
             "getinfo" | "getstatus" | "getchallenge" => {
                 if self.core.limiter.limited(cmd, from.ip(), now) {

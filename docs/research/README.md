@@ -60,7 +60,7 @@ The CoD1 view weapon: `cod11-combat.md` (its offsets), `xanim-v14-format.md` (th
 
 | Doc | Covers |
 |---|---|
-| [coduo-diff.md](coduo-diff.md) | Protocol 22: wire, configstrings, events, vehicles on the wire, sprint, gametypes, assets; sound and its blend entities (16); events, effects, flame, the turret view and the HUD (19); vcod-server hosting UO: stage 1 (20), weapons, missiles, artillery and the flamethrower (21), gametypes (22); HTTP downloads (23); systeminfo, pak lists and pure DLL names (24) |
+| [coduo-diff.md](coduo-diff.md) | Protocol 22: wire, configstrings, events, vehicles on the wire, sprint, gametypes, assets; sound and its blend entities (16); events, effects, flame, the turret view and the HUD (19); vcod-server hosting UO: stage 1 (20), weapons, missiles, artillery and the flamethrower (21), gametypes (22); HTTP downloads (23); systeminfo, pak lists and pure DLL names (24); the master heartbeat, status and challenge (25) |
 | [coduo-vehicles.md](coduo-vehicles.md) | Vehicle seats in and out, the seated cmd, prediction and camera; the server's spawn, drive step, guns, damage, wheel dust, death and wrecks |
 | [coduo-movement.md](coduo-movement.md) | UO movement against 1.5: sprint, fatigue, LMG bipod and mounts, grenade cook; weapon time truncation, which holds on every CoD1 Linux server (13) |
 

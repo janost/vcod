@@ -818,11 +818,8 @@ server reads the repeats.
   packet carrying the location confirm dropped at the server, the
   selection still ends; at `cl_packetdup` 0 the map stays up). VERIFIED
   (the tests).
-- vcod departs: the first cmd still goes on the long branch with every
-  field (`CmdWire::full`), not off the playerstate base, so its bits
-  differ from 1.7's wherever the base matches a field; the server reads
-  the same cmd. INFERRED (the code). The send rate and the move op follow
-  1.7 since 14.1 and 14.2.
+- vcod: the send rate and the move op follow 1.7 since 14.1 and 14.2, the
+  first cmd's base since 14.5.
 
 ### 14.1 The send rate
 
@@ -1144,3 +1141,69 @@ What the 1.7 client sends from `CA_CONNECTED` to the world, read off
   test). vcod counts a snapshot's entities and clients once it is read
   whole; retail counts each as it goes, so a message that overflows
   mid-list moves retail's counts and not vcod's. INFERRED (the code).
+
+### 14.5 The first cmd's base: `MSG_SetDefaultUserCmd`
+
+- **The client.** `CL_WritePacket` builds the base of a move's first cmd
+  (14) with 0x505b70 off the playerstate at 0xc5f954, `cl.snap`'s +0x1c
+  (`push 0xc5f954` at 0x463fa6, the call at 0x463faf). 0x505b70 zeroes
+  the 32-byte cmd, stores the bytes of ps +0xe8 and +0xe0 at cmd +0x14
+  and +0x15 (0x505b9b, 0x505ba4), and for two angles takes ps +0x108
+  less ps +0x64 times the double 0x70afb0 (182.04444885, the float
+  `65536 / 360`) plus the double 0x70ace8 (0.5) on the x87 and truncates
+  through 0x68b360 (`cvttsd2si`), masked 0xffff, into cmd +8 and +0xc
+  (0x505bbc..0x505bdb). Then only when ps +0x14 has bit 4 (0x505be1): ps
+  +0xb0 bit 8 sets button 0x100, else bit 4 sets 0x200 (0x505beb..);
+  ps +0x5c above 0 sets 0x80, below 0 sets 0x40 (0x505c0b, 0x505c1e);
+  ps +0xf4 not 0 sets 0x800 (0x505c2c); ps +0xc bit 0x8000 sets 0x2
+  (0x505c40). VERIFIED (the instructions and the doubles). By the
+  playerstate table (section 1) those are `weapon`, `offHandIndex`,
+  `viewangles`, `delta_angles`, `otherFlags`, `eFlags`, `leanf`,
+  `fWeaponPosFrac` and `pm_flags`. VERIFIED (the table's offsets). That
+  `otherFlags` 4 is a player in the world, the eFlags bits prone and
+  crouch, 0x40 and 0x80 the leans, 0x800 the sight key and 0x2 the
+  sprint (`pm_flags` 0x8000 sprinting) is INFERRED (vcod's `pmove`
+  names).
+- **The server.** `SV_UserMove` (0x8172560) passes the playerstate of
+  `SV_GameClientNum` (0x817be6c, called at 0x8172653) to 0x8130ab0 (the
+  call at 0x8172664) before the reader (0x813928e at 0x817269d). 0x8130ab0
+  reads the same fields into the same bits (0x8130ab0..0x8130b94), each
+  angle's x87 result stored as a float and truncated with `cvttss2si`
+  (0x8130adc..0x8130b29). VERIFIED (the instructions). So the client
+  truncates the double and the server the float: an angle a hair under a
+  short (2144.99988) reads 2144 on the client and 2145 on the server.
+  VERIFIED (the instructions above). The CoD4x 21.3 release's
+  `SV_UserMove` calls `MSG_SetDefaultUserCmd` (0xd302a) on
+  `SV_GameClientNum`'s playerstate at 0x112920, before
+  `MSG_ReadDeltaUsercmdKey` (0x11295e); it reads the same fields, its
+  angles `(view - delta) * 65536 / 360` in SSE (the floats at 0x2a7e88
+  and 0x2b37e8) with no 0.5.
+  VERIFIED (the symbols and the instructions).
+- So the first cmd sends only what differs from the client's newest
+  snapshot, and the server fills the rest from its own, newer playerstate:
+  a field the cmd holds at the snapshot's value reads as the server's.
+  VERIFIED (the instructions above). A gamestate clears `cl` (section 14),
+  so the first move after it deltas off a zero playerstate.
+- vcod: `clmsg::default_usercmd` builds both, the rounding by
+  `CmdBaseSide`. `Conn` keeps the base of the newest snapshot read
+  (`take_ops`), clears it at a gamestate and writes each move's cmds the
+  fewest bits off it (`CmdWire::natural`). vcod-server reads a message's
+  first cmd off its own playerstate for the slot, the zero cmd while the
+  slot has none. The capture walk (`capture::Session`) reads a client
+  message off the base of the newest snapshot the capture showed before
+  it. Tests: `the_default_usercmd_reads_the_playerstate`,
+  `the_first_cmd_deltas_off_the_snapshots_playerstate`,
+  `a_cod4_first_cmd_reads_off_the_servers_playerstate` (a crouching
+  player's cmd held at his snapshot sends only its time and the server
+  keeps him crouched; read off the zero cmd it stood him up). VERIFIED (the
+  tests).
+- Live: vcod's `--net-probe --team allies` against `cod4_lnxded` on
+  loopback (`tools/cod4x_capture.sh`, mp_crash, 30 s), the capture read
+  through `play_dump --moves`: all 3626 cmds went on the branch that sends
+  only the time, the spawned player's weapon (27) and view among them, and
+  the server kept him in the world with that weapon and view to the end.
+  VERIFIED live.
+- vcod departs: the in-process probe (`test_harness::Probe`, unless
+  `natural_moves`) and the examples still write every cmd with every field
+  (`CmdWire::full`), as `cod4_probe` and so every capture did; that reads
+  the same off any base. INFERRED (the code).

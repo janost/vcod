@@ -2328,9 +2328,9 @@ loopback (`COD_VERSION=uo tools/run_server.sh`, mp_cassino dm).
   retail server, VERIFIED): the identity rows, `fs_basegame uo`, the vehicle
   and tracer cvars, `sv_night`, `sv_obituary`, `bg_nofatigue`,
   `bg_lmg_yawcap`, `cg_hudcompassMaxRange`, `scr_allow_jeeps` and
-  `scr_allow_tanks` (`S`, `L`, default 1), `sv_master1
-  coduomaster.activision.com` (vcod's row reads `master.cod.pm`, whose UO
-  list is on port 20610). The mirror adds `bg_lmg_yawcap`, `bg_nofatigue`
+  `scr_allow_tanks` (`S`, `L`, default 1). vcod adds `sv_master1..5`,
+  `sv_master1` reading `master.cod.pm`, whose UO list is on port 20610;
+  retail UO has no `sv_master*` cvar (section 25). The mirror adds `bg_lmg_yawcap`, `bg_nofatigue`
   and `cg_hudcompassMaxRange` to 1.5's set (VERIFIED, the gamestate's 155,
   156, 165); systeminfo adds `sv_allowDownload`, `sv_night` and
   `sv_obituary` to 1.5's rows (VERIFIED, configstring 1).
@@ -3353,6 +3353,110 @@ names from `Cod1Wire::pure_dlls`.
   captures were each recipe's second map load, and the gate loads the
   recipe's first map before it. Its pure gate needs `nsf_mp_j5outpost.pk3` in
   the install's `main/`.
+
+## 25. The master
+
+Measured 2026-11-26 on the retail 1.51b server (`COD_VERSION=uo
+tools/run_server.sh`, `dedicated 2`, tdm on mp_cassino) inside its own
+network namespace, a UDP listener standing in for the master and a hosts
+file pointing `coduomaster.activision.com` at it. The stand-in answered each
+heartbeat with `getchallenge <n>`, `getstatus <n>` and `getinfo <n>`, as the
+live CoD1 master does (`cod11-server-handshake.md`, "Master heartbeat").
+Three runs: 26 min on loopback with `scr_tdm_timelimit 5` and an empty
+`sv_mapRotation`, so each map end is a `map_rotate` that restarts mp_cassino
+in place; 11 min with `scr_tdm_timelimit 2` and a two-map rotation
+(mp_arnhem, mp_cassino), so each map end loads a level; 20 s with the master
+off the LAN (198.51.100.2 across a veth pair, `tools/lib.sh` `offlan_veth`).
+
+### 25.1 Retail
+
+- One master, a constant: `SV_MasterAddress` (0x809308f) resolves
+  `coduomaster.activision.com` (0x80e5c0f) once into a static address
+  (0x829f1c0) and keeps it, a failed lookup included. VERIFIED (the
+  instructions).
+- UO registers no `sv_master*` cvar: the string is in neither `coduo_lnxded`
+  nor `game.mp.uo.i386.so`, and `rcon cvarlist sv_m` lists none. VERIFIED
+  (strings, live). 1.5b's `cod_lnxded` has no such string either. VERIFIED
+  (strings).
+- The port is 20610, `BigShort(0x5082)` at 0x80930f4 when the name holds no
+  `:`. VERIFIED (the instructions; live, `resolved to 127.0.0.2:20610`).
+- `SV_MasterHeartbeat` (0x8093159) runs only at `dedicated 2` (`cmpl
+  $0x2,0x20(%eax)` at 0x8093171). When `svs.time` (0x84f7008) reaches the
+  next beat (0x84f7058) it moves that 180000 ms on (`add $0x2bf20` at
+  0x809318d) and sends `heartbeat COD-1\n` (`heartbeat %s` 0x80e5cf1,
+  `COD-1` 0x80e6289). It then runs a second timer the same way (0x84f705c,
+  `add $0x927c0` at 0x8093205, 600000 ms) and calls `SVC_Status` (0x8093316)
+  with the master's address, an unasked `statusResponse`. VERIFIED (the
+  instructions at 0x8093159..0x8093249).
+- `SVC_Status` writes `challenge` from `Cmd_Argv(1)` (the call at
+  0x809334e). VERIFIED (the instructions). The pushed status therefore
+  carries the last tokenized line's argument: `mp_cassino_tdm.cfg` on the
+  first frame, from the load's `exec %s_%s.cfg` (0x80e34d7, used at
+  0x8088275; the log reads `couldn't exec mp_cassino_tdm.cfg`), and later
+  the stand-in's last `getinfo` argument. VERIFIED (live).
+- 26 min loopback timeline: heartbeats at 1.1, 180.4, 360.1, 540.1, 719.8,
+  899.8, 1079.5, 1259.2 and 1439.2 s; pushed statuses at 1.1, 600.1 and
+  1199.5 s; `heartbeat flatline` at `rcon quit` (1560.3 s). The four
+  `map_rotate` restarts forced no heartbeat. VERIFIED (live).
+- Rotation run: every level load forced a heartbeat and restarted the
+  180 s timer, so with maps lasting about 130 s each beat was a load's
+  (130.5, 260.2, 389.8, 519.7 and 649.3 s). The 600 s status kept its own
+  timer through them and went at 599.2 s. VERIFIED (live).
+- The master's `getchallenge` from off the LAN: `SV_GetChallenge` resolves
+  `coduoauthorize.activision.com` on 20600 (`BigShort(0x5078)` at
+  0x8089a63) and sends `getIpAuthorize <challenge> <master ip>  0`
+  (format at 0x80e3f00) there, not a `challengeResponse`. VERIFIED (live:
+  `getIpAuthorize -1606872362 198.51.100.2  0` to 198.51.100.3:20600 5 ms
+  after the heartbeat, no `challengeResponse` in 20 s).
+- Its 5 s fallback, `authorize server timed out` (0x80e3e7f, printed at
+  0x8089b39) and a direct `challengeResponse` (`cmp $0x1388` at
+  0x8089ad6), skips an address equal
+  to `SV_MasterAddress()` (the compare at 0x8089ae1..0x8089b33): the master
+  is sent `getIpAuthorize` again instead. VERIFIED (the instructions). What
+  the authorize server then tells the master is not visible from here.
+  UNVERIFIED.
+- On loopback (a LAN address) the same `getchallenge` gets its
+  `challengeResponse` at once. VERIFIED (live).
+- 1.5b has the same pair of timers: `SV_MasterHeartbeat` (0x80922b1) adds
+  0x2bf20 at 0x80922e5 and 0x927c0 at 0x809235d, the second calling
+  0x809246e, with `codmaster.activision.com` on 20510 (`push 0x501e` at
+  0x809224c). VERIFIED (the instructions). 0x809246e is `SVC_Status`, as the
+  connectionless handler's call at 0x80935cb suggests. INFERRED. 1.1d has
+  the 180 s timer alone (no `0x927c0` in `cod_lnxded`). VERIFIED (the
+  instructions).
+
+### 25.2 vcod-server
+
+The same three setups against `vcod-server mp_cassino --mod-dir uo --bots 6
+--bots-shoot --gametype tdm --set dedicated=2 --set
+sv_master2=coduomaster.activision.com`, `master.cod.pm` and
+`coduomaster.activision.com` both on stand-ins:
+
+- Matches retail: `heartbeat COD-1\n` on port 20610 every 180 s of
+  `svs.time` (0.4, 180.4, 360.1, ... 1439.2 s over the 26 min), none at
+  a `map_restart`, one forced by each level load (130.5, 260.1, 389.8,
+  519.6 and 649.3 s in the rotation run), a flatline on `quit`, and the
+  three queries answered from the server's port with `protocol\22`.
+  VERIFIED (live).
+- The 600 s status was missing before 2026-11-26. `Server::master_heartbeat`
+  now runs `Masters::status` on 1.5 and UO and sends `SVC_Status` to each
+  master the heartbeat resolved. `challenge` is the last connectionless or
+  console line's argument, a UO load setting `<map>_<gametype>.cfg`; client
+  commands, which retail tokenizes too, leave it. The first status waits a
+  second behind the heartbeat under the one packet a second a master gets,
+  so the master's own `getinfo` has landed and its argument is the
+  challenge; retail's goes in the heartbeat's frame. In the rotation run
+  the fixed build pushed at 1.4 and 599.2 s, retail at 1.2 and 599.2 s.
+  VERIFIED (live).
+  `uo_pushes_a_status_to_the_master_every_ten_minutes` gates the timer.
+- Not matched: vcod answers every `getchallenge`, the master's included,
+  with a `challengeResponse` at once and sends no `getIpAuthorize`
+  (server-side authorize is not implemented, `docs/features/cod1.md`). A
+  master that lists only servers its authorize round vouched for would not
+  list vcod-server. INFERRED.
+- With bots, `clients` in `infoResponse` counts them and the
+  `statusResponse` player lines read ping 0. VERIFIED (live). Retail has no
+  bots to compare.
 
 ## Tools
 
