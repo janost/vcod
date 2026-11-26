@@ -1358,17 +1358,21 @@ pub(crate) fn step<W: BotWorld>(w: &mut W) {
         drop(p);
         drop(probing);
         let _p = crate::tick_profile::phase("bots/think");
-        let Some((cmd, kill, yell)) = w
-            .driver_mut()
-            .bots
-            .get_mut(&slot)
-            .map(|bot| (bot.think(&view), bot.take_kill(), bot.take_yell()))
-        else {
+        let Some((cmd, kill, yell, cycle)) = w.driver_mut().bots.get_mut(&slot).map(|bot| {
+            let cmd = bot.think(&view);
+            (
+                cmd,
+                bot.take_kill(),
+                bot.take_yell(),
+                bot.take_seat_change(),
+            )
+        }) else {
             continue;
         };
         if kill && !w.keeps_alive(slot) {
             replies.push((slot, "kill".into()));
         }
+        replies.extend(cycle.map(|c| (slot, c.to_string())));
         yells.extend(yell.map(|y| (slot, y)));
         if let Some(cmd) = w.cmd(slot, cmd, &view) {
             moves.push((slot, cmd, view.on_ladder && !view.on_ground));

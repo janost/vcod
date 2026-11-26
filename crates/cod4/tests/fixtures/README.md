@@ -17,3 +17,34 @@ recipe; the parsers skip `#` lines (`vcod_cod4::net::capture::parse` for
 | `pins` | Not retail: the pmove model's own step lines behind each self-pin digest, written by the lib tests under `PIN_DUMP=1` (`src/pmove/pin.rs`); a `#` line of field names, then a line of values a step | `src/pmove/pin.rs`, on a digest miss |
 | `tapes` | Not retail: a trace tape, every trace a `moves_ab` replay asked of mp_crash's clip and the answer it got, the weapon list's move scales in its header, written under `RECORD_TAPES=1` at `COD4_DIR` (docs/dev/testing.md, "Trace tapes") | `tests/moves_ab.rs` |
 | `skel` | `cod4_lnxded` under gdb, a pose or anim dump per header | `tests/skel_ab.rs`, `crates/common/src/playerpose.rs` |
+| `ragdoll` | Not the server: the Windows client `iw3mp.exe` under Wine and gdb (`tools/cod4_wine/run.sh` with `tools/re/cod4_ragdoll_gdb.py`, docs/dev/retail.md, "A ragdoll from spawn to rest"), its own player killed on mp_crash and its corpse's ragdoll dumped step by step to rest; format below | `tools/re/cod4_ragdoll_summary.py`; the oracle for a port of 1.7's solver (`cod4-player-anims.md` 10.5) |
+
+## `ragdoll/` lines
+
+One ragdoll slot of world 2 (the ragdolls'), from the frame its bodies are
+built to the step it goes idle. Every float is its IEEE bits in hex
+(`f32::from_bits`); units are the game's, seconds and radians.
+
+- `# frame F ragdoll_time T: CMD`: the console commands the driver sent,
+  `F` frames after `cl_ingame` first read 1, `T` the ragdoll clock
+  (0xd5ec534) then.
+- `world W seed S msec_step M`: world 2's `dxWorld` address, its reorder
+  seed (world +0x30) and its step length when the first body appears.
+- `start SLOT BONE FLAGS IDLE | px py pz | qw qx qy qz | vx vy vz | wx wy wz`:
+  each body as the slot built it, before its first step: ODE's flags
+  (+0x18; 0x4 disabled, 0x10 auto-disable), the idle time left (+0xd8), the
+  position (+0xe0, the centre of mass), the quaternion (+0xf0, ODE's w
+  first), the linear (+0x130) and angular (+0x140) velocity. `BONE` is the
+  def's bone index, `ragdoll.cfg`'s `ragdoll_bone 1` lines in order (0 the
+  root, 1 and 2 the spine, 3 the neck, 4 and 5 the left upper and lower
+  arm, 6 and 7 the right's, 8 and 9 the left thigh and shin, 10 and 11
+  the right's).
+- `step N msec M sim T to E seed S next M2`: after world 2's `N`th step
+  since the first body (0x5a6e69 in `Phys_RunToTime`): its length, the
+  world's clock after it, the time the frame runs it to, the seed after
+  the step and the next step's length.
+- `slot I state S msec M frames F`: the slot's state (4 simulating, 5 idle),
+  the time and frames in that state (+0x24, +0x28, +0x2c).
+- `body SLOT BONE ...`: as `start`, after the step. An idle slot has let
+  its bodies go and lists none.
+- `end`: the dump stopped (the slot idle, or `RAGDOLL_STEPS` passed).

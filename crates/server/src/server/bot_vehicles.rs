@@ -338,6 +338,33 @@ fn half_width(info: &crate::game::vehicle::info::VehicleInfo) -> f32 {
     (info.maxs[0] - info.mins[0]).min(info.maxs[1] - info.mins[1]) * 0.5
 }
 
+/// A hull's sizes as its route reads them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct HullSize {
+    /// Half the box's narrower side ([`half_width`]).
+    half: f32,
+    /// Half its length as its collision probes reach: the farther of
+    /// `collisionFrontDist` and `collisionBackDist`, plus the probe box's
+    /// 24 (`physics` `PROBES`; coduo-vehicles.md 12). A Panzer IV's is
+    /// 136, a jeep's 84.
+    long: f32,
+}
+
+impl HullSize {
+    fn of(info: &crate::game::vehicle::info::VehicleInfo) -> Self {
+        let half = half_width(info);
+        HullSize {
+            half,
+            long: (info.collision_front_dist.max(info.collision_back_dist) + 24.0).max(half),
+        }
+    }
+
+    /// The fit radii a plan tests: the hard fit, the full width, the length.
+    fn radii(self) -> [f32; 3] {
+        [self.half * FIT_SHARE, self.half, self.long]
+    }
+}
+
 /// Vehicle `id` as a bot sees it: where it stands, its box, whether a tank.
 fn spot_of(
     id: vcod_gsc::EntId,
@@ -536,6 +563,12 @@ const WARM_LOOKUPS: usize = 8000;
 const FIT_SHARE: f32 = 0.75;
 const FIT_LIFT: f32 = 18.0;
 const FIT_HEIGHT: f32 = 48.0;
+/// What entering a node costs, in grid steps, where a box of the hull's
+/// full half width does not fit, or one of its half length
+/// ([`HullSize`]): a route keeps to open ground, where the hull's long
+/// ends turn clear of the walls (bot-objectives.md 10.13).
+const TIGHT_STEPS: f32 = 2.0;
+const NARROW_STEPS: f32 = 1.0;
 
 /// One driver's route over the navigation graph.
 pub(super) struct DriveRoute {
@@ -748,7 +781,8 @@ impl Server {
             drives.graph = graph;
             drives.routes.clear();
         }
-        let half = self.seated_half_width(slot)?;
+        let hull = self.seated_hull(slot)?;
+        let half = hull.half;
         let now = self.core.sv_time_ms;
         let at = glam::Vec3::from(seat.origin);
         let flat = |p: glam::Vec3| (p - at).truncate().length();
@@ -777,7 +811,7 @@ impl Server {
         if stale {
             self.game.module.bot_drives.routes.remove(&slot);
             let mut rng = self.game.module.driver.bots.get(&slot).map_or(1, |b| b.rng);
-            let path = self.plan_drive(&g, half, at, want, &mut rng);
+            let path = self.plan_drive(&g, hull, at, want, &mut rng);
             if let Some(b) = self.game.module.driver.bots.get_mut(&slot) {
                 b.rng = rng;
             }
@@ -845,15 +879,13 @@ impl Server {
         if hull.warm >= g.nodes.len() {
             return;
         }
-        // Each box's fit radius, as `plan_drive` keys it.
+        // Each box's fit radii, as `plan_route` keys them.
         let mut keys: Vec<(u32, f32)> = host
             .vehicles
             .live
             .values()
-            .map(|v| {
-                let r = half_width(host.vehicles.info_of(v)) * FIT_SHARE;
-                (r as u32, r)
-            })
+            .flat_map(|v| HullSize::of(host.vehicles.info_of(v)).radii())
+            .map(|r| (r as u32, r))
             .collect();
         keys.sort_by_key(|k| k.0);
         keys.dedup_by_key(|k| k.0);
@@ -872,12 +904,12 @@ impl Server {
         }
     }
 
-    /// Half the narrower side of the box of the vehicle `slot` sits in.
-    fn seated_half_width(&self, slot: usize) -> Option<f32> {
+    /// The sizes of the vehicle `slot` sits in.
+    fn seated_hull(&self, slot: usize) -> Option<HullSize> {
         let host = &self.game.module.script.as_ref()?.host;
         let (id, _) = host.vehicles.seat_of(slot)?;
         let info = host.vehicles.info_of(host.vehicles.live.get(&id)?);
-        Some(half_width(info))
+        Some(HullSize::of(info))
     }
 
     /// The fits' link epoch, once they have dropped what the brush links
@@ -901,21 +933,21 @@ impl Server {
     fn plan_drive(
         &mut self,
         g: &crate::nav::NavGraph,
-        half: f32,
+        hull: HullSize,
         at: glam::Vec3,
         want: Option<[f32; 3]>,
         rng: &mut u64,
     ) -> Option<Vec<u32>> {
         let world = self.game.world.as_ref()?;
-        let hull = &mut self.game.module.bot_drives.fits;
+        let fits = &mut self.game.module.bot_drives.fits;
         let bounds = self
             .game
             .module
             .script
             .as_ref()
             .map_or(&[][..], |rt| &rt.host.model_bounds[..]);
-        hull.relink(&world.collision, bounds);
-        plan_route(g, &world.collision, &mut hull.fit, half, at, want, rng)
+        fits.relink(&world.collision, bounds);
+        plan_route(g, &world.collision, &mut fits.fit, hull, at, want, rng)
     }
 }
 
@@ -923,24 +955,26 @@ impl Server {
 type FitCache = HashMap<([u32; 3], u32), bool>;
 
 /// A* from the node nearest `at` to the node nearest `want` (a random far
-/// node for a roam) over the nodes a hull of `half` fits on, through `fit`.
+/// node for a roam) over the nodes `hull` fits on, through `fit`, a node
+/// with no room for the full width or the length costing more to enter.
 /// A goal out of reach routes to the reached node nearest it.
 fn plan_route(
     g: &crate::nav::NavGraph,
     collision: &vcod_common::collision::CollisionWorld,
     fit: &mut FitCache,
-    half: f32,
+    hull: HullSize,
     at: glam::Vec3,
     want: Option<[f32; 3]>,
     rng: &mut u64,
 ) -> Option<Vec<u32>> {
-    let r = half * FIT_SHARE;
-    let key = r as u32;
-    let mut fits = |n: u32| {
+    let [r, wide, long] = hull.radii();
+    let mut test = |n: u32, r: f32| {
         let node = g.nodes[n as usize];
-        *fit.entry((node.to_array().map(f32::to_bits), key))
+        *fit.entry((node.to_array().map(f32::to_bits), r as u32))
             .or_insert_with(|| test_fit(collision, node, r))
     };
+    let tight = TIGHT_STEPS * g.spacing;
+    let narrow = NARROW_STEPS * g.spacing;
     let from = g.nearest(at.into())?;
     let to = match want {
         Some(p) => g.goal_node(p).or_else(|| g.nearest(p))?,
@@ -949,7 +983,7 @@ fn plan_route(
             (0..16).find_map(|_| {
                 let n = (rand_from(rng) as usize % g.nodes.len()) as u32;
                 let p = g.nodes[n as usize];
-                ((p - at).truncate().length() > ROAM_MIN && fits(n)).then_some(n)
+                ((p - at).truncate().length() > ROAM_MIN && test(n, r)).then_some(n)
             })?
         }
     };
@@ -960,14 +994,38 @@ fn plan_route(
     // infinite while unreached.
     let mut cost = vec![(f32::INFINITY, u32::MAX); g.nodes.len()];
     cost[from as usize] = (0.0, from);
+    // What entering each node costs over its edge's length, once tested.
+    let mut extra: Vec<Option<f32>> = vec![None; g.nodes.len()];
+    extra[from as usize] = Some(0.0);
     open.push(std::cmp::Reverse((ordered(h(from)), from)));
     let (mut best, mut best_h) = (from, h(from));
     let mut expanded = 0;
-    while let Some(std::cmp::Reverse((_, n))) = open.pop() {
+    while let Some(std::cmp::Reverse((f, n))) = open.pop() {
+        // A node met again cheaper since this entry went on.
+        if f != ordered(cost[n as usize].0 + h(n)) {
+            continue;
+        }
         // A node is tested as it comes off the heap, not as it goes
         // on: the frontier left at the goal is never tested.
-        if n != from && !fits(n) {
+        if n != from && !test(n, r) {
             continue;
+        }
+        // Its room is read as it first comes off too; a cost found goes
+        // on and the node waits its turn again.
+        if extra[n as usize].is_none() {
+            let e = if !test(n, wide) {
+                tight
+            } else if !test(n, long) {
+                narrow
+            } else {
+                0.0
+            };
+            extra[n as usize] = Some(e);
+            if e > 0.0 {
+                cost[n as usize].0 += e;
+                open.push(std::cmp::Reverse((ordered(cost[n as usize].0 + h(n)), n)));
+                continue;
+            }
         }
         if n == to {
             best = to;
@@ -988,7 +1046,7 @@ fn plan_route(
             if !plain || (q.z - p.z).abs() > vcod_common::pmove::STEPSIZE {
                 continue;
             }
-            let c = here + p.distance(q);
+            let c = here + p.distance(q) + extra[m as usize].unwrap_or(0.0);
             if c < cost[m as usize].0 {
                 cost[m as usize] = (c, n);
                 open.push(std::cmp::Reverse((ordered(c + h(m)), m)));
@@ -1317,7 +1375,8 @@ mod tests {
     ) -> Vec<u32> {
         let goal = g.nodes[to as usize].to_array();
         let at = g.nodes[from as usize];
-        let path = plan_route(g, world, &mut FitCache::new(), half, at, Some(goal), &mut 1);
+        let hull = HullSize { half, long: half };
+        let path = plan_route(g, world, &mut FitCache::new(), hull, at, Some(goal), &mut 1);
         let path = path.expect("no route");
         // A chain of the graph's own edges from the start.
         assert_eq!(path[0], from);
@@ -1413,6 +1472,29 @@ mod tests {
         assert!(!p.contains(&2), "{p:?}");
         g.nodes[2].z = vcod_common::pmove::STEPSIZE;
         assert_eq!(plan(&g, &world, 10.0, 0, 3), [0, 1, 2, 3]);
+    }
+
+    /// Round a pillar on a 5 x 3 grid's middle row, 64 apart, the two
+    /// ways are as long; the one by a post too near for the hull's full
+    /// width costs more, and the route takes the other (bot-objectives.md
+    /// 10.13).
+    #[test]
+    fn a_route_keeps_off_a_node_with_no_room_for_the_full_width() {
+        let g = grid(5, 3, 64.0);
+        let pillar = (Vec3::new(112.0, 56.0, 0.0), Vec3::new(144.0, 72.0, 200.0));
+        // 34 from node 2 (128, 0) or node 12 (128, 128): room for the
+        // fit's 30, none for the half width's 40.
+        let post_by = |y: f32| {
+            let lo = if y < 64.0 { y - 70.0 } else { y + 34.0 };
+            (
+                Vec3::new(112.0, lo, 0.0),
+                Vec3::new(144.0, lo + 36.0, 200.0),
+            )
+        };
+        let p = plan(&g, &test_world(&[pillar, post_by(0.0)]), 40.0, 5, 9);
+        assert!(p.contains(&12) && !p.contains(&2), "{p:?}");
+        let p = plan(&g, &test_world(&[pillar, post_by(128.0)]), 40.0, 5, 9);
+        assert!(p.contains(&2) && !p.contains(&12), "{p:?}");
     }
 
     /// A link change drops only the fits a toggled submodel's bounds (2

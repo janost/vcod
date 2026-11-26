@@ -79,6 +79,12 @@ pub(crate) const GUN_RANGE: f32 = 3000.0;
 /// A driver held by a teammate in its way this long backs off, when the
 /// way back is clear.
 const BLOCKED_TICKS: u32 = 40;
+/// A rider moves to the empty driver's seat with `prevvehslot` at most
+/// once in this many ticks, past the 1750 ms `G_VEH_CycleSlot` holds
+/// between changes, and tries this many times a seat before he gives the
+/// wheel up (bot-objectives.md 10.14).
+const CYCLE_TICKS: u32 = 40;
+const CYCLE_TRIES: u32 = 3;
 /// A four-wheel's driver runs an enemy on foot this near over, within this
 /// many degrees of the hull's heading; the lead counts the hull at no less
 /// than this speed, units/s ([`run_over`]).
@@ -283,6 +289,8 @@ pub(crate) struct Rider {
     /// Where the hull stood, and its yaw, as the stall window opened.
     stall_from: [f32; 3],
     stall_yaw: f32,
+    /// The window opened turning in place (no throttle).
+    stall_pivot: bool,
     /// Ticks a driver has been held by a teammate in its way.
     blocked: u32,
     reverse: u32,
@@ -306,6 +314,13 @@ pub(crate) struct Rider {
     rocket_tap: bool,
     /// This tick's fight is a vehicle: the launcher stays out.
     pub(crate) at_armor: bool,
+    /// The seat held last tick, the tries at the driver's seat from it,
+    /// the ticks before the next, and whether this tick sends
+    /// `prevvehslot`.
+    seat_was: usize,
+    cycles: u32,
+    cycle_wait: u32,
+    pub(crate) cycle: bool,
 }
 
 impl Rider {
@@ -342,6 +357,9 @@ impl Bot {
                 self.rider.progress_from = seat.origin;
             }
             self.rider.seated += 1;
+            if self.rider.seat_was != seat.seat {
+                (self.rider.seat_was, self.rider.cycles) = (seat.seat, 0);
+            }
             // Whatever the walk was doing starts afresh once out.
             self.disengage();
             self.restart_stall(view.origin);
@@ -681,7 +699,25 @@ impl Bot {
         // A hull that has struck something for seconds on end, driven or
         // sliding, is about to destroy itself and everyone in it.
         let wedged = seat.contact_ms >= LEAVE_CONTACT_MS;
-        let abandoned = seat.seat > 1 && !seat.driven && self.rider.idle > UNDRIVEN_TICKS;
+        // A rider whose driver's seat stands empty moves to it: a tank's
+        // holds the main gun as well as the wheel, and a jeep's gunner
+        // with nobody to shoot drives on. `prevvehslot` steps down to the
+        // nearest free seat (bot-objectives.md 10.14).
+        let r = &mut self.rider;
+        let wheel = seat.seat > 1
+            && !seat.driven
+            && !seat.off
+            && !wedged
+            && !r.leaving
+            && (seat.tank || enemy.is_none())
+            && r.cycles < CYCLE_TRIES;
+        r.cycle_wait = r.cycle_wait.saturating_sub(1);
+        if wheel && r.cycle_wait == 0 {
+            r.cycle = true;
+            r.cycles += 1;
+            r.cycle_wait = CYCLE_TICKS;
+        }
+        let abandoned = seat.seat > 1 && !seat.driven && self.rider.idle > UNDRIVEN_TICKS && !wheel;
         // A ride ends on its clock, but not while the gun breaches a base:
         // 35 shells take one, three seconds apart.
         let done = self.rider.seated > RIDE_TICKS && shell.is_none()
@@ -812,9 +848,16 @@ impl Bot {
         // the hold's count runs down rather than starting over.
         r.blocked = r.blocked.saturating_sub(1);
         let keyed = cmd.forward != 0 || cmd.right != 0;
-        if !keyed || r.stall == 0 {
+        // A window is judged by the keys it opened under: a tank that
+        // pivoted most of it and drove the last tick read as stalled on
+        // ground, and one that drove and then pivoted on its turn
+        // (bot-objectives.md 10.13).
+        let pivot = cmd.forward == 0;
+        if !keyed || r.stall == 0 || pivot != r.stall_pivot {
             r.stall_from = seat.origin;
             r.stall_yaw = seat.yaw;
+            r.stall_pivot = pivot;
+            r.stall = 0;
         }
         r.stall = if keyed { r.stall + 1 } else { 0 };
         let stalled = r.stall >= STALL_TICKS && {
