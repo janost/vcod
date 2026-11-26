@@ -96,6 +96,8 @@ CoD4 1.7's formats and wire.
 - `fx.rs`: an effect element's `FxElemDef` and samples.
 - `ragdoll.rs`: the client ragdoll (`ragdoll.cfg`'s defs, the 1.7 dvars, the
   solver `play::cod4_players` runs on a corpse).
+- `ode/`: ODE 0.5 as iw3mp.exe 1.7 built it (cod4-player-anims.md 10.4),
+  the ragdoll's rigid body core; not wired in yet.
 - `physics.rs`: a `physicsLaunch`ed part's rigid body (its preset, shape and
   the solver `play::cod4_physics` runs on it).
 - `collision/`: the clip map from a clipMap_t.

@@ -1380,8 +1380,10 @@ mod tests {
             let Some(sun) = lighting.sun() else {
                 continue;
             };
-            let world =
-                CollisionWorld::build(&bsp, &crate::props::collision_tris(&fs, &bsp.entities));
+            let world = CollisionWorld::with_statics(
+                &bsp,
+                &crate::props::static_models(&fs, &bsp.entities),
+            );
             let reach = world_reach(&bsp);
             let k = sun_keep(
                 &sun_keep_samples(&bsp, 40_000),
@@ -1440,8 +1442,10 @@ mod tests {
             let Some(sun) = lighting.sun() else {
                 continue;
             };
-            let world =
-                CollisionWorld::build(&bsp, &crate::props::collision_tris(&fs, &bsp.entities));
+            let world = CollisionWorld::with_statics(
+                &bsp,
+                &crate::props::static_models(&fs, &bsp.entities),
+            );
             let reach = world_reach(&bsp);
             let (lit, shadowed) = split_by_sun(
                 &sun_keep_samples(&bsp, 40_000),

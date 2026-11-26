@@ -421,7 +421,7 @@ Server:
 - rcon runs `map`, `devmap`, `map_restart`, `map_rotate`, `status`,
   `clientkick`, `kick`, `banUser`, `banClient`, `dumpuser`, `serverinfo`,
   `systeminfo`, `say`, `set`, `seta`, `cvarlist`, cvar queries,
-  `heartbeat`, `killserver` and `quit`; on 1.5 also `tempBanUser`,
+  `heartbeat`, `exec`, `killserver` and `quit`; on 1.5 also `tempBanUser`,
   `tempBanClient`, `unbanUser`, `setdrawfriend`, `setfriendlyfire` and
   `setkillcam`. `scriptUsage` prints retail's report: at `developer 1` each
   position's source line and caret, at `developer 0` an offset in vcod's

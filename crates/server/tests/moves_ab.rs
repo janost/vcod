@@ -28,7 +28,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use vcod_common::collision::CollisionWorld;
-use vcod_common::movetrace::MoveWorld;
+use vcod_common::movetrace::{ContentsBox, MoveWorld};
 use vcod_common::net::event_ids::EV_PAIN;
 use vcod_common::net::msg::{self, NULL_USERCMD, UserCmd};
 use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
@@ -55,7 +55,8 @@ fn retail_cs7() -> &'static str {
 fn load_world(fs: &vcod_common::pk3::Pk3Fs, map: &str) -> (CollisionWorld, String) {
     let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).expect("read the bsp")).expect("parse");
-    let world = CollisionWorld::build(&bsp, &vcod_common::props::collision_tris(fs, &bsp.entities));
+    let world =
+        CollisionWorld::with_statics(&bsp, &vcod_common::props::static_models(fs, &bsp.entities));
     (world, bsp.entities.clone())
 }
 
@@ -252,16 +253,18 @@ fn replay(
     world: &CollisionWorld,
     weapons: &[Option<WeaponDef>],
 ) -> Report {
-    replay_taped(p, rules, lines, world, None, weapons)
+    replay_taped(p, rules, lines, world, None, &[], weapons)
 }
 
-/// [`replay`], its traces recorded on or answered from `tape`.
+/// [`replay`], its traces recorded on or answered from `tape`, its point
+/// contents meeting `mounts` as the server's do ([`script_mounts`]).
 fn replay_taped(
     p: &Cod1Wire,
     rules: MoveRules,
     lines: &[Line],
     world: &CollisionWorld,
     tape: Option<&Tape>,
+    mounts: &[ContentsBox],
     weapons: &[Option<WeaponDef>],
 ) -> Report {
     let cmds: Vec<UserCmd> = lines
@@ -300,7 +303,7 @@ fn replay_taped(
     } else {
         Arith::Kept
     });
-    let mw = MoveWorld::bare(world);
+    let mw = MoveWorld::bare(world).with_boxes(mounts);
     let mw = tape.map_or(mw, |t| mw.with_tape(t));
     let mut report = Report {
         compared: 0,
@@ -706,11 +709,13 @@ fn the_predictor_replays_uo_prone_moves() {
         let Some((world, weapons)) = uo_setup(&text, "mp_carentan") else {
             return;
         };
-        let r = replay(
+        let r = replay_taped(
             &PROTOCOL_V22,
             MoveRules::Uo,
             &parse(&PROTOCOL_V22, &text),
             &world,
+            None,
+            &script_mounts(file),
             &weapons,
         );
         print(file, &r);
@@ -721,42 +726,32 @@ fn the_predictor_replays_uo_prone_moves() {
     assert!(failures.is_empty(), "{failures:#?}");
 }
 
-/// Fields the prone move captures' replays may miss, per capture.
-/// - The crouched script mount's two deploys (ct 23490 and 39491): the
-///   `UOFOOT_GAPS` `mount` gap. The server's own point contents meet the
-///   trigger's 0x400000 and deploy crouched, and its hint 7 goes out with
-///   `serverCursorHintVal` 0, which a standing script mount sends too; the
-///   trigger reaches no client (`r.svFlags` 1), so the predictor, as the
-///   retail cgame by the same code, stands the body up for one snapshot
-///   (coduo-movement.md 11). Read as crouched, this capture replays with no
-///   miss and the standing one misses the mirror image. The second deploy
-///   comes as a turn's cone decays, and the stood body decays it at the
-///   standing rate: `aimSpreadScale` off with the stance.
-const PRONEMOVE_GAPS: &[(&str, &str, &[i32])] = &[
-    (PRONEMOVE_DEPLOY_CROUCH_UO, "ducked", &[23490, 39491]),
-    (PRONEMOVE_DEPLOY_CROUCH_UO, "stance", &[23490, 39491]),
-    (
-        PRONEMOVE_DEPLOY_CROUCH_UO,
-        "viewHeightCurrent",
-        &[23490, 39491],
-    ),
-    (
-        PRONEMOVE_DEPLOY_CROUCH_UO,
-        "viewHeightLerpTarget",
-        &[23490, 39491],
-    ),
-    (
-        PRONEMOVE_DEPLOY_CROUCH_UO,
-        "viewHeightLerpTime",
-        &[23490, 39491],
-    ),
-    (
-        PRONEMOVE_DEPLOY_CROUCH_UO,
-        "viewHeightTarget",
-        &[23490, 39491],
-    ),
-    (PRONEMOVE_DEPLOY_CROUCH_UO, "aimSpreadScale", &[39491]),
-];
+/// Fields the prone move captures' replays may miss, per capture. None
+/// since the replay's point contents meet the script mount
+/// ([`script_mounts`]).
+const PRONEMOVE_GAPS: &[(&str, &str, &[i32])] = &[];
+
+/// The `spawnTriggerMount` box `client-probes/probe_uofoot` linked for the
+/// capture `file`, as the server's pmove point contents meet it
+/// (`trap_PointContents`, game.mp.uo 0x7443a, coduo-movement.md 11.1). The
+/// trigger reaches no client, so the predictor alone deploys a crouched one
+/// standing for a snapshot off hint 7 value 0, as the retail cgame does;
+/// the capture is the server's pmove, which deploys it crouched.
+fn script_mounts(file: &str) -> Vec<ContentsBox> {
+    let mount = |mins: [f32; 3], maxs: [f32; 3], crouch: bool| ContentsBox {
+        mins: mins.into(),
+        maxs: maxs.into(),
+        contents: vcod_server::game::trigger::mount_contents(crouch, false) as u32,
+    };
+    // probe_spot mound and moundcrouch on mp_carentan, mount on mp_foy.
+    let mound = ([-244.0, 30.0, -20.0], [-204.0, 52.0, 120.0]);
+    match file {
+        PRONEMOVE_DEPLOY_UO => vec![mount(mound.0, mound.1, false)],
+        PRONEMOVE_DEPLOY_CROUCH_UO => vec![mount(mound.0, mound.1, true)],
+        UOFOOT_MOUNT => vec![mount([-130.0, 2598.0, -20.0], [-70.0, 2640.0, 40.0], true)],
+        _ => Vec::new(),
+    }
+}
 
 /// United Offensive's talk mask (`TALK_UO`), which keeps the sight as
 /// 1.5's does. Needs `COD_DIR` at a UO install.
@@ -1058,10 +1053,11 @@ fn gaps_of(list: &[(&str, &'static str, &'static [i32])], file: &str) -> Vec<Gap
         .collect()
 }
 
+const UOFOOT_MOUNT: &str = "mp_foy-dm-slope-8ms-uofoot-mount.txt";
 const UOFOOT: [&str; 3] = [
     "mp_foy-dm-slope-8ms-uofoot-stand.txt",
     "mp_foy-dm-slope-8ms-uofoot-crouch.txt",
-    "mp_foy-dm-slope-8ms-uofoot-mount.txt",
+    UOFOOT_MOUNT,
 ];
 
 /// United Offensive's mounts and grenade cook (`--probe-uofoot`,
@@ -1081,30 +1077,38 @@ fn the_predictor_replays_uo_mounts_and_cook() {
             return;
         };
         let lines = parse(&PROTOCOL_V22, &text);
-        let r = replay(&PROTOCOL_V22, MoveRules::Uo, &lines, &world, &weapons);
+        let mounts = script_mounts(file);
+        let r = replay_taped(
+            &PROTOCOL_V22,
+            MoveRules::Uo,
+            &lines,
+            &world,
+            None,
+            &mounts,
+            &weapons,
+        );
         print(file, &r);
         assert!(r.compared > 500, "{file}: only {} snapshots", r.compared);
         let gaps = gaps_of(UOFOOT_GAPS, file);
         failures.extend(over(&r, &gaps).into_iter().map(|f| format!("{file}: {f}")));
+
+        // Without the trigger, as the client's point contents are, hint 7
+        // value 0 stands each crouched deploy for one snapshot: what shows
+        // the box is measured.
+        if file == UOFOOT_MOUNT {
+            let r = replay(&PROTOCOL_V22, MoveRules::Uo, &lines, &world, &weapons);
+            print("mount without the trigger", &r);
+            let stance = r.misses.get("stance").map_or(0, Vec::len);
+            assert_eq!(stance, 2, "{file}: the client's deploys");
+        }
     }
     assert!(failures.is_empty(), "{failures:#?}");
 }
 
-/// Fields the mount and cook captures' replays may miss, per capture.
-/// - The trigger_mount's two deploys (the first at ct 21042): the server's
-///   own `pointcontents` sees the trigger's 0x400000 and deploys crouched, so
-///   it never asks `G_CheckPointInsideTriggerMount` and sends hint 7 with
-///   `serverCursorHintVal` 0, which the predictor (and, by the same code,
-///   the retail cgame) reads as a standing mount. The next snapshot puts
-///   the stance right (coduo-movement.md, 11).
-const UOFOOT_GAPS: &[(&str, &str, &[i32])] = &[
-    ("mount", "ducked", &[21042, 36542]),
-    ("mount", "stance", &[21042, 36542]),
-    ("mount", "viewHeightCurrent", &[21042, 36542]),
-    ("mount", "viewHeightLerpTarget", &[21042, 36542]),
-    ("mount", "viewHeightLerpTime", &[21042, 36542]),
-    ("mount", "viewHeightTarget", &[21042, 36542]),
-];
+/// Fields the mount and cook captures' replays may miss, per capture. None
+/// since the replay's point contents meet the script mount
+/// ([`script_mounts`]).
+const UOFOOT_GAPS: &[(&str, &str, &[i32])] = &[];
 
 /// Runs at, along and over mp_carentan's patches (`--probe-patchwalk`,
 /// `patchwalk_script` in `crates/client/src/probe/scripts.rs`, `client-probes/
@@ -1289,6 +1293,7 @@ fn record_tapes() {
             &lines,
             &world,
             Some(&tape),
+            &[],
             &weapons,
         );
         let mut header = vec![
@@ -1327,6 +1332,7 @@ fn the_taped_captures_replay_without_the_paks() {
             &parse(&PROTOCOL_V1, &text),
             &world,
             Some(&tape),
+            &[],
             &weapons,
         );
         print(file, &r);
@@ -1357,6 +1363,7 @@ fn a_tape_from_another_capture_stops_at_the_first_query() {
         &parse(&PROTOCOL_V1, &text),
         &world,
         Some(&tape),
+        &[],
         &weapons,
     );
 }

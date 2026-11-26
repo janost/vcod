@@ -932,9 +932,9 @@ of the body's box along its yaw at `g_dropForwardSpeed` (10) and up at
 `g_dropUpSpeedBase` (10) (VERIFIED, the defaults), falling under gravity. INFERRED (`Drop_Item`, `LaunchItem`). The three
 `crandom` spreads are drawn and added (10.9). The start at the hand's tag
 and `G_RunItem`'s fall and rest are 6.1.
-`itemWeaponSetAmmo(clip, stock)` keeps the counts. A living player whose
-box meets an item at rest and who holds the same weapon takes clip and
-stock into the reserve up to `maxAmmo` (+820) and the item goes
+`itemWeaponSetAmmo(clip, stock)` keeps the counts. A living player the
+item touches (6.2), falling or at rest, who holds the same weapon takes
+clip and stock into the reserve up to `maxAmmo` (+820) and the item goes
 (`Touch_Item`, `WeaponPickup_Touch`, `Add_Ammo`). INFERRED. The touch's
 event is `EV_ITEM_PICKUP` (9, not `EV_AMMO_PICKUP`'s 10): the lunge
 capture (`play-1.7-lunge.txt`, t=52450) has event 9 parm 27 on an attacker
@@ -1175,6 +1175,53 @@ prone and killcam runs. VERIFIED (the gates).
   read the frame before's, one ease short. VERIFIED (the gate, which
   read 247 under 1.7's controllers until the drop read that pose).
 
+### 6.2 The touch
+
+VERIFIED (the instructions) where no label says otherwise:
+
+- When. `G_RunFrame` (`cod4_lnxded` 0x80b61fc) opens with a pass over
+  the clients (0x80b624b..0x80b6298): each in use (+0x100) whose client
+  word +0x3078 is 0 goes through `G_TouchTriggers` (0x80a5352), ahead of
+  the scripts and the entities. So an item dropped in a cmd's
+  `ClientEvents` (a kill's `dropWeaponForDeath`) is touched at the next
+  frame's start, after that frame's cmds and before its snapshot.
+- Who. `G_TouchTriggers` returns for a `pm_type` (ps+4) past 1
+  (0x80a5367). `BG_CanItemBeGrabbed` (0x805301e) refuses an item whose
+  `clientNum` (+0x8c) is the toucher's (ps+0xdc, 0x8053043..0x805304f),
+  the dropper's 1000 ms (6), and a toucher with `weapFlags` (ps+0x10) bit
+  7 or `pm_flags` 0x100000 (0x805302d, 0x8053051).
+- Where. The candidates are `CM_AreaEntities` (0x811f386) on the
+  player's `absmin`/`absmax` (+0x124, +0x130) less and plus 20 (0x8209654)
+  under contents 0x405c0008 (0x80a5378..0x80a53e3). An `ET_ITEM` (`eType`
+  3, 0x80a550c) goes through `BG_PlayerTouchesItem` (0x8053910) at
+  `level.time`, anything else through `SV_EntityContact` (0x817c862). The
+  first evaluates the item's `pos` (`BG_EvaluateTrajectory` 0x80536ba,
+  stored) and takes the origin less it on the x87 stack: within 36 either
+  way in x and y (0x820aab8, 0x820aabc) and from 18 below the origin to
+  88 above it in z (0x820a314, 0x820aac0). No test of rest.
+- Then `touch` both ways with the script up, and the entity's handler
+  touch (row +0xc of 0x826cee0 by the handler byte +0x16e), items' being
+  0x8092a44 into `Touch_Item` (cod4-gsc.md 9.1.2).
+
+`play-1.7-lunge.txt` shows it: the target's M16 (27) drops from the kill
+at 52450 and is taken in that frame, `EV_ITEM_PICKUP` parm 27 ringing on
+the attacker after `EV_MELEE_BLOOD`, reserve 60 to 150, with no `ET_ITEM`
+in any snapshot. VERIFIED (the capture). 150 is the attacker's 60 plus a
+full clip of 30 and a stock of 60 (`maxAmmo` 180), the spawn rounds of
+the class both probes got, which the target never fired. INFERRED.
+
+`cod4_moves_ab`'s `lunge` replay writes the pickup at the frame's start
+from its `PICKUPS` row (the item's rounds as above), through
+`vcod_cod4::pmove::weapon::take_ammo`, the server's own take. VERIFIED
+(the gate).
+
+Open in vcod: `Cod4Level::touch_items` still takes only resting items,
+after the frame's item moves, inside a 15-unit box over the item's base,
+with no dropper's cut. 1.7's bounds, timing and cut stall
+`cod4_damage_survives_every_transition` at its `KillInKillcam(1)` step
+(the victim never leaves spectator; the bounds alone do it), not yet
+understood. The item's link box, which the area query reads, is unread.
+
 ## 7. The killcam
 
 `_killcam.gsc` sets `spectatorclient` to the attacker and `archivetime`
@@ -1352,10 +1399,35 @@ Under `bCookOffHold` the fuse runs down at 18 and at 0 reads -1 with
 VERIFIED (`weapon_dump`, `common_mp.ff`). The walk capture's throw reads
 states 15, 16 (`weaponTime` 0x238), 17 (0x158, delay 0x71, fuse 0xd8c),
 19 at 66050, then 20. VERIFIED live. `cod4_moves_ab`'s `frag` rows replay
-it armed from 64500, every weapon word exact but `grenadeTimeLeft` on the
-throw's row, which the server's grenade timer init zeroes inside
-`ClientEvents`. VERIFIED (the gate). A main-hand grenade's pin raises
+it armed from 64500, every word exact on all 456 rows, free and resynced,
+the fuse's zero on the throw's row written as the server writes it
+(10.1.1). VERIFIED (the gate). A main-hand grenade's pin raises
 `EV_PULLBACK_WEAPON` (25). INFERRED.
+
+#### 10.1.1 The fuse's zero
+
+VERIFIED (the instructions):
+
+- `ClientThink_real` hands each event a cmd raised to `ClientEvents`'
+  body (0x80a581e, the loop 0x80a62f4..0x80a6327) before the link and
+  `ClientImpacts`. `EV_USE_OFFHAND` (33) is the jump table's (0x8217d98)
+  entry 14, 0x80a5aa7, a tail jump into `G_UseOffHand` (0x80a2b42): the
+  offhand's def by `offHandIndex` (ps+0xe0), the view, the eye, then the
+  throw (0x80a21fa) with the offhand's `weaponmodels` byte and the def's
+  `fuseTime` (+0x3ec) into `G_FireGrenade` (0x80944a8, called at
+  0x80a22de).
+- `G_FireGrenade`'s fuse arm (0x8094595..0x80946b5): a def with
+  `projectileActivateDist` (+0x574) and no fuse above 0 skips it.
+  Otherwise, for a thrower with a client, a `timedDetonation` def
+  (+0x5ac) bursts at `level.time` plus the thrower's `grenadeTimeLeft`
+  (ps+0x44) when that is set (0x809467c..0x80946af), else at `level.time`
+  plus the fuse (0x8094683), and both arms store 0 into `grenadeTimeLeft`
+  (0x80945c8).
+
+So the snapshot after the throw reads `grenadeTimeLeft` 0 where pmove
+left the cook's remainder (3275 on `frag`'s row 414). vcod:
+`WeaponDef::takes_fuse`, read by `Cod4Level::new_grenade` and by the
+replay's `Replay::think` after each cmd's `EV_USE_OFFHAND`.
 
 ### 10.2 The missile
 
@@ -1545,6 +1617,37 @@ stops it in `dist` units, so the hit's trace at `player_meleeRange` starts
 beside the target. VERIFIED (cod4-pmove.md 19: addresses, the client's
 pick). `cod4_live_the_melee_key_lunges_at_a_bot_in_reach` (client and
 server) lunges at a bot 100 units off. VERIFIED (the gate).
+
+#### 10.4.1 The blood on the attacker
+
+VERIFIED (the instructions):
+
+- `EV_FIRE_MELEE` (31) is the jump table's entry 12, 0x80a5ada: with the
+  bool of the dvar behind 0x84bc368 set (its byte +0xc; 0x80a5b4a when
+  not, unread), a tail jump into `FireWeaponMelee` (0x80a3492), the word
+  at +0x3168 of the client its second argument. After the traces
+  (0x80a2a0c, called at 0x80a3540) the contact goes to 0x80a2794 (called
+  at 0x80a355c).
+- There, with the attacker a client (+0x15c) and the entity met a client
+  too, `G_AddEvent(attacker, EV_MELEE_BLOOD (37), 0)` (0x80a2820..0x80a284b)
+  comes first; then `EV_MELEE_HIT` (35) from `G_TempEntity` (0x80cbd96) with
+  `otherEntityNum` (+0x74) the victim's number and +0x9c 1 for a def
+  whose +0x304 is set and an attacker with a client (0x80a285e..0x80a2896);
+  then, for a victim not the world (1022) that
+  takes damage (+0x16b), `G_Damage` (0x80b16c0) with the damage plus
+  `G_rand() % 5` (0x80ca308, the `0x66666667` division at 0x80a2919) and
+  means 7 (0x80a28cd..0x80a2956).
+- `G_AddEvent` (0x80ca0d2) on an entity with a client writes the
+  playerstate's ring: `events[seq & 3]` (ps+0xb8), `eventParms` (ps+0xc8),
+  `eventSequence` (ps+0xb4) plus 1 masked to a byte, and the entity's
+  `eventTime` (+0x184) and +0x158 to `level.time`.
+
+`play-1.7-lunge.txt` rings 31, 37 and 9 on the attacker at 52450 with
+`EV_MELEE_HIT` (parm 1, `otherEntityNum` 0, the target) in the same
+snapshot. VERIFIED (the capture). `cod4_moves_ab` writes the blood after
+the cmd whose `EV_FIRE_MELEE` its row's snapshot shows meeting a client
+(an `EV_MELEE_HIT` with `otherEntityNum` under 64), and the pickup at the
+frame's start (6.2): all 147 `lunge` rows exact. VERIFIED (the gate).
 
 ### 10.5 `kill`
 
@@ -1797,7 +1900,9 @@ those anims.
   (cod4-gsc.md 9.1.1, 9.1.2), the killcam's archived angles in its
   `GAPS`; the mounted SAW's pair is gated, a few ulps in its `GAPS`
   (cod4-gsc.md 9.2.1).
-- The terrain triangle normal's last bit.
+- The terrain triangle normal's last bit: closed. The frag's bounce off a
+  terrain triangle takes 1.7's point sweep (cod4-collision.md 3) and
+  `FRAG_GAPS` is empty (10.2).
 - The corpse's drag uses CoD2's yaw turn shape; no 1.7 capture of a death
   anim whose root turns. No retail capture holds a shellshock's torso
   anim.

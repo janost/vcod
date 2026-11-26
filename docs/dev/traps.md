@@ -35,6 +35,10 @@ by doc and section. Grep `Trap:` in the subsystem doc you were sent to.
   pixels (GPU kit pack 8). Keep a new position term off the other outputs'
   operations; `renderer::tests::the_entity_position_reads_no_world_normal_operation`
   holds it for the normal.
+- One builtin can round differently per build: `closer` keeps 1.1d's second
+  distance on the x87 stack, rounds both on 1.5b, UO and CoD2, and neither
+  on CoD4 (`CloserRounding`, cod11-gsc-object-model.md 9.2). Read every
+  build's handler before binding a shared one by name.
 
 ### Script host and VM
 
@@ -514,6 +518,11 @@ otherwise.
 - A 1.1 shot, swing or throw starts at the truncated eye over the truncated
   origin. 1.5's and UO's start at the unsnapped origin's eye plus the walk
   bob, never truncated (`combat::muzzle_point_in`, combat doc 2.1).
+- A static or script model clips a surface at a time, each culled by its
+  stored bounds grown 0.001 (`xmodel-v14-format.md` 2.1). A flat surface's
+  bounds have no thickness without the growth, and the slab test never
+  enters a box whose two faces meet: a cage light's plate goes
+  transparent (combat doc 2.7.2).
 - `trap_SightTraceToEntity` (the `trigger_damage` walks) clips a brush
   with no `SURFACE_CLIP_EPSILON`: a round's end 1/16 short of a face
   misses. Test it with `collision::sight_meets_brush`, never a trace
@@ -786,6 +795,16 @@ otherwise.
   overheated `pm_flags` sit above bit 23 (`PMF_*_V22`), so a 1.1 handler
   never fires on one (`coduo-diff.md` 19).
 
+### UO map cycle and script
+
+- UO's `map` reads `<map>_<gametype>.cfg` before the load and runs it after:
+  the file goes ahead of the console queue (`Server::exec_file`), so its
+  `set`s miss the level's init. The gametype is the running one, not
+  `cfg.gametype`, which already holds a latched `set` (coduo-diff.md 26).
+- 1.1 and 1.5 refuse to compile a script naming a UO-only builtin, so a
+  probe shared with them cannot log `getTurretHeat`; UO's measurements of
+  such builtins go in a UO-only probe (`probe_turretheat`).
+
 ### Movement and weapons
 
 - UO's sprint button is `buttons` 0x8 (`msg::BUTTON_SPRINT_V22`), sent to a
@@ -796,7 +815,9 @@ otherwise.
 - A crouched `trigger_mount` reaches the client as hint 7 with value 0 (the
   server's own contents found it), so the predictor deploys it standing for a
   snapshot, as retail's would (11). The server's pmove point contents meet
-  the mount triggers (`MoveWorld::with_boxes`); the client's never do.
+  the mount triggers (`MoveWorld::with_boxes`); the client's never do. A
+  replay of a capture with a script mount gives its `MoveWorld` the box
+  (`moves_ab`'s `script_mounts`, 11.1).
 - UO has a grenade cook, started only by the sight button's edge on a pulled
   grenade (`weapon::cook`, `coduo-movement.md` 12).
 - UO's prone check traces water (mask 0x810031): a body can't start in it
@@ -967,7 +988,8 @@ otherwise.
   a strafe's legs swing a frame late and the head reads 0.05 units off
   (cod4-player-anims.md 8.1).
 - Inline: `cod4-combat.md` 3.2 (the eye and gun angle bytes), 5 (the
-  corpse's bit, `suicide`, the end-frame draw), 7.1 (the last-cmd word),
+  corpse's bit, `suicide`, the end-frame draw), 6.2 (1.7 takes a dropped
+  weapon at the next frame's start, still falling; vcod's touch is open), 7.1 (the last-cmd word),
   10.2, 10.3, 10.8, 10.10 (missiles, the burst, flash and concussion,
   `radiusDamage`), 13 and 13.1 (rounds on script entities), 14 (entity
   numbers).

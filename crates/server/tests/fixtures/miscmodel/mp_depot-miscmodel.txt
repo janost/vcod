@@ -1,0 +1,19 @@
+# Retail CoD 1.1d, 1.5b and UO 1.51b dedicated servers, 2026-11-26: the PROBE lines of
+# client-probes/probe_miscmodel on mp_depot (no client); the three builds log the same rows.
+# COD_VERSION=1.1 COD_DIR=<1.1 install> PROBE_UNTIL='PROBE mdone' tools/run_probe.sh client-probes/probe_miscmodel mp_depot
+# COD_VERSION=1.5 COD_DIR=<stock 1.5 + UO tree> PROBE_UNTIL='PROBE mdone' tools/run_probe.sh client-probes/probe_miscmodel mp_depot
+# COD_VERSION=uo COD_DIR=<stock 1.5 + UO tree> PROBE_UNTIL='PROBE mdone' tools/run_probe.sh client-probes/probe_miscmodel mp_depot
+# Each static-model hit is the one a surface-by-surface clip under each surface's grown stored bounds finds.
+PROBE mtrace 1050 0 -1 0.359425 (0.00, -0.00, 1.00) (-2462.00, -1437.00, 133.58)
+PROBE mtrace 1050 1 -1 0.786727 (0.00, -0.00, 1.00) (-2556.00, -1737.00, 28.47)
+PROBE mtrace 1050 2 -1 0.962064 (-1.00, -0.00, 0.00) (-2561.05, -1486.03, 68.11)
+PROBE mtrace 1050 3 -1 0.813247 (1.00, 0.00, 0.00) (-2486.89, -1782.37, 29.48)
+PROBE mtrace 1050 4 -1 0.933106 (-0.00, 0.00, -1.00) (-367.70, 844.99, 25.40)
+PROBE mtrace 1050 5 -1 0.913941 (0.00, -1.00, 0.00) (-421.25, 1320.25, 24.65)
+PROBE mtrace 1050 6 -1 0.864834 (1.00, 0.00, 0.00) (-620.83, 634.08, 193.82)
+PROBE mtrace 1050 7 -1 0.96124 (-0.46, 0.89, 0.00) (-2095.95, 1567.53, 156.64)
+PROBE mtrace 1050 8 -1 0.91564 (1.00, 0.00, 0.00) (-2095.83, 1567.44, 155.10)
+PROBE mtrace 1050 9 -1 0.752248 (1.00, 0.00, 0.00) (-2095.83, 1268.41, 155.32)
+PROBE mtrace 1050 10 -1 1 (0.06, -0.78, 0.62) (-2647.50, -1449.00, 134.62)
+PROBE mtrace 1050 11 -1 0.876229 (1.00, 0.00, 0.00) (-620.83, 636.41, 195.54)
+PROBE mdone 1050

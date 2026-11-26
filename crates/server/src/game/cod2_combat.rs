@@ -2524,9 +2524,7 @@ impl Cod2Level {
     }
 
     /// `finishPlayerDamage`'s playerstate stores (Mac 0x1c2e32): the
-    /// knockback, 0.3 of the damage standing, 0.15 crouched, 0.02 prone,
-    /// at most 60, times `g_knockback` over 250 along the direction with a
-    /// `pm_time` of twice it in 50..200; the damage timer
+    /// knockback ([`vcod_cod2::pmove::knock_back`]); the damage timer
     /// (`player_dmgtimer_timePerPoint` 100 a point, at most
     /// `player_dmgtimer_maxTime` 750) and the flinch's yaw. A fatal one runs
     /// `player_die`'s (Mac 0x1c4a7c): a grenade still in hand drops live,
@@ -2548,23 +2546,8 @@ impl Cod2Level {
         let Some(p) = self.players.get_mut(slot).and_then(Option::as_mut) else {
             return;
         };
-        let ps = &mut p.ps;
-        if knockback && ps.e_flags & 0x300 == 0 {
-            let scale = if ps.pm_flags & vcod_cod2::pmove::pmf::PRONE != 0 {
-                0.02
-            } else if ps.pm_flags & vcod_cod2::pmove::pmf::DUCKED != 0 {
-                0.15
-            } else {
-                0.3
-            };
-            let knock = ((scale * damage as f32) as i32).min(60);
-            if knock > 0 {
-                ps.velocity += dir * (knock as f32 * g_knockback / 250.0);
-                if ps.pm_time == 0 {
-                    ps.pm_time = (knock * 2).clamp(50, 200);
-                    ps.pm_flags |= vcod_cod2::pmove::pmf::TIME_KNOCKBACK;
-                }
-            }
+        if knockback {
+            vcod_cod2::pmove::knock_back(&mut p.ps, damage, dir, g_knockback);
         }
         // A god takes the knockback alone (`finishPlayerDamage`, Mac 0x1c2e32).
         if self.rt.host.cod2().clients[slot].flags & crate::game::cod2_cmds::FL_GODMODE != 0 {

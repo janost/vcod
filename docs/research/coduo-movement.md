@@ -292,14 +292,15 @@ INFERRED, from the stand-ups: nothing but prone writes the field.
 `moves_ab`'s `the_predictor_replays_uo_prone_moves` replays both
 captures; a clamp centred on 0 off prone misses `delta_angles[0]` on 120
 snapshots of the standing one. The crouched one's view and
-`delta_angles` match on every snapshot. It misses one snapshot of each
-deploy (ct 23490, 39491) on the stance and eye fields, section 11's
-script-mount gap, and at the second deploy `aimSpreadScale` with them
-(VERIFIED, replay): the cone was decaying from a turn, and the stood body
-decays it at the standing rate (`PM_AdjustAimSpreadScale` reads the
-`eFlags` stance). Read as a crouched mount, the crouched capture replays
-with no miss and the standing one misses the same fields mirrored, so the
-hint cannot tell them apart (`PRONEMOVE_GAPS`).
+`delta_angles` match on every snapshot. Replayed on the client's point
+contents, it misses one snapshot of each deploy (ct 23490, 39491) on the
+stance and eye fields, section 11's script-mount gap, and at the second
+deploy `aimSpreadScale` with them (VERIFIED, replay): the cone was
+decaying from a turn, and the stood body decays it at the standing rate
+(`PM_AdjustAimSpreadScale` reads the `eFlags` stance). Read as a crouched
+mount, the crouched capture replays with no miss and the standing one
+misses the same fields mirrored, so the hint cannot tell them apart. With
+the server's point contents both replay with no miss (11.1).
 
 A client reads a deploy off the wire as: `pm_flags` 0x20 with an LMG in
 hand, the stance in `pm_flags` 3, `weaponstate` 12 or 13 through the
@@ -432,15 +433,13 @@ The `mount` result is the trigger's own contents seen by the server's
 pmove (INFERRED: the server's point contents include linked entities, the
 client's do not). The predictor, reading hint 7 value 0, deploys standing
 on those two snapshots, as the retail cgame's identical code would
-(INFERRED); the next snapshot corrects it. `moves_ab`'s
-`the_predictor_replays_uo_mounts_and_cook` replays all three under UO's
-rules: every compared field right except those two snapshots
-(`UOFOOT_GAPS`). The crouched deploy capture of section 7
-(`-pronemove-deploy-crouch-uo.txt`, `PRONEMOVE_GAPS`) misses the same
-way, and reading its hint as a crouched mount makes the standing capture
-miss instead (VERIFIED, replay): hint 7 value 0 reads the same over a
-standing and a crouched script mount, and the trigger reaches no client,
-so no client-side replay closes it. The stand and mount captures were retaken 2026-10-17
+(INFERRED); the next snapshot corrects it. The crouched deploy capture of
+section 7 (`-pronemove-deploy-crouch-uo.txt`) misses the same way, and
+reading its hint as a crouched mount makes the standing capture miss
+instead (VERIFIED, replay): hint 7 value 0 reads the same over a standing
+and a crouched script mount, and the trigger reaches no client, so no
+client closes it. `moves_ab` replays the captures on the server's point
+contents and matches every compared field (11.1). The stand and mount captures were retaken 2026-10-17
 (VERIFIED, same recipe) with the cmds sent before the first logged
 snapshot in the file: those stamped past its `commandTime` run in the
 first pair, and without them that pair's `aimSpreadScale` read one turn
@@ -558,6 +557,46 @@ one. Its `a_script_mount_fires_once_per_cmd_as_on_uo` replays the
 cmd ours ran, 2700 over the 2711 cmds up to the frag switch, as retail ran
 (VERIFIED, 2026-11-15).
 
+### 11.1 The replay meets the server's mount
+
+The crouched script-mount deploy is a predictor miss on both sides, not a
+vcod divergence: the capture is the server's pmove, whose point contents
+meet the trigger.
+
+- `ClientThink_real` (game.mp.uo 0x40c91) stores `trap_PointContents`'
+  address into `pm.pointcontents`, `pm` + 0x110 (0x40f8d..0x40f93; GOT
+  slot 0xb459c, `R_386_GLOB_DAT trap_PointContents`). VERIFIED (the
+  instructions, the relocation).
+- `trap_PointContents` (0x7443a) is syscall 0x2f with the point, the pass
+  entity and the mask. VERIFIED (the instructions). That the engine's
+  handler is an `SV_PointContents` that meets linked entities' boxes is
+  INFERRED (Q3's shape, and the `mount` capture's crouched deploy under
+  hint value 0).
+- `PM_UpdateAimDownSightFlag` (0x32c0b) calls `pm->pointcontents(point,
+  ps->clientNum, 0x404000)` at 0x32ed0..0x32ed6. On a hit it sets
+  `pm_flags` 0x20, then with 0x400000 in the result `pm_flags` |= 2 and
+  &= ~1 (0x32f36..0x32f79, crouched), else clears both (0x32f81..0x32fb8,
+  standing). With no hit it reads `serverCursorHint` (`ps` + 0x5c4) for 7
+  (0x32fca). VERIFIED (the instructions).
+
+So retail's server deploys a crouched script mount crouched off its own
+contents, and the cgame, whose point contents never hold the trigger
+(`r.svFlags` 1), deploys it standing off hint 7 value 0 for one snapshot
+(INFERRED, same code). vcod does both: the server's pmove world carries
+the mount boxes (`MoveWorld::with_boxes`, section 11, "The server's
+half"), the predictor's does not.
+
+`moves_ab` replays the capture as the server ran it: `script_mounts` gives
+the replay's `MoveWorld` the `spawnTriggerMount` box `probe_uofoot` linked
+for the capture (`probe_spot mound`, `moundcrouch`, `mount`), its contents
+`mount_contents(crouch, false)`. The `mount`, `-pronemove-deploy-uo` and
+`-pronemove-deploy-crouch-uo` captures then match every compared field,
+and `PRONEMOVE_GAPS` and `UOFOOT_GAPS` are empty (VERIFIED, replay,
+2026-11-26). The `mount` capture replayed without the box still misses the
+stance and eye fields at ct 21042 and 36542, the predictor's one-snapshot
+stand (VERIFIED, replay; `the_predictor_replays_uo_mounts_and_cook`
+asserts it).
+
 ## 12. The grenade cook
 
 In `PM_Weapon` (0x3726c), before its timers, for `weaponType` 1
@@ -634,7 +673,7 @@ instructions). vcod applies both (`hold_still_sighted`).
 
 ## 14. The client: sounds and the sprint pose
 
-Sounds, all VERIFIED from the cgame and the csvs:
+Sounds, each VERIFIED from the cgame and the csvs:
 
 - 140 plays `fatigue_breath` (section 4); vcod's cue table plays it on the
   event's entity.

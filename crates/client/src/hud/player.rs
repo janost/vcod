@@ -16,6 +16,7 @@ use vcod_common::localize::Localized;
 use vcod_common::net::msg::Objective;
 use vcod_common::pmove::aim::DamageKick;
 use vcod_common::pmove::weapon::{SpreadStance, hip_spread_min};
+use vcod_common::rng::MsvcRand;
 use vcod_common::weapon::{SightDirection, WeaponDef};
 
 /// `northyaw`, the compass north.
@@ -1227,7 +1228,6 @@ fn hint_use_key(text: &str, bound: &dyn Fn(&str) -> Option<String>, loc: &Locali
 /// the damage kick the view and the gun read. Fed once a frame off the
 /// drawn playerstate, mounted or not, HUD drawn or not (hud doc "Damage
 /// direction").
-#[derive(Default)]
 pub struct DamageIndicators {
     last: Option<DamageFeedback>,
     /// `0x3020c9a8`, `0x3020c9e4`, `0x3020c9e8`.
@@ -1235,10 +1235,23 @@ pub struct DamageIndicators {
     /// (start ms, world yaw degrees the damage travelled along).
     slots: [Option<(i32, f32)>; 8],
     /// MSVC `rand`'s state, for the yaw jitter.
-    seed: u32,
+    seed: MsvcRand,
     /// The red flash's end and the kick it scales by (`0x3020c9e0`,
     /// `0x3020c9e4`).
     flash: Option<(i32, f32)>,
+}
+
+impl Default for DamageIndicators {
+    fn default() -> Self {
+        DamageIndicators {
+            last: None,
+            kick: DamageKick::default(),
+            slots: [None; 8],
+            // Seeded 0, not the CRT's 1.
+            seed: MsvcRand::seed(0),
+            flash: None,
+        }
+    }
 }
 
 const DAMAGE_ICON_MS: i32 = 2000;
@@ -1270,7 +1283,7 @@ impl DamageIndicators {
             .min_by_key(|&i| self.slots[i].map_or(i32::MIN, |(start, _)| start))
             .expect("eight slots");
         let yaw = fb.yaw as f32 / 255.0 * 360.0;
-        let jitter = (self.rand() as f32 / 32768.0 - 0.5) * 20.0;
+        let jitter = (self.seed.unit() - 0.5) * 20.0;
         self.slots[slot] = Some((now, angle_mod(jitter + yaw)));
         true
     }
@@ -1324,12 +1337,6 @@ impl DamageIndicators {
         if let Some(a) = self.flash_alpha(now) {
             out.push(v.quad_fill(-10.0, -10.0, 650.0, 490.0, [0.2, 0.0, 0.0, a], "white"));
         }
-    }
-
-    /// 0..32767, MSVC's `rand` LCG.
-    fn rand(&mut self) -> u32 {
-        self.seed = self.seed.wrapping_mul(214_013).wrapping_add(2_531_011);
-        (self.seed >> 16) & 0x7fff
     }
 
     #[cfg(test)]

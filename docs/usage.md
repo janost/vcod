@@ -241,11 +241,31 @@ logged with its sender.
 | Game | Commands |
 |---|---|
 | all | `status`, `serverinfo`, `systeminfo`, `dumpuser`, `say`, `kick`, `clientkick`, `banUser`, `banClient`, `unbanUser`, `tempBanUser`, `tempBanClient`, `map`, `devmap`, `map_restart`, `map_rotate`, `set`, `seta`, `heartbeat`, `quit`, `addbot`, `removebot`, `listbots` |
-| CoD1, UO | `killserver`, `cvarlist`, `gamecompletestatus`, `scriptusage`, `stringusage`, `setdrawfriend`, `setfriendlyfire`, `setkillcam`, a bare cvar name to read it |
+| CoD1, UO | `killserver`, `cvarlist`, `exec`, `gamecompletestatus`, `scriptusage`, `stringusage`, `setdrawfriend`, `setfriendlyfire`, `setkillcam`, a bare cvar name to read it |
 | CoD2 | `tell`, `onlykick`, `fast_restart`, `sets`, `kickbot`, a bare cvar name |
 | CoD4 | `tell`, `onlykick` (`kick all` too), `fast_restart`, `killserver`, `sets`, `setu`, `toggle`, `togglep`, `reset`, `setfromdvar`, `vstr`, `exec`, `wait`, `writeconfig`, `dvar_bool`, `dvar_int`, `dvar_float`, `setdvartotime`, `touchfile`, `cmdlist`, `kickbot` |
 
 `devmap` sets `sv_cheats 1` after the load and `map` sets it back.
+
+`exec <file>` runs a config's lines after the command that ran it, as
+retail's does. The file is looked up through the paks and the game
+directories (`.cfg` is added when the name has none).
+
+### Per-map configs (UO)
+
+On UO every `map`, the first one and a rotation's included, first runs
+`exec <map>_<gametype>.cfg` (`mp_cassino_tdm.cfg`), both names in lower
+case. The gametype is the one running when the `map` runs: after `set
+g_gametype sd` the next `map` still reads the old gametype's file,
+while a rotation's `gametype` takes effect at once. The file's lines run
+once the level has loaded, before the first frame and before any `--set`
+written after the map, so its values reach the level's frames but not
+its load. Put it in `uo/` (or `main/`) of the game directory or in a
+pk3; a pk3 in a directory wins over a loose file beside it. A missing
+file prints `couldn't exec mp_cassino_tdm.cfg` and nothing else
+happens. `map <map> noautoexec` skips it; `map_restart` never runs it.
+A loose file added while the server runs is not seen until the next
+start, and `--vanilla` reads none.
 
 ### Bots
 

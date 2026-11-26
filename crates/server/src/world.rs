@@ -289,12 +289,12 @@ impl World {
         let placed = fs.map(|fs| vcod_common::props::Placed::load(fs, &b.entities));
         let props = placed
             .as_ref()
-            .map_or_else(Vec::new, |p| p.collision_tris());
+            .map_or_else(Default::default, |p| p.static_models());
         let prop_areas = placed.map(|p| PropAreas {
             entities: PropAreas::hash(&b.entities),
             bounds: p.area_bounds(),
         });
-        let collision = CollisionWorld::build(b, &props);
+        let collision = CollisionWorld::with_statics(b, &props);
         let spawn = bsp::find_spawn(&b.entities)
             // No spawn class in the ents: hover above the origin.
             .unwrap_or(([0.0, 0.0, 64.0], 0.0));

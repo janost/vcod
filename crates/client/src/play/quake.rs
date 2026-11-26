@@ -93,7 +93,7 @@ pub struct Quakes {
     /// The cgame's own `rand()` state (`_holdrand`, per-thread data
     /// `+0x14`), for the phase. The other 33 `rand()` calls of the cgame
     /// draw from it too; vcod's draws are the phase's alone.
-    seed: u32,
+    seed: vcod_common::rng::MsvcRand,
 }
 
 impl Default for Quakes {
@@ -107,7 +107,7 @@ impl Default for Quakes {
             stored: Default::default(),
             eye: Vec3::ZERO,
             phase: 0.0,
-            seed: 1,
+            seed: Default::default(),
         }
     }
 }
@@ -167,7 +167,7 @@ impl Quakes {
             }
         }
         if strength <= 0.0 {
-            self.phase = (self.rand() as f32 * (1.0 / 32768.0) * 2.0 - 1.0) * std::f32::consts::PI;
+            self.phase = (self.seed.unit() * 2.0 - 1.0) * std::f32::consts::PI;
             return [0.0; 3];
         }
         let amp = strength.min(1.0) * fade;
@@ -182,12 +182,6 @@ impl Quakes {
             wave(47.123_89, 16.0),
             wave(37.699_112, 10.0),
         ]
-    }
-
-    /// msvcrt's `rand()`: the LCG `0x3004b189` calls, 15 bits out.
-    fn rand(&mut self) -> u32 {
-        self.seed = self.seed.wrapping_mul(214_013).wrapping_add(2_531_011);
-        (self.seed >> 16) & 0x7fff
     }
 }
 
@@ -255,7 +249,7 @@ mod tests {
         let want = (41.0f32 * (1.0 / 32768.0) * 2.0 - 1.0) * std::f32::consts::PI;
         assert_eq!(qs.phase, want);
         // the second draw is 18467, as msvcrt's sequence from 1 goes
-        assert_eq!(qs.rand(), 18467);
+        assert_eq!(qs.seed.next(), 18467);
     }
 
     /// With every slot live, a new quake replaces the weakest one weaker

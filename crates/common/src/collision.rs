@@ -20,6 +20,7 @@ mod entities;
 mod masks;
 mod query;
 mod reach;
+mod statics;
 mod walk;
 
 pub use build::brush_side_planes;
@@ -37,6 +38,7 @@ pub use masks::{
     SURF_SLICK,
 };
 pub use reach::{ClipState, Reach, reach, recorded};
+pub use statics::{StaticModel, StaticModels};
 
 /// A brush as clip planes: point p is inside iff n·p <= d for every plane.
 #[derive(Clone)]
@@ -56,7 +58,8 @@ pub struct BrushPlanes {
     pub model: u32,
 }
 
-/// One collision triangle of a placed static xmodel. Retail's server clips
+/// One collision triangle of a static xmodel, in its model's frame (in the
+/// world for [`StaticModels::loose`]). Retail's server clips
 /// static models as the bare start-to-end segment of a trace, whatever box
 /// or capsule the trace carries, one surface at a time against
 /// `contents & mask` (docs/research/cod11-mantle.md, "Static models are
@@ -81,7 +84,12 @@ pub enum Prim {
     Terrain(u32),
     /// A lump-24 patch, all its facets.
     Patch(u32),
+    /// A static model's collision triangle, into
+    /// [`CollisionWorld::model_tris`]: what a trace reports it stopped on.
     Model(u32),
+    /// A placed static model, the unit the BVH holds and the static pass
+    /// walks a surface at a time.
+    Static(u32),
     /// A player capsule hit, carrying its entity number (`movetrace.rs`).
     Body(u32),
     /// A contact a [`WorldClip`] reported, carrying its contents word.
@@ -211,8 +219,13 @@ pub fn sound_material(surface_flags: u32) -> i32 {
 pub struct CollisionWorld {
     pub brushes: Vec<BrushPlanes>,
     pub tris: Vec<[Vec3; 3]>,
-    /// The placed props' collision triangles, clipped as a segment only.
+    /// The static models' collision triangles, each model's once in its
+    /// own frame, clipped as a segment only.
     pub model_tris: Vec<ModelTri>,
+    /// Their surfaces, runs into `model_tris`.
+    static_surfs: Vec<clip::ModelSurf>,
+    /// The placed static models, indexed by [`Prim::Static`].
+    statics: Vec<statics::StaticPlacement>,
     /// Per-triangle material `surface_flags`, parallel to `tris`. The sound
     /// surface rides bits 20-24 (`cod11-events-and-fx.md`, section 4).
     tris_surf: Vec<u32>,
@@ -232,9 +245,9 @@ pub struct CollisionWorld {
     /// partition, so a trace that stops on it was met on retail's walk.
     tri_listed: Vec<bool>,
     nodes: Vec<BvhNode>,
-    /// The subtree holding every [`Prim::Model`] and nothing else, which a
-    /// trace without the static models skips whole; `u32::MAX` when the map
-    /// has none or nothing else.
+    /// The subtree holding every [`Prim::Static`] and nothing else, which
+    /// the world's walk skips whole and the static pass walks; `u32::MAX`
+    /// when the map has none.
     models_root: u32,
     prims: Vec<(Prim, Vec3, Vec3)>,
     water: Vec<Volume>,
@@ -304,6 +317,8 @@ impl Clone for CollisionWorld {
             brushes: self.brushes.clone(),
             tris: self.tris.clone(),
             model_tris: self.model_tris.clone(),
+            static_surfs: self.static_surfs.clone(),
+            statics: self.statics.clone(),
             tris_surf: self.tris_surf.clone(),
             tris_contents: self.tris_contents.clone(),
             terrain: self.terrain.clone(),

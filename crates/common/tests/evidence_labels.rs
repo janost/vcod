@@ -10,7 +10,9 @@
 //!
 //! - a per-section blanket past the document's header, in the spellings
 //!   `BLANKETS` lists (`VERIFIED throughout`, "every number below is
-//!   VERIFIED"), which the rule forbids outright: a section is a mix of
+//!   VERIFIED") and the escape-clause forms (`VERIFIED unless marked`,
+//!   `all VERIFIED`, "every result ... is VERIFIED"), which the rule forbids
+//!   outright: a section is a mix of
 //!   claims and a blanket covers the ones it should not;
 //! - one clause carrying both labels, which is how a single claim ends up
 //!   opening VERIFIED and closing INFERRED and is really neither. `UNVERIFIED`
@@ -131,6 +133,32 @@ const BLANKETS: [&str; 6] = [
     "verything here is INFERRED",
 ];
 
+/// Phrases that turn a label into a default with exceptions: a clause carrying
+/// a label and one of these covers every claim around it, which is the
+/// blanket in other words (`VERIFIED unless marked:`, `all VERIFIED:`).
+const ESCAPES: [&str; 5] = [
+    "unless marked",
+    "unless labelled",
+    "unless noted",
+    "unless a step says",
+    "except where",
+];
+
+/// True when `clause` is a label with an escape clause, `all VERIFIED`, or
+/// "every result/claim ... VERIFIED". The lead-in for one list reads "each
+/// VERIFIED" instead, which stays allowed.
+fn is_escape_blanket(clause: &str) -> bool {
+    let labelled = has_verified(clause) || clause.contains("INFERRED");
+    let every = ["Every result", "Every claim", "Each bullet is"]
+        .iter()
+        .any(|p| clause.contains(p));
+    labelled
+        && (ESCAPES.iter().any(|e| clause.contains(e))
+            || clause.contains("all VERIFIED")
+            || clause.contains("all INFERRED")
+            || every)
+}
+
 /// Byte offset of the first `## ` heading: what sits above it is the
 /// document's header, where a document-level default may stand.
 fn first_h2(text: &str) -> usize {
@@ -146,9 +174,16 @@ fn blankets(text: &str) -> Vec<usize> {
     let mut out: Vec<usize> = BLANKETS
         .iter()
         .flat_map(|b| text.match_indices(b).map(|(i, _)| i))
+        .chain(
+            clauses(text)
+                .into_iter()
+                .filter(|(_, c)| is_escape_blanket(c))
+                .map(|(i, c)| i + c.len() - c.trim_start().len()),
+        )
         .filter(|&i| i >= from)
         .collect();
     out.sort();
+    out.dedup();
     out
 }
 
@@ -247,4 +282,12 @@ fn the_check_fires_on_the_shapes_it_claims_to_catch() {
         blankets("## 1. A\n\nOne list, VERIFIED throughout.\n").len(),
         1
     );
+
+    // An escape clause or "all" makes a lead-in a default; "each" does not.
+    let lead = "## 1. A\n\nThe stores (VERIFIED unless marked):\n\n- a\n\n\
+                They show, all VERIFIED:\n\n- b\n\n\
+                Every result in this section is VERIFIED.\n\n\
+                Each bullet is VERIFIED unless labelled otherwise.\n\n\
+                The stores, each VERIFIED:\n\n- c\n";
+    assert_eq!(blankets(lead).len(), 4);
 }

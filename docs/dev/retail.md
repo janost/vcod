@@ -419,7 +419,9 @@ ring and temp entities, means of death.
   - `--save-combat` beside `probe_uofx`;
   - `--save-turret` beside `probe_turret` (its
     `mp_carentan-dm-turret-uo.txt` committed, as 1.5's `-15.txt`, and
-    `-victim-uo.txt`, which logs the target's entity);
+    `-victim-uo.txt`, which logs the target's entity) and beside
+    `probe_turretheat`, UO's alone, whose server log is
+    `mp_carentan-dm-turret-heat-uo.txt` (`coduo-diff.md` 21.3.1);
   - `--probe-flame` beside `probe_flame` (`coduo-diff.md` 19, "The flame
     report");
   - `--probe-items` beside `probe_itemdrop`, `probe_respawnsign` and `probe_fragcount`

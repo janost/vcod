@@ -80,19 +80,18 @@ weapons disabled.
 
 ### 1.2 The order of one step
 
-The code's order (Mac 0x7cbb2). INFERRED, except where a step says
-otherwise.
+The code's order (Mac 0x7cbb2), each step labelled.
 
 1. `pm_flags` 0x1000 returns at once. `pm_type` above 5 zeroes `weapon`
-   and returns. A gunner (`eFlags & 0x300`) returns.
-2. `PM_UpdateAimDownSightLerp` (Mac 0x7c762), then the breath hold.
+   and returns. A gunner (`eFlags & 0x300`) returns. INFERRED.
+2. `PM_UpdateAimDownSightLerp` (Mac 0x7c762), then the breath hold. INFERRED.
 3. A cooked offhand grenade with `cookOffHold` counts `grenadeTimeLeft`
-   down. At 0 its clip loses one and `EV_GRENADE_SUICIDE` (197) goes out.
+   down. At 0 its clip loses one and `EV_GRENADE_SUICIDE` (197) goes out. INFERRED.
 4. `weaponRestrictKickTime` and `weaponTime` count down by the step's ms.
    A `weaponTime` that runs out holds at 1 for a `semiAuto` weapon while
    attack stays down on the same weapon with rounds in the clip; that is
    why a semi-automatic needs a release. States 3, 4, 10 and 11 go ready
-   there. `weaponDelay` running out marks the step "delay fired".
+   there. `weaponDelay` running out marks the step "delay fired". INFERRED.
 5. The offhand keys. The cmd's offhand byte is taken when held. A frag or
    smoke key picks the first held weapon of that `offhandClass` with
    rounds and raises `EV_SWITCH_OFFHAND` (167) with its index. From a
@@ -111,16 +110,16 @@ otherwise.
    with `PM_Weapon_AllowReload` (Mac 0x7ac60), or on an empty clip with
    reserve outside the firing state and not prone and moving. Attack
    pressed during a segmented reload marks it interrupted (5 to 6, 7 to
-   8).
+   8). INFERRED.
 8. The melee key (`meleeDamage` non-zero) raises `EV_MELEE_SWIPE` (163),
    and `EV_FIRE_MELEE` (164) at once when `meleeDelay` is 0, else after
-   it.
+   it. INFERRED.
 9. A bolt-action weapon owing a rechamber goes from ready to state 4 for
    `rechamberTime` with `EV_RECHAMBER_WEAPON` (161). At
-   `rechamberBoltTime` `EV_EJECT_BRASS` (162) goes out.
-10. Prone and moving, or meleeing, sets `aimSpreadScale` to 255.
+   `rechamberBoltTime` `EV_EJECT_BRASS` (162) goes out. INFERRED.
+10. Prone and moving, or meleeing, sets `aimSpreadScale` to 255. INFERRED.
 11. With either timer running and no delay fired, return. Else the closing
-    switch on the state.
+    switch on the state. INFERRED.
 
 ### 1.3 The shot
 
@@ -268,55 +267,57 @@ VERIFIED, the stores:
 ### 1.8 The binoculars
 
 `PM_Weapon` (Mac 0x7cbb2) runs a binocular block after the two timers'
-countdown and before the offhand keys. Each bullet is VERIFIED off the
-stores and tests in the Mac decompile unless labelled otherwise.
+countdown and before the offhand keys. The bullets read the stores and tests
+in the Mac decompile. Branch conditions and ordering with no address carry
+INFERRED, constants and assets carry their own label.
 
 - The binocular weapon is the first `bg_weaponDefs` row with
   `weaponType` 3 (`binoculars`). The block does not test that the player
-  holds it. VERIFIED, the loop. Stock `binoculars_mp`: `weaponClass`
+  holds it. INFERRED, the loop. Stock `binoculars_mp`: `weaponClass`
   `item`, `weaponSlot` `none`, `aimDownSight` 1, no ammo. VERIFIED, the
   asset.
 - The block runs in states 17..22, or in state 0 when the weapon is not
   down a scoped sight (`fWeaponPosFrac` above 0 with an
   `adsOverlayReticle`) and no key of 0x30015 (fire, melee, reload, frag,
-  smoke) is held. VERIFIED.
+  smoke) is held. INFERRED.
 - Inside, any of these drops the binoculars at once: a weapon or offhand
   byte that differs from the last cmd's, a key of 0x30015, a non-zero
   `ps+0x128`. The drop: `pm_flags` 0x810 off, `fWeaponPosFrac` 0,
   `EV_RESET_ADS` (149), `pm_flags` 0x20040 off, `EV_BINOCULAR_EXIT` (169),
   both timers 0, state 0, `weapAnim` 0; a held fire key leaves
-  `weaponTime` 1. VERIFIED. What `ps+0x128` holds was not read.
+  `weaponTime` 1. INFERRED. What `ps+0x128` holds was not read.
 - Else, without the fire key, in state 20 the use keys (0x28) raise
   `EV_BINOCULAR_FIRE` (170) on their press and `EV_BINOCULAR_RELEASE`
-  (171) on their release, against the last cmd. VERIFIED.
+  (171) on their release, against the last cmd. INFERRED.
 - `player_toggleBinoculars` (default 1, `Dvar_RegisterBool`, Mac decompile
   line 72207) makes `+binoculars` (0x4000) a toggle: its press goes in
   from outside 17..22 and out from 18..20. With 0 the held key goes in
-  and its release goes out. VERIFIED, the tests.
+  and its release goes out. INFERRED, the tests. The default 1 and the
+  `Dvar_RegisterBool` call are VERIFIED (Mac decompile line 72207).
 - In, with a cmd weapon byte of 0: state 19 at once, `weaponTime` the
   binoculars' `adsTransInTime` (+0x2c0), `pm_flags` 0x20000,
   `EV_BINOCULAR_ENTER` (168). With the sight key held: `EV_RESET_ADS`,
   `pm_flags` 0x40 off, `weaponDelay` the weapon's `adsTransOutTime`
   (+0x2c4) plus `player_adsExitDelay`, state 17. Otherwise state 18,
   `weaponTime` the weapon's `quickDropTime` (+0x240), `weapAnim` 0x11.
-  VERIFIED.
+  INFERRED; the offsets are VERIFIED.
 - Out, from 18 (the weapon still going down): state 22, `pm_flags`
   0x20000 off, `EV_BINOCULAR_EXIT`, `weaponTime` the weapon's
   `quickRaiseTime` (+0x244) and `weapAnim` 0x12, or `weaponDelay` 1 with
   a cmd weapon byte of 0. From 19 or 20: state 21, `weaponTime` the
   binoculars' `adsTransOutTime` plus `player_adsExitDelay`,
-  `EV_BINOCULAR_DROP` (172). VERIFIED.
+  `EV_BINOCULAR_DROP` (172). INFERRED.
 - The closing switch once the timers run out: 17 to 18 as above; 18 to 19
   with `pm_flags` 0x20000 and `EV_BINOCULAR_ENTER`; 19 to 20; 20 stays; 21
   to 22 with `EV_BINOCULAR_EXIT` and the weapon's raise; 22 runs 16's
-  tail, so the way out raises `EV_BINOCULAR_EXIT` twice. VERIFIED, the
+  tail, so the way out raises `EV_BINOCULAR_EXIT` twice. INFERRED, the
   switch's arms 0x10..0x16.
 - The other arms (offhand keys, weapon switch, reload, melee, rechamber)
-  skip states 17..22 (`5 < weaponstate - 0x11`). VERIFIED.
+  skip states 17..22 (`5 < weaponstate - 0x11`). INFERRED.
 - `BG_GetViewmodelWeaponIndex` (Mac 0x7b226) draws the binoculars while
   `pm_flags` 0x20000 is set. `PM_IsBinocularsADS` (Mac 0x7a04a) is states
   19 and 20, where the client sends the sight bit by itself
-  (`cod2-protocol.md`, the button bits). VERIFIED.
+  (`cod2-protocol.md`, the button bits). INFERRED.
 
 vcod: `pmove::weapon::binoculars` and `binocular_state`; the sight, the
 lerp and the breath hold read the binoculars' def while 0x20000 is set
@@ -805,26 +806,29 @@ Mac 0x1c4272. VERIFIED:
 
 ## 4. `finishPlayerDamage`
 
-Mac 0x1c2e32 (lnxded 0x80fb170). VERIFIED:
+Mac 0x1c2e32 (lnxded 0x80fb170). Each bullet carries its own label:
 
 - Ten arguments. A damage under 1 does nothing. The inflictor argument,
-  when an entity, is read as the attacker (`Scr_GetEntity(1)`), as in 1.1.
+  when an entity, is read as the attacker (`Scr_GetEntity(1)`), as in 1.1. INFERRED, the decompile's flow, no address range.
 - Knockback, unless the entity's flag 8 or `dflags` 4: 0.02 of the damage
   prone, 0.15 crouched, 0.3 standing, truncated, at most 60, times
   `g_knockback` (1000) over 250 along the direction. A `pm_time` of twice
   it clamped to 50..200 with `pm_flags` 0x400 when none runs. Rodata
-  0x326568, 0x32631c, 0x3262ac, 0x32656c.
+  0x326568, 0x32631c, 0x3262ac, 0x32656c. VERIFIED, the constants; the
+  conditions on them are INFERRED, no address range.
 - A bullet weapon raises 182/183 at the point for every client but the
   victim (`r.clientMask` with the victim's bit) and 185/186 for the victim
   alone (`clientNum` the victim, every other bit set), both `surfType` 7,
-  `otherEntityNum` the attacker.
+  `otherEntityNum` the attacker. INFERRED, the decompile's flow, no address
+  range.
 - `damageTimer` (ps+0x90) grows `damage * player_dmgtimer_timePerPoint`
   (100), at most `player_dmgtimer_maxTime` (750). `damageDuration`
   (+0x94) takes it. `flinchYaw` (+0x98) is the direction's yaw less the
-  view's (9.2 has lnxded's arithmetic).
+  view's (9.2 has lnxded's arithmetic). INFERRED, no address range.
 - The health drops and `damage` is notified with the damage and the
   attacker. At 0 or below (clamped at -999) the die handler runs with
-  `psOffsetTime`. `stats[0]` takes the health.
+  `psOffsetTime`. `stats[0]` takes the health. INFERRED, the decompile's flow, no address
+  range.
 
 ## 5. `player_die`
 
@@ -1245,8 +1249,8 @@ Open:
   `pmove/weapon.rs`);
 - the corpse's startsolid re-trace (6.2);
 - `g_maxDroppedWeapons`, the no-slot touch, the contents clear (6.3);
-- `radiusDamage`'s callback order, and its `CanDamage` probes past the
-  static models and script models (7);
+- `radiusDamage`'s callback order (7). Its `CanDamage` probes past the
+  static models and script models closed in 372324ec3 (7, `cod2_blast::passed`);
 - the look-at trace's smoke test (9.2);
 - the aim block's leftovers (9.6).
 
@@ -1306,22 +1310,53 @@ to the first server-side change (below). VERIFIED, the captures.
   `fWeaponPosFrac` on the x87 stack and rounds once at the store. Two
   float roundings leave 9 rows a bit off. VERIFIED, `rifle`, `smg`,
   `pistol`, `frag`.
-- The only rows `moves_ab` cannot replay are `frag`'s three after each
-  blast: the thrower's own grenade lands beside him and `G_Damage`'s
-  knockback (`pm_flags` 0x400, `pm_time`, the push) is server-side.
-  Their numbers are section 4's knockback: the pushes are 108, 100 and 96
-  long (to the float), `knockback * g_knockback / 250` for 27, 25 and 24,
-  with `pm_time` 54, 50 and 50 (48 clamped up), and `velocity[0]` stays 0.
-  VERIFIED, the capture's bits and the arithmetic. Each row is the first
-  snapshot after its blast and carries `pm_time` as set, so the push lands
-  after the frame's cmds and before the snapshot. INFERRED. The replay
-  could only apply it by running the blast: the missile's flight, the
-  `G_RadiusDamage` falloff, the gametype's damage callback and
-  `finishPlayerDamage`, all vcod-server's. The capture predates the
-  gametype's `PROBE damage` line, so not even the callback's damage is
-  logged. Closing the rows needs a server-side replay of a thrower's own
-  blast (`game::cod2_combat_ab` runs two clients, and compares the
-  target's knockback there, 9.2), not a pmove one.
+- `frag`'s three rows after each blast carry the server's knockback:
+  the thrower's own grenade lands beside him and `finishPlayerDamage`
+  pushes him (`pm_flags` 0x400, `pm_time`, the push). Their numbers are
+  section 4's knockback: the pushes are 108, 100 and 96 long (to the
+  float), `knockback * g_knockback / 250` for 27, 25 and 24, with
+  `pm_time` 54, 50 and 50 (48 clamped up), and `velocity[0]` stays 0.
+  VERIFIED, the capture's bits and the arithmetic. The replay writes the
+  push itself (9.1.1).
+
+#### 9.1.1 The server's writes in the replay
+
+`moves_ab` applies the one write the server makes into its capture's
+playerstate outside pmove, the blast's knockback, after the cmds of the
+snapshot it lands in (`server_writes`). With it every `frag` row is exact,
+263 of 263 free and resynced (118 free before). VERIFIED (the gate).
+
+- The store. `PlayerCmd_finishPlayerDamage` (`cod2_lnxded` 0x80fb170)
+  picks the share by stance off `pm_flags` (ps+0xc) bit 1 (0.02,
+  0x3ca3d70a), bit 2 (0.15, 0x3e19999a), else 0.3 (0x3e99999a)
+  (0x80fb38d..0x80fb3cb); `fildl` the damage, `fmuls` the share and
+  `fistpl` under a 0xc00 control word, so the extended product truncates
+  (0x80fb3ce..0x80fb3f5); at most 60 (0x80fb3fb); nothing for 0 or with
+  `eFlags` (ps+0xa0) & 0x300 (0x80fb408..0x80fb42b); `knock * g_knockback /
+  250` (0x437a0000) on the stack, stored once as `VectorScale`'s argument
+  (0x80fb44b..0x80fb464), the scaled direction added to the velocity
+  (ps+0x20, `VectorAdd` 0x80fde8a); with `pm_time` (ps+0x10) 0, `2 knock`
+  clamped to 50..200 into it and `pm_flags` | 0x400 (0x80fb49d..0x80fb518).
+  VERIFIED (the instructions). vcod: `vcod_cod2::pmove::knock_back`, which
+  `Cod2Level::damaged` and the replay both call. Trap: 0.02 as a float is
+  below 0.02, so 50 prone damage is 0.99999998 on the x87 stack and
+  truncates to 0, where an `f32` product rounds to 1. INFERRED (the
+  arithmetic); no capture holds a prone blast.
+- When. `G_RunFrame` runs the missiles after the cmds that arrived since
+  the last frame, and the snapshot follows the frame, so the push lands
+  after the row's cmds and before its snapshot. INFERRED; each row
+  carries `pm_time` as set and the replay meets it there. VERIFIED (the
+  gate).
+- The inputs, off the capture. The burst's point is the `e` line whose
+  delta raises `EV_GRENADE_EXPLODE` (188): its `pos.trBase`, the truncated
+  point `G_ExplodeMissile` hands `G_RadiusDamage` (section 7), (-299,
+  1179, 29) for the first. The direction is the body's origin less it,
+  raised 24, normalized by `Vec3NormalizeTo` as `finishPlayerDamage`
+  does (9.2). The damage is the frame's `damageCount` on a new
+  `damageEvent`: `P_DamageFeedback`'s `damage * 100 / maxhealth` is the
+  damage at a max health of 100 (`stats[2]`), 93, 84 and 81 here. The
+  health is no input: it regenerates off the wire, `stats[0]` taking it
+  only at the next damage (7, then 16 and 19). VERIFIED (the capture).
 
 ### 9.2 Two clients: damage and the end frame
 

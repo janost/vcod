@@ -160,7 +160,7 @@ pub(crate) struct Cod4Damage {
     /// The newest snapshot's health fraction.
     health: f32,
     /// The state of the CRT `rand()` the icons' jitter draws on.
-    rng: u32,
+    rng: vcod_common::rng::MsvcRand,
     /// The view's and gun's kick of the last hit (`play::cod4_kick`).
     kick: crate::play::cod4_kick::DamageKick,
     /// The view the next hit is measured against (pitch, yaw).
@@ -227,7 +227,7 @@ impl Cod4Damage {
     /// The oldest slot takes a hit from the byte angle `yaw`, jittered up
     /// to 10 degrees either way (0x445eb0..0x445f2f).
     fn mark(&mut self, server_time: i32, yaw: u32) {
-        let jitter = (self.rand() as f32 * (1.0 / 32768.0) - 0.5) * 20.0;
+        let jitter = (self.rng.unit() - 0.5) * 20.0;
         let degrees = yaw as f32 / 255.0 * 360.0;
         let oldest = self
             .icons
@@ -239,13 +239,6 @@ impl Cod4Damage {
             ms: ICON_MS,
             yaw: (degrees + jitter).rem_euclid(360.0),
         };
-    }
-
-    /// The MSVC CRT's `rand()` (0x670622) from its seed of 1.
-    fn rand(&mut self) -> u32 {
-        let state = self.rng.max(1);
-        self.rng = state.wrapping_mul(214_013).wrapping_add(2_531_011);
-        (self.rng >> 16) & 0x7fff
     }
 
     /// The last hit's kick (cod4-client-view.md 14.2).
