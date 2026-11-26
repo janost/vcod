@@ -47,6 +47,9 @@ CoD1 (1.1d, 1.5b, UO):
   every `G_Damage` (cod11-movers.md 26.9).
 - `gdb_bullet.py`: a gdb script for the 1.1d server that logs every
   `Bullet_Fire_Extended` leg's trace and glass test and every `G_Damage`.
+- `gdb_missile.py`: a gdb script for the 1.1d server, read only, that logs
+  every `G_RunMissile` move and ground-snap trace, its ends and its trace
+  result, every float as its bits (cod11-combat.md 12.4).
 - `gdb_teams.py`: a gdb script for the 1.1d, 1.5b and UO servers, read
   only, that logs the team pick of `Use_Item` and `RespawnItem`
   (cod11-items.md 14.8).

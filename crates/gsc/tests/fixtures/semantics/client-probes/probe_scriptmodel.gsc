@@ -29,6 +29,10 @@
 //	script puts them every frame. The site is the first tdm spawn point
 //	past the first with 256 units of level, clear ground on its facing:
 //	the allies player stands on it, the axis player 256 ahead facing back.
+//	Once both are in, the target's model and attachments (the gear the dm
+//	script drew):
+//
+//	PROBE body <time> <model> [ <tag>:<attached model>]...
 //
 //	rounds: the shooter (`--probe-uo-weapon aim`, a Thompson) is turned
 //	every frame onto the target's waist, 30 above its feet, and a barrel
@@ -350,6 +354,7 @@ pair_part(part)
 			if (!isdefined(placed))
 			{
 				placed = now;
+				logPrint("PROBE body " + now + " " + target.model + attached(target) + "\n");
 				if (part == "grenade" || part == "rounds")
 				{
 					model = spawn("script_model", ground_at(bpos));
@@ -460,4 +465,14 @@ pair_part(part)
 		}
 		wait 0.05;
 	}
+}
+
+//	A player's attached models, as ` <tag>:<model>` words: the gear the dm
+//	script drew, which a frag off his back strikes.
+attached(p)
+{
+	out = "";
+	for (i = 0; i < p getAttachSize(); i++)
+		out = out + " " + p getAttachTagName(i) + ":" + p getAttachModelName(i);
+	return out;
 }
