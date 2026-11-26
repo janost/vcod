@@ -210,8 +210,8 @@ The scripts under `tools/` no other section names:
 
 The client's tools are `vcod::tools`, built outside `cfg(test)` under the
 crate's `testing` feature, so an edit to one rebuilds no unit test. One
-example runs them by name:
-`cargo run -p vcod --example client_tools -- <tool>`.
+example runs them by name: `cargo run -p vcod --features testing
+--example client_tools -- <tool>` (without the feature cargo skips it).
 
 | Tool | Env | What | Where |
 |---|---|---|---|
@@ -386,7 +386,8 @@ What the frame checks see:
 
 ## CoD2 map census
 
-`COD2_DIR=... cargo run -p vcod --example client_tools -- cod2_map_census` runs
+`COD2_DIR=... cargo run -p vcod --features testing --example client_tools --
+cod2_map_census` runs
 every stock CoD2 map through vcod-server, a spectating client, a headless
 frame (lavapipe env and `nice` as for `pipeline_check`;
 `VCOD_CENSUS_FRAMES=0` skips it) and a walk from each spawn. It writes its
@@ -395,8 +396,8 @@ table, frames and per-map warnings to `tmp/cod2-map-census/`
 
 ## CoD4 map sweep
 
-`COD4_DIR=... cargo run -p vcod --example client_tools -- cod4_map_sweep`
-runs every stock CoD4 map under war, dm, sd, sab, dom and koth.
+`COD4_DIR=... cargo run -p vcod --features testing --example client_tools --
+cod4_map_sweep` runs every stock CoD4 map under war, dm, sd, sab, dom and koth.
 Per map: a vcod-server with six shooting bots rotating through the six
 gametypes (30 s limits) and one client playing it through `Cod4Client::pump`
 into a headless renderer (lavapipe env as for `pipeline_check`).

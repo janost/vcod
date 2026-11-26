@@ -52,7 +52,7 @@ fi
 export LP_NUM_THREADS=${LP_NUM_THREADS:-4}
 read -r -a wrap <<<"${WRAP:-nice -n 10}"
 # One build, copied out, so the checkout can change under a long run.
-bin=$(cd "$here" && "${wrap[@]}" cargo build -p vcod --example client_tools \
+bin=$(cd "$here" && "${wrap[@]}" cargo build -p vcod --features testing --example client_tools \
   --message-format=json-render-diagnostics |
   sed -n 's/.*"executable":"\([^"]*client_tools\)".*/\1/p' | tail -1)
 [ -n "$bin" ] || { echo "soak: build failed" >&2; exit 1; }

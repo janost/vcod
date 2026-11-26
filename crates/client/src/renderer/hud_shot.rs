@@ -8,7 +8,8 @@
 //! (`VCOD_COD2_HUD_DUMP`) to `<a.quads>.ppm` at 1280 x 720.
 //!
 //! Each is a `client_tools` run: `COD2_DIR=... VCOD_HUD_SHOT=<out> cargo
-//! run -p vcod --example client_tools -- cod2_player_hud_shot`.
+//! run -p vcod --features testing --example client_tools --
+//! cod2_player_hud_shot`.
 
 use super::*;
 use vcod_common::asset_source::AssetSource;

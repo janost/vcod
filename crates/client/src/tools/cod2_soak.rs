@@ -13,8 +13,8 @@
 //! (default `tmp/cod2-soak`) counts per pair what the CoD4 soak counts
 //! (docs/research/cod2-client-perf.md, "The soak").
 //!
-//! `COD2_DIR=... cargo run -p vcod --example client_tools -- cod2_soak`
-//! (it installs the process's logger), under
+//! `COD2_DIR=... cargo run -p vcod --features testing --example
+//! client_tools -- cod2_soak` (it installs the process's logger), under
 //! lavapipe with `VK_DRIVER_FILES`, `WGPU_BACKEND=vulkan`,
 //! `GALLIVM_PERF=nopt`. `tools/cod2_soak.sh` runs it a map a process.
 //! `VCOD_SWEEP_MAPS`, `VCOD_SWEEP_GAMETYPES`, `VCOD_SOAK_MINUTES` (3),

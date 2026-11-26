@@ -6,8 +6,8 @@ own label.
 
 ## 1. The tool
 
-`COD4_DIR=... cargo run -p vcod --example client_tools -- cod4_map_sweep`
-(`crates/client/src/tools/cod4_sweep.rs`, its header lists the
+`COD4_DIR=... cargo run -p vcod --features testing --example client_tools --
+cod4_map_sweep` (`crates/client/src/tools/cod4_sweep.rs`, its header lists the
 knobs). Per map, vcod-server loads it with six shooting bots and
 `sv_mapRotation` naming the map once for each of war, dm, sd, sab, dom and
 koth (time limits 0.5 min, round limits 1); one client joins through the

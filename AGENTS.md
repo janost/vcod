@@ -108,14 +108,15 @@ Before a commit, run what CI runs:
 
 ```
 cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo clippy -p vcod-common -p vcod-cod4 -p vcod-server --lib --bins -- -D warnings
+cargo clippy --workspace --all-targets --features vcod/testing -- -D warnings
+cargo clippy -p vcod-common -p vcod-cod4 -p vcod-server -p vcod --lib --bins -- -D warnings
 cargo test --workspace --lib --bins --tests
 cargo deny check   # after a dependency change
 ```
 
 The second clippy builds the crates with a `testing` feature without it,
-as a release build does: `--all-targets` turns it on. `--lib --bins
+as a release build does: `--all-targets` turns it on, and
+`--features vcod/testing` the client's, which builds its tools. `--lib --bins
 --tests` leaves out the examples, about a GB of links that clippy's
 `--all-targets` already compiles. `tools/gate.sh [area...]` runs the
 first four, the suite once per install the environment names (`COD_DIR`,

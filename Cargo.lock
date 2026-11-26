@@ -2565,7 +2565,6 @@ dependencies = [
  "pollster",
  "symphonia",
  "tempfile",
- "vcod",
  "vcod-cod2",
  "vcod-cod4",
  "vcod-common",

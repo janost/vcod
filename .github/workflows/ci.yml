@@ -59,13 +59,13 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --features vcod/testing --locked -- -D warnings
 
       # The tests turn on each crate's `testing` feature, so the step above
       # never sees a release build's warnings: the crates that have the
       # feature, their libraries and binaries built without it.
       - name: Clippy without testing
-        run: cargo clippy -p vcod-common -p vcod-cod4 -p vcod-server --lib --bins --locked -- -D warnings
+        run: cargo clippy -p vcod-common -p vcod-cod4 -p vcod-server -p vcod --lib --bins --locked -- -D warnings
 
       # COD_DIR is unset here, so tests that need the retail paks return
       # early (vcod_common::testing::game_fs). What runs is the parser,

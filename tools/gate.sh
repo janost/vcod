@@ -104,9 +104,9 @@ require=$(IFS=,; echo "${req[*]}")
 base=(VCOD_REQUIRE_INSTALL="$require")
 
 run fmt -- fmt --all --check || fail fmt
-run clippy -- clippy --workspace --all-targets -- -D warnings || fail clippy
+run clippy -- clippy --workspace --all-targets --features vcod/testing -- -D warnings || fail clippy
 # The crates with a `testing` feature, built without it as a release is.
-run clippy-release -- clippy -p vcod-common -p vcod-cod4 -p vcod-server --lib --bins -- -D warnings ||
+run clippy-release -- clippy -p vcod-common -p vcod-cod4 -p vcod-server -p vcod --lib --bins -- -D warnings ||
 	fail clippy-release
 [[ ${DRY:-} == 1 ]] || echo "fmt, clippy: ok"
 check suite "${base[@]}" -- test --workspace --lib --bins --tests --no-fail-fast
