@@ -151,15 +151,9 @@ fn tokens(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// C's `atof` over the forms the stock files use: the longest leading
-/// number, 0 without one.
+/// C's `atof` ([`vcod_common::text::atof`]) stored as a float.
 pub(crate) fn atof(s: &str) -> f32 {
-    let s = s.trim_start();
-    (1..=s.len())
-        .rev()
-        .filter(|&n| s.is_char_boundary(n))
-        .find_map(|n| s[..n].parse::<f32>().ok())
-        .unwrap_or(0.0)
+    vcod_common::text::atof(s) as f32
 }
 
 /// `soundaliases/volumemodgroups.def`: `VOLUMEMODGROUPS`, then name and

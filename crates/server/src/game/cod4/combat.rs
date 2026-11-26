@@ -75,7 +75,7 @@ const MASK_MELEE: u32 = 0x280_6891;
 
 /// `EV_ITEM_PICKUP` (cod4-netfields.md 9), what retail sends for the touch
 /// of a dropped weapon already held (cod4-combat.md 6).
-pub(super) const EV_ITEM_PICKUP: u32 = 9;
+pub(super) const EV_ITEM_PICKUP: u32 = vcod_cod4::pmove::weapon::ev::ITEM_PICKUP;
 
 pub use vcod_cod4::collision::MASK_SHOT;
 /// `iDFlags` 4.
@@ -93,7 +93,7 @@ pub mod ev {
     pub const BULLET_HIT_CLIENT_SMALL: i32 = 42;
     pub const MELEE_HIT: i32 = 35;
     pub const MELEE_MISS: i32 = 36;
-    pub const MELEE_BLOOD: u32 = 37;
+    pub const MELEE_BLOOD: u32 = vcod_cod4::pmove::weapon::ev::MELEE_BLOOD;
     pub const OBITUARY: i32 = 66;
 }
 
@@ -1627,10 +1627,9 @@ impl Cod4Level {
 
     /// `Touch_Item` for the weapons at rest: a living player whose box
     /// meets the item's and who holds the same weapon takes its stock and
-    /// clip into the reserve (`WeaponPickup_Touch`, `Add_Ammo`, capped at
-    /// `maxAmmo`); one that took any gets `EV_ITEM_PICKUP` and the item
-    /// goes. Picking up a weapon not held is the use key's swap, not run
-    /// (cod4-combat.md 6).
+    /// clip into the reserve ([`vcod_cod4::pmove::weapon::take_ammo`]) and
+    /// the item goes. Picking up a weapon not held is the use key's swap,
+    /// not run (cod4-combat.md 6). Retail's touch differs (6.2, open).
     pub(super) fn touch_items(&mut self) {
         let items = self.rt.host.cod4().items.clone();
         let mut taken = Vec::new();
@@ -1648,17 +1647,11 @@ impl Cod4Level {
                 let lo = ps.origin + Vec3::new(-15.0, -15.0, 0.0);
                 let hi = ps.origin + Vec3::new(15.0, 15.0, 70.0);
                 let meets = (0..3).all(|a| it.base[a] + 1.0 >= lo[a] && it.base[a] - 1.0 <= hi[a]);
-                if !meets || !ps.has_weapon(it.weapon) || d.ammo_index >= ps.ammo.len() {
+                let rounds = it.stock.max(0) + it.clip.max(0);
+                if !meets || !vcod_cod4::pmove::weapon::take_ammo(&mut ps, &d, it.weapon, rounds) {
                     continue;
                 }
-                let have = ps.ammo[d.ammo_index];
-                let want = (it.stock.max(0) + it.clip.max(0)).max(0);
-                let after = (have + want).min(d.max_ammo.max(have));
-                if after == have {
-                    continue;
-                }
-                ps.ammo[d.ammo_index] = after;
-                ps.add_event(EV_ITEM_PICKUP, it.weapon);
+                let after = ps.ammo[d.ammo_index];
                 let p = self.players[slot].as_mut().unwrap();
                 ps.write_wire(&mut p.ps);
                 let l = &mut self.rt.host.cod4_mut().clients[slot].loadout;
