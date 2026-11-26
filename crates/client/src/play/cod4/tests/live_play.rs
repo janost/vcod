@@ -256,7 +256,7 @@ fn cod4_live_saw_mounts_fires_clamps_and_lets_go() {
     assert_eq!(yaw, Some(45.0), "the barrel past its arc");
     assert_eq!(released, (0, 0, 1023), "release");
     // `G_PlayerTurretPositionAndBlend`: retail's gunner at barrel yaw 0
-    // and 45 (`play-1.7-saw.txt`, cod4-gsc.md 9.2).
+    // and 45 (`play-1.7-saw-gunner.txt`, cod4-gsc.md 9.2).
     let retail = [
         (0.0, [-754.039, 75.398, 258.125]),
         (45.0, [-752.46, 51.005, 258.125]),

@@ -274,6 +274,7 @@ its doc comment says what it reads and which env vars drive it.
 | `a_prone_view_flick_costs` | CoD2 prone view cost | cod2-movement.md 10 |
 | `lit_pipeline_register_census` | CoD4 shader registers on a driver | cod4-client-perf.md 29 |
 | `spawn_wave` | the gsc interpreter | "The gsc interpreter" below |
+| `cod4_use_key_swap_ab` | CoD4 use-key swap against its retail capture, open: fails until ours swaps as retail does (`COD4_DIR`) | cod4-gsc.md 9.1.1 |
 
 By-hand tools behind an env var: each is `#[ignore = "tool: set <VAR>"]`
 and panics with that line when run without it.

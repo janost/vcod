@@ -200,6 +200,10 @@ pub struct Player4 {
     /// The gun's `triggerDown`, which holds a single-shot gun to one round
     /// a press.
     pub trigger_down: bool,
+    /// The body as a gun's own `BG_PlayerStateToEntityState` left it this
+    /// end frame (the gunner's placement, the release), after the end
+    /// frame's (`super::turret`).
+    pub turret_entity: Option<EntityState>,
     /// `client->inactivityTime` and `inactivityWarning`
     /// ([`Cod4Level::inactivity_timer`]).
     pub inactivity_time: i32,
@@ -526,6 +530,7 @@ impl Cod4Level {
             body_events: BodyEvents::default(),
             turret_active: 0,
             trigger_down: false,
+            turret_entity: None,
             inactivity_time: 0,
             inactivity_warned: false,
         });
@@ -1611,6 +1616,9 @@ impl Cod4Level {
         // `ClientEndFrame` after `BG_PlayerAnimation`, dead or alive
         // (0x80a6f57): a gunner's `turret_think_client`, which lets a
         // dead one go on his death frame (cod4-gsc.md 9.2).
+        if let Some(p) = self.players[slot].as_mut() {
+            p.turret_entity = None;
+        }
         self.turret_end_frame(slot);
     }
 
@@ -2179,7 +2187,9 @@ impl Cod4Level {
             let Some(p) = p else { continue };
             out.remove(&(slot as u32));
             if p.ps.word(ps!("otherFlags")) & POF_PLAYER != 0 && in_play(p.ps.pm_type()) {
-                let mut e = player_entity(slot, &p.ps);
+                let mut e = p
+                    .turret_entity
+                    .unwrap_or_else(|| player_entity(slot, &p.ps));
                 p.body_events.write(&mut e);
                 out.insert(slot as u32, e);
             }

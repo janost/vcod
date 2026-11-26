@@ -1278,6 +1278,9 @@ fn move_body(pm: &mut Pmove, pml: &mut Pml) {
     if pm.ps.e_flags & ef::TURRET != 0 {
         hold_in_place(pm, pml);
         run_steps(pm, pml, GUNNER_STEPS);
+        // The arm ends in 0x8060d8e (called at 0x805c2df): the gun at rest,
+        // its idle anim restarted every step (cod4-gsc.md 9.2).
+        weapon::settle_ready(pm.ps);
         return;
     }
     if pm.ps.pm_flags & pmf::MANTLE == 0 {

@@ -15,11 +15,14 @@ ones are kept at the end for the causes they name.
 
 By how much a player notices.
 
-- Two retail captures were never committed, so their claims are VERIFIED
-  live with no gate replaying them: the mounted SAW on mp_backlot
-  (`play-1.7-saw.txt`, cod4-gsc.md 9.2, cod4-effects.md 12.4) and the use
-  key's weapon swap (cod4-combat.md 12). Both want a fresh capture beside
-  the other pairs of `cod4::capture_ab`.
+- The use key's weapon swap against its capture
+  (`cod4_use_key_swap_ab`, `#[ignore]`d): 1.7 rings `EV_ITEM_PICKUP` with
+  the new weapon, reads `weapon` 0 on the pickup frame and leaves the old
+  gun at rest where the taken one lay; ours launches it from the taker
+  and rings nothing (cod4-gsc.md 9.1.1). Unread: 1.7's `Touch_Item` arm.
+- `cod4_mounted_saw_ab`'s `GAPS`: the barrel's angles and the gunner's
+  origin a few ulps off, the let go's yaw -0 against +0, and the
+  watcher's spawn off a spectator view of 94 (cod4-gsc.md 9.2.1).
 
 ## 2. Not gaps
 

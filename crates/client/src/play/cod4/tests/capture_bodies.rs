@@ -200,7 +200,7 @@ fn a_body_under_two_weapons_shares_its_meshes() {
 /// (`CG_PlayerTurretPositionAndBlend`, cod4-gsc.md 9.2): the spectator
 /// capture's walker given mp_backlot's crouch SAW 393 at (-720 68 290)
 /// and its gunner's legs anim (0x35) and wire origin, drawn at retail's
-/// placement for the barrel at 0 and -45 (`play-1.7-saw.txt`).
+/// placement for the barrel at 0 and -45 (`play-1.7-saw-gunner.txt`).
 #[test]
 fn a_watched_gunner_stands_on_his_gun() {
     use crate::play::cod4_players::{Cod4Players, GunInfo};
