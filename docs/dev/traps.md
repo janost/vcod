@@ -987,9 +987,14 @@ otherwise.
   CoD2: call `PlayerBody::script_movetype` ahead of `animate`. Without it
   a strafe's legs swing a frame late and the head reads 0.05 units off
   (cod4-player-anims.md 8.1).
+- An entity the touch pass or the use key takes goes through `free_next`,
+  not `free_entity`: `engine_notifies` reach only live entities, so an item
+  freed in the pass drops its own `touch` and `trigger` (cod4-combat.md
+  6.2.1).
 - Inline: `cod4-combat.md` 3.2 (the eye and gun angle bytes), 5 (the
-  corpse's bit, `suicide`, the end-frame draw), 6.2 (1.7 takes a dropped
-  weapon at the next frame's start, still falling; vcod's touch is open), 7.1 (the last-cmd word),
+  corpse's bit, `suicide`, the end-frame draw), 6.2 and 6.2.1 (1.7 takes a
+  dropped weapon in the next frame's touch pass, falling or at rest, within
+  36 across and 18 below to 88 above the origin), 7.1 (the last-cmd word),
   10.2, 10.3, 10.8, 10.10 (missiles, the burst, flash and concussion,
   `radiusDamage`), 13 and 13.1 (rounds on script entities), 14 (entity
   numbers).

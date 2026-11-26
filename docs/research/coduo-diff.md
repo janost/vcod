@@ -3547,7 +3547,7 @@ files in the homepath's `uo/` and `main/` and in a pk3 in its `uo/`.
   noautoexec` 0x80e3961), `allow_jeeps <v>` and `allow_tanks <v>`
   (`Setting scr_allow_jeeps: %s.` 0x80e3799, a `Cvar_Set` of
   `scr_allow_jeeps` 0x80e37b7 and `scr_allow_tanks` 0x80e3857). VERIFIED
-  (the strings and calls). Not run live.
+  (the strings and calls). Run live and ported in 26.2.1.
 - INFERRED, off Q3's `Com_AddStartupCommands` and the insert ahead of the
   buffer: a `+set` written after `+map` runs after the map's config.
 
@@ -3566,10 +3566,93 @@ files in the homepath's `uo/` and `main/` and in a pk3 in its `uo/`.
   argument at the first frame, as retail's.
 - `console_cmds::tests::uo_map_execs_the_maps_gametype_cfg` replays the
   live run's steps on vcod.
-- Not done: the rotation's `exec`, `allow_jeeps` and `allow_tanks` words
-  (vcod's `engine::rotation` skips them as unknown); `sv_console_lockout`;
+- Not done: `sv_console_lockout`;
   a loose file added after the server started (the search path indexes
   loose files at start); vcod has no separate homepath to search.
+
+### 26.2.1 The rotation's UO words
+
+Retail, `SV_MapRotate_f` (coduo_lnxded 0x80886e5..0x8088aea), after
+1.1's banners and refill (cod11-map-cycle.md 5.2):
+
+- Each word is a `strcasecmp` against `exec` (0x80e36bb, at 0x80887ab),
+  `allow_jeeps` (0x80e3729, 0x8088828), `allow_tanks` (0x80e37c7,
+  0x80888d5), `gametype` (0x80e3867) and `map` (0x80e38f2), in that
+  order; anything else is `Unknown keyword '%s' in sv_mapRotation.`
+  (0x80e3980). Each of the first three reads one more word through
+  `NextToken` (0x8088655). VERIFIED (the instructions).
+- A missing value prints `No value specified after 'exec'` (0x80e36c0),
+  `'allow_jeeps'` (0x80e3740) or `'allow_tanks'` (0x80e37e0) `keyword in
+  sv_mapRotation - forcing map_restart.` and calls `SV_MapRestart_f`
+  (0x8088325), as a missing gametype or map does. VERIFIED (the
+  instructions).
+- `exec <v>`: prints `Execing: %s.` (0x80e3712), then
+  `Cbuf_ExecuteText(0, va("exec %s\n", v))` (0x80887eb..0x8088809).
+  Mode 0 is `Cmd_ExecuteString` (0x805faf4 branches on it to 0x80603e9),
+  so `Cmd_Exec_f` runs at once and inserts the file's text ahead of the
+  buffer. It sets a local flag (`-0x8(%ebp)` = 1, 0x808880e) that no
+  other word clears. VERIFIED (the instructions).
+- `map <m>`: with the flag set, `Cbuf_ExecuteText(0, va("map %s
+  noautoexec\n", m))` (0x8088a73..0x8088a97), else 1.1's `map %s`
+  (0x80e3974): an `exec` anywhere before the map in the same walk skips
+  the map's `<map>_<gametype>.cfg` (26.1). VERIFIED (the instructions).
+- `allow_jeeps <v>` and `allow_tanks <v>`: print `Setting scr_allow_jeeps:
+  %s.` (0x80e3799) or `Setting scr_allow_tanks: %s.` (0x80e3839); when
+  `0x84897c0`'s `+0x20` is non-zero and `v` differs case-insensitively
+  from the cvar's string (pointers 0x84f6fbc, 0x84f6fcc), call
+  0x809bfb4 with `(*0x80f5104, 0x11, 0)`, the same call the `gametype`
+  arm makes (0x80889ec); then `Cvar_Set` (0x8073798) of `scr_allow_jeeps`
+  or `scr_allow_tanks`. VERIFIED (the instructions). INFERRED, off 1.1's gametype arm (cod11-map-cycle.md
+  5.2): the check is `sv_running`, the call `VM_Call(gvm, 17, 0)`, UO's
+  `savePersist` setter, so a changed value drops what `exitLevel(true)`
+  kept.
+- The engine registers both cvars at 0x809223d..0x809227a: `Cvar_Get`
+  (0x8073114) with default `1` (0x80e56cc) and flags 0x24, the
+  serverinfo and latch bits (INFERRED, Q3's flag values); `getinfo`
+  reports them as `jps` and `tnk` (section 2). VERIFIED (the
+  instructions).
+- 1.1d and 1.5b hold none of the three words or their lines. VERIFIED
+  (strings).
+
+Live on the retail 1.51b server, loopback, every claim VERIFIED:
+
+- `allow_jeeps 0 allow_tanks 0 exec rot_a exec rot_b map mp_arnhem`
+  printed `Setting scr_allow_jeeps: 0.`, `Setting scr_allow_tanks: 0.`,
+  `Execing: rot_a.`, `execing rot_a`, `Execing: rot_b.`, `execing rot_b`,
+  `Setting map: mp_arnhem.`, and no `will be changed upon restarting`: the
+  `Cvar_Set` passes the latch. The load execed no `mp_arnhem_dm.cfg`
+  (the file was there), and after `Game Initialization` the files' `echo`
+  lines printed `rot_b`'s first, then `rot_a`'s: each insert goes ahead of
+  the last. Serverinfo then held `scr_allow_jeeps 0` and `scr_allow_tanks
+  0`.
+- `exec nothere gametype sd allow_jeeps 1 map mp_cassino` printed
+  `couldn't exec nothere` and still skipped `mp_cassino_sd.cfg`: the flag
+  is set whether or not the file was found.
+- A trailing `allow_tanks` and a trailing `exec` each printed their `No
+  value specified` line and restarted the map.
+- `allow_jeeps 0 allow_jeeps 1` printed both lines; the last wins.
+- A rotation with no `exec` ran the map's cfg (`execing mp_foy_dm.cfg`)
+  on the restart path too.
+- 1.5b over `exec rot_a allow_jeeps 0 allow_tanks 0 map mp_harbor` printed
+  `Unknown keyword` for each of the six words and loaded mp_harbor.
+- Not reached live: an `exec` value holding a blank. The console's
+  tokenizer cannot write a quote into `sv_mapRotation` (`set sv_mapRotation
+  "exec \"rot_a rot_b\" map mp_foy"` stored `exec \ rot_a rot_b\  map
+  mp_foy`). INFERRED, off `Cmd_Exec_f`'s
+  argument count (26.1): such a value prints the usage line.
+
+vcod: `engine::rotation::rotate` takes `Keywords::Uo` on UO and
+`Keywords::Base` everywhere else (1.1, 1.5, CoD2, CoD4), and returns UO's
+words in order (`Walk::uo`) and `Walk::noautoexec`.
+`Server::run_uo_rotation_words` runs each `exec` as the console line
+`exec <v>` (so a blank in the value gets the usage line), forces each
+`allow_*` into the running level's table through `set_cvar`, drops
+`savePersist` when the value changed, and the walk's map queues as `map
+<m> noautoexec` after an `exec`. The `Execing:` and `Setting` lines go to
+the log only, as the `gametype` and `map` ones do.
+`engine::rotation::tests::uo_*` and `base_keywords_skip_uo_s_words`, and
+`console_cmds::tests::uo_rotation_*` and `rotation_words_are_uo_s_alone`
+replay these steps.
 
 ## Tools
 

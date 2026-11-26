@@ -1625,52 +1625,92 @@ impl Cod4Level {
         }
     }
 
-    /// `Touch_Item` for the weapons at rest: a living player whose box
-    /// meets the item's and who holds the same weapon takes its stock and
-    /// clip into the reserve ([`vcod_cod4::pmove::weapon::take_ammo`]) and
-    /// the item goes. Picking up a weapon not held is the use key's swap,
-    /// not run (cod4-combat.md 6). Retail's touch differs (6.2, open).
-    pub(super) fn touch_items(&mut self) {
-        let items = self.rt.host.cod4().items.clone();
-        let mut taken = Vec::new();
-        for it in items.iter().filter(|i| i.resting()) {
-            let Some(d) = self.combat.defs.get(it.weapon as usize).cloned() else {
-                continue;
-            };
-            for slot in 0..self.players.len() {
-                if !self.playing(slot) || self.rt.client_vitals(slot).health < 1 {
-                    continue;
-                }
-                let Some(mut ps) = self.pm_state(slot) else {
-                    continue;
-                };
-                let lo = ps.origin + Vec3::new(-15.0, -15.0, 0.0);
-                let hi = ps.origin + Vec3::new(15.0, 15.0, 70.0);
-                let meets = (0..3).all(|a| it.base[a] + 1.0 >= lo[a] && it.base[a] - 1.0 <= hi[a]);
-                let rounds = it.stock.max(0) + it.clip.max(0);
-                if !meets || !vcod_cod4::pmove::weapon::take_ammo(&mut ps, &d, it.weapon, rounds) {
-                    continue;
-                }
-                let after = ps.ammo[d.ammo_index];
-                let p = self.players[slot].as_mut().unwrap();
-                ps.write_wire(&mut p.ps);
-                let l = &mut self.rt.host.cod4_mut().clients[slot].loadout;
-                l.ammo[d.ammo_index] = after;
-                taken.push(it.id);
-                break;
-            }
-        }
-        if taken.is_empty() {
+    /// `G_TouchTriggers`' items for `slot` (`cod4_lnxded` 0x80a5352,
+    /// cod4-combat.md 6.2.1): a playing client at `pm_type` 1 or under
+    /// touches every item, falling or at rest, that
+    /// [`super::item::player_touches`] meets: `"touch"` on the item with the
+    /// client, then on the client with the item, then `Touch_Item`. With
+    /// health, an item `BG_CanItemBeGrabbed` leaves it (not its dropper's)
+    /// gives its rounds to a weapon on the same ammo slot
+    /// ([`vcod_cod4::pmove::weapon::take_ammo`]), and on any taken the item
+    /// is notified `"trigger"` with the client and no drop. A held weapon's
+    /// item gives stock and clip and goes; another's gives its stock and
+    /// stays with the rest. Picking up a weapon not held is the use key's
+    /// swap (cod4-gsc.md 9.1.2).
+    pub(super) fn touch_items(&mut self, slot: usize) {
+        /// `pm_flags` bit `BG_CanItemBeGrabbed` refuses on (0x8053051).
+        const PMF_NO_GRAB: u32 = 0x10_0000;
+        if self.rt.host.cod4().items.is_empty() {
             return;
         }
-        self.rt
-            .host
-            .cod4_mut()
-            .items
-            .retain(|i| !taken.contains(&i.id));
-        for id in taken {
-            self.rt.host.free_entity(id);
+        let (Some(mut ps), Some(client)) = (self.pm_state(slot), self.rt.client_entity(slot))
+        else {
+            return;
+        };
+        if ps.pm_type > vcod_cod4::pmove::pm_type::NORMAL_LINKED || !self.playing(slot) {
+            return;
         }
+        let grabs = self.rt.client_vitals(slot).health >= 1
+            && ps.weap_flags & 0x80 == 0
+            && ps.pm_flags & PMF_NO_GRAB == 0;
+        let now = self.level_time();
+        let height = vcod_cod4::pmove::wire::body_height(ps.pm_flags);
+        let items = self.rt.host.cod4().items.clone();
+        let (mut taken, mut left) = (Vec::new(), Vec::new());
+        for it in &items {
+            if !super::item::player_touches(it, ps.origin, height, now) {
+                continue;
+            }
+            let notes = &mut self.rt.host.engine_notifies;
+            notes.push((it.id, "touch", vec![Value::Entity(client)]));
+            notes.push((client, "touch", vec![Value::Entity(it.id)]));
+            if !grabs || it.owner == ps.client_num {
+                continue;
+            }
+            let Some(def) = self.combat.defs.get(it.weapon as usize) else {
+                continue;
+            };
+            // The weapon held, else one held on its ammo slot (0x8060dd4,
+            // def+0x328).
+            let held = ps.has_weapon(it.weapon);
+            let shared = (1..self.combat.defs.len() as u32).any(|w| {
+                ps.has_weapon(w) && self.combat.defs[w as usize].ammo_index == def.ammo_index
+            });
+            if !held && !shared {
+                continue;
+            }
+            let rounds = it.stock.max(0) + if held { it.clip.max(0) } else { 0 };
+            let took = vcod_cod4::pmove::weapon::take_ammo(&mut ps, def, it.weapon, rounds);
+            if took == 0 {
+                continue;
+            }
+            let l = &mut self.rt.host.cod4_mut().clients[slot].loadout;
+            l.ammo[def.ammo_index] = ps.ammo[def.ammo_index];
+            self.rt.host.engine_notifies.push((
+                it.id,
+                "trigger",
+                vec![Value::Entity(client), Value::Undefined],
+            ));
+            if held {
+                taken.push(it.id);
+            } else {
+                left.push((it.id, it.stock - took));
+            }
+        }
+        if taken.is_empty() && left.is_empty() {
+            return;
+        }
+        let p = self.players[slot].as_mut().unwrap();
+        ps.write_wire(&mut p.ps);
+        let c4 = self.rt.host.cod4_mut();
+        for (id, stock) in left {
+            if let Some(it) = c4.items.iter_mut().find(|i| i.id == id) {
+                it.stock = stock;
+            }
+        }
+        // Out of the world now, freed once the frame's notifies reached it.
+        c4.items.retain(|i| !taken.contains(&i.id));
+        c4.free_next.extend(taken);
     }
 
     /// Each live item as 1.7 sends it: `ET_ITEM` (3), `index` its weapon

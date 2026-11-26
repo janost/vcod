@@ -389,7 +389,9 @@ against a retail kill capture, entity numbers included:
 - Destructible cars and barrels break under rounds and blasts (13).
 - The stock damage and killed callbacks, the obituary, the corpse (death
   anim, set down on the ground, `startRagdoll` at retail's moment), the
-  dropped weapon (its ammo handed to a player holding the same gun), and
+  dropped weapon (its ammo handed to a player holding the same gun or
+  one on its ammo slot who touches it, falling or at rest, within 1.7's
+  reach, with its `touch` and `trigger` notifies (6.2)), and
   the killcam with the world as it was.
 - Frag, smoke and flash grenades are pulled, cooked, thrown and bounce,
   off static models too. A replayed frag matches retail word for word,

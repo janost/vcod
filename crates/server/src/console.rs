@@ -276,7 +276,11 @@ pub fn info_print(info: &str) -> String {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Rotate {
-    Map(String),
+    /// `noautoexec`: UO's `map <m> noautoexec`, after an `exec` word.
+    Map {
+        map: String,
+        noautoexec: bool,
+    },
     Restart,
 }
 
@@ -286,6 +290,8 @@ pub enum Rotate {
 pub struct Rotation {
     pub current: String,
     pub warnings: Vec<String>,
+    /// UO's `exec`, `allow_jeeps` and `allow_tanks`, for the caller to run.
+    pub uo: Vec<crate::engine::rotation::UoWord>,
 }
 
 impl Rotation {
@@ -294,9 +300,16 @@ impl Rotation {
     /// `Restart` when the rotation names none. A `gametype` token writes
     /// `gametype` and the caller clears its stashed `savePersist` when the
     /// value changed.
-    pub fn rotate(&mut self, full: &str, gametype: &mut String) -> Rotate {
+    pub fn rotate(
+        &mut self,
+        full: &str,
+        gametype: &mut String,
+        keywords: crate::engine::rotation::Keywords,
+    ) -> Rotate {
         use crate::engine::rotation::{self, End, Words};
-        let walk = rotation::rotate(full, &mut self.current, Words::Cod1);
+        let mut walk = rotation::rotate(full, &mut self.current, Words::Cod1, keywords);
+        let noautoexec = walk.noautoexec();
+        self.uo.append(&mut walk.uo);
         if let Some(g) = walk.gametype {
             *gametype = g;
         }
@@ -308,7 +321,7 @@ impl Rotation {
             self.warnings.push(w.into());
         }
         match walk.end {
-            End::Map(m) => Rotate::Map(m),
+            End::Map(map) => Rotate::Map { map, noautoexec },
             _ => Rotate::Restart,
         }
     }
@@ -380,6 +393,7 @@ pub type Console = VecDeque<String>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::rotation::Keywords::Base;
 
     #[test]
     fn a_map_id_bumps_the_high_nibble_and_skips_zero() {
@@ -410,19 +424,37 @@ mod tests {
         let mut r = Rotation::default();
         let mut gt = "dm".to_string();
         let full = "gametype tdm map mp_carentan map mp_brecourt";
-        assert_eq!(r.rotate(full, &mut gt), Rotate::Map("mp_carentan".into()));
+        assert_eq!(
+            r.rotate(full, &mut gt, Base),
+            Rotate::Map {
+                map: "mp_carentan".into(),
+                noautoexec: false
+            }
+        );
         assert_eq!(gt, "tdm");
-        assert_eq!(r.rotate(full, &mut gt), Rotate::Map("mp_brecourt".into()));
+        assert_eq!(
+            r.rotate(full, &mut gt, Base),
+            Rotate::Map {
+                map: "mp_brecourt".into(),
+                noautoexec: false
+            }
+        );
         // The queue is empty: refill once from the full list.
-        assert_eq!(r.rotate(full, &mut gt), Rotate::Map("mp_carentan".into()));
+        assert_eq!(
+            r.rotate(full, &mut gt, Base),
+            Rotate::Map {
+                map: "mp_carentan".into(),
+                noautoexec: false
+            }
+        );
     }
 
     #[test]
     fn map_rotate_without_a_map_falls_back_to_restart() {
         let mut r = Rotation::default();
         let mut gt = "dm".to_string();
-        assert_eq!(r.rotate("", &mut gt), Rotate::Restart);
-        assert_eq!(r.rotate("gametype tdm", &mut gt), Rotate::Restart);
+        assert_eq!(r.rotate("", &mut gt, Base), Rotate::Restart);
+        assert_eq!(r.rotate("gametype tdm", &mut gt, Base), Rotate::Restart);
         assert_eq!(gt, "tdm");
     }
 
@@ -431,8 +463,11 @@ mod tests {
         let mut r = Rotation::default();
         let mut gt = "dm".to_string();
         assert_eq!(
-            r.rotate("bogus map mp_ship", &mut gt),
-            Rotate::Map("mp_ship".into())
+            r.rotate("bogus map mp_ship", &mut gt, Base),
+            Rotate::Map {
+                map: "mp_ship".into(),
+                noautoexec: false
+            }
         );
         assert_eq!(
             r.warnings,
