@@ -138,7 +138,7 @@ pub struct Cod4Players {
     /// Set by the caller; without it corpses only play their death anims.
     pub ragdoll: Option<RagdollWorld>,
     /// The blasts' jitter draws.
-    seed: u32,
+    seed: vcod_common::rng::MsvcRand,
 }
 
 impl Default for Cod4Players {
@@ -155,7 +155,7 @@ impl Default for Cod4Players {
             tags: HashMap::new(),
             heads: HashMap::new(),
             ragdoll: None,
-            seed: 1,
+            seed: Default::default(),
         }
     }
 }
@@ -212,8 +212,8 @@ impl Cod4Players {
         let seed = &mut self.seed;
         // `flrand(-1, 1)` over the MSVC `rand()` 1.7 draws from.
         let mut rand = || {
-            *seed = seed.wrapping_mul(0x343fd).wrapping_add(0x269ec3);
-            ((*seed >> 16) & 0x7fff) as f32 / 32767.0 * 2.0 - 1.0
+            // Over 32767, not the 32768 of `unit`.
+            seed.next() as f32 / 32767.0 * 2.0 - 1.0
         };
         self.bodies
             .values_mut()

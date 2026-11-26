@@ -8,6 +8,7 @@ use vcod_common::net::event_ids::{
     EV_FIRE_WEAPON_MG42, EV_FIRE_WEAPONB,
 };
 use vcod_common::pmove::aim::GunKick;
+use vcod_common::rng::MsvcRand;
 use vcod_common::weapon::WeaponDef;
 
 /// `CG_KickAngles`' clamp on each axis, degrees (`0x30069350`).
@@ -30,24 +31,14 @@ pub fn fire_calls(event: i32) -> usize {
     }
 }
 
-/// MSVC's `rand` (`0x3004b189`), which the cgame's `random()` divides by
-/// 32768.
-struct CrtRand(u32);
-
-impl CrtRand {
-    fn random(&mut self) -> f32 {
-        self.0 = self.0.wrapping_mul(214_013).wrapping_add(2_531_011);
-        ((self.0 >> 16) & 0x7fff) as f32 / 32768.0
-    }
-}
-
 /// `cg.kickAngles` and `cg.kickAVel` (`0x3020cb38`, `0x3020cb2c`) and the
 /// gun spring (`0x3020cb94`).
 pub struct Recoil {
     angles: [f32; 3],
     speed: [f32; 3],
     gun: GunKick,
-    rng: CrtRand,
+    /// MSVC's `rand` (`0x3004b189`), which the cgame's `random()` divides by 32768.
+    rng: MsvcRand,
 }
 
 impl Default for Recoil {
@@ -62,7 +53,7 @@ impl Recoil {
             angles: [0.0; 3],
             speed: [0.0; 3],
             gun: GunKick::default(),
-            rng: CrtRand(seed),
+            rng: MsvcRand::seed(seed),
         }
     }
 
@@ -92,7 +83,7 @@ impl Recoil {
     }
 
     fn draw(&mut self, [min, max]: [f32; 2]) -> f32 {
-        self.rng.random() * (max - min) + min
+        self.rng.unit() * (max - min) + min
     }
 
     /// One frame of `frametime_ms`: `CG_KickAngles` (`0x300328b0`) on the
@@ -329,9 +320,9 @@ pub(crate) mod tests {
     /// The first CRT draws from seed 1 are 41 and 18467.
     #[test]
     fn rand_is_msvc_rand() {
-        let mut r = CrtRand(1);
-        assert_eq!(r.random(), 41.0 / 32768.0);
-        assert_eq!(r.random(), 18467.0 / 32768.0);
+        let mut r = MsvcRand::seed(1);
+        assert_eq!(r.unit(), 41.0 / 32768.0);
+        assert_eq!(r.unit(), 18467.0 / 32768.0);
     }
 
     /// A hip carbine shot sets the view kick's pitch speed to -40 (both

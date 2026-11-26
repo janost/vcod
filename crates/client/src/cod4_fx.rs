@@ -655,7 +655,7 @@ pub(crate) struct Cod4Effects {
     ambience: Option<Vec<(Play, f32)>>,
     pub(crate) client_sounds: Vec<(Vec3, String)>,
     /// The tracer rolls' `rand()` state, and tracers spawned.
-    rand: u32,
+    rand: vcod_common::rng::MsvcRand,
     pub(crate) tracers: usize,
 }
 
@@ -737,7 +737,7 @@ impl Cod4Effects {
             ents: HashMap::new(),
             ambience: Some(ambience),
             client_sounds,
-            rand: 1,
+            rand: Default::default(),
             tracers: 0,
         }
     }
@@ -2244,13 +2244,12 @@ impl Cod4Effects {
     }
 
     fn next_rand(&mut self) -> u32 {
-        self.rand = self.rand.wrapping_mul(214013).wrapping_add(2531011);
-        (self.rand >> 16) & 0x7fff
+        self.rand.next()
     }
 
     /// `rand() / 32768`.
     fn roll(&mut self) -> f32 {
-        self.next_rand() as f32 / 32768.0
+        self.rand.unit()
     }
 
     /// `CG_BulletHitEvent`'s effect for a client-side bullet that met the

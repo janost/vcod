@@ -2948,8 +2948,8 @@ fn draw_turret(
         yaw += barrel[1];
         // `viewlocked` 2 is a frame that fired.
         if ps_int("viewlocked") == 2 {
-            pitch += shake.shake();
-            yaw += shake.shake();
+            pitch += turret::rand_shake(shake);
+            yaw += turret::rand_shake(shake);
         }
         out.turret_eye = Some(TurretEye {
             pos: eye,
