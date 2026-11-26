@@ -325,7 +325,7 @@ python3 -I tools/re/cod4_ragdoll_summary.py tmp/ragdoll.txt [another dump]
 `vcod --net-probe <ip:port>` is a headless client that joins, prints a
 per-second snapshot summary, and dumps captures to `tmp/`. Each scripted mode
 (`--save-*`, `--probe-*`) is documented on its flag in
-`crates/client/src/main.rs` (`vcod --help`): what it does, which fixture it
+`crates/client/src/probe.rs`, `ProbeArgs` (`vcod --help`, under "Probe flags"): what it does, which fixture it
 writes, which gsc probe it pairs with. The fixture paths are fixed at build
 time under the checkout the binary was built from, so the fixture modes need
 a source build; a release binary writes to its build machine's path. A multi-shell recipe (gsc probe,
@@ -337,6 +337,10 @@ lines, the slope recipes' `<spot>` and `<yaw>`, and the mp_carentan and
 port 28970 recipes in the sd, pickup, turret and weapsel headers. Correct
 them by hand before committing a fixture. `--net-probe --game cod2` and
 `--game cod4` probe those servers through `play::cod2` and `play::cod4`.
+Every probe flag needs `--net-probe` (clap rejects it alone), and a CoD2 or
+CoD4 probe refuses one it does not read: CoD2 reads `--probe-team`,
+`--probe-weapon` and `--probe-secs`, CoD4 `--probe-team` and `--probe-secs`
+(plus `--team` and `--class`).
 
 - Both servers treat loopback and private addresses as LAN and skip rate
   pacing for them. `tools/offlan_capture.sh retail|ours <dir>` runs a server

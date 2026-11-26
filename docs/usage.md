@@ -612,7 +612,8 @@ Server (`vcod-server <map> --game cod4`, or a CoD4 install):
   `weaponslot N` (1-4 by default) picks loadout weapon N of 7 and the
   weapon cycle (the wheel) steps through them.
 - `vcod --net-probe <ip:port>` is a headless client that joins, prints a
-  line a second and writes captures. `vcod --help` documents its modes.
+  line a second and writes captures. `vcod --help` documents its modes
+  under "Probe flags"; each needs `--net-probe`.
   Bare, on CoD1 and UO, it holds forward for 2 s in every 30 once in
   play, which shows moves still apply; it sends no chat unless
   `--probe-say` asks.
