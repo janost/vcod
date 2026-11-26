@@ -229,6 +229,73 @@ the first raised flag to the last `fdc`: each cmd's `serverTime` step, its
 `FlameSystem::report` on that clock with fire in reach on the flagged
 frames and expects the same flag and `fdc` frames (`coduo-diff.md` 19.3.1).
 
+## The CoD4 Windows client
+
+The ragdoll and the rest of the cgame run only in the client, so they are
+measured on 1.7's `iw3mp.exe` under Wine. `tools/cod4_wine/run.sh [game
+args...]` (options in its header) runs it headless and torn off from the
+host:
+
+- `unshare -rnm`: no network (the client still joins its own listen
+  server; the console logs `Sys_SendPacket: WSAENETUNREACH` once), tmpfs
+  over `/tmp/.X11-unix` and `/dev/snd`,
+  a KWin `--virtual` compositor with Xwayland of its own, its own D-Bus,
+  and ALSA's null PCM as the only sound device (`alsa-null.conf`). The
+  client needs a sound device: with every audio driver off it crashed at
+  0x4ecf26 in the first runs.
+- `COD4_DIR` is only read. The Wine prefix (`prefix/`, made on the first
+  run, about 20 s) and the game root (`root/`: the exe and DLLs copied, the
+  zones and iwds linked, `players/` and the logs its own) live under
+  `COD4_WINE_DIR`, default `tmp/cod4_wine`. Each run's console log, gdb log,
+  `SHOTS=1` window grabs land in its `run/`.
+- The client gets `+set logfile 2 +set r_fullscreen 0` and then the args.
+  From the start to the main menu takes about 15 s and `+devmap mp_crash`
+  about a minute more on llvmpipe.
+- `GDB_PY=<script>` attaches gdb to the client once its console log opens.
+  Wine starts the game detached from `start.exe`, so the script finds it by
+  name and prefix. Inside the user namespace root holds `CAP_SYS_PTRACE` over
+  its own processes, so `ptrace_scope` 1 lets gdb attach to a non-child.
+  Wine 11 runs the 32-bit exe in a 64-bit process (new WoW64): gdb sees
+  x86-64, breakpoints at the exe's addresses work, `$esp` and the other
+  32-bit registers read as the low halves, and displaced stepping has to be
+  off. A script's end, or the client's exit, ends the run.
+- Traps paid for: `wineserver -w` never returns after `wineboot` (the
+  script kills the prefix's server instead); a deep `XDG_RUNTIME_DIR`
+  overflows KWin's socket paths and leaves the client with no display
+  (the script uses a short one under `/tmp`); a `__iw3mp` file left by a
+  crash brings up "Run In Safe Mode?" (the script deletes it); a cfg's
+  `wait`s run out during the map load, and `kill` before the client is
+  connected prints `Unknown command "kill"`, so commands go in from gdb.
+- `fixedtime` pins every frame's msec (`Com_ModifyMsec`, 0x4ffce0) but is a
+  cheat dvar: set it after `devmap`, which turns `sv_cheats` on.
+
+### A ragdoll from spawn to rest
+
+`tools/re/cod4_ragdoll_gdb.py` drives the client's own player to a death
+and dumps world 2 per step (`cod4-player-anims.md` 10.4):
+
+```
+COD4_DIR=<1.7 install> RAGDOLL_OUT=$PWD/tmp/ragdoll.txt \
+    GDB_PY=$PWD/tools/re/cod4_ragdoll_gdb.py \
+    tools/cod4_wine/run.sh +devmap mp_crash +set fixedtime 17
+python3 -I tools/re/cod4_ragdoll_summary.py tmp/ragdoll.txt [another dump]
+```
+
+- From the first frame `cl_ingame` reads 1 it writes console commands into
+  the command buffer by frame count: the team and class menus' answers, a
+  `setviewpos` (`RAGDOLL_POS`), and `kill`. The corpse turns ragdoll
+  `delayStartRagdoll`'s wait later (`cod4-combat.md` 5.1).
+- It logs each body as the slot builds it and each world 2 step after it,
+  until the slot goes idle or `RAGDOLL_STEPS` pass, then detaches: with
+  `SHOTS=1` the grab shows the body at rest. About 5 minutes.
+- The first ragdoll after the map load is the one to keep: each map load's
+  `Phys_Init` resets the solver's seed to 0x89abcdef, and the dump's
+  `world` line shows it.
+- The death is at a known frame, not a known pose: the corpse's start pose
+  and velocities change from run to run, so a fixture holds the start
+  state with the steps.
+- The format and the committed take: `crates/cod4/tests/fixtures/README.md`.
+
 ## Public servers and the master
 
 - vcod's browser and heartbeat use `master.cod.pm`, whose operator allowed

@@ -941,6 +941,62 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
     fill from the front), and 0.5 and 0.9 shuffle when `(iteration & 7)
     == 0`, with `dRandInt`. INFERRED (the sources).
 
+### 10.4 A ragdoll step by step on 1.7
+
+Captured from the Windows client under Wine and gdb (docs/dev/retail.md,
+"A ragdoll from spawn to rest"): the client's own player on mp_crash `war`,
+put at (207, 2291, 296) by `setviewpos` and killed by `kill`, at
+`fixedtime` 17. Addresses are iw3mp.exe's.
+
+- Where the dump reads. `Ragdoll_Update` (0x5beca0) adds the frame's msec
+  to the ragdoll clock at 0xd5ec534 (0x5beccb), runs each of the 32 slots
+  (0x9d4 bytes from 0xcc78a00) through its state's handler from the table
+  at 0x71e658 until the state (+0x24) holds, adds the msec to the slot's
+  time in state (+0x28) and one to its frames (+0x2c), then calls
+  0x5a6d50 for world 2 up to the clock (0x5bed24). A slot's bones (count
+  +0x34) are 0x1c bytes from +0x38, the body each one's +8 (0x5bcdc0..0x5bce0b,
+  stored at 0x5bc9e2). 0x5a6d50 runs at most two steps (0x5a6dfb..0x5a6e6b)
+  and 0x5a6e69 follows each, with the step's msec in `ebx`. VERIFIED (the
+  instructions).
+- Each 17 ms frame ran one 17 ms step: `msecStep` stayed 17 with 12 bodies
+  awake. The world's seed read 0x89abcdef when the first body appeared,
+  changed every step while a body was awake and held on a step with every
+  body asleep. VERIFIED (the captures).
+- The 12 bodies of def 1 start with flags 0x11 (0x10 auto-disable) and 0.9
+  s of idle time left, `phys_autoDisableTime`. A step under both speed
+  thresholds takes 0.017 off a body's time, any other puts it back to 0.9,
+  and a body's time goes on falling under 0 while another of the ragdoll
+  is awake. All 12 set the disabled bit (0x4) on the same step, the first
+  on which every body's time is under 0, and that step leaves their
+  velocities as the step before left them. VERIFIED (the captures). That
+  the joints make the ragdoll one island, which ODE's step disables or
+  enables whole, is INFERRED (ODE's island walk).
+- The frame after, the slot turns idle (state 5). Its entry (0x5beb10)
+  saves the pose (0x5bc4f0) and destroys the joints (0x5bce20) and the
+  bodies (0x5bce80, `dBodyDestroy` 0x5b6d60), zeroing each bone's body
+  (0x5bced4). VERIFIED (the instructions; the capture's idle step lists no
+  body).
+- Six takes on 2026-11-26, each the first ragdoll after its map load.
+  The start differs from take to take, the root by up to 44 units: the
+  death anim and the moment the corpse turns ragdoll vary. Four slept,
+  after 70, 79, 96 and 167 steps (1.2 to 2.8 s). Two never did: the slot went idle at `ragdoll_max_life`, step
+  266, 4505 ms in, as one body or another kept rising over
+  `phys_autoDisableAngular`'s 1 rad/s (to 1.1..2.2 rad/s) while every body
+  moved 1 to 4 units a second. From start to rest the root moved 2.5 to
+  5.9 units, nearly all of it down. VERIFIED (the captures).
+- The committed take, `crates/cod4/tests/fixtures/ragdoll/kill-mp_crash-1.7.txt`
+  (format in that directory's README): the ragdoll clock read 11390 when
+  `kill` went in and 13379 after the first step; the fastest body 47 u/s
+  and 12.2 rad/s on the first step and 75 u/s on the fifth, every body at
+  most 2 u/s and 0.6 rad/s from step 27 on, asleep on step 79 (1343 ms), the slot idle on step
+  80. The root moved 4.78 units, all down; the bodies' centres at rest
+  span 33.2 by 48.1 units across and 3.4 high (z 237.3 to 240.7).
+  VERIFIED (the capture).
+- Against vcod's solver (10, 10.2): vcod sleeps each body on its points'
+  linear speeds alone; 1.7 sleeps the ragdoll whole on both speeds, and a
+  resting body's angular jitter is what keeps a 1.7 ragdoll awake to
+  `ragdoll_max_life`. VERIFIED (the captures against 10.2).
+
 ## 11. The anim sampler
 
 - `DObjCalcAnim` (`cod4_lnxded` 0x81b4c8c) masks out the bones not asked
