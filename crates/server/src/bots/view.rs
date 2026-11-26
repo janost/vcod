@@ -373,6 +373,13 @@ pub struct ReObjView {
     /// and the seconds left before `objective_timeout` sends it there
     /// (`re.gsc` 2422-2432, 60 s from the drop).
     pub returns: Option<([f32; 3], f32)>,
+    /// Dropped with its pickup trigger's middle inside the world's solid:
+    /// every use pick's trace to the middle ends on the world, so nobody
+    /// takes it before it goes back (bot-objectives.md 4.2.2).
+    pub buried: bool,
+    /// Bit `k` set: a standing eye at the pickup's `k`th side
+    /// (`objective::pickup_side`) sees its trigger's middle.
+    pub sides: u16,
 }
 
 /// Which side of the S&D objective the bot's team plays this map.

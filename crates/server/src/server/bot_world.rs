@@ -18,6 +18,35 @@ fn mid((lo, hi): script::Bounds) -> [f32; 3] {
     std::array::from_fn(|i| (lo[i] + hi[i]) * 0.5)
 }
 
+/// Whether a retrieval pickup whose trigger's middle is `c` lies buried in
+/// the world's solid (`ReObjView::buried`), and the sides from which a
+/// standing eye sees the middle (`ReObjView::sides`): the side's point
+/// reaches the middle at its height, and the use pick's trace from the eye
+/// over the floor under it does too (`item::activate_ent`'s mask, items
+/// doc 2.1; bot-objectives.md 4.2.2).
+fn pickup_reach(w: &vcod_common::collision::CollisionWorld, c: [f32; 3]) -> (bool, u16) {
+    use vcod_common::collision::{CONTENTS_GLASS, CONTENTS_SOLID};
+    let mask = CONTENTS_SOLID | CONTENTS_GLASS;
+    if w.point_contents(c.into()) & mask != 0 {
+        return (true, 0);
+    }
+    let clear = |a: glam::Vec3, b: glam::Vec3| {
+        let tr = w.point_trace(a, b, mask, false);
+        !tr.startsolid
+            && (tr.fraction >= 1.0 || w.entity_num(&tr) != crate::game::entity::ENTITYNUM_WORLD)
+    };
+    let mid = glam::Vec3::from(c);
+    let sides = (0..crate::bots::PICKUP_SIDES)
+        .filter(|&k| {
+            let p = glam::Vec3::from(crate::bots::pickup_side(c, k));
+            let floor = w.point_trace(p, p - glam::Vec3::Z * 128.0, mask, false);
+            let eye = floor.endpos + glam::Vec3::Z * vcod_common::pmove::VIEW_STAND;
+            (k == 0 || clear(mid, p)) && clear(p, eye) && clear(eye, mid)
+        })
+        .fold(0, |m, k| m | 1 << k);
+    (false, sides)
+}
+
 /// `slot`'s team in a tick's team list, 0 past its end.
 pub(super) fn team_of(teams: &[i32], slot: usize) -> i32 {
     teams.get(slot).copied().unwrap_or(0)
@@ -924,6 +953,10 @@ impl Server {
                     let sim = self.core.clients.get(slot)?.as_ref()?.sim.as_ref()?;
                     Some(sim.ps.origin.into())
                 });
+                let (buried, sides) = match (r.pickup.map(mid), self.game.world.as_ref()) {
+                    (Some(c), Some(w)) => pickup_reach(&w.collision, c),
+                    _ => (false, 0),
+                };
                 let view = crate::bots::ReObjView {
                     pickup: r.pickup.map(mid),
                     goal,
@@ -933,6 +966,8 @@ impl Server {
                     carrier_at,
                     laid: r.laid,
                     returns,
+                    buried,
+                    sides,
                 };
                 (view, r.carrier, r.shown_to)
             })
@@ -1727,6 +1762,29 @@ impl crate::bots::driver::BotWorld for Server {
 mod tests {
     use super::*;
     use crate::bots::LOB_MISS;
+
+    /// An objective dropped just south of a thin wall, as on mp_pavlov
+    /// (bot-objectives.md 4.2.2): the sides past the wall (north-east,
+    /// north, north-west) see no middle; one inside a brush is buried.
+    #[test]
+    fn a_pickup_is_seen_from_the_sides_on_its_side_of_a_wall() {
+        use vcod_common::collision::{CONTENTS_SOLID, synthetic_world};
+        let world = synthetic_world(
+            &[("textures/test/solid", CONTENTS_SOLID, 0)],
+            &[
+                (0, [-1024.0, -1024.0, -16.0], [1024.0, 1024.0, 0.0]),
+                (0, [-64.0, 1.0, 0.0], [64.0, 9.0, 128.0]),
+                (0, [200.0, -16.0, 0.0], [232.0, 16.0, 32.0]),
+            ],
+        );
+        let (buried, sides) = pickup_reach(&world, [0.0, 0.0, 2.0]);
+        assert!(!buried);
+        let seen: Vec<u32> = (0..crate::bots::PICKUP_SIDES)
+            .filter(|k| sides & 1 << k != 0)
+            .collect();
+        assert_eq!(seen, [0, 1, 5, 6, 7, 8]);
+        assert_eq!(pickup_reach(&world, [216.0, 0.0, 16.0]), (true, 0));
+    }
 
     /// Two bots on 1.1's mp_carentan tdm, spawned.
     fn tdm_pair() -> Option<Server> {

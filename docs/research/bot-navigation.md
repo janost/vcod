@@ -3347,6 +3347,63 @@ release, before is master af564b3c7:
   (`pmf` 0x8; section 3, "the head-on ladder"), a meeting the new
   matches reach and master's do not. Kills 781 to 770. VERIFIED (measured).
 
+### 3.16 A jump over a pit between level ledges, 2026-11-26
+
+bot-objectives.md 4.2.1's last open stall: on mp_rocket's upper floor bots
+paced under a node 33 units up, (9217, 5904, 371).
+
+- A player makes the climb. VERIFIED (ours, `pmove::STEPSIZE` 18,
+  `pmove::JUMP_HEIGHT` 39, `pmove::slide`'s jump step, cod11-mantle.md
+  "The jump's step"): a ground jump rises 39, and a body blocked under its
+  jump's origin plus 39 steps up by the rest, at most 18. 33 is under the
+  apex. The graph has it: jump edges into node 604 at (9217, 5904, 371)
+  from 56 (9217, 5951, 338) and 47 (9260, 5948, 338) in the pit, and from
+  290 (9175, 5952, 371) across it, level with 604. VERIFIED (`nav_build
+  NEAR=`, `JUMPS=`, master fa9faa6ac).
+- Traced: `bot_match GAMETYPE=re BOTS=10 MAPS=mp_rocket`, seed 78, bot 2,
+  ticks 4500 to 4800, with a temporary print each tick of the body, its
+  cmd, its waypoints and the brain's view. On the edge 290 to 604 the bot
+  ran off 290's ledge into the pit at (9196, 5930, 338), jumped from under
+  604 (`jump_under`) and landed on 604's ledge at (9216, 5929, 371), 25
+  short of the node, its jump cooling down. `Follower::jump_wait` then
+  sent it back to the edge's foot, 290, level with the top: waypoint 290,
+  `stop`. It walked back off the ledge into the pit, four times in 3.7 s
+  (ticks 4716 to 4791), until one landing the wait missed. VERIFIED (the
+  trace).
+- The fix: `jump_wait` waits nowhere for a body on the top's own floor
+  (within a step of it) nearer the top than the foot; the jump is made
+  (`nav::follower::tests::a_jump_over_a_pit_is_not_waited_on_from_its_top_ledge`).
+  A foot under its top, and mp_cassino's ledge and top-side cases (its
+  other tests), wait as before.
+
+VERIFIED (measured, ours, release, `bot_match GAMETYPE=re BOTS=10
+TICKS=6000`, on bot-objectives.md 4.2.2's tip against the fix; wins by
+team):
+
+| Set | Build | stalled | upper-floor windows | captures | pickups | carrier deaths | allies W | axis W | kills |
+|---|---|---|---|---|---|---|---|---|---|
+| mp_rocket, seeds 1-144 | tip | 88 | 3 | 35 | 469 | 183 | 277 | 109 | 3358 |
+| mp_rocket, seeds 1-144 | fix | 174 | 1 | 47 | 447 | 169 | 275 | 108 | 3350 |
+| mp_rocket, seeds 145-288 | tip | 482 | 1 | 46 | 427 | 149 | 270 | 118 | 3304 |
+| mp_rocket, seeds 145-288 | fix | 33 | 1 | 41 | 450 | 164 | 293 | 103 | 3344 |
+| mp_carentan, seeds 1-48 | tip | 117 | - | 134 | 456 | 123 | 226 | 36 | 1970 |
+| mp_carentan, seeds 1-48 | fix | 117 | - | 129 | 452 | 127 | 215 | 44 | 1922 |
+| mp_pavlov, seeds 1-48 | tip | 0 | - | 89 | 393 | 234 | 151 | 120 | 2054 |
+| mp_pavlov, seeds 1-48 | fix | 0 | - | 78 | 400 | 250 | 146 | 130 | 2068 |
+
+- The wait fires on many jump edges: 138 of mp_rocket's first 144
+  matches moved, 43 of mp_carentan's 48 and 45 of mp_pavlov's. Over
+  mp_rocket's 288 stalls go 570 to 207 and captures 81 to 88; the largest
+  either side are single matches in bot-objectives.md 4.2.1's document
+  room (seed 228 153 on the tip, seed 112 124 with the fix). VERIFIED (the
+  runs). Captures fall 5 on mp_carentan and 11 on mp_pavlov over 48
+  matches each. INFERRED (the per-match spread above) that these are the
+  matches moving, not the rule.
+- The upper-floor windows left are other edges: seed 114 at (8967, 6168,
+  361) toward (9025, 6238, 369) on both builds, seed 227 at (9145, 5974,
+  308) on the tip and seed 203 at (9062, 6074, 338) with the fix. VERIFIED
+  (the stall lines). Not traced.
+
 ## 4. Memory and hearing
 
 Two goals sit between a visible enemy and `Roam`, both kept by the brain

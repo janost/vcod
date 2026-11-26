@@ -57,7 +57,10 @@ use objective::{
     CAREFUL_CROUCH, DRY_TICKS, ObjTarget, Objective, PLAYER_HEIGHT, SHORT_GAIN, SHORT_TICKS,
     SHUN_TICKS, SITE_MARGIN,
 };
-pub(crate) use objective::{GuardHold, RADIO_HEIGHT, RADIO_HEIGHT_COD2, RADIO_MARGIN, inside_site};
+pub(crate) use objective::{
+    GuardHold, PICKUP_SIDES, RADIO_HEIGHT, RADIO_HEIGHT_COD2, RADIO_MARGIN, inside_site,
+    pickup_side,
+};
 use sight::Recall;
 pub(crate) use sight::{
     HEAR_BLAST, HEAR_GUNFIRE, HitFelt, Looker, Seen, WRECK_REACH, blast, chest, feel_hit, fired,
@@ -1244,6 +1247,8 @@ mod tests {
                 carrier_at: None,
                 laid: Some([30.0, 0.0, 64.0]),
                 returns: None,
+                buried: false,
+                sides: 0,
             }],
         });
         v

@@ -271,7 +271,10 @@ teammate was not told it carried and stood outside the goal.
   `holduse`'s 0.3 s). VERIFIED (measured, `mp_dawnville`): from the side
   the graph led to, the eye's trace to the trigger's middle met the world,
   so each tap that took nothing moves the next try 40 units round the
-  objective, eight sides in turn.
+  objective, eight sides in turn. Since 2026-11-26 the tries go only round
+  the sides a standing eye there sees the trigger's middle from, and a
+  dropped objective whose middle lies in solid is waited for where it
+  comes back (4.2.2).
 - Attacker with a teammate carrying: escorts him, holding within 250
   units and closing again when he moves on. Its compass always shows him.
 - Attacker with nothing to pick up and no carrier on its compass, and the
@@ -482,7 +485,15 @@ mp_pavlov seed 6 (315), below.
   BOTS=10`, mp_toujane, mp_carentan, mp_burgundy and mp_dawnville, seeds
   1 to 8: plants 136 to 126, defuses 65 to 68, stalled 2 to 50 (one
   match, mp_toujane seed 7, a bot held up by a teammate), kills 1316 to
-  1292. VERIFIED (measured, ours, release).
+  1292. VERIFIED (measured, ours, release). Rerun 2026-11-26 on master
+  fa9faa6ac, `GAME=cod2 GAMETYPE=sd BOTS=10 MAPS=mp_toujane`: seed 7
+  stalls 0, and seeds 1 to 32 stall 39 in three matches (seed 4 23, 16
+  14, 27 2). Traced every other tick, seed 4's bot paced a 150-unit circle
+  at (1119 to 1166, 2544 to 2632, 46) at up to 150 units/s with no
+  teammate within 160, and seed 16's walked off south-west at 140 units/s
+  past a still teammate 31 to 69 off: no body held either. VERIFIED (the
+  runs, a temporary `STALLS` print every other tick). Nothing to fix there;
+  INFERRED that a merge since moved seed 7's match off the queue.
 
 Tried on the way, not kept. VERIFIED (measured, ours, release, mp_rocket
 seeds 1 to 144 unless named, stalled bot-ticks):
@@ -505,11 +516,83 @@ seeds 1 to 144 unless named, stalled bot-ticks):
   (315 stalled on the door rule): an attacker walked out its plan at
   (-9337, 10016, 160) and walked at the pickup's side (-9360, 9985, 162)
   into a wall for the rest of the round; the tap that moves the side
-  never came. VERIFIED (the trace). Open.
+  never came. VERIFIED (the trace). Traced 2026-11-26: 4.2.2.
 - Left: mp_rocket's upper floor at (9100 to 9240, 5900 to 6160, 338 to
   371), a climb toward a node 33 up (wp (9217, 5904, 371)) that bots
   pace below, 3 to 8 windows in 144 matches on every build above.
-  VERIFIED (measured). Not traced.
+  VERIFIED (measured). Traced 2026-11-26: bot-navigation.md 3.16.
+
+### 4.2.2 A dropped objective the use key cannot reach, 2026-11-26
+
+4.2.1's mp_pavlov seed 6 stall no longer came up on master fa9faa6ac; the
+same spot did on other seeds. VERIFIED (measured, ours, release,
+`bot_match GAMETYPE=re BOTS=10 TICKS=6000 MAPS=mp_pavlov`, seeds 1 to 48):
+986 stalled bot-ticks, seeds 11 (635), 21 (160) and 36 (191), every window
+at (-9340 to -9190, 10000 to 10140, 110 to 160). Traced on seed 11 with a
+temporary print of each attacker's target, goal, `pick` and walked-out
+point every tick there, and point traces through a temporary `nav_build`
+dump. VERIFIED (the trace and the traces):
+
+- A carrier died and dropped the objective with its pickup trigger's
+  middle at (-9397.97, 9983.69, 162.13), in the open, 0.19 units south of
+  a wall 8 thick (faces at y 9983.875 and 9992.125), with another wall at
+  x -9360.125 to the east, the floor at 160.125 and a ceiling at 253.875.
+- Three attackers walked up from the north and tapped from (-9395, 10018),
+  (-9399, 10007) and (-9425, 10000): every tap took nothing. The eye's
+  trace from (-9399, 10007, 220) to the middle meets the wall at
+  (-9398.35, 9992.125, 182.55), and the use key's pick traces from the
+  muzzle to the trigger's middle and skips a candidate the world blocks
+  (`G_GetActivateEnt` 0x4f503..0x4f52e, cod11-items.md 2.1;
+  `item::activate_ent`).
+- Each failed tap moves the try to the next side. The first, 40 east at
+  (-9357.97, 9983.69), lies past the east wall: the graph's node nearest it
+  is node 27 at (-9337, 10016, 160), in the room east, and each attacker
+  walked out its plan there and pressed into the corner at (-9336, 10007)
+  for the rest of the objective's 60 s. No tap came to move the side on.
+- Seeds 21 and 36 are a drop at the same wall whose middle lies inside a
+  brush. `getPlant` starts its traces 10 over the feet and 11 ahead
+  (`maps/MP/_utility.gsc` 182-222), so a carrier who died facing the wall
+  drops the objective into it. VERIFIED (the runs below: with only the
+  buried rule on, those two matches alone moved). INFERRED (the script)
+  that a `bulletTrace` started in solid ends there.
+
+The fix, on the server's `re` view (`Server::bot_re`, `pickup_reach`):
+
+- `ReObjView::buried`: the trigger's middle is inside solid or glass.
+  Every pick's trace to it ends on the world, so nobody takes it before
+  `objective_timeout` sends it back. Attackers and defenders both wait
+  where it comes back, as for one the run cannot reach before its clock
+  (`bots::objective::tests::a_buried_objective_is_awaited_at_its_start`).
+- `ReObjView::sides`: of the nine tries (the middle and the eight sides
+  40 off it, `objective::pickup_side`), those whose point the middle
+  reaches at its own height and whose standing eye (60 over the floor
+  under the point) reaches the middle, by the pick's mask. The taps go
+  round those alone; with none, round all nine as before
+  (`server::bot_world::tests::a_pickup_is_seen_from_the_sides_on_its_side_of_a_wall`,
+  `bots::objective::tests::the_taps_go_round_the_sides_that_see_the_pickup`).
+
+VERIFIED (measured, ours, release, master fa9faa6ac against the branch,
+same settings; wins by team):
+
+| Set | Build | stalled | captures | pickups | carrier deaths | allies W | axis W | kills |
+|---|---|---|---|---|---|---|---|---|
+| mp_pavlov, seeds 1-48 | master | 986 | 86 | 391 | 231 | 151 | 119 | 2041 |
+| mp_pavlov, seeds 1-48 | buried and sides | 0 | 89 | 393 | 234 | 151 | 120 | 2054 |
+| mp_carentan, seeds 1-48 | master | 117 | 134 | 456 | 123 | 226 | 36 | 1970 |
+| mp_carentan, seeds 1-48 | buried and sides | 117 | 134 | 456 | 123 | 226 | 36 | 1970 |
+| mp_rocket, seeds 1-144 | master | 88 | 37 | 463 | 178 | 277 | 108 | 3344 |
+| mp_rocket, seeds 1-144 | buried and sides | 88 | 35 | 469 | 183 | 277 | 109 | 3358 |
+
+- mp_carentan's 48 matches came out byte for byte; 16 of mp_rocket's 144
+  moved, with its stalls where they were (4.2.1's room and
+  bot-navigation.md 3.16's climb). VERIFIED (the runs).
+- The buried rule alone: stalled 635 (seed 11's, untouched), captures 86,
+  pickups 391. VERIFIED (measured).
+- Tried, not kept: a side the follower walked out its plan to and came no
+  16 units nearer in 3 s passed for the next (4.2.1's tried rule, on a
+  walked-out plan only). Over the buried rule alone it took seed 11 from
+  635 to 163; with the sides on as well the 48 matches came out byte for
+  byte as without it. VERIFIED (measured).
 
 ## 5. Behind Enemy Lines (`bel`)
 
