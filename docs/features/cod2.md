@@ -324,7 +324,7 @@ stock content. Most need `COD2_DIR` and pass vacuously without it.
 | `cod2_combat_ab`, `cod2_hitpose_ab`, `cod2_antilag_ab`, `cod2_pickup_ab` | shots, hit poses, antilag and pickups ([cod2-combat.md](../research/cod2-combat.md) 9) |
 | `cod2_killcam_ab`, `cod2_turret_ab` | the killcam and mounted guns |
 | `cod2::wire_ab` | the server's wire against a retail session (cod2-protocol.md 15) |
-| `cod2_map_census` (ignored) | every stock map through the server, a spectating client, a headless frame and a walk from each spawn |
+| `client_tools cod2_map_census` | every stock map through the server, a spectating client, a headless frame and a walk from each spawn |
 | `tools/cod2_soak.sh` | per map, six bots through dm, tdm, sd, ctf, hq with the client playing ([cod2-client-perf.md](../research/cod2-client-perf.md), "The soak") |
 | `GAME=cod2 tools/cod4_perf.sh` | client frame time ([cod2-client-perf.md](../research/cod2-client-perf.md)) |
 | `GAME=cod2 bot_match` | seeded bot matches ([bots.md](../bots.md#cod2)) |

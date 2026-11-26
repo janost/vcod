@@ -104,9 +104,9 @@ require=$(IFS=,; echo "${req[*]}")
 base=(VCOD_REQUIRE_INSTALL="$require")
 
 run fmt -- fmt --all --check || fail fmt
-run clippy -- clippy --workspace --all-targets -- -D warnings || fail clippy
+run clippy -- clippy --workspace --all-targets --features vcod/testing -- -D warnings || fail clippy
 # The crates with a `testing` feature, built without it as a release is.
-run clippy-release -- clippy -p vcod-common -p vcod-cod4 -p vcod-server --lib --bins -- -D warnings ||
+run clippy-release -- clippy -p vcod-common -p vcod-cod4 -p vcod-server -p vcod --lib --bins -- -D warnings ||
 	fail clippy-release
 [[ ${DRY:-} == 1 ]] || echo "fmt, clippy: ok"
 check suite "${base[@]}" -- test --workspace --lib --bins --tests --no-fail-fast
@@ -130,13 +130,13 @@ for area in "$@"; do
 		render)
 			lvp=()
 			[[ -n ${LVP_ICD:-} ]] && lvp=(VK_DRIVER_FILES="$LVP_ICD" WGPU_BACKEND=vulkan GALLIVM_PERF=nopt)
-			check "pipeline_check" "${base[@]}" "${lvp[@]}" -- test -p vcod --bins -- renderer::pipeline_check
+			check "pipeline_check" "${base[@]}" "${lvp[@]}" -- test -p vcod --lib -- renderer::pipeline_check
 			;;
 		cod2)
 			[[ -n ${COD2_DIR:-} ]] && check "cod2_gametype_census" "${base[@]}" -- \
 				test -p vcod-server --lib -- --ignored cod2_gametype_census
 			[[ -n ${COD2_DIR:-} ]] && check "cod2 live play" "${base[@]}" -- \
-				test -p vcod --bins -- --ignored play::cod2_soak::cod2_live_
+				test -p vcod --lib -- --ignored play::cod2_soak::cod2_live_
 			;;
 		cod4)
 			[[ -n ${COD4_DIR:-} ]] && check "cod4 hit boxes" "${base[@]}" -- \

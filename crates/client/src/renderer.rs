@@ -93,8 +93,8 @@ mod fx_pass;
 pub(crate) mod gpu_util;
 pub(crate) mod headless;
 mod hud_pass;
-#[cfg(test)]
-mod hud_shot;
+#[cfg(all(feature = "testing", not(test)))]
+pub(crate) mod hud_shot;
 mod mark_pass;
 #[cfg(test)]
 mod material_keys;

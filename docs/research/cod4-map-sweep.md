@@ -6,8 +6,8 @@ own label.
 
 ## 1. The tool
 
-`COD4_DIR=... cargo test -p vcod --bins -- --ignored cod4_map_sweep
---nocapture` (`crates/client/src/play/cod4_sweep.rs`, its header lists the
+`COD4_DIR=... cargo run -p vcod --features testing --example client_tools --
+cod4_map_sweep` (`crates/client/src/tools/cod4_sweep.rs`, its header lists the
 knobs). Per map, vcod-server loads it with six shooting bots and
 `sv_mapRotation` naming the map once for each of war, dm, sd, sab, dom and
 koth (time limits 0.5 min, round limits 1); one client joins through the
@@ -270,7 +270,7 @@ Fixes 1 to 7 came out of the 2026-10-26 run, 8 to 10 out of the 2026-10-27 one.
 
 The sweep checks that every level loads, ends and rotates; the soak
 checks what a player would hit on the way. `tools/cod4_soak.sh <outdir>
-[map...]` runs `play::cod4_sweep::cod4_soak` one map a process (the run
+[map...]` runs `tools::cod4_sweep::cod4_soak` one map a process (the run
 here went through a local wrapper script as `WRAP`). Per map, vcod-server
 loads it with six shooting bots and rotates through war, dm, sd, koth and
 sab at 3 min time limits (`VCOD_SOAK_MINUTES`), one round each. The client

@@ -1538,7 +1538,7 @@ mod tests {
 
     /// The Internet list against cod.pm's live master: one `getservers 118`
     /// on the CoD2 port, then a `getinfo` to every server it lists. Run with
-    /// `VCOD_LIVE_NET=1 cargo test -p vcod --bins master_list_live --
+    /// `VCOD_LIVE_NET=1 cargo test -p vcod --lib master_list_live --
     /// --ignored --nocapture`.
     #[test]
     #[ignore = "live net: asks cod.pm's public master; needs VCOD_LIVE_NET=1"]

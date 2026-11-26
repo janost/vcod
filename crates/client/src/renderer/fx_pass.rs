@@ -417,7 +417,7 @@ impl Renderer {
     }
 
     /// Images the fx pass holds, loaded or not found.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn fx_images(&self) -> usize {
         self.fx.textures.len()
     }

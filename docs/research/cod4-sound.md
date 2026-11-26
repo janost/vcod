@@ -407,7 +407,7 @@ replay gate resolves each it meets).
   (`CG_CopyEntityOrientation`).
 - vcod: `Cod4Client::entity_angles` hands the mixer each entity's drawn
   angles where it drew, else its angle trajectory at the drawn time, and
-  `main.rs`' CoD4 frame passes them to `AudioSystem::step`, so a voice
+  `lib.rs`' CoD4 frame passes them to `AudioSystem::step`, so a voice
   started off its entity (a fire sound at a helicopter's or a gun's
   `tag_flash`, a brush model's loop at its middle) swings round it as
   it turns. Before, the frame passed no angles and every offset stayed

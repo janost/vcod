@@ -1,5 +1,5 @@
 //! Every stock CoD2 MP map end to end, one at a time: vcod-server loads it
-//! on a thread of the test, the client joins as a spectator through
+//! on a thread of the process, the client joins as a spectator through
 //! [`Cod2Session`] (the `--net-probe` path: snapshots, events, sounds and
 //! the map's `_fx` effects), loads the world into a headless renderer and
 //! draws a frame from the first spawn, and a body walks from every spawn
@@ -7,7 +7,8 @@
 //! frame, as a PPM, and each map's warnings under `VCOD_CENSUS_OUT`
 //! (default `tmp/cod2-map-census` at the workspace root).
 //!
-//! `COD2_DIR=... cargo test -p vcod --bins -- --ignored cod2_map_census`.
+//! With `COD2_DIR=...` set:
+//! `cargo run -p vcod --features testing --example client_tools -- cod2_map_census`.
 //! The frames need an adapter with BC textures; under lavapipe set
 //! `VK_DRIVER_FILES`, `WGPU_BACKEND=vulkan` and `GALLIVM_PERF=nopt`, and
 //! run it `nice`d. `VCOD_CENSUS_MAPS=mp_a,mp_b` limits the maps,
@@ -27,8 +28,8 @@ use vcod_common::collision::CollisionWorld;
 use vcod_common::mapworld::MapWorld;
 use vcod_common::pk3::Pk3Fs;
 
-use super::cod2::{Cod2Session, ConnectOpts};
 use crate::camera::FlyCamera;
+use crate::play::cod2::{Cod2Session, ConnectOpts};
 use crate::renderer::{CullMode, Frame, Renderer};
 
 const SERVER_THREAD: &str = "census-server";
@@ -503,7 +504,7 @@ fn session(
 fn census_map(
     fs: &Pk3Fs,
     map: &str,
-    renderer: &mut Option<(Renderer, crate::renderer::pipeline_check::Errors)>,
+    renderer: &mut Option<(Renderer, crate::renderer::headless::Errors)>,
     secs: f32,
     out: &Path,
 ) -> Row {
@@ -621,9 +622,8 @@ fn table(rows: &[Row]) -> String {
     t
 }
 
-#[test]
-#[ignore = "every stock map through server, client, renderer and pmove; minutes"]
-fn cod2_map_census() {
+/// See the module doc.
+pub fn cod2_map_census() {
     let Some(fs) = vcod_common::testing::cod2_fs() else {
         eprintln!("no COD2_DIR; skipped");
         return;

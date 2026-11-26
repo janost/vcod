@@ -17,7 +17,7 @@ use crate::play::cod4_menus::{Join as MenuJoin, ScriptMenus};
 impl Cod4Session {
     /// Joins `addr` and waits for its gamestate, up to 30 s (the `cp` goes
     /// once the cgame is up, `Conn::cgame_up`); `join` answers the team and class menus on their own.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn connect(addr: SocketAddr, name: &str, cp: Cp, join: MenuJoin) -> Result<Cod4Session> {
         Self::connect_with(addr, name, cp, join, None)
     }

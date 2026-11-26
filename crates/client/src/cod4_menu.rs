@@ -1463,7 +1463,7 @@ mod tests {
         m.bind_key("BACKSPACE");
         assert_eq!(m.take_console(), ["unbind MOUSE3"]);
         assert_eq!(value_of(&m, &a, "Look Up"), "Unbound");
-        // The console runs the lines as `main.rs` does; the config keeps them.
+        // The console runs the lines as `lib.rs` does; the config keeps them.
         let mut shell = crate::console::shell::Shell::new();
         shell.execute("bind PGUP \"+lookup\"");
         assert_eq!(shell.keys_bound_to("+lookup"), ["PGUP"]);

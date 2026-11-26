@@ -6,6 +6,10 @@
 //! (lavapipe will do), each written as a PPM. `VCOD_HUD_QUADS=<a.quads>,...`
 //! draws each `vcod --net-probe ADDR --game cod2` HUD dump
 //! (`VCOD_COD2_HUD_DUMP`) to `<a.quads>.ppm` at 1280 x 720.
+//!
+//! Each is a `client_tools` run, with `COD2_DIR=...` and
+//! `VCOD_HUD_SHOT=<out>` set:
+//! `cargo run -p vcod --features testing --example client_tools -- cod2_player_hud_shot`.
 
 use super::*;
 use vcod_common::asset_source::AssetSource;
@@ -17,9 +21,8 @@ fn headless() -> Option<(wgpu::Device, wgpu::Queue)> {
     crate::renderer::headless::test_device(crate::renderer::headless::Need::Bc)
 }
 
-#[test]
-#[ignore = "tool: set VCOD_MENU_SHOT"]
-fn cod2_main_menu_shot() {
+/// See the module doc; needs `VCOD_MENU_SHOT`.
+pub fn cod2_main_menu_shot() {
     let out = std::env::var_os("VCOD_MENU_SHOT").expect("set VCOD_MENU_SHOT");
     let Some(fs) = vcod_common::testing::cod2_fs() else {
         return;
@@ -63,9 +66,8 @@ fn cod2_main_menu_shot() {
     shoot(&device, &queue, &fs, &quads, (w, h), &out);
 }
 
-#[test]
-#[ignore = "tool: set VCOD_HUD_QUADS"]
-fn cod2_dumped_hud_shot() {
+/// See the module doc; needs `VCOD_HUD_QUADS`.
+pub fn cod2_dumped_hud_shot() {
     let files = std::env::var_os("VCOD_HUD_QUADS").expect("set VCOD_HUD_QUADS");
     let Some(fs) = vcod_common::testing::cod2_fs() else {
         return;
@@ -179,9 +181,7 @@ fn shoot(
 /// A crouched allies player with a Thompson, a frag and a smoke grenade, a
 /// third of his health, a use trigger in his sight, a teammate ahead and
 /// a hit from his right, a second into the hit.
-#[test]
-#[ignore = "tool: set VCOD_HUD_SHOT"]
-fn cod2_player_hud_shot() {
+pub fn cod2_player_hud_shot() {
     use vcod_cod2::net::delta::field_index;
     use vcod_cod2::net::delta::{ClientState2, EntityState2, PlayerState2};
     use vcod_cod2::net::fields::{CLIENT_STATE_FIELDS, ENTITY_STATE_FIELDS, PLAYER_STATE_FIELDS};
@@ -297,9 +297,7 @@ fn cod2_player_hud_shot() {
 /// held: two allies, two axis, a spectator, the viewer's row lit) and
 /// `<prefix>-chat.ppm` (chat lines, the open say field, two kill lines and
 /// the viewer's death print) through `Cod2Hud`.
-#[test]
-#[ignore = "tool: set VCOD_UI_SHOT"]
-fn cod2_ui_shot() {
+pub fn cod2_ui_shot() {
     use vcod_cod2::net::delta::field_index;
     use vcod_cod2::net::delta::{ClientState2, EntityState2, PlayerState2};
     use vcod_cod2::net::fields::{CLIENT_STATE_FIELDS, ENTITY_STATE_FIELDS, PLAYER_STATE_FIELDS};

@@ -3428,7 +3428,7 @@ Retail's:
   exactly 1. INFERRED, its index expression. Retail's fullscreen is a
   display mode change to the `r_mode` size.
 
-vcod's (`crate::video`, `apply_video_mode` in `main.rs`):
+vcod's (`crate::video`, `apply_video_mode` in `lib.rs`):
 
 - `r_mode` reads the same 13 rows. vcod registers `r_mode` -1 and
   `r_customwidth` / `r_customheight` 0; -1 with either at 0 keeps the

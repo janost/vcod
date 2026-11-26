@@ -10,6 +10,21 @@ publish = false
 build = "../version.rs"
 description = "Client and map viewer for Call of Duty 1.1 and 1.5, United Offensive, Call of Duty 2 and Call of Duty 4"
 
+# The client is a lib holding every module and a bin calling its `main`.
+# Its unit tests run under `--lib`; the bin has none.
+[lib]
+doctest = false
+
+[[bin]]
+name = "vcod"
+test = false
+
+# `testing`: `vcod::tools` and the test hooks they call, for
+# `examples/client_tools.rs`. Off in the unit tests, which reach the same
+# hooks through cfg(test) and so never build a tool.
+[features]
+testing = ["dep:vcod-server", "vcod-common/testing", "vcod-cod4/testing"]
+
 [dependencies]
 vcod-common.workspace = true
 vcod-cod2 = { path = "../cod2" }
@@ -31,6 +46,7 @@ pollster.workspace = true
 symphonia.workspace = true
 winit.workspace = true
 wgpu.workspace = true
+vcod-server = { path = "../server", features = ["testing"], optional = true }
 
 [dev-dependencies]
 vcod-common = { workspace = true, features = ["testing"] }
@@ -38,6 +54,10 @@ vcod-cod4 = { path = "../cod4", features = ["testing"] }
 vcod-server = { path = "../server", features = ["testing"] }
 tempfile.workspace = true
 zip.workspace = true
+
+[[example]]
+name = "client_tools"
+required-features = ["testing"]
 
 [lints]
 workspace = true

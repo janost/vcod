@@ -37,7 +37,7 @@ const ALLOWED: &[(&str, &str)] = &[
         "left (`cod2-client-perf.md` 11).",
     ),
     (
-        "crates/client/src/play/cod4_sweep.rs",
+        "crates/client/src/tools/cod4_sweep.rs",
         "`soak.md` under `VCOD_SWEEP_OUT` (default `tmp/cod4-soak`).",
     ),
     (

@@ -1088,7 +1088,7 @@ mod tests {
         let p = edit_custom_class(&mut f, &shell, &file);
         f.close();
         let (spawned, perks, weapons) =
-            crate::play::cod4::tests::live_join_profile(players, "custom1,0", |s, spawned| {
+            crate::play::cod4::live::live_join_profile(players, "custom1,0", |s, spawned| {
                 let gs = s.gamestate().unwrap();
                 let names = crate::play::cod4::weapon_list(gs).to_vec();
                 let ps = &s.client().snapshots.last().unwrap().ps;
@@ -1754,7 +1754,7 @@ mod tests {
     /// broadcast's own millisecond pings 0, which the display list hides
     /// (browser.rs `pump_until`).
     fn frames_until(f: &mut Cod4Front, done: impl Fn(&Cod4Front) -> bool) -> bool {
-        use crate::play::cod4::tests::{clk_now, clk_sleep};
+        use crate::harness::{clk_now, clk_sleep};
         let t0 = clk_now();
         while clk_now() - t0 < std::time::Duration::from_secs(5) {
             clk_sleep(std::time::Duration::from_millis(16));
@@ -1799,7 +1799,7 @@ mod tests {
     /// the main menu comes back with `error_popmenu` saying why.
     #[test]
     fn cod4_front_join_game_joins_a_lan_server_and_drops_back_to_the_menu() {
-        use crate::play::cod4::tests::{clk_now, clk_sleep};
+        use crate::harness::{clk_now, clk_sleep};
         use std::time::Duration;
         let Some((mut f, shell, _players)) = front() else {
             return;

@@ -77,7 +77,7 @@ pub const BREATH_ENTITY: u32 = 1022;
 /// the dry path stays at 1 (docs/research/cod11-shellshock.md, "Sound").
 const ROOM_FEEDBACK: f64 = 0.85;
 /// The frames one mock `process` renders: kira's default internal buffer.
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 const MOCK_BLOCK: usize = 128;
 const ROOM_DAMPING: f64 = 0.9;
 
@@ -387,10 +387,10 @@ fn main_track() -> (MainTrackBuilder, (ReverbHandle, VolumeControlHandle)) {
 /// kira's mock backend, which renders only when [`AudioSystem::pump_mixer`]
 /// runs it.
 // one per AudioSystem; the mock variant exists only in the test build
-#[cfg_attr(test, expect(clippy::large_enum_variant))]
+#[cfg_attr(any(test, feature = "testing"), expect(clippy::large_enum_variant))]
 enum Mixer {
     Device(AudioManager<DefaultBackend>),
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     Mock(AudioManager<kira::backend::mock::MockBackend>),
 }
 
@@ -401,7 +401,7 @@ impl Mixer {
     ) -> Result<D::Handle, kira::PlaySoundError<D::Error>> {
         match self {
             Mixer::Device(m) => m.play(d),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "testing"))]
             Mixer::Mock(m) => m.play(d),
         }
     }
@@ -2325,7 +2325,7 @@ impl AudioSystem {
 
     /// Voices start on kira's mock backend from here on, as on a device but
     /// rendered only by [`Self::pump_mixer`]: no test opens an output.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn mock_mixer(&mut self) {
         let (main, room) = main_track();
         let settings = AudioManagerSettings {
@@ -2342,7 +2342,7 @@ impl AudioSystem {
 
     /// The mock mixer's rate: the bank's, 44.1 kHz where the bank keeps the
     /// files' own.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     fn mock_rate(&self) -> u32 {
         if self.bank.rate == 0 {
             44100
@@ -2353,7 +2353,7 @@ impl AudioSystem {
 
     /// Renders `secs` of the mock mixer's output, its sounds' clocks and
     /// fades with it; nothing on a device's.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn pump_mixer(&mut self, secs: f64) {
         let frames = (secs * f64::from(self.mock_rate())).ceil() as usize;
         let Some(Mixer::Mock(m)) = &mut self.manager else {

@@ -2457,7 +2457,7 @@ fn weapon_list_of(s: &Cod4Session) -> Option<std::sync::Arc<[String]>> {
 #[cfg(test)]
 mod saw_tests {
     use super::*;
-    use crate::play::cod4::tests::{clk_now, clk_sleep, run_held, since as clk_since};
+    use crate::harness::{clk_now, clk_sleep, run_held, since as clk_since};
     use crate::play::input::Action;
     use std::time::Duration;
 

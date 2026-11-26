@@ -758,7 +758,7 @@ pub struct PlayInput {
     /// pitch (index 0) down-positive, yaw (index 1) as `FlyCamera`'s own
     /// sign. Index 2 (roll) is unused. Unclamped: retail's server clamps
     /// pitch at 16000 short units, and the drawn view clamps the same way
-    /// (`own_view` in main.rs).
+    /// (`own_view` in lib.rs).
     raw_angles: [i32; 3],
     /// The sub-unit rest of the mouse motion per axis [pitch, yaw], carried
     /// so slow motion still turns.

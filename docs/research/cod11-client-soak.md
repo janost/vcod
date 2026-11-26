@@ -51,9 +51,9 @@ logs into `soak.md`, one row per (map, gametype):
   line);
 - the resident set at the level's start and end.
 
-The CoD2 and CoD4 soaks (`play::cod2_soak`, `play::cod4_sweep`) run a
-session's `pump` in a test into a headless renderer. CoD1 has no such
-pump: its frame is `main.rs`'s `App`, menus, HUD and render included. So
+The CoD2 and CoD4 soaks (`tools::cod2_soak`, `tools::cod4_sweep`) run a
+session's `pump` in process into a headless renderer. CoD1 has no such
+pump: its frame is `lib.rs`'s `App`, menus, HUD and render included. So
 this soak drives the real binary and shares only the frame profile.
 
 ## 2. Findings before the fixes
@@ -89,7 +89,7 @@ with 7), then every effect configstring from 0x30d (781) through syscall
 `fx/impacts/flesh_hit_noblood.efx`. VERIFIED (the decompilation). A
 level's models and effects are read before its first frame.
 
-vcod does the same in `prewarm_level` (`main.rs`), once a gamestate's map
+vcod does the same in `prewarm_level` (`lib.rs`), once a gamestate's map
 has loaded and on an in-game `vid_restart`'s fresh cgame:
 
 - `EntityScene::prewarm` loads the player animtree and uploads every

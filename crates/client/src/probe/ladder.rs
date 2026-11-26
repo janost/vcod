@@ -215,7 +215,7 @@ impl LadderProbe {
                 if t < *at {
                     break;
                 }
-                // As the play client runs them (main.rs, `Effect::Impulse`
+                // As the play client runs them (lib.rs, `Effect::Impulse`
                 // and `Effect::Weapon`).
                 let outcome = match line.split_once(' ') {
                     Some(("weapon", arg)) => {

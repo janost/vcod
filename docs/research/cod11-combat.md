@@ -5787,7 +5787,7 @@ VERIFIED: the six writes of `"cg_weaponSelect"` sit in `0x30028a70`,
   (`0x30027180`, `0x3002b720`); neither cycles nor stamps. VERIFIED: 1.5's
   `0x300399d0` / `0x30039a40` and UO's `0x300474c0` / `0x30047550` open with
   the same branch, UO's ahead of its seat test. vcod:
-  `Scoreboard::take_cycle`, ahead of the seat and view gates in `main.rs`.
+  `Scoreboard::take_cycle`, ahead of the seat and view gates in `lib.rs`.
 - VERIFIED: the stamp (`0x3020c920 = cg.time`) is written by `weapnext` and
   `weapprev` before the cycle (`0x300380a2`, `0x3003811c`), by `weaponslot`
   before it parses its argument (`0x30038342`), and by the select
@@ -5796,7 +5796,7 @@ VERIFIED: the six writes of `"cg_weaponSelect"` sit in `0x30028a70`,
   fruitless cycle included; only `weapalt` and `weapon` stamp on a select
   alone. VERIFIED: 1.5 (`0x30039a32`, `0x30039aac`, `0x30039c52`) and UO
   (`0x3004753f`, `0x300475dd`, `0x300477b5`) store it at the same points.
-  vcod stamps the same way (`main.rs`, the `Effect::Impulse` arm).
+  vcod stamps the same way (`lib.rs`, the `Effect::Impulse` arm).
 - VERIFIED, the gates' bits: the snapshot's `0x40000` is 1.5's `0x20000`
   (`0x30039a0e`) and UO's `0x80000` (`0x3004751b`), each version's own-view
   bit, which vcod reads off `cg.snap` (`Held::cg_snap`). The predicted
@@ -9576,7 +9576,7 @@ before `CL_AdjustAngles` (0x40b723..0x40b738): the first block is
 mouse's rest and the kick's units summed, once. The gun kick turns the viewmodel about the
 eye and reaches the scope through `AimInput::gun_kick`; a 1.1 server
 passes zero, a 1.5 or UO one its own spring (`cod15-movement.md` 6). The drawn view takes its roll from the cmd angles plus
-`delta_angles` (`own_view` in `crates/client/src/main.rs`), as the
+`delta_angles` (`own_view` in `crates/client/src/lib.rs`), as the
 predicted `viewangles[2]`; a mounted gun's view keeps roll 0.
 `OnlineView::track_spawn` clears the kick on a new `(clientNum, stats[5])`
 off the newest snapshot, `OnlineView::new_gamestate` at each map load, and

@@ -103,10 +103,10 @@ the cell walk's node tests on maps with many portal paths.
 ## 5. The soak
 
 `tools/cod2_soak.sh <outdir> [map...]` (`COD2_DIR`, the lavapipe env;
-`tools/cod4_soak.sh` with `GAME=cod2`) runs `play::cod2_soak::cod2_soak`,
+`tools/cod4_soak.sh` with `GAME=cod2`) runs `tools::cod2_soak::cod2_soak`,
 one map a process, every stock map without arguments. It is the CoD4 soak
 (`cod4-map-sweep.md`, "The soak") on the same harness
-(`play::cod4_sweep`: `Game`, `SoakServer`, `Player`, `Tally`).
+(`tools::cod4_sweep`: `Game`, `SoakServer`, `Player`, `Tally`).
 
 - Server: per map, vcod-server `--game cod2` loads it with six shooting
   bots and rotates through dm, tdm, sd, ctf and hq (dm again last) at
@@ -441,7 +441,7 @@ at the Mac binary's file offsets of the names. VERIFIED (program text):
 
 ### vcod's, before and after
 
-`renderer::shader_ops` (`SHADER_OPS=1 cargo test -p vcod --bins
+`renderer::shader_ops` (`SHADER_OPS=1 cargo test -p vcod --lib
 cod2_shader_ops -- --nocapture`), the counter of `cod4-client-perf.md` 26,
 exp fog, the sun lighting. "Runs" is the material's path with every switch
 known; "compiled" is what its pipeline's fragment stage holds with the
@@ -590,7 +590,7 @@ VERIFIED (HLSL; code).
    the fixed-function state, outside the shader. Not changed.
 5. CoD2 walks its cells as retail does (`MapWorld::portals_only`, below).
 
-The counter (`SHADER_OPS=1 cargo test -p vcod --bins cod2_shader_ops --
+The counter (`SHADER_OPS=1 cargo test -p vcod --lib cod2_shader_ops --
 --nocapture`, section 8's), before and after, beside the Mac programs'
 `tools/re/cod2_macarb.py --count`. "Runs" is what a path executes,
 "compiled" the split pipeline's fragment stage with the frame's switches
@@ -849,7 +849,7 @@ than a CPU one feeding a dynamic buffer each frame.
 
 ### Counts
 
-`SHADER_OPS=2 cargo test -p vcod --bins cod2_shader_ops -- --nocapture`
+`SHADER_OPS=2 cargo test -p vcod --lib cod2_shader_ops -- --nocapture`
 against `tools/re/cod2_macarb.py --count`, fetch / ALU / slots. VERIFIED
 (counter, program text):
 

@@ -1068,14 +1068,16 @@ pub fn weapon_list(gs: &Gamestate) -> std::sync::Arc<[String]> {
 /// Now for a live session's cmd clock, send pacing and timeouts: the
 /// client's frame clock (`cls.realtime`, which `cl_avidemo` steps), or the
 /// clock a live test drives faster than real time on this thread
-/// (`tests::sim`).
+/// (`crate::harness::sim`).
 pub(crate) fn clock_now() -> Instant {
     #[cfg(test)]
-    if let Some(t) = tests::sim::now() {
+    if let Some(t) = crate::harness::sim::now() {
         return t;
     }
     crate::frame_clock::now()
 }
 
+#[cfg(test)]
+pub(crate) mod live;
 #[cfg(test)]
 pub(crate) mod tests;

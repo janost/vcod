@@ -223,13 +223,13 @@ impl Cod2Session {
         let progress = Arc::new(std::sync::Mutex::new(None));
         let shown = progress.clone();
         let (slot, flag) = (handoff.clone(), cancel.clone());
-        // A live test's join runs on its clock (`play::cod4::tests::sim`).
+        // A live test's join runs on its clock (`crate::harness::sim`).
         #[cfg(test)]
-        let clock = crate::play::cod4::tests::sim::current();
+        let clock = crate::harness::sim::current();
         let job = std::thread::spawn(move || {
             #[cfg(test)]
             if clock.is_some() {
-                crate::play::cod4::tests::sim::install(clock);
+                crate::harness::sim::install(clock);
             }
             let r = Self::connect_with(&a, &opts, timeout, Some(shown), Some(&flag));
             let Ok(mut slot) = slot.lock() else {

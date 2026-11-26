@@ -1,7 +1,7 @@
 //! The console's command layer: retail's tokenizer, a cvar table, key binds
 //! and the client commands vcod implements (docs/research/cod11-console.md).
 //! Commands that act on the window or the connection come back as
-//! [`Effect`]s for `main.rs` to carry out; the rest run here.
+//! [`Effect`]s for `lib.rs` to carry out; the rest run here.
 
 use std::collections::BTreeMap;
 
@@ -316,7 +316,7 @@ fn weapon_slot(arg: &str) -> usize {
 }
 
 /// The binds `vcod` starts with when it has no config: the stock keys
-/// `main.rs` hard-coded before the console existed, and the vote keys
+/// `lib.rs` hard-coded before the console existed, and the vote keys
 /// `default_mp.cfg` (localized_english_pak0) binds.
 pub const DEFAULT_BINDS: &[(&str, &str)] = &[
     ("TAB", "+scores"),
@@ -1434,7 +1434,7 @@ impl Shell {
     }
 
     /// The bind of `key` if it holds a [`Action`] button or impulse, which is
-    /// what the mouse grab gates (`main.rs`).
+    /// what the mouse grab gates (`lib.rs`).
     pub fn bind_is_gameplay(&self, key: &str) -> bool {
         let Some(cmd) = self.binds.get(key) else {
             return false;

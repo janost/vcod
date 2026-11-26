@@ -105,10 +105,10 @@ pub use probe::{demo_probe, probe};
 
 /// Now for a session's waits, send pacing and timeouts: the wall's, or the
 /// clock a live test shares with its in-process server on this thread
-/// (`play::cod4::tests::sim`, the CoD2 server through `tests::run_held`).
+/// (`crate::harness::sim`, the CoD2 server through `crate::harness::run_held`).
 pub(crate) fn clock_now() -> Instant {
     #[cfg(test)]
-    if let Some(t) = crate::play::cod4::tests::sim::now() {
+    if let Some(t) = crate::harness::sim::now() {
         return t;
     }
     Instant::now()
@@ -123,7 +123,7 @@ fn since(t: Instant) -> Duration {
 /// a frame of it, which is what lets its server answer.
 fn clock_sleep(d: Duration) {
     #[cfg(test)]
-    if crate::play::cod4::tests::sim::sleep(Duration::from_millis(16)) {
+    if crate::harness::sim::sleep(Duration::from_millis(16)) {
         return;
     }
     if !d.is_zero() {
@@ -135,7 +135,7 @@ fn clock_sleep(d: Duration) {
 /// `cl_avidemo` steps) where no test clock runs.
 fn frame_now() -> Instant {
     #[cfg(test)]
-    if let Some(t) = crate::play::cod4::tests::sim::now() {
+    if let Some(t) = crate::harness::sim::now() {
         return t;
     }
     crate::frame_clock::now()
@@ -1933,11 +1933,11 @@ impl Cod2Session {
         // A live test's clock holds while the map loads: this thread reads
         // it but sleeps on the wall.
         #[cfg(test)]
-        let clock = crate::play::cod4::tests::sim::current();
+        let clock = crate::harness::sim::current();
         let handle = std::thread::spawn(move || {
             #[cfg(test)]
             if clock.is_some() {
-                crate::play::cod4::tests::sim::install(clock);
+                crate::harness::sim::install(clock);
             }
             let mut s = self;
             let (start, messages) = (Instant::now(), s.stats.messages);
@@ -2140,7 +2140,7 @@ mod tests {
         // The server's client count at each frame.
         let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let seen = count.clone();
-        let (connected, freed) = crate::play::cod4::tests::run_held(
+        let (connected, freed) = crate::harness::run_held(
             &mut sv,
             move |addr| {
                 let mut connecting = Some(Cod2Session::connect_in_background(
@@ -2168,7 +2168,7 @@ mod tests {
                     if connecting.as_ref().is_some_and(Connecting::running) {
                         std::thread::sleep(Duration::from_millis(1));
                     } else {
-                        crate::play::cod4::tests::clk_sleep(Duration::from_millis(16));
+                        crate::harness::clk_sleep(Duration::from_millis(16));
                     }
                 }
                 (connecting.is_none(), false)

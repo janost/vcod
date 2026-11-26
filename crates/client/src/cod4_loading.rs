@@ -322,13 +322,13 @@ impl<T: Send + 'static> Loader<T> {
         let p = progress.clone();
         let cancel = Arc::new(AtomicBool::new(false));
         let flag = cancel.clone();
-        // A live test's join runs on its clock (`play::cod4::tests::sim`).
+        // A live test's join runs on its clock (`crate::harness::sim`).
         #[cfg(test)]
-        let clock = crate::play::cod4::tests::sim::current();
+        let clock = crate::harness::sim::current();
         let job = std::thread::spawn(move || {
             #[cfg(test)]
             if clock.is_some() {
-                crate::play::cod4::tests::sim::install(clock);
+                crate::harness::sim::install(clock);
             }
             f(&p, &flag)
         });
@@ -508,12 +508,12 @@ mod tests {
     /// map (cod4-hud.md 18).
     #[test]
     fn cod4_live_join_draws_the_connect_screen_then_hands_over() {
-        use crate::play::cod4::tests::{clk_now, run_held, since};
+        use crate::harness::{clk_now, run_held, since};
         use vcod_server::cod4::{Cod4Config, Cod4Server};
         let Some(install) = vcod_cod4::testing::cod4_install() else {
             return;
         };
-        let _live = crate::play::cod4::tests::live_slot();
+        let _live = crate::harness::live_slot();
         let mut sv = Cod4Server::new(
             Cod4Config {
                 map: "mp_crash".into(),
@@ -658,7 +658,7 @@ mod tests {
     /// The worker's end: what `poll` hands back within `secs` of a live
     /// test's clock, which the worker moves.
     fn finish(l: &mut Loader, secs: u64) -> Option<Result<Joined>> {
-        use crate::play::cod4::tests::{clk_now, since};
+        use crate::harness::{clk_now, since};
         let t0 = clk_now();
         while since(t0) < Duration::from_secs(secs) {
             if let Some(done) = l.poll() {
@@ -678,7 +678,7 @@ mod tests {
         secs: u64,
         client: impl FnOnce(std::net::SocketAddr) -> T + Send + 'static,
     ) -> (T, usize, bool) {
-        use crate::play::cod4::tests::{clk_now, clk_sleep, run_held, since};
+        use crate::harness::{clk_now, clk_sleep, run_held, since};
         use std::sync::atomic::AtomicUsize;
         let (count, most) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
         let (c, m) = (count.clone(), most.clone());
@@ -798,12 +798,12 @@ mod tests {
     /// frees the slot (`CL_Disconnect`), instead of timing it out.
     #[test]
     fn cod4_connect_cancel_after_the_gamestate_frees_the_server_slot() {
-        use crate::play::cod4::tests::{clk_now, since};
+        use crate::harness::{clk_now, since};
         use vcod_server::cod4::{Cod4Config, Cod4Server};
         let Some(install) = vcod_cod4::testing::cod4_install() else {
             return;
         };
-        let _live = crate::play::cod4::tests::live_slot();
+        let _live = crate::harness::live_slot();
         let mut sv = Cod4Server::new(
             Cod4Config {
                 map: "mp_crash".into(),
