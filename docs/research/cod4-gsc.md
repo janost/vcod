@@ -2219,8 +2219,9 @@ What the port matches:
   -50..50 box or a dynamic entity's cylinder; the unit tests in
   `ode::tests` pin the last two as read. Class 11 is not ported: vcod
   leaves brush dynamic entities out.
-- `run_frame` refuses a body whose first geom is not a capsule, so
-  nothing on worlds 0 or 1 steps until the colliders (P3) come.
+- `run_frame` refuses a body whose first geom is not a capsule or a
+  brush (3.6.4), so no box or cylinder on worlds 0 or 1 steps until
+  their colliders (P3) come.
 
 The census (`phys_create::the_stock_zones_phys_geoms_are_brushes_boxes_and_cylinders`,
 every zone of the client's `zone/english/`, one copy of a model for
@@ -2233,8 +2234,167 @@ other than 4.
 
 For the colliders: a body carries up to six geoms, newest first. A
 brush geom sits at the body's point while its brush is in the model's
-frame: its +0x50 is what to take off a brush point before turning it by
-the body. INFERRED (the build above).
+frame: the collider takes the body's rotation times its +0x50 off the
+body's position and turns the brush about that point, the model's
+origin (3.6.4). VERIFIED (0x5a8513..0x5a856b).
+
+#### 3.6.4 The brush geom collider, as ported
+
+I ported IW's collider for a class 12 geom, a `physGeoms` brush, into
+`ode::collide::brushgeom`: P3b of the world 0/1 port. Addresses are
+`iw3mp.exe`'s (3.6), read with `objdump`; every function below stores
+where the binary writes a DWORD and keeps the x87's 53 bits between, as
+the capsule's do (`cod4-player-anims.md` 10.4, 10.6).
+
+The geom, 0x5a8110's class 12 arm (0x5a8513..0x5a86a8):
+
+- The context's position (+0x38) is the body's position less the
+  rotation times the geom's +0x50 (0x431440, each component a stored
+  three-term dot, each difference stored); its axes (+0x44) are the
+  rotation's columns (0x5a8170..0x5a819a); the brush goes to +0x8c and
+  the kind is 3. VERIFIED (the instructions).
+- The walk's box: the largest magnitude among the brush's `maxs` x, y,
+  z and `mins` x, y, z (0x401000's `fabs`, a later one only when
+  strictly larger) times the double at 0x70ba90 (1.7320508, `sqrt 3`
+  as a float), stored as each half size, grown by 1 round the position
+  (0x5a8370). VERIFIED (the instructions).
+- The geom is narrow when `phys_narrowObjMaxLength` is over the brush's
+  `maxs` z (0x5a869e..0x5a87f9), its top and not a size. VERIFIED (the
+  compare). The car take's hood (`maxs` z 0) is narrow and its doors
+  (28.5) are not. VERIFIED (the take's brush lines).
+
+Against a world brush (0x59b370, from 0x5a79b0 while the contacts have
+room):
+
+- The geom's faces are 0x596ae0's six axial planes of its brush, then
+  its sides' planes, each normal turned by the rotation (0x59b120 for the
+  axial ones, the same arithmetic inlined for the sides) and each
+  distance `n' . pos + d`, both stored. VERIFIED (0x59b380..0x59b696).
+- 0x599cb0 winds each geom face off those planes through 0x599560 into
+  one buffer of 0x100 corners, a face's neighbours the brush's own;
+  0x599560 is 0x5998e0 on a plane array (10.6), the same sequence of x87
+  operations. 0x599d30 winds the world brush's faces through 0x5998e0
+  into another 0x100. Either buffer empty ends the collide. VERIFIED (the
+  calls, the two functions' operations compared).
+- Each world face's least height over every geom corner (0x59acb0:
+  `n . p - d` stored, a later point taken when its height less the least
+  so far, stored, is under 0, from `FLT_MAX` at 0x70af58) of 0 or more
+  ends the collide; of the faces with edges the least deep is kept, a
+  later one only when strictly less deep, from `-FLT_MAX`. After the
+  world's windings 0x59b010 does the same for each geom face over the
+  world's corners. VERIFIED (0x59b3f0..0x59b8a5, 0x59b010..0x59b117).
+- The world's face is the reference when its winding has corners and
+  the geom's face is deeper or has none; else the geom's, when it has
+  corners; else there is no contact. VERIFIED (0x59b951..0x59ba7a).
+- A world face as the reference (0x59b1a0): the incident face is the
+  geom face with corners whose normal dots least with the reference's
+  (0x5992a0, from the float 2.0 at 0x700c0c, a later one only when
+  strictly less); each contact's normal is the reference's negated and
+  its surface flags the world face's material's (+0x40 of the 0x48-byte
+  materials at 0x14098dc, the axial material at +0x24 `[i & 1][i >> 1]`,
+  a side's at +4). VERIFIED (the instructions).
+- A geom face as the reference (0x59b240): the incident face is the
+  world face with corners whose normal dots least with the geom face's,
+  and under the double at 0x70b490 (-0.1) too (0x598d60), none ending
+  the collide; each contact's normal is the geom face's and its surface
+  flags the incident face's, which the narrow pass then skips in place
+  of the world's reference. VERIFIED (the instructions).
+- 0x5989f0 clips the incident winding to the reference (0x597e70) and
+  makes each point strictly behind the reference's plane a contact of
+  depth `d - n . p`, stored, written straight into the `dContactGeom`s
+  (the surface flags at +0x2c) while they have room: no local contact
+  list, no 0x59c710 merge. VERIFIED (0x5989f0..0x598d56).
+- 0x597e70 reads the reference winding's sense (0x5974b0: the first edge
+  crossed with the first later edge whose cross squared is over the
+  float 0.01 at 0x6df494, 1 when that cross dots under 0 with the
+  reference's normal, else 0; 2, no contact, when no edge is long
+  enough), then cuts the incident polygon (0x597800) by each of the
+  reference's edges from its last corner round: the plane through the
+  edge's first corner whose normal is `n x e` when the sense is 1, else
+  `e x n`, not normalized, skipped when the edge's square or the
+  normal's is under the double at 0x70b040 (0.1, 0x5975e0). Fewer than
+  three corners left after a cut gives no contact. VERIFIED (the
+  instructions).
+- 0x597800 cuts a polygon to `n . p <= d` in place, a point out when
+  `d < n . p` (NaN out); none in leaves it as it was and returns 0. The
+  last vertex in before the run out and the first in after it bound the
+  run: one vertex out opens a slot after it and becomes the meets with
+  both neighbours' edges; a longer run's ends become their meets and the
+  vertices between drop (0x597440). A meet is `b + (a - b) t` with
+  `t = (d - n . b) / n . (a - b)` stored, the rest on the stack; an edge
+  whose `n . (a - b)` reads 0 leaves its vertex. VERIFIED (0x597800..
+  0x597e6a, 0x597440..0x5974a6).
+- A narrow geom (context +0xa4) then takes as references (through
+  0x59b1a0) each world axial face with corners whose side of the bounds
+  the geom's position lies past (`mins > pos` for a lower face, `maxs <
+  pos` for an upper one; a lower face past which it lies ends its axis),
+  then each side with corners whose plane it lies in front of
+  (`d < n . pos`), but the face skipped above, and only when every geom
+  plane leaves something of the face's winding (0x59b2f0, 0x597800 per
+  plane, 0 left refusing it). VERIFIED (0x59b9bb..0x59bc43).
+
+Against a partition's triangles (0x59c300):
+
+- Each triangle, while the contacts have room, is culled against a
+  sphere round the geom (0x596c70, the context's +0x30), then taken into
+  the model's frame (0x59c050: `R^T (v - pos)`, each stored) and
+  collided there (0x59bd00); each contact it made turns back
+  (`R n`, `pos + R p`, stored; the stride hard 0x30). VERIFIED (the
+  calls and the instructions). The cull is not ported; on the car take
+  the gate below met 360 partitions and matches without it. VERIFIED
+  (the run).
+- 0x59bd00: each brush face (the brush's own planes) against the
+  triangle through 0x59ae80, which gives `-FLT_MAX` (0x70af5c) when the
+  triangle's edges off `t0` and their cross `e2 x e1` are each over 0.01
+  squared and that cross dots over 0 with the face's normal, and
+  otherwise the face's least height over the corners (0x59acb0); 0 or
+  more ends it, and the least deep face with edges is kept. Then the
+  brush's windings (0x599d30, 0x400 corners), the triangle's plane
+  (0x596bc0: `(t0 - t1) x (t2 - t0)` normalized by 0x4076d0, `d` at
+  `t0`) and its least height over the brush's corners, 0 or more ending
+  it. The brush face is the reference when it is strictly less deep
+  than the triangle and has corners, the triangle incident, each
+  contact along the face's normal; else the triangle is, the brush face
+  facing it most under -0.1 incident (0x598d60), each contact along the
+  triangle's normal negated; both through 0x5989f0 with the
+  partition's surface flags. VERIFIED (0x59bd00..0x59c048,
+  0x59ae80..0x59b002, 0x596bc0..0x596c66).
+- `dCollide` turns every normal round, so each points out of the world
+  into the geom, as for the capsule (10.6). INFERRED (the reversed
+  class pair).
+
+The sweep size (0x5a684f): the brush's bounds times the double at
+0x70afb8 (0.01f), each stored; 0x561910 takes the stored sizes and, when
+z is under x, moves both x bounds in by half the stored `x - z`, each
+stored, then, when y is over z, both y bounds by half of `y - z`
+(0x561910..0x561998). VERIFIED (the instructions). `Geom::bounds`. The
+hood's comes to x 0.15..0.23, so its sweep is a point (3.6.1). VERIFIED
+(`a_brush_geoms_sweep_size_is_its_bounds_cut_to_its_height`, ours).
+
+The cut (0x5a2320, `collide::reduce`) now stores where the binary does:
+each cluster's normals summed one add stored at a time, the means and
+the clusters' normals normalized as 0x4076d0 and 0x55f6e0 do (the same
+instructions), 0x5a1d80's tangents `N x u` and `N x T1` with `u`'s zero
+parts multiplied in, each normalized, and every dot and squared
+distance a stored three-term dot. VERIFIED (0x5a18e0..0x5a21c1,
+0x5a1d80..0x5a1e3a, 0x55f6e0..0x55f755). In `f32` it kept 6 of the
+car door's 9 contacts on step 1 where retail kept 7: two corners
+2.4e-5 apart along the tangent, under an `f32` step at 360 units.
+VERIFIED (the run).
+
+The brush's loader keeps each face's neighbours (the axial runs at
++0x34 and +0x40, a side's at +8 and +0xa, into the edges at +0x30) and
+each side's own inline plane (`PhysBrush::side_planes`); the plane
+array at +0x4c read empty for the sedan's brushes, so `PhysBrush::planes`,
+which the impulse solver reads, stays as it was. VERIFIED (the run).
+
+`phys_brush_ab::the_car_takes_brush_geoms_collide_as_retail` feeds the
+port the car take's pose of each brush body (the hood, 9, and the two
+doors, 5 and 6) on every one of its 120 brush geom collides (steps 1
+to 40): all 582 contacts equal the capture's `dCollide` output word for
+word in count, order, position, normal, depth and surface flags, 19 of
+them off triangles, and the cut of each equals the contact pass's
+input word for word. VERIFIED (the run, ours).
 
 ## 4. The load
 

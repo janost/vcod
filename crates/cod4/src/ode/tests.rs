@@ -709,3 +709,23 @@ fn a_flat_model_launches_as_a_cube_and_lies_as_its_bounds() {
     assert_eq!(b.mass, Mass::cylinder_total(6.0, 3, 4.0, 3.0));
     assert_eq!(b.pos, [10.0, 20.0, 33.0]);
 }
+
+/// 0x5a684f on the sedan hood's brush (-3.5..41.5, -24..24, -8..0): a
+/// hundredth of its bounds, x cut to z's 0.08 about its middle, y too;
+/// its top x, 0.23, sizes the post-frame sweep, a point under 2 `phys_csl`.
+#[test]
+fn a_brush_geoms_sweep_size_is_its_bounds_cut_to_its_height() {
+    let brush = std::sync::Arc::new(crate::assets::model::PhysBrush {
+        mins: [-3.5, -24.0, -8.0],
+        maxs: [41.5, 24.0, 0.0],
+        ..Default::default()
+    });
+    let g = super::geom::Geom::Brush {
+        brush,
+        offset: [0.0; 3],
+    };
+    let (lo, hi) = g.bounds().unwrap();
+    let close = |a: [f32; 3], b: [f32; 3]| (0..3).all(|k| (a[k] - b[k]).abs() < 1e-6);
+    assert!(close(lo, [0.15, -0.04, -0.08]), "{lo:?}");
+    assert!(close(hi, [0.23, 0.04, 0.0]), "{hi:?}");
+}

@@ -20,6 +20,8 @@ fn w(x: f32) -> f64 {
 
 /// `sqrt(1/2)` as a float widened (the double at 0x70ae70).
 const HALF_SQRT2: f64 = 0.707_106_769_084_930_4;
+/// A brush's bounds' share in its sweep size (the double at 0x70afb8, 0.01f).
+const BRUSH_SWEEP_SHARE: f64 = 0.009_999_999_776_482_582;
 
 /// A geom's class (+4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,8 +98,7 @@ impl Geom {
     /// its least side (0x5a9a44, ties keep the earlier), a cylinder's
     /// `min(r sqrt(1/2), +0x54)` (0x5a688b), a capsule's `r sqrt(1/2)`
     /// unless `2 r + h` is less (0x5a68b7), a transform its inner geom's
-    /// (0x5aed10). Class 12 scales its brush's bounds and goes on to
-    /// 0x561910 (0x5a684f), not read.
+    /// (0x5aed10); a brush's [`brush_bounds`].
     pub fn bounds(&self) -> Result<(V3, V3), Unported> {
         let m = match self {
             Geom::Box { sides } => {
@@ -123,8 +124,29 @@ impl Geom {
                 if s < w(t) { s as f32 } else { t }
             }
             Geom::Transform(t) => return t.inner.bounds(),
-            g => return Err(Unported(g.class())),
+            Geom::Brush { brush, .. } => return Ok(brush_bounds(brush)),
         };
         Ok(([-m; 3], [m; 3]))
     }
+}
+
+/// 0x5a684f: a brush's bounds times 0.01, each stored, then 0x561910 cuts
+/// x to z's size about its middle when z is the shorter and y when y is
+/// the longer, by half the stored difference of the stored sizes.
+fn brush_bounds(b: &PhysBrush) -> (V3, V3) {
+    let mut lo = b.mins.map(|x| (w(x) * BRUSH_SWEEP_SHARE) as f32);
+    let mut hi = b.maxs.map(|x| (w(x) * BRUSH_SWEEP_SHARE) as f32);
+    let s: V3 = std::array::from_fn(|k| (w(hi[k]) - w(lo[k])) as f32);
+    let mut cut = |k: usize, by: f32| {
+        let h = ((w(s[k]) - w(by)) * 0.5) as f32;
+        lo[k] = (w(lo[k]) + w(h)) as f32;
+        hi[k] = (w(hi[k]) - w(h)) as f32;
+    };
+    if s[2] < s[0] {
+        cut(0, s[2]);
+    }
+    if s[1] > s[2] {
+        cut(1, s[2]);
+    }
+    (lo, hi)
 }

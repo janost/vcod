@@ -2371,6 +2371,7 @@ mod tests {
                     mins: [-10.0; 3],
                     maxs: [10.0; 3],
                     planes: planes.clone(),
+                    ..PhysBrush::default()
                 }),
                 kind: 0,
                 orientation: [[0.0; 3]; 3],
@@ -2414,6 +2415,7 @@ mod tests {
             mins: [-3.5, -24.0, -8.0],
             maxs: [41.5, 24.0, 0.0],
             planes: vec![],
+            ..PhysBrush::default()
         };
         let mut c = brush_corners(&hood);
         assert_eq!(c.len(), 8);
@@ -2422,6 +2424,7 @@ mod tests {
             mins: [0.0; 3],
             maxs: [10.0; 3],
             planes: vec![[1.0, 0.0, 1.0, 10.0]],
+            ..PhysBrush::default()
         };
         c = brush_corners(&wedge);
         assert_eq!(c.len(), 6, "{c:?}");
