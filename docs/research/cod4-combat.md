@@ -1514,7 +1514,7 @@ VERIFIED (the instructions):
   plus the fuse (0x8094683), and both arms store 0 into `grenadeTimeLeft`
   (0x80945c8).
 
-So the snapshot after the throw reads `grenadeTimeLeft` 0 where pmove
+INFERRED (from the arms above): so the snapshot after the throw reads `grenadeTimeLeft` 0 where pmove
 left the cook's remainder (3275 on `frag`'s row 414). vcod:
 `WeaponDef::takes_fuse`, read by `Cod4Level::new_grenade` and by the
 replay's `Replay::think` after each cmd's `EV_USE_OFFHAND`.

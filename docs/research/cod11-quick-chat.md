@@ -8,15 +8,15 @@ Sources, addresses virtual:
 - `game_mp_x86.dll` 1.1, the same code (`cod11-sound-system.md`).
 - `cgame_mp_x86.dll` 1.1, image base `0x30000000`; md5s in `cod11-events-and-fx.md`.
 
-Default label for the first four sections: VERIFIED, read from the binaries; exceptions are labelled. No stock server has been seen sending `j`/`k`/`l` on the wire. The live captures in `cod11-sound-system.md` came from modded servers that bypass this path with `EV_SOUND_ALIAS`.
+Each claim carries its own label. No stock server has been seen sending `j`/`k`/`l` on the wire. The live captures in `cod11-sound-system.md` came from modded servers that bypass this path with `EV_SOUND_ALIAS`.
 
 ## 1. Server side
 
 `G_Voice` (`game.mp.i386.so`, `G_Voice@@Base` at `0x473b8`; `game_mp_x86.dll` at the same VA):
 
-- Spam gate first: a per-entity accumulator at `ent+0x308` compared against level time (`0x1e8`), capped near 30 s (`cmp $0x752f`). Past it, the `GAME_SPAMPROTECT` notice (string at `0x73a86`) goes out instead.
-- The caller's mode argument (`0x10(%ebp)`) picks the letter: `1` gives `"k"` (`0x73a48`), `2` gives `"l"` (`0x73a4a`), anything else `"j"` (`0x73a4c`).
-- It formats `"%s %d %d %d %s %i %i %i"` (`0x73a4e`) and sends it as a reliable server command. Push order at `0x474db..0x4752f`: the letter, three ints from entity fields, the category string argument, then the speaker origin xyz, each loaded as float and converted with `fistpl` (`flds 0x20/0x1c/0x18(%ebx)`).
+- VERIFIED (the instructions): spam gate first, a per-entity accumulator at `ent+0x308` compared against level time (`0x1e8`), capped near 30 s (`cmp $0x752f`). Past it, the `GAME_SPAMPROTECT` notice (string at `0x73a86`) goes out instead.
+- VERIFIED (the instructions): the caller's mode argument (`0x10(%ebp)`) picks the letter: `1` gives `"k"` (`0x73a48`), `2` gives `"l"` (`0x73a4a`), anything else `"j"` (`0x73a4c`).
+- VERIFIED (the instructions): it formats `"%s %d %d %d %s %i %i %i"` (`0x73a4e`) and sends it as a reliable server command. Push order at `0x474db..0x4752f`: the letter, three ints from entity fields, the category string argument, then the speaker origin xyz, each loaded as float and converted with `fistpl` (`flds 0x20/0x1c/0x18(%ebx)`).
 
 One command:
 
@@ -24,20 +24,20 @@ One command:
 j <int> <int> <int> <category> <origin_x> <origin_y> <origin_z>
 ```
 
-Every numeric field prints as a decimal integer, which the client reads back with `atol`. The client takes argv 1 as the scope echo (it picks the chat-line format and the team-only gate), argv 3 as the speaking client index and argv 5-7 as the speaker origin. argv 2's meaning is unknown.
+VERIFIED (the client's reads): every numeric field prints as a decimal integer, which the client reads back with `atol`; argv 3 is the speaking client index and argv 5-7 the speaker origin. INFERRED: argv 1 is the scope echo (it picks the chat-line format and the team-only gate). argv 2's meaning is unknown.
 
 ## 2. Client dispatch and handling
 
 All addresses are `cgame_mp_x86.dll` 1.1.
 
-- Dispatch: console-string cases `'j'` `'k'` `'l'` (`0x6a/6b/6c`) call `FUN_3002d940(0/1/2)` (call sites `0x30026437..0x30026443` in the export).
-- `FUN_3002d940` (`0x3002d940`): reads argv 1-3 via trap_Argv (syscall `0xd`) through `atol` (`0x3004afde`), keeps argv 4 as the category string, converts argv 5-7 back to floats (`fild`/`fstp` pairs). When global `DAT_301ad3cc` is set it drops the auto-taunt categories early: `kill_insult` (`0x30062a54`), `taunt` (`0x30062a4c`), `death_insult`, `kill_gauntlet`, `praise` (the Q3 voice-chat category names). What sets `DAT_301ad3cc` is not traced.
-- `FUN_3002d770` (`0x3002d770`, `__thiscall`; ECX points at a vec3 the caller built on its stack from argv 5-7, so the origin comes from the command, not entity state):
+- VERIFIED (call sites): dispatch, console-string cases `'j'` `'k'` `'l'` (`0x6a/6b/6c`) call `FUN_3002d940(0/1/2)` (call sites `0x30026437..0x30026443` in the export).
+- VERIFIED (the decompilation): `FUN_3002d940` (`0x3002d940`) reads argv 1-3 via trap_Argv (syscall `0xd`) through `atol` (`0x3004afde`), keeps argv 4 as the category string, converts argv 5-7 back to floats (`fild`/`fstp` pairs). When global `DAT_301ad3cc` is set it drops the auto-taunt categories early: `kill_insult` (`0x30062a54`), `taunt` (`0x30062a4c`), `death_insult`, `kill_gauntlet`, `praise` (the Q3 voice-chat category names). What sets `DAT_301ad3cc` is not traced.
+- VERIFIED (the decompilation): `FUN_3002d770` (`0x3002d770`, `__thiscall`; ECX points at a vec3 the caller built on its stack from argv 5-7, so the origin comes from the command, not entity state):
   - clamps argv 3 to `0..63` as the speaking client index;
   - bails if `clientinfo[idx].field_0x00 == 0` (clientinfo stride `0x448` from `0x3018bc0c`);
   - picks the voice table: `EBX = 0x302f7d80` (axis) by default, `0x30340ec8` (allies) when `clientinfo[idx].field_0x2c != 1`. Team `1` is axis, as on the HUD (1 axis, 2 allies);
   - a mode check passes when the mode argument is `1` or global `DAT_3029824c == 0`.
-- Selection, `FUN_3002d390` (`0x3002d390`; EBX the table base; stack args the category string and three out-pointers): scans up to `count = *(table+0x44)` categories, records from `table+0x48` at stride `0x1244`. The match test `FUN_3003e8f0(ECX = record)` returns 0 on a hit. On the first hit it draws `rand()` modulo the variant count at `record+0x40` and returns:
+- VERIFIED (the decompilation): selection, `FUN_3002d390` (`0x3002d390`; EBX the table base; stack args the category string and three out-pointers): scans up to `count = *(table+0x44)` categories, records from `table+0x48` at stride `0x1244`. The match test `FUN_3003e8f0(ECX = record)` returns 0 on a hit. On the first hit it draws `rand()` modulo the variant count at `record+0x40` and returns:
 
 | Out | Address | What |
 |---|---|---|
@@ -45,8 +45,8 @@ All addresses are `cgame_mp_x86.dll` 1.1.
 | B | `record+0x1144 + j*4` | the head-icon material handle |
 | C | `record+0x144 + j*0x40` | a pointer into an inline per-variant area the 1.1 parser never writes |
 
-- Queueing: the entry `{pos.xyz, category copy char[149], client index, handles...}` goes into a 32-slot ring at `DAT_305407c0`, indexed by `DAT_3020d094`. The drain, `FUN_3002d5d0` (`0x3002d5d0`), takes at most one entry per 1000 ms (`DAT_3020d08c = time + 1000`).
-- Presentation, `FUN_3002d470` (`0x3002d470`): unless `cg_noVoiceChats` is set (0x3002d473), plays the sound and copies the head-icon handle into the speaker's centity (`cent+0x220`, shown until `cent+0x224`; cod11-gametypes-re-bel.md 7.3, "The second sprite"), then prints `": <text>"` to the console. The localizer `FUN_3002d670` (`0x3002d670`, syscall `0x38` lookup) falls back to the raw key wrapped in `#UNLOCALIZED# ... #`. The chat-line formats in `FUN_3002d770`:
+- VERIFIED (the decompilation): queueing, the entry `{pos.xyz, category copy char[149], client index, handles...}` goes into a 32-slot ring at `DAT_305407c0`, indexed by `DAT_3020d094`. The drain, `FUN_3002d5d0` (`0x3002d5d0`), takes at most one entry per 1000 ms (`DAT_3020d08c = time + 1000`).
+- VERIFIED (the decompilation): presentation, `FUN_3002d470` (`0x3002d470`): unless `cg_noVoiceChats` is set (0x3002d473), plays the sound and copies the head-icon handle into the speaker's centity (`cent+0x220`, shown until `cent+0x224`; cod11-gametypes-re-bel.md 7.3, "The second sprite"), then prints `": <text>"` to the console. The localizer `FUN_3002d670` (`0x3002d670`, syscall `0x38` lookup) falls back to the raw key wrapped in `#UNLOCALIZED# ... #`. The chat-line formats in `FUN_3002d770` are VERIFIED (the format strings):
 
 | Mode | Format |
 |---|---|
@@ -56,18 +56,18 @@ All addresses are `cgame_mp_x86.dll` 1.1.
 
 ## 3. The `.voice` file format
 
-`FUN_3002cbd0` (`0x3002cbd0`) parses it, called once at init from `FUN_30020a00` (`0x30020a00`):
+VERIFIED (the decompilation): `FUN_3002cbd0` (`0x3002cbd0`) parses it, called once at init from `FUN_30020a00` (`0x30020a00`):
 
 ```
 FUN_3002cbd0("mp/axis_chat.voice",   &DAT_302f7d80, 0x40);
 FUN_3002cbd0("mp/allies_chat.voice", &DAT_30340ec8, 0x40);
 ```
 
-VERIFIED against the decompilation and asm:
+The parser, by item:
 
-- Read through the fs traps (`0xf` open/size, `0x10` read, `0x12` free). A file over `0x4000` bytes is rejected ("voice chat file too large").
-- Tokens come from the shared Q3-style tokenizer `FUN_3003da70` (`GetToken`). Category and brace compares are case-insensitive.
-- Grammar:
+- VERIFIED (the decompilation): read through the fs traps (`0xf` open/size, `0x10` read, `0x12` free). A file over `0x4000` bytes is rejected ("voice chat file too large").
+- VERIFIED (the decompilation): tokens come from the shared Q3-style tokenizer `FUN_3003da70` (`GetToken`). Category and brace compares are case-insensitive.
+- VERIFIED (the decompilation and asm): grammar:
 
 ```
 <gender>                      "male" @0x30062be4 -> table+0x40 = 0,
@@ -81,10 +81,10 @@ VERIFIED against the decompilation and asm:
 }
 ```
 
-- The head-icon slot is a same-line read. Every other token comes from `GetToken(allowLineBreaks = 1)`; the slot after a sound alias uses `GetToken(0)` (the second call site in `FUN_3002cbd0`). An entry is `alias` or `alias headicon` on one line. Two aliases on one line make the second the first's head icon. Category and brace tokens flow across lines.
-- Each `soundAlias` is registered with syscall `0xbf` into array A. INFERRED: `0xbf` is `S_RegisterSound`, since `FUN_30020a00` registers known aliases such as `mp_announce_g_twominutes` through it right beside.
-- The optional second token becomes array B via `FUN_30030b70(name, 2)` (INFERRED: register shader/material). Missing or empty, it defaults to `headiconVoiceChat`. A `}` in that slot is pushed back (`UngetToken`) and the default icon applies.
-- Per-category record (stride `0x1244`):
+- VERIFIED (the decompilation): the head-icon slot is a same-line read. Every other token comes from `GetToken(allowLineBreaks = 1)`; the slot after a sound alias uses `GetToken(0)` (the second call site in `FUN_3002cbd0`). An entry is `alias` or `alias headicon` on one line. Two aliases on one line make the second the first's head icon. Category and brace tokens flow across lines.
+- VERIFIED (the decompilation): each `soundAlias` is registered with syscall `0xbf` into array A. INFERRED: `0xbf` is `S_RegisterSound`, since `FUN_30020a00` registers known aliases such as `mp_announce_g_twominutes` through it right beside.
+- VERIFIED (the decompilation): the optional second token becomes array B via `FUN_30030b70(name, 2)`; INFERRED: that call registers a shader/material. Missing or empty, it defaults to `headiconVoiceChat`. A `}` in that slot is pushed back (`UngetToken`) and the default icon applies.
+- VERIFIED (the decompilation): per-category record (stride `0x1244`):
 
 | Offset | Content |
 |---|---|
@@ -94,7 +94,7 @@ VERIFIED against the decompilation and asm:
 | `+0x144..0x1143` | inline structs |
 | `+0x1144` | array B, up to 64 dwords |
 
-`0x44 + 64*4 = 0x144` and `0x1144 + 64*4 = 0x1244` exactly.
+VERIFIED (arithmetic on the offsets): `0x44 + 64*4 = 0x144` and `0x1144 + 64*4 = 0x1244` exactly.
 
 The aliases these files name are the `american_*` / `british_*` / `russian_*` / `german_*` rows of `dialog_mp.csv` (`cod11-sound-system.md`, quick chat).
 

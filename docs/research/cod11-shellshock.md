@@ -292,7 +292,7 @@ VERIFIED, `pak4.pk3` (CRLF text, values quoted):
 | `pain` | 0.1 / 0.15 | 0.15 / 0.005 | 0 | | | | off |
 | `stop` | 0 / 0 | 0 / 0 | 1 | 0 / 0 / 0 | 0 / 0 | generic 0 | off |
 
-`default`'s volumes: `auto` 0.1, `menu` 1, `weapon` 0.5, `voice` 0.2,
+VERIFIED (same files): `default`'s volumes: `auto` 0.1, `menu` 1, `weapon` 0.5, `voice` 0.2,
 `item` 0.1, `body` 0.1, `local` 0.1, `music` 0.1, `announcer` 1,
 `shellshock` 1 (before the crossing of section 4).
 

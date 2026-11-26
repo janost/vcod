@@ -1038,7 +1038,9 @@ retail's tree. INFERRED.
 
 ## 10. Census
 
-VERIFIED, census, record counts per map:
+Record counts per lump, one row per shipped MP map. VERIFIED (census):
+the counts below.
+
 
 | map | materials | planes | brushes | sides | surfaces | verts | lightmaps | grid | grid colours | cells | portals | aabb trees | cull groups | nodes | leafs | leaf brushes | coll verts | edges | tris | borders | partitions | coll aabbs | models | clusters |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|

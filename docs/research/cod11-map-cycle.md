@@ -1066,10 +1066,10 @@ restarts each, no client in, loopback, in a sealed namespace
 | UO 1.51b | mp_foy bas | 110 to 124 ms |
 | UO 1.51b | mp_cassino sd | 96 to 101 ms |
 
-Retail UO's restart holds its frame loop about 100 ms, four times 1.1's.
+INFERRED (from the round trip): retail UO's restart holds its frame loop about 100 ms, four times 1.1's.
 Where UO spends it is not read.
 
-vcod-server, the same restarts with six shooting bots
+VERIFIED (measured), vcod-server, the same restarts with six shooting bots
 (`VCOD_TICK_PROFILE_MS=20`; the `console/map_restart` and `load/*` phases,
 `spawn/*` inside `load/spawn`), mp_foy sd:
 
