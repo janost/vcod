@@ -5,7 +5,7 @@
 //! projected Gauss-Seidel solver (`SOR_LCP`, 0x5b8080, iterating in
 //! 0x5b7ad0 or, for a one-body island, 0x5b7df0), with IW's changes:
 //! no warm start, its row order and reorder, and the velocity clamp after
-//! the solve (cod4-player-anims.md 10.3).
+//! the solve (cod4-player-anims.md 10.4).
 
 use super::body::{Body, DISABLED, NO_GRAVITY};
 use super::joint::{Info2, Joint};

@@ -4,7 +4,7 @@
 //! ODE's vector, matrix and quaternion helpers as iw3mp.exe compiled them:
 //! `f32` storage, the x87 at 53 bits between the binary's stores, so each
 //! function here computes in `f64` and rounds where the binary writes a
-//! DWORD (cod4-player-anims.md 10.3).
+//! DWORD (cod4-player-anims.md 10.4).
 
 /// A vector (ODE's `dVector3` without its pad).
 pub type V3 = [f32; 3];

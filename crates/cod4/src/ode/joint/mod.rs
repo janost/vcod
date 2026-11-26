@@ -3,7 +3,7 @@
 //!
 //! Joints: IW's `dxJoint` has no vtable, an int type at +0x14 instead,
 //! dispatched by `getInfo1` (0x5b5b30) and `getInfo2` (0x5b5bd0);
-//! cod4-player-anims.md 10.3.
+//! cod4-player-anims.md 10.4.
 
 pub mod amotor;
 pub mod ball;

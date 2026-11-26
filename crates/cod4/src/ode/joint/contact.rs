@@ -3,7 +3,7 @@
 //!
 //! The contact joint (type 4; `contactGetInfo1` 0x5b4270,
 //! `contactGetInfo2` 0x5b4420): a normal row and up to two friction rows
-//! (cod4-player-anims.md 10.3).
+//! (cod4-player-anims.md 10.4).
 
 use super::{Info1, Info2};
 use crate::ode::body::Body;

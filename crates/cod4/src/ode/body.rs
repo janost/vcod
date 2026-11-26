@@ -2,7 +2,7 @@
 //! Russell L. Smith, under its BSD license (LICENSE-ODE-BSD.txt beside this file). See NOTICE.
 //!
 //! A rigid body (`dxBody`, 0x150 bytes in iw3mp.exe) and its position
-//! update (`dxStepBody`, 0x5b8380); cod4-player-anims.md 10.3.
+//! update (`dxStepBody`, 0x5b8380); cod4-player-anims.md 10.4.
 
 use super::mass::Mass;
 use super::math::{IDENTITY, M3, Quat, V3};

@@ -3,7 +3,7 @@
 //!
 //! The world: its bodies and joints, the sleep test (`autoDisableBodies`,
 //! iw3mp.exe 0x5b9b70) and the island walk (`dxProcessIslands`, 0x5b9d40)
-//! with IW's island split (0x5b9cc0); cod4-player-anims.md 10.3.
+//! with IW's island split (0x5b9cc0); cod4-player-anims.md 10.4.
 
 use super::body::{AutoDisable, Body, DISABLED, Node};
 use super::joint::Joint;

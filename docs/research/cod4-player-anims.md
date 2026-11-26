@@ -763,6 +763,171 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   turn or slide, and no limb roll about its length. Check at a high frame
   rate (`com_maxfps 0`) and at a low one (`com_maxfps 20`).
 
+### 10.4 The ODE core as ported
+
+`vcod_cod4::ode` translates upstream ODE 0.5 (2004-05-29, under its BSD
+licence) and takes IW's changes from iw3mp.exe 1.7 alone. Not wired into
+the ragdoll yet. Upstream function names below are 0.5's; that the
+binary's functions are those is INFERRED (their shape against the
+source), the rest is labelled per claim.
+
+- **Precision.** IW's build is dSINGLE: every body, joint and row field
+  is a DWORD the code loads with `fld DWORD` and writes with `fstp
+  DWORD` (the SOR row at 0x5b7be6..0x5b7db2, the body step at
+  0x5b8386..0x5b86be). VERIFIED (the instructions). The x87 runs at
+  53 bits (11), so a value held on the stack between two stores rounds
+  as a double does; the port computes in `f64` and rounds to `f32` at
+  each of the binary's DWORD stores, `x87::F80` is not needed. Each
+  three-term dot is `(p0 + p1) + p2` whatever order the products load
+  in, the angular dot in the SOR stored before the linear one and both
+  before the fold into `delta` (0x5b7c0f..0x5b7c4f). VERIFIED (the
+  instructions). The port matches the store points in the stepper, the
+  SOR, the joints' rows and the mass, rotation and Cholesky helpers;
+  `sin`, `cos`, `atan2` and `sqrt` go through MSVC's `_CIsin` (0x68b8c0),
+  `_CIcos` (0x68b9f0), `_CIatan2` (0x68b86a) and `_CIsqrt` (0x68aec0),
+  where the port takes Rust's: equal after the store for `sqrt`, and for
+  the others INFERRED to agree to the float.
+- **The world.** Three worlds of 0x10110 at 0xd5ec6e0; `dWorldCreate`
+  (0x5b7350) writes gravity 0 (+0x10), ERP 0.2 (+0x20), CFM 1e-5
+  (+0x24), 20 iterations (+0x28) at over-relaxation 1.3 (+0x2c), the
+  reorder seed 0x89abcdef (+0x30), the contacts' most correcting
+  velocity `FLT_MAX` (+0x34) and surface layer 0 (+0x38), the sleep
+  thresholds `0.001f * 0.001f` (+0x3c, +0x40), idle time 0 (+0x44), 10
+  idle steps (+0x48) and sleep off (+0x4c). VERIFIED (the stores at
+  0x5b735f..0x5b73c1). IW's order puts the seed and the contact
+  parameters before the sleep test's, upstream's after. `Phys_Init`
+  then turns sleep on and zeroes the idle steps (0x5a2d83). VERIFIED
+  (the store). `dInfinity` is `FLT_MAX` (0x70af58, 0x70af5c). VERIFIED
+  (the floats).
+- **Per step.** `Phys_RunFrame` (0x5a6440) stores into the world before
+  its one island pass (0x5b9d40): `phys_cfm` (1e-4), `phys_erp` (0.8),
+  for world 2 `phys_mcv_ragdoll` (1000, the others `phys_mcv`) at
+  +0x34, `phys_csl` (1) at +0x38, `phys_qsi` (15) at +0x28, the squares
+  of `phys_autoDisableLinear` and `phys_autoDisableAngular` at +0x3c and
+  +0x40, `phys_autoDisableTime` at +0x44, and gravity `(0, 0,
+  phys_gravity)`. VERIFIED (the instructions). `Phys_PostStep` (0x5a6640)
+  then clears every awake body's force and torque, empties the contact
+  group and, in world 2, adds `avel * -0.01` (10.2): IW's stepper leaves
+  the accumulators as they are. VERIFIED (the instructions). The port:
+  `Params::ragdoll` (world 2 after `Phys_Init` and a frame at the dvars'
+  defaults), `World::zero_forces`, `World::empty_contacts`. The damping,
+  the 17..34 ms step scheduling (`Phys_RunToTime`, 0x5a6d50) and the
+  tunnel and bounds checks after a frame (0x5a6c10) are the glue's.
+- **Bodies.** `dBodyCreate` (0x5b6b10) takes a pooled body, upstream's
+  defaults, the world's sleep test, and puts it at the head of the
+  world's list; `dJointAttach` (0x5b72e0) puts the joint at the head of
+  each body's list, as upstream's; joint init (0x5b71b0) puts a joint at
+  the head of the world's. VERIFIED (the instructions). The island walk
+  visits in those orders, so the port keeps them. `dBodySetMass`
+  (0x5b6f70) inverts the inertia by a 3x3 Cholesky (0x5b6840, 0x5b6570,
+  0x5b6680) storing every assignment, and falls back to the identity;
+  `dBodySetRotation` (0x5b6ec0) goes through `dQfromR` (0x5b98b0),
+  `dNormalize4` and `dQtoR`. VERIFIED (the instructions). `dxStepBody`
+  (0x5b8380) moves the position, turns the quaternion by a finite
+  rotation when flag 1 is set (`sinc` at 0x5b8320 switching to `1 -
+  x^2 / 6` under 1e-4, the double at 0x70b178, with 1/6 a widened float,
+  0x70b600) and by `dWtoDQ` otherwise, and calls no `dGeomMoved` (IW
+  moves the geoms in `Phys_PostStep`). VERIFIED (the instructions). The
+  ragdoll's bodies run finite rotation (0x5b7170) with gravity on; the
+  finite rotation axis mode is not ported.
+- **Mass.** `dMassSetCappedCylinder` (0x5b5cd0) is upstream's with its
+  constants floats widened (pi 0x70b080, 4 pi / 3 0x70b258, 0.4
+  0x70b250, 1/12 0x70b240), the two masses stored and the inertia's
+  terms kept on the stack; `dMassAdjust` (0x5b5ec0) scales by a stored
+  ratio. VERIFIED (the instructions). For a capsule bone the ragdoll
+  calls it at density 1, direction 1, the length half the bone's, then
+  adjusts to the bone's mass, and moves the body to the capsule's middle
+  instead of translating the mass (0x5a56a0, 0x5a4ab0, 0x5a47c0).
+  VERIFIED (the calls).
+- **Joints.** No vtable: an int at joint +0x14 picks `getInfo1`
+  (0x5b5b30) and `getInfo2` (0x5b5bd0) through the tables at 0x5b5bb4
+  and 0x5b5c4c: 1 ball, 2 hinge, 4 contact, 6 a joint of six rows, 7
+  one of none, anything else the angular motor, which IW creates as 8. VERIFIED (the
+  tables, the creates). `getInfo2` writes `lo` and `hi` into the
+  interleaved 0x90 rows at `row * rowskip` (`rowskip` 0x24 floats),
+  `c`, `cfm` and `findex` by row. VERIFIED (0x5b3612..0x5b3663 and the
+  contact's).
+  - Ball (`setBall`, 0x5b2ab0) and its anchors (`setAnchors`, 0x5b2e30)
+    are upstream's, `k = fps * erp` stored. Hinge: `hingeGetInfo1`
+    (0x5b3840), `hingeGetInfo2` (0x5b38e0), its angle (0x5b30d0,
+    0x5b3010) storing the sine, the arctangent and the angle, init
+    0x5b3780. VERIFIED (the instructions).
+  - The limit motor: `limot.set` (0x5b3140) stores the stops without
+    upstream's order checks; `addLimot` (0x5b3250) reverses the motor's
+    force at the high stop when `vel` is 0 as well as when it is
+    positive (0x5b3403..0x5b3420), so the ragdoll's joint friction
+    (`vel` 0) presses into either stop where 0.5's pushed body 1 off the
+    high one. VERIFIED (the instructions). Later ODE has the same rule.
+    INFERRED (the 0.7 source).
+  - The angular motor: `amotorGetInfo1` (0x5b5680) keeps the Euler
+    angles local (IW's joint has no angle field), and its inlined limit
+    test reads an angle that is NaN as at the low stop; `amotorGetInfo2`
+    (0x5b5750) holds `ax1 x ax2`, `ax1` and `ax0 x ax1`; the axes
+    (0x5b5120), angles (0x5b52e0), reference vectors (0x5b55c0) and
+    `dJointSetAMotorAxis` (0x5b5860) are upstream's. VERIFIED (the
+    instructions). Only Euler mode is ported, the swivel's.
+  - The contact: `contactGetInfo1` (0x5b4270) is upstream's;
+    `contactGetInfo2` (0x5b4420) reads the most correcting velocity and
+    the surface layer from world +0x34 and +0x38 through a pointer the
+    stepper passes, and caps `k * depth` against the product before it
+    is stored. IW's create (0x5b7210) copies the surface and the geom
+    but not `fdir1`; the group (0x5b7270) empties last made first.
+    VERIFIED (the instructions).
+- **Islands** (0x5b9d40). The sleep test (0x5b9b70) is upstream's and
+  runs first; with the idle steps 0 it is time alone. The walk tags
+  bodies and joints as upstream's and wakes a body as it reaches it
+  (0x5b9e08). VERIFIED (the instructions). IW's split (0x5b9cc0) then
+  keeps at most 14 bodies, dropping the last, and drops one more body at
+  a time while 74 joints or more remain; a joint goes with a dropped
+  body (0x5b9f20, test 0x5b9c60) when its other end is dropped too or is
+  the world, and one to a kept body stays, its dropped end's index read
+  as 0, the island's first body. VERIFIED (the instructions). That the
+  last is a slip is INFERRED. Dropped bodies and joints are untagged, so
+  a later body in the list can start an island from them that step.
+  VERIFIED (the instructions). Each body's island index goes into its
+  joints (+0x24, +0x34) before the step (0x5b9e5d..0x5b9eb6). VERIFIED
+  (the instructions).
+- **QuickStep** (0x5b86e0). Upstream's, but: joints with no rows stay in
+  the list; the rows, `lambda` and the constraint forces start at 0
+  every step (0x5b8af1, 0x5b80bc), where 0.5 warm-starts from the last
+  step's `lambda * 0.9`; and after the forces it slows a body turning
+  faster than 40 rad/s to 39 (the doubles 1600 at 0x70b928 and 39 at
+  0x70b920) and one moving faster than `sqrt(1e12)` to 999900 (0x70b918,
+  0x70b910), the speed scaled after the solve, then steps it and clears
+  its disabled flag (0x5b93f5). VERIFIED (the instructions).
+- **SOR** (0x5b8080). Rows with `findex < 0` first in order, the rest
+  filled from the back, so in reverse (0x5b8297..0x5b82cb). On each
+  iteration with `(iter & 7) == 7`, `m` swaps of two drawn rows, each
+  draw the MSVC step `s * 0x343fd + 0x269ec3` on the world's seed
+  (through the pointer at 0xcc781cc, set at 0x5b870b) and the index
+  `((s >> 17) * m) >> 15` (`__allmul`, `__allshr`, 0x5b7ad0..0x5b7b7d);
+  the seed carries over every step since `Phys_Init`. Upstream 0.5
+  shuffles with `dRandInt` on `(iter & 7) == 0`. A one-body island runs
+  its own loop (0x5b7df0) that updates only body 0. A row's new `lambda`
+  takes `hi` when `new - hi`, stored, is not below 0, and `lo` over it
+  when `lo - new` is not below 0 (0x5b7cad..0x5b7d12). VERIFIED (the
+  instructions). Whether the reorder is IW's or a later ODE patch's is
+  INFERRED either way.
+- **For the glue** (phase 3, read here): the hinge is made at 0x5a7150
+  with `vel` 0, `fmax` the def's friction times 15, fudge 0.9,
+  `phys_joint_cfm`, `phys_joint_stop_cfm`, `phys_joint_stop_erp` and the
+  def's stops; the swivel at 0x5a7250 (ball) and 0x5a7510 (Euler motor,
+  axis 2 on the parent, axis 0 on the child, the same eight settings
+  per axis); every joint is made with the child bone first. The friction
+  update (0x5be780) rewrites them with `fmax` the friction times
+  `0.9 (1 - t)^2 + 0.1`, without the 15. VERIFIED (the instructions).
+  Which of the two a body's first step sees is not read.
+- **Tests** (`ode::tests`, ours): the reorder's draws from the init seed
+  against the formula by hand, SOR on a two-row LCP with a bound and on a
+  friction row, a capsule's mass against its closed form, a hinge
+  pendulum's period (2.016 s within 0.5%), a ball chain under -800
+  holding within 3% of a link, a hinge and an Euler motor resting on
+  their stops, friction pressing into either stop, a sliding contact
+  stopping in `v / (mu g)`, the sleep's 53rd step at 17 ms and the
+  14-body split. VERIFIED (the tests, ours). Let go level, the chain's
+  lower link whips past 39 rad/s and the clamp opens its ball by 1.4
+  units. VERIFIED (the run, ours). No retail capture gates the port yet.
+
 ## 11. The anim sampler
 
 - `DObjCalcAnim` (`cod4_lnxded` 0x81b4c8c) masks out the bones not asked

@@ -1,7 +1,7 @@
 //! Contains routines ported from the Open Dynamics Engine 0.5, Copyright (C) 2001-2004
 //! Russell L. Smith, under its BSD license (LICENSE-ODE-BSD.txt beside this file). See NOTICE.
 //!
-//! ODE's quaternion helpers the stepper calls (cod4-player-anims.md 10.3).
+//! ODE's quaternion helpers the stepper calls (cod4-player-anims.md 10.4).
 
 use super::math::{M3, Quat, V3};
 

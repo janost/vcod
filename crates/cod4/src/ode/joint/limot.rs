@@ -2,7 +2,7 @@
 //! Russell L. Smith, under its BSD license (LICENSE-ODE-BSD.txt beside this file). See NOTICE.
 //!
 //! The limit and motor of one rotational axis (`dxJointLimitMotor`): the
-//! hinge's and each angular motor axis's (cod4-player-anims.md 10.3).
+//! hinge's and each angular motor axis's (cod4-player-anims.md 10.4).
 
 use super::Info2;
 use crate::ode::body::Body;

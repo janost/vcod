@@ -2,7 +2,7 @@
 //! Russell L. Smith, under its BSD license (LICENSE-ODE-BSD.txt beside this file). See NOTICE.
 //!
 //! The hinge (type 2; `hingeGetInfo1` 0x5b3840, `hingeGetInfo2` 0x5b38e0),
-//! with one limit and motor about its axis (cod4-player-anims.md 10.3).
+//! with one limit and motor about its axis (cod4-player-anims.md 10.4).
 
 use super::ball::{set_anchors, set_ball};
 use super::limot::LimitMotor;

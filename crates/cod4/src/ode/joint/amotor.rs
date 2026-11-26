@@ -3,7 +3,7 @@
 //!
 //! The angular motor (IW's type 8; `amotorGetInfo1` 0x5b5680,
 //! `amotorGetInfo2` 0x5b5750) in Euler mode, the swivel's three limited,
-//! frictioned axes (cod4-player-anims.md 10.3).
+//! frictioned axes (cod4-player-anims.md 10.4).
 
 use super::limot::LimitMotor;
 use super::{Info1, Info2};
