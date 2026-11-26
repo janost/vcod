@@ -1020,3 +1020,112 @@ launches the mp40 with `item::launch`. Tests in `game::cod2_use`.
   (5.2 has what retail passes).
 - The handlers of the new builtins past 5.2's table are unread.
 - The contact test behind `svFlags` 0x20 and 0x40.
+
+## 7. The math builtins' rounding
+
+CoD 1.1d, 1.5b and UO round these differently from each other
+(cod11-gsc-object-model.md 9.3); this is CoD2 1.3's rule. The handlers,
+VERIFIED (`tools/re/dump_cod2_gsc.py`, `functions`):
+
+| Builtin | Handler | Callee |
+|---|---|---|
+| `sin`, `cos`, `tan` | 0x8113e16, 0x8113e48, 0x8113e7a | `tan`: sine and cosine 0x811861c |
+| `asin`, `acos`, `atan` | 0x8113ede, 0x8113f58, 0x8113fd2 | |
+| `int` | 0x811400a | |
+| `distance`, `distanceSquared` | 0x81140ce, 0x8114116 | 0x80a40ea, 0x80a4116 |
+| `length`, `lengthSquared` | 0x811415e, 0x811418c | 0x81187f0, 0x81187bc |
+| `vectorNormalize` | 0x8114288 | copy 0x8118698, then 0x80a4424 |
+| `vectorToAngles` | 0x81142ce | 0x80a4fe2 |
+| `anglesToUp`, `anglesToRight`, `anglesToForward` | 0x8114306, 0x811434e, 0x8114396 | 0x80a5226 |
+
+CoD2 has no `sqrt`, `abs`, `floor` or `ceil` builtin (VERIFIED, the same
+table). Every handler reads a float through `Scr_GetFloat` (0x8084968),
+which converts an int argument with `fildl` and stores it as a float
+(0x80849ac..0x80849ae), and returns one `fstps` into `Scr_AddFloat`
+(0x8085188) or a vector through `Scr_AddVector` (0x8085306). Where each
+rounds:
+
+- VERIFIED (the instructions), 0x8113e28..0x8113e38: `sin` multiplies the
+  float by the double `M_PI / 180` (0.017453292519943295, `.rodata`
+  0x815c078) on the stack, stores the product as a double for libm's `sin`
+  and stores the result. `cos` (0x815c080, libm's `cos`) is the same.
+- VERIFIED (the instructions), 0x8113e8c..0x8113ed4: `tan` stores the same
+  product (0x815c098) as a float, 0x811861c hands it to libm's `sin` and
+  `cos` as a double and stores each as a float, and the handler divides
+  the sine by the cosine on the stack. A cosine of 0 is `divide by 0`
+  (0x815c088).
+- VERIFIED (the instructions), 0x8113ef0..0x8113f47: `asin` refuses a
+  value under -1 (the float at 0x815c0b0) or over 1 with `%g out of range`
+  (0x815c0a0), stores libm's `asin` as a float, multiplies it by the
+  double `180 / M_PI` (57.29577951308232, 0x815c0b8) on the stack and
+  stores that. `acos` (0x8113f6a..0x8113fc1, 0x815c0c8) is the same, and
+  `atan` (0x8113fe4..0x8113ffa, 0x815c0d0) without the range check.
+- VERIFIED (the instructions), 0x80a40ea, 0x80ab14c, 0x80ab2fe, 0x80aaebe:
+  `distance` stores each difference as a float, sums the squares on the
+  stack, stores the sum as a float and returns libm's `sqrt` of it,
+  stored as a float. `length` (0x81187f0, then 0x811882e) roots its sum
+  the same way. 1.5b and UO hand the sum to `sqrt` unrounded, as a double.
+- VERIFIED (the instructions), 0x80a4116 and 0x81187bc: `distanceSquared`
+  and `lengthSquared` leave the sum on the stack; the handler's store is
+  the one rounding, 1.5b's shape.
+- VERIFIED (the instructions), 0x80a4424..0x80a44b4: `VectorNormalize`
+  stores the squares' sum, the length and `1 / length` each as a float and
+  multiplies each component by the stored reciprocal, the shape of 1.5b's
+  0x32f73. A length that stores as 0 leaves the vector as it went in
+  (0x80a4475), so a vector whose squares underflow a float comes back
+  unnormalized.
+- VERIFIED (the instructions), 0x80a4fe2..0x80a511f: `vectoangles` checks
+  `y` and then `x` against 0; both 0 gives yaw 0 and pitch 270 when `z > 0`,
+  else 90 (0x43870000, 0x42b40000). Otherwise each angle is libm's `atan2`
+  times 180 (-180 for the pitch, 0x814d0b0, 0x814d0c8) over the double pi
+  (0x814d0b8) on the stack, stored as a float, and 360 (0x814d0c0) added
+  when it is negative; a -0 stays -0. The flat length is 0x80aaebe's root
+  of `x*x + y*y` stored as a float (0x80a50ae).
+- VERIFIED (the instructions), 0x80a5226..0x80a539b: `AngleVectors` turns
+  each angle to radians by the double at 0x814d0e8 (`M_PI / 180`), stores
+  them as floats, and takes each sine and cosine from libm through
+  0x80aaf80, stored as floats. Each component's products and sum stay on
+  the stack until one store (`-sr * sp * cy + cr * sy` at
+  0x80a52fc..0x80a530f), the rounding `x87::angle_vectors` models for the
+  CoD1 Linux builds.
+- VERIFIED (the instructions), 0x811405d..0x8114072: `int` of a float is
+  `fistpl` under the control word `| 0xc00` (truncate). A float at or
+  past 2^31 in size, an infinity or a NaN stores the integer indefinite,
+  -2147483648.
+
+INFERRED: which libm answers is the host's 32-bit glibc, loaded at run
+time; the capture below is the libm of the machine it ran on, and its
+`sin(180)` matches 1.5b's and UO's libm to the bit. The process runs the
+x87 at its default 64-bit precision: the binary's `fldcw` sites are the
+truncation idiom above (INFERRED, a sample of them read).
+
+VERIFIED, live (retail `cod2_lnxded` 1.3 on mp_toujane, 2026-11-26,
+`crates/server/tests/fixtures/cod2/probe_math.gsc` through
+`tools/run_probe_cod2_gsc.sh`, 61 lines in
+`crates/server/tests/fixtures/cod2/probe_math.txt`): the lines of CoD1's
+`probe_math` plus the CoD2 cases. Against a float at every step, what vcod
+ran before:
+
+| Line | Call | CoD2 | Every step a float |
+|---|---|---|---|
+| `dsq_one_round` | `distanceSquared((0,0,0), (4096,1,1))` | 2^24 + 2 | 2^24 |
+| `norm_a` | `vectorNormalize((0,0,1234.5))[2]` | 1 - 2^-24 | 1 |
+| `norm_tinier` | `vectorNormalize((1e-23,0,0))[0]` | 1e-23 | 0 |
+| `right_a` | `anglesToRight((30,45,60))[0]` | 12715019p-28 | 12715016p-28 |
+| `asin_small` | `asin(0.001)` | 15380221p-28 | 15380222p-28 |
+| `int_huge` | `int(3000000000.0)` | -2147483648 | 2147483647 |
+| `int_inf` | `int(inf)` | -2147483648 | 2147483647 |
+| `int_nan` | `int(inf - inf)` | -2147483648 | 0 |
+
+`dist_one_round` and `len_one_round` log 4096 where 1.5b and UO log
+4096 + 2^-11: the sum 2^24 + 2.25 stores as 2^24 + 2 before the root.
+`sin`, `cos` and `tan` logged the bits 1.5b and UO log for every shared
+line, `sin(36000)` and `sin(1e24)` included. `len_tinier` and
+`dist_tinier` (a component of 1e-23) log 0, where 1.5b's double sum would
+root to 1e-23 (INFERRED from 1.5b's instructions, not run).
+
+vcod: `MathRounding::Cod2` on the CoD2 profile (`builtins::math`):
+`root` takes the float sum, `vectoangles_cod2`, `cod2_radians` and
+`cod2_degrees`, `x87::normalize_stored` and `x87::angle_vectors`;
+`builtins::cod2::cast_int` stores the integer indefinite. `semantics_ents`'s
+`probe_math_matches_retail_cod2` replays the capture.

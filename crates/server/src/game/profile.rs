@@ -499,7 +499,7 @@ pub static COD2: HostProfile = HostProfile {
     head_icon_spectator: false,
     model_change_updates_client: false,
     closer: CloserRounding::Floats,
-    math: MathRounding::Float,
+    math: MathRounding::Cod2,
 };
 
 /// CoD2's and CoD4's combat rules: 1.1's where the CoD1 code reads them.
