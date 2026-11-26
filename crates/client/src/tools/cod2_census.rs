@@ -7,8 +7,8 @@
 //! frame, as a PPM, and each map's warnings under `VCOD_CENSUS_OUT`
 //! (default `tmp/cod2-map-census` at the workspace root).
 //!
-//! `COD2_DIR=... cargo run -p vcod --features testing --example
-//! client_tools -- cod2_map_census`.
+//! With `COD2_DIR=...` set:
+//! `cargo run -p vcod --features testing --example client_tools -- cod2_map_census`.
 //! The frames need an adapter with BC textures; under lavapipe set
 //! `VK_DRIVER_FILES`, `WGPU_BACKEND=vulkan` and `GALLIVM_PERF=nopt`, and
 //! run it `nice`d. `VCOD_CENSUS_MAPS=mp_a,mp_b` limits the maps,

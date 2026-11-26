@@ -7,9 +7,9 @@
 //! draws each `vcod --net-probe ADDR --game cod2` HUD dump
 //! (`VCOD_COD2_HUD_DUMP`) to `<a.quads>.ppm` at 1280 x 720.
 //!
-//! Each is a `client_tools` run: `COD2_DIR=... VCOD_HUD_SHOT=<out> cargo
-//! run -p vcod --features testing --example client_tools --
-//! cod2_player_hud_shot`.
+//! Each is a `client_tools` run, with `COD2_DIR=...` and
+//! `VCOD_HUD_SHOT=<out>` set:
+//! `cargo run -p vcod --features testing --example client_tools -- cod2_player_hud_shot`.
 
 use super::*;
 use vcod_common::asset_source::AssetSource;

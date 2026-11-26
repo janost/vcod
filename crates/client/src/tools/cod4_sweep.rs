@@ -16,8 +16,9 @@
 //! table, then every distinct error and warning ranked by count) and
 //! `warnings.txt` under `VCOD_SWEEP_OUT` (default `tmp/cod4-map-sweep`).
 //!
-//! `COD4_DIR=... cargo run -p vcod --features testing --example
-//! client_tools -- cod4_map_sweep` (it installs the process's logger). Under
+//! With `COD4_DIR=...` set:
+//! `cargo run -p vcod --features testing --example client_tools -- cod4_map_sweep`
+//! (it installs the process's logger). Under
 //! lavapipe set `VK_DRIVER_FILES`, `WGPU_BACKEND=vulkan`,
 //! `GALLIVM_PERF=nopt`; without an adapter the client steps its session
 //! only. `VCOD_SWEEP_MAPS=mp_a,mp_b`, `VCOD_SWEEP_GAMETYPES=war,dm`,

@@ -1,5 +1,6 @@
-//! The client's tools (`vcod::tools`), one per run: `cargo run -p vcod
-//! --features testing --example client_tools -- <tool>`. Each tool's doc
+//! The client's tools (`vcod::tools`), one per run:
+//! `cargo run -p vcod --features testing --example client_tools -- <tool>`.
+//! Each tool's doc
 //! names its environment (docs/dev/testing.md, "Client tools").
 
 use vcod::tools;
