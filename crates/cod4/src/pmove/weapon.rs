@@ -93,6 +93,9 @@ pub mod ev {
     pub const FIRE_MELEE: u32 = 31;
     pub const PREP_OFFHAND: u32 = 32;
     pub const USE_OFFHAND: u32 = 33;
+    /// The server's (cod4-combat.md 6, 10.4).
+    pub const ITEM_PICKUP: u32 = 9;
+    pub const MELEE_BLOOD: u32 = 37;
     pub const SWITCH_OFFHAND: u32 = 34;
     pub const GRENADE_SUICIDE: u32 = 62;
     pub const NO_FRAG_GRENADE_HINT: u32 = 67;
@@ -415,6 +418,14 @@ impl WeaponDef {
 }
 
 impl WeaponDef {
+    /// `G_FireGrenade`'s fuse arm (`cod4_lnxded` 0x8094595..0x80945c8): a
+    /// grenade thrown with `fuse` is timed, and its thrower's
+    /// `grenadeTimeLeft` goes to 0, unless it arms by distance
+    /// (`projectileActivateDist`, +0x574) with no fuse of its own.
+    pub fn takes_fuse(&self, fuse: i32) -> bool {
+        self.projectile_activate_dist == 0 || fuse > 0
+    }
+
     /// [`WeaponDef::from_raw`] of a loaded weapon, a zone's or a weapon
     /// file's, with what its strings say.
     pub fn of(w: &crate::assets::weapon::Weapon) -> Option<WeaponDef> {
@@ -498,6 +509,23 @@ impl super::PlayerState {
     pub fn has_weapon(&self, w: u32) -> bool {
         bit(&self.weapons, w)
     }
+}
+
+/// `Touch_Item` on a dropped `weapon` (def `d`) that `ps` holds: the item's
+/// `rounds` (its clip and stock) into the reserve up to `maxAmmo`, and
+/// `EV_ITEM_PICKUP` with the weapon when any went in (cod4-combat.md 6).
+/// Whether any did.
+pub fn take_ammo(ps: &mut super::PlayerState, d: &WeaponDef, weapon: u32, rounds: i32) -> bool {
+    let Some(&have) = ps.ammo.get(d.ammo_index) else {
+        return false;
+    };
+    let after = (have + rounds.max(0)).min(d.max_ammo.max(have));
+    if !ps.has_weapon(weapon) || after == have {
+        return false;
+    }
+    ps.ammo[d.ammo_index] = after;
+    ps.add_event(ev::ITEM_PICKUP, weapon);
+    true
 }
 
 fn clip(ps: &super::PlayerState, d: &WeaponDef) -> i32 {

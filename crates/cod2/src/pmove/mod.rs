@@ -48,6 +48,33 @@ pub fn vec3_normalize_to(v: Vec3) -> Vec3 {
     fpu::normalize_to(v).0
 }
 
+/// `PlayerCmd_finishPlayerDamage`'s knockback (`cod2_lnxded`
+/// 0x80fb390..0x80fb518, cod2-combat.md 4): `damage` times 0.02 prone, 0.15
+/// crouched, 0.3 standing, truncated off the x87 product, at most 60; none
+/// on a turret (`eFlags` 0x300). `dir` (normalized) times `knock *
+/// g_knockback / 250`, stored once, joins the velocity, and with no timer
+/// running `pm_time` takes `2 knock` in 50..200 under `PMF_TIME_KNOCKBACK`.
+/// The server's write, outside pmove.
+pub fn knock_back(ps: &mut PlayerState, damage: i32, dir: Vec3, g_knockback: f32) {
+    let scale: f32 = if ps.pm_flags & pmf::PRONE != 0 {
+        0.02
+    } else if ps.pm_flags & pmf::DUCKED != 0 {
+        0.15
+    } else {
+        0.3
+    };
+    let knock = ((f64::from(scale) * f64::from(damage)) as i32).min(60);
+    if knock == 0 || ps.e_flags & 0x300 != 0 {
+        return;
+    }
+    let push = (f64::from(knock) * f64::from(g_knockback) / 250.0) as f32;
+    ps.velocity += dir * push;
+    if ps.pm_time == 0 {
+        ps.pm_time = (knock * 2).clamp(50, 200);
+        ps.pm_flags |= pmf::TIME_KNOCKBACK;
+    }
+}
+
 /// `groundEntityNum` off the ground.
 pub const ENTITYNUM_NONE: i32 = 1023;
 
