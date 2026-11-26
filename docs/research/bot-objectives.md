@@ -2955,12 +2955,70 @@ takes the "Left" item of 10.13: no plan read another vehicle.
 - mp_kharkov's vehicle kills fall from 180 to 142 under each variant
   (its shell kills 161 to 130), two standard deviations of the
   difference (a row's sum spreads by about 14); mp_cassino's rise from
-  1387 to 1411. Not traced: the variant that leaves enemy hulls out did
-  not bring them back. Open.
+  1387 to 1411. Traced: the drop does not reproduce on other
+  seeds, and nothing in the hulls' play moves with it (10.16.1).
+  Closed.
 - The cost: a loop over the live vehicles at a node's first pop, and the
   detours' extra expansions. Not timed.
 - Left: a yield for a moving vehicle met on the way, which the plan sees
   only where it stood. Open.
+
+### 10.16.1 mp_kharkov's vehicle kills under the cost, 2026-11-26
+
+- Measured as 10.16, at master 012b9fd21, the cost at 0 and at 2 steps
+  on the same seeds, three more sets of 120 seeds after 10.16's (a
+  temporary measuring arm, taken out before the commit). The 1 to 239
+  rows give 10.16's 740 and 180, 770 and 142 again, so a game replays
+  from its seed. VERIFIED (the runs).
+
+  | seeds, odd | vehicle kills, 0 → 2 | shell kills, 0 → 2 |
+  |---|---|---|
+  | 1 to 239 | 180 → 142 | 161 → 130 |
+  | 241 to 479 | 137 → 127 | 126 → 118 |
+  | 481 to 719 | 151 → 162 | 132 → 139 |
+  | 721 to 959 | 171 → 152 | 153 → 135 |
+  | 241 to 959 | 459 → 441 | 411 → 392 |
+  | all 480 | 639 → 583 | 572 → 522 |
+
+  The seed-by-seed difference of a 120-game row's sum spreads by about
+  14 (one standard deviation). The three new sets together fall by 18,
+  under one deviation of their sum (about 25); 10.16's 180 is the
+  highest of the four rows at cost 0, which run 137 to 180. VERIFIED (the
+  table).
+- What the hulls did, all 480 games, cost 0 → 2. "Enemy hull in reach"
+  counts a tank driver's bot-ticks whose `BotView::armor` (the nearest
+  enemy-crewed hull in a clear line) stands within `GUN_RANGE` (3000);
+  "enemy on foot in reach" the same for `BotView::enemy`; "shells" are
+  `launch_shell` calls; "shell hits on a hull" are `vehicle_damage` calls
+  past the immunity with a `MOD_PROJECTILE` means and a seated attacker,
+  not splash. VERIFIED (the runs):
+
+  | | 0 | 2 |
+  |---|---|---|
+  | tank driver bot-ticks | 1 832 340 | 1 862 478 |
+  | enemy hull in reach | 46 530 | 50 680 |
+  | enemy on foot in reach | 85 683 | 84 830 |
+  | units driven | 15 747 488 | 15 881 319 |
+  | shells | 1416 | 1322 |
+  | shell hits on a hull | 491 | 430 |
+  | shell kills per shell | 0.40 | 0.39 |
+  | shell kills of a victim on foot | 479 | 443 |
+  | stuck drivers | 8 | 11 |
+  | plans | 22 740 | 22 183 |
+
+  The hulls meet enemy armour as often or more, drive as far, and kill
+  as much per shell; the kills follow the shells fired, whose drop
+  (paired z 1.4) is inside the spread like the kills' own.
+- The plans, read in the same game state: after each plan with the cost
+  the arm ran the same `plan_route` with no other hulls, on a copy of
+  the rng. Of 22 183 plans, 5720 (26 %) took another route; those ran
+  43 units longer on average, 0.2 % over all routes. No plan reached
+  the 30 000 expansions (`PLAN_EXPANSIONS`) either way, and none the
+  cost lost or found. VERIFIED (the runs). So the cost blocks no street
+  or bridge on mp_kharkov and sends no hull the long way round; it
+  shifts a quarter of the routes by about a grid step.
+- Kept at 2 steps. Not excluded: a drop under 5 % (the three new sets
+  give 3.9 %, at their spread), which 360 games a row cannot resolve.
 
 ## 11. CoD2's `sd`, `ctf` and `hq`
 
