@@ -149,7 +149,7 @@ pub struct GunnerPlacement {
     /// each row's goal weight and its leaves (animtree node ids) with theirs,
     /// the rows' weights and each row's leaves' summing to 1. The tree walk
     /// normalizes each row to its weight before the group sums them
-    /// (cod11-turrets.md 13.9, "The rows").
+    /// (cod11-turrets.md 13.9.3).
     pub rows: Vec<TurretRow>,
     /// The rows the search's first pass weighted and walked past, before
     /// [`Self::rows`] in engine child order, with that pass's goals: 1 and
@@ -351,7 +351,7 @@ impl GroupWeights {
 /// step, and [`Self::rows`] what a pose reads in between. A row or leaf the
 /// placement drops keeps its weight until the next step, and one it adds
 /// stands at 0.001 times its first pass's goal until then
-/// (cod11-turrets.md 13.9, "The weights across frames").
+/// (cod11-turrets.md 13.9.4).
 #[derive(Clone, Debug, Default)]
 pub struct GunnerTree {
     groups: Vec<GroupWeights>,

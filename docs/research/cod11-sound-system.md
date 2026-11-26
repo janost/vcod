@@ -104,23 +104,23 @@ Rows that share a name across csvs meet in the sort (section 1e).
 
 ### 1b. Columns
 
-`VERIFIED`. The header row is bound by name, case-insensitively
+VERIFIED (the decompilation). The header row is bound by name, case-insensitively
 (`FUN_0044aa90`, a `stricmp`), against the 16-entry table at
 `CoDMP.exe 0x57aca8` (index 1..16): `name, sequence, file, subtitle, vol_min,
 vol_max, pitch_min, pitch_max, dist_min, dist_max, channel, type, loop,
-probability, loadspec, masterslave`. Unknown column names are ignored; up to
-256 columns. `name` and `file` columns are required (`"Sound alias file %s:
-missing 'name' and/or 'file' columns\n"` @ `0x563534`). Data rows whose first
+probability, loadspec, masterslave`. VERIFIED (the decompilation): unknown column names are ignored; up to
+256 columns. VERIFIED (the string): `name` and `file` columns are required (`"Sound alias file %s:
+missing 'name' and/or 'file' columns\n"` @ `0x563534`). VERIFIED (the decompilation): data rows whose first
 cell is empty or starts with `#` are skipped (`FUN_004333d0` tests the row's
 first byte for `#`); a row with either name or file empty is rejected
-(`0x5634f8`). `FUN_00432eb0` @ `0x432eb0` parses cells, **only non-empty
+(`0x5634f8`). VERIFIED (the decompilation): `FUN_00432eb0` @ `0x432eb0` parses cells, **only non-empty
 ones** (`FUN_004333d0` tests the cell's first byte before the call), so a
-blank cell keeps the per-row default. A column
+blank cell keeps the per-row default. VERIFIED (the string): a column
 appearing twice in one row is an error (`0x563774`).
 
 ### 1c. Defaults and validation
 
-`VERIFIED`. Per-row defaults are written by `FUN_00432ad0` @ `0x432ad0` into
+VERIFIED (the decompilation). Per-row defaults are written by `FUN_00432ad0` @ `0x432ad0` into
 the parse struct (offsets in that struct in parentheses):
 
 | Column | Default | Struct |
@@ -140,7 +140,7 @@ the parse struct (offsets in that struct in parentheses):
 | `sequence` | `0` | `+0x1080` |
 | `subtitle` | empty | `+0x80` |
 
-After the last cell of a row, `FUN_00433190` @ `0x433190` fixes it up, in this
+VERIFIED (the decompilation): after the last cell of a row, `FUN_00433190` @ `0x433190` fixes it up, in this
 order:
 
 1. if `pitch_max < pitch_min` swap them; warn if `pitch_min <= 0`
@@ -153,11 +153,11 @@ order:
    min`); the values are **not** changed;
 5. warn if `dist_min <= 0` (`0x563570`).
 
-So a row with both blank plays full volume to 120 units, fades linearly to
+INFERRED (from the fix-up order and section 3): a row with both blank plays full volume to 120 units, fades linearly to
 silence at 600 and is not started beyond 600 (section 3). That is why
 `MP_announcer_*` rows use `dist_min = 1000000`.
 
-Keyword parsers, all `stricmp`: `channel` (`FUN_00432b80` @ `0x432b80`) walks
+VERIFIED (the decompilation): keyword parsers, all `stricmp`: `channel` (`FUN_00432b80` @ `0x432b80`) walks
 the 10-entry table at `0x57acec` (section 2) and errors on anything else
 (`"Unknown sound channel '%s'; should be %s"` @ `0x5638d0`, the list built from
 the table itself). `type` (`FUN_00432c70` @ `0x432c70`): `"streamed"`
@@ -287,47 +287,47 @@ is per alias, not per entity.
 
 ### 1f. `null.wav`
 
-`VERIFIED` (absence). Nothing in the loader, pick or play path tests for
+VERIFIED (absence in the decompilation). Nothing in the loader, pick or play path tests for
 `null.wav` (the only special-cased file name is `temp.wav`, in the
 "used as streamed in alias '%s' and loaded in alias '%s'" warning of
-`FUN_00433c20`). `sound/null.wav` is a real 22094-byte file in `pak1.pk3`
-(so is `null2.wav`). A `null.wav` row is picked like any other, holds a voice
-and plays silence. The `whizby` group's `!airfield` rows 1-15 are real files
-and row 16 is `null.wav` with `probability 5`, so one whiz-by in four is
+`FUN_00433c20`). VERIFIED (the pak): `sound/null.wav` is a real 22094-byte file in `pak1.pk3`
+(so is `null2.wav`). INFERRED (from the absence above): a `null.wav` row is picked like any other, holds a voice
+and plays silence. VERIFIED (the csv): the `whizby` group's `!airfield` rows 1-15 are real files
+and row 16 is `null.wav` with `probability 5`. INFERRED: so one whiz-by in four is
 silent.
 
 ---
 
 ## 2. Channels
 
-`VERIFIED`. The pointer table at `CoDMP.exe 0x57acec` holds 10 names, in this
+VERIFIED (the table): the pointer table at `CoDMP.exe 0x57acec` holds 10 names, in this
 order: `0 auto, 1 menu, 2 weapon, 3 voice, 4 item, 5 body, 6 local, 7 music,
 8 announcer, 9 shellshock` (strings `0x563af4`, `0x563b90`, `0x560f78`,
 `0x563aec`, `0x563ae4`, `0x563adc`, `0x563ad4`, `0x563acc`, `0x563ac0`,
 `0x563ab4`). Index = record `+0x2c`.
 
-Every voice decision keys on the index with the same test:
+VERIFIED (the decompilation): every voice decision keys on the index with the same test:
 `channel == 1 || (6 <= channel && channel <= 9)`.
 
-- **2D channels** `menu, local, music, announcer, shellshock`: played as
+- **2D channels** `menu, local, music, announcer, shellshock`. VERIFIED (the decompilation): played as
   plain Miles samples (`FUN_0044ced0` @ `0x44ced0` routes them to `FUN_0044c980`
   @ `0x44c980`) at pan `0.5`, no distance cull, no falloff, no entity tracking
   (`FUN_0044c040` @ `0x44c040` zeroes the entity offset for them).
-- **3D channels** `auto, weapon, voice, item, body`: Miles 3D samples
+- **3D channels** `auto, weapon, voice, item, body`. VERIFIED (the decompilation): Miles 3D samples
   (`FUN_0044cb90` @ `0x44cb90`), distance-culled at start, linear falloff, and
   they follow their entity (section 3). Streamed aliases on 3D channels are 2D
   streams with engine-computed volume and pan (section 10).
 
-Voice pools (init in `FUN_0044ba30` @ `0x44ba30` and `FUN_0044bb70` @
+VERIFIED (the decompilation): voice pools (init in `FUN_0044ba30` @ `0x44ba30` and `FUN_0044bb70` @
 `0x44bb70`): 32 3D samples (`DAT_008e1b70 = 0x20`), 32 2D samples
 (`DAT_008e1b6c = 0x20`, slot indices `0x2d..`), 13 streams (`DAT_008e1b74 =
 0xd`, slot indices `0x20..0x2c`); stream slots 0-4
 are reserved (music in slot 0, the two ambient crossfade slots 1 and 2
 toggled by `DAT_008e083c = 3 - DAT_008e083c` in `FUN_0044dc80`), general
 streams start at 5 (`FUN_0044c720` @ `0x44c720` starts its scan at 5).
-Inferred from the slot arithmetic; no use of slots 3-4 is known (open item 7).
+INFERRED from the slot arithmetic: no use of slots 3-4 is known (open item 7).
 
-**Replacement rule.** `FUN_0044d670` @ `0x44d670` (the common start path)
+**Replacement rule.** VERIFIED (the decompilation): `FUN_0044d670` @ `0x44d670` (the common start path)
 calls `FUN_0044c7e0(entnum, channel)` @ `0x44c7e0` **only when the channel
 index is non-zero**. That function ends every playing 3D sample, 2D sample and
 stream whose stored entity number and channel index both match (a finished
@@ -338,14 +338,14 @@ command). **`auto` never replaces anything.** Two `ENTITYNUM_WORLD` (1022)
 sounds on one non-auto channel replace each other too (`bomb_tick` is
 `voice`; explosions and impacts are `auto`).
 
-**Looping dedupe.** Before allocating a voice, `FUN_0044d250` @ `0x44d250`
+**Looping dedupe.** VERIFIED (the decompilation): before allocating a voice, `FUN_0044d250` @ `0x44d250`
 scans all three pools for a voice with the same entity number, the same alias
 name pointer and the alias `loop` byte set; if found it refreshes that voice's
 volume, pitch and frame stamp and starts nothing. That lets "play the loop
 alias every frame" (section 9) run without restarts. Non-looping aliases are
 never deduped.
 
-**Voice stealing.** When no voice is free, `FUN_0044c350` @ `0x44c350`
+**Voice stealing.** VERIFIED (the decompilation): when no voice is free, `FUN_0044c350` @ `0x44c350`
 picks a victim among voices whose channel index is `<=` the new sound's
 channel index (an `auto` sound can only steal from `auto`; `body` can steal
 from `auto..body`). Among candidates it prefers a voice already owned by the
@@ -366,22 +366,20 @@ target (`0x44e8b6`).
 
 ## 3. Distance falloff and panning
 
-`VERIFIED` (decompilation of both the start and the per-frame paths).
-
-**Listener.** cgame `FUN_30033980` @ `0x30033980` (view setup) calls syscall
+**Listener.** VERIFIED (the decompilation): cgame `FUN_30033980` @ `0x30033980` (view setup) calls syscall
 `0xd1` with `(cg.snap->ps.clientNum, &cg.refdef.vieworg, &cg.refdef.viewaxis)`
 (`DAT_301e2160 + 0xb8`, `&DAT_30209594`, `&DAT_302095a0`); the engine
 (`FUN_0044bd60` @ `0x44bd60`) stores origin at `0x8e0850`, the 3x3 axis at
 `0x8e085c` (`axis[0]` forward, `axis[1]` left, `axis[2]` up, Q3 convention) and
 the entity number at `0x8e0880`. The entity number is never used by the
-spatializer (section 5).
+spatializer (section 5; VERIFIED, absence in the decompilation).
 
-**Start-time cull.** `FUN_0044d670` @ `0x44d670`: for 3D channels, if
+**Start-time cull.** VERIFIED (the decompilation): `FUN_0044d670` @ `0x44d670`: for 3D channels, if
 `|origin - listener| > dist_max` the sound is **not started** and the call
-returns 0. There is no later cull; a sound that starts in range keeps playing
+returns 0. INFERRED (no other cull found): there is no later cull; a sound that starts in range keeps playing
 (at zero volume beyond `dist_max`) even if it moves away.
 
-**Volume at start** (`FUN_0044cb90` @ `0x44cb90`) and **every frame**
+**Volume at start** VERIFIED (the decompilation, both the start and the per-frame paths) (`FUN_0044cb90` @ `0x44cb90`) and **every frame**
 (`FUN_0044eea0` @ `0x44eea0`, called per active 3D voice from `S_Update` =
 `FUN_0044f210` @ `0x44f210`):
 
@@ -400,17 +398,17 @@ v     = (vol_min + rand01 * (vol_max - vol_min)) * 0.8     // _DAT_00568f18 = 0.
 pitch =  pitch_min + rand01 * (pitch_max - pitch_min)       // playback rate = file rate * pitch
 ```
 
-(`rand01 = rand() / 32768`, `_DAT_00568e98 = 1/32768`). The `0.8` is
-unconditional; a `vol_min 1` alias plays at 80% of Miles full scale before the
+(`rand01 = rand() / 32768`, `_DAT_00568e98 = 1/32768`). VERIFIED (the decompilation): the `0.8` is
+unconditional. INFERRED: a `vol_min 1` alias plays at 80% of Miles full scale before the
 `s_volume` and per-channel multipliers. `s_volume` is `DAT_008e078c`.
 
-Then `AIL_set_3D_sample_distances(sample, dist_max, dist_max)` (in
+VERIFIED (the calls): `AIL_set_3D_sample_distances(sample, dist_max, dist_max)` (in
 `FUN_0044cb90` @ `0x44cb90`) and `AIL_set_3D_distance_factor(provider,
-0.0254)` at init (float constant `0x3cd013a9`, inches to metres) mean Miles applies **no**
-rolloff of its own inside `dist_max`. The curve is the engine's linear one
-above; there is no dB or inverse-square component.
+0.0254)` at init (float constant `0x3cd013a9`, inches to metres). INFERRED: Miles applies **no**
+rolloff of its own inside `dist_max`; the curve is the engine's linear one
+above, with no dB or inverse-square component.
 
-Worked examples (scale only, `v` and multipliers excluded):
+Worked examples, INFERRED (the csv rows put through the formula above; scale only, `v` and multipliers excluded):
 
 | Alias | `dist_min` / `dist_max` | d=0 | d=min | midpoint | d=max | beyond |
 |---|---|---|---|---|---|---|
@@ -421,21 +419,21 @@ Worked examples (scale only, `v` and multipliers excluded):
 | `bomb_tick` (`1200`, blank) | 1200 / 6000 | 1.0 | 1.0 | d=3600: 0.5 | 0.0 | not started |
 | `land_dirt` | 80 / 120 | 1.0 | 1.0 | d=100: 0.5 | 0.0 | not started |
 
-**Position and pan for 3D samples.** `FUN_0044bf70` @ `0x44bf70` gives Miles
+**Position and pan for 3D samples.** VERIFIED (the decompilation): `FUN_0044bf70` @ `0x44bf70` gives Miles
 the emitter in listener space: `x = -(rel . axis[1])` (right), `y = rel .
-axis[2]` (up), `z = rel . axis[0]` (forward), `rel = emitter - listener`. Miles
-does the panning from that; the engine does not compute a pan for 3D samples.
-The listener orientation is not separately set (Miles' default listener looks
-down +z), which is why the engine rotates the emitter instead.
+axis[2]` (up), `z = rel . axis[0]` (forward), `rel = emitter - listener`. INFERRED: Miles
+does the panning from that, and the engine does not compute a pan for 3D samples.
+VERIFIED (absence in the decompilation): the listener orientation is not separately set. INFERRED: Miles' default listener looks
+down +z, which is why the engine rotates the emitter instead.
 
-**Pan for positional streams** (`FUN_0044c240` @ `0x44c240`, asm
+**Pan for positional streams** VERIFIED (the asm) (`FUN_0044c240` @ `0x44c240`, asm
 `0x44c27d..0x44c348`): `u = normalize(emitter - listener)`,
 `pan = (1 - u . axis[1]) * 0.5` (`_DAT_00568e70 = 0.5`), so a source straight
 left gives `0.0` (Miles full left), straight right `1.0`, ahead or behind `0.5`.
 No front/back cue. Volume uses the same linear `scale`. Updated per frame by
 `FUN_0044f100` @ `0x44f100`.
 
-**Entity tracking.** When a 3D-channel sound starts with an entity number
+**Entity tracking.** VERIFIED (the decompilation): when a 3D-channel sound starts with an entity number
 below `0x400`, `FUN_0044c040` @ `0x44c040` asks the cgame for that entity's
 origin and axis (`VM_Call(cgvm, 0xd, entnum, &origin, &axis)` =
 `FUN_00460480`) and stores the start position as an offset in entity space; each
@@ -448,40 +446,38 @@ where it started; `ENTITYNUM_WORLD` (1022) is a static frame.
 
 ## 4. `masterslave`
 
-`VERIFIED`. Once per `S_Update` (`FUN_0044f210` @ `0x44f210`), `DAT_008e088c =
-FUN_0044ed60()` @ `0x44ed60`, which is 1 when **any** voice in any pool is
-still playing an alias whose master byte (`+0x35`) is set. Then for every voice
+VERIFIED (the decompilation): once per `S_Update` (`FUN_0044f210` @ `0x44f210`), `DAT_008e088c =
+FUN_0044ed60()` @ `0x44ed60`. INFERRED (no address range read): that call is 1 when **any** voice in any pool is
+still playing an alias whose master byte (`+0x35`) is set. INFERRED (no address range read): for every voice
 whose alias has the slave byte (`+0x36`) set, the per-frame volume is
 `min(scale * v, slaveLevel)` before the `s_volume` and channel multipliers
 (`FUN_0044eea0` for 3D samples, `FUN_0044f070` @ `0x44f070` for 2D samples,
-`FUN_0044f100` for streams). `slaveLevel` is record `+0x38`, the csv number.
-A numeric row does nothing while no master plays; a `master` row is not
-changed. When two aliases are blended (syscall `0xc3`), the level is
+`FUN_0044f100` for streams). VERIFIED (the decompilation): `slaveLevel` is record `+0x38`, the csv number.
+INFERRED: a numeric row does nothing while no master plays, and a `master` row is not
+changed. VERIFIED (the decompilation): when two aliases are blended (syscall `0xc3`), the level is
 the blend of both records' levels, and `FUN_0044d800` @ `0x44d800` refuses blends
 whose master/slave status, channel, type, loop or file differ (warnings
 `0x55f6c0..0x55f9a0`).
 
-Retail MP relevance: `iw_sound.csv` has 10 `master` rows, all SP ambients or
+Retail MP relevance: VERIFIED (the csv): `iw_sound.csv` has 10 `master` rows, all SP ambients or
 SP-only weapon loops (`ambient_dam_int`, `weap_nagant_sniper` on Stalingrad,
 `flakpanzer_loop`...), and 445 numeric rows (`weap_mg42_loop 0.75`, ...). No
-`master` row has an MP loadspec, so in MP the mechanism never engages
+`master` row has an MP loadspec (VERIFIED, the csv). So in MP the mechanism never engages
 (INFERRED from the csv).
 
 ---
 
 ## 5. Own-entity handling and `channel=local`
 
-`VERIFIED` (absence in the engine, presence in the cgame).
-
-The engine has no own-entity rule. The listener entity number stored by
+VERIFIED (absence in the engine's decompilation): the engine has no own-entity rule. The listener entity number stored by
 `S_Respatialize` (`0x8e0880`) is read by exactly one function,
 `FUN_0044d9c0` @ `0x44d9c0` (play-by-name with the listener's entity number and
 no origin, used by the UI), and by nothing on the spatialize path. The
-channel alone decides spatialization (section 2). A `body` or `weapon` sound
+channel alone decides spatialization (section 2). INFERRED: a `body` or `weapon` sound
 from the followed player is a 3D sound at (or near) `cg.refdef.vieworg`,
 below `dist_min`, so `scale = 1`, and Miles pans it centred.
 
-What the cgame does differently for the body the view rides (the test is
+What the cgame does differently for the body the view rides (VERIFIED, the cgame decompilation; the test is
 always `(cg.snap->ps.pm_flags & 0x50000) != 0 && es.number ==
 cg.snap->ps.clientNum`, see the events-and-fx doc section 7):
 
@@ -500,13 +496,13 @@ cg.snap->ps.clientNum`, see the events-and-fx doc section 7):
   the landing view-bob are the only events gated to the own client, and they
   make no sound.
 
-`channel=local` means 2D, pan centre, no distance cull, no falloff, not
+INFERRED from those routes: `channel=local` means 2D, pan centre, no distance cull, no falloff, not
 entity-tracked, nothing more (`FUN_0044ced0` @ `0x44ced0` routes channels 1
 and 6..9 to `FUN_0044c980`; `FUN_0044c040` zeroes the entity offset for them).
 The entity-channel replacement rule still applies: two `local` sounds on
 one entity number replace each other.
 
-The `s` server command (`CG_LocalSound`, `FUN_3002e040` @ `0x3002e040`) plays
+VERIFIED (the decompilation): the `s` server command (`CG_LocalSound`, `FUN_3002e040` @ `0x3002e040`) plays
 configstring `524 + idx` with entity `cg.snap->ps.clientNum` at
 `cg.snap->ps.origin` (`DAT_301e2160 + 0x20`; INFERRED from the `ps` layout,
 `ps` at `snap+0xc` with `pm_flags` at `+0xc` and `clientNum` at `+0xac` as
@@ -519,8 +515,7 @@ anchors); the alias's own channel decides
 
 ## 6. Whizby
 
-`VERIFIED` from `CG_BulletWhizby` = `FUN_30038dc0` @ `cgame 0x30038dc0`
-(asm `0x30038dc0..0x30038f29`). Inputs: `EBX = start`, `EAX = impact`
+VERIFIED (the asm `0x30038dc0..0x30038f29`) from `CG_BulletWhizby` = `FUN_30038dc0` @ `cgame 0x30038dc0`. Inputs: `EBX = start`, `EAX = impact`
 (register-passed; the decompiler shows them as `unaff_EBX`/`in_EAX`).
 Constants: `0x300695a0 = 64.0`, `0x3006959c = -64.0`, `0x30069598 = 140.0`,
 `0x30069468 = 16.0`. `DAT_30209594..9c` is `cg.refdef.vieworg`.
@@ -534,11 +529,10 @@ if 64 <= t and t + 64 <= L:                              // closest point at lea
         play "whizby" (handle DAT_301d6120) as ENTITYNUM_WORLD (0x3fe) at p - 16 * u
 ```
 
-The sound sits 16 units back toward the shooter from the closest point, so
-Miles pans it from the side the bullet passed, never exactly on the listener.
-`whizby` is `auto`, `100/700`: full volume at 140 units.
+VERIFIED (the asm above): the sound sits 16 units back toward the shooter from the closest point. INFERRED: Miles pans it from the side the bullet passed, never exactly on the listener.
+VERIFIED (the csv): `whizby` is `auto`, `100/700`. INFERRED: full volume at 140 units.
 
-Call chain: `CG_EntityPreEvent` case 173/174 -> `FUN_30039640` @ `0x30039640`
+VERIFIED (the decompilation), call chain: `CG_EntityPreEvent` case 173/174 -> `FUN_30039640` @ `0x30039640`
 (impact sound + effect) -> `FUN_30039590` @ `0x30039590` -> `FUN_30039440` @
 `0x30039440` computes `start` (own body: `ps.origin + ps.viewheight`; others:
 world-model `tag_flash` via `FUN_3001c2c0`, falling back to the entity origin
@@ -547,17 +541,17 @@ plus a stance offset) -> tracer decision (skipped for the own body, otherwise
 `0x301df440`, cvar table `0x30074e50`; a flesh impact (`surfType == 7`) spawns
 `FUN_30039340` instead of a tracer) -> **`CG_BulletWhizby` is called
 unconditionally afterwards** (the two `call 0x30038dc0` at `0x30039618` and
-`0x3003962e`, both inside `FUN_30039590`). The whole chain is skipped only when `cg_tracerchance < 0`
+`0x3003962e`, both inside `FUN_30039590`). INFERRED from those branches: the whole chain is skipped only when `cg_tracerchance < 0`
 or the shooter's start point cannot be computed (entity has no model, syscall
 `0xa2` returns 0).
 
-Flesh hits do **not** skip it: `CG_BulletHitFlesh` = `FUN_300396f0` @
+VERIFIED (the decompilation): flesh hits do **not** skip it: `CG_BulletHitFlesh` = `FUN_300396f0` @
 `0x300396f0` (cases 175/176) plays `bullet_small_<surf>` / `bullet_large_<surf>`
 at the impact as `ENTITYNUM_WORLD` and then calls the same `FUN_30039590`.
 175/176 reach only the victim and whoever follows it; everyone else gets the
 flesh hit as 173/174 with `surfType == 7` through `FUN_30039640`
 (events-and-fx doc, section 2). vcod plays the same alias and runs the same
-whizby test for all four.
+whizby test for all four (a vcod fact, not a retail one).
 
 Inferred: `FUN_30039590`'s "own body" test compares the **attacker** entity
 (`es.otherEntityNum`, in `EBX`) with `ps.clientNum`, so when following a player
@@ -571,7 +565,7 @@ so nothing plays).
 
 ### 7a. The per-surface tables
 
-`VERIFIED`. The alias registration function `FUN_30020a00` @ `cgame 0x30020a00` (asm
+VERIFIED (the asm): the alias registration function `FUN_30020a00` @ `cgame 0x30020a00` (asm
 `0x30020c2b..0x30020cb2`) fills nine 23-entry tables by calling `FUN_30020980`
 @ `0x30020980` with `EDI = table`, `EBX = prefix`; that helper loops `i = 0..22`, asks the engine
 for the surface name (syscall `0xc5` = `FUN_00401cc0` @ `CoDMP.exe 0x401cc0`,
@@ -590,31 +584,31 @@ table `0x571790`; index 0 and out-of-range give `"default"`), formats
 | `0x301d605c` | `step_prone` | 47-69 |
 | `0x301d60b8` | `land` | 93-115 and 116-138 |
 
-Surface order (engine table `0x571790`, matches the events-and-fx doc section
+VERIFIED (the table): surface order (engine table `0x571790`, matches the events-and-fx doc section
 4): `default, bark, brick, carpet, cloth, concrete, dirt, flesh, foliage,
 glass, grass, gravel, ice, metal, mud, paper, plaster, rock, sand, snow, water,
 wood, asphalt`. **The engine spells it `asphalt`; every csv row spells it
 `asphault`** (`step_run_asphault`, `Land_asphault`, ...; `grep -ic asphalt
-iw_sound.csv` = 0). So `step_run_asphalt`, `land_asphalt`, `bullet_*_asphalt`,
+iw_sound.csv` = 0). INFERRED (from the spelling mismatch and the no-op rule): `step_run_asphalt`, `land_asphalt`, `bullet_*_asphalt`,
 `grenade_*_asphalt` register as `NULL` and **asphalt surfaces are silent in the
 retail client**. No `_default` fallback; a null handle is a no-op (section
 1e). vcod's `ALIAS_SURFACES` (`crates/client/src/audio/cues.rs`) spells index
 22 `asphault` on purpose, so asphalt is audible in vcod: the only deliberate
 divergence from the engine's alias names.
 
-`canvas` is not an engine surface either: the table at `0x571790` has 23
+`canvas` is not an engine surface either. VERIFIED (the table): the table at `0x571790` has 23
 entries (`FUN_00401cc0` returns `"default"` outside `1..22`; each cgame table
 is `0x5c` = 23 pointers), none `canvas`. The 36 `*_canvas` rows in
 `iw_sound.csv` (`bullet_small_canvas`, `bullet_large_canvas`, 18 each) are
-**unreachable in 1.1 MP**: no `surfType` maps to them and nothing asks for
-them by name. vcod must not invent a canvas suffix.
+**unreachable in 1.1 MP** (INFERRED: no `surfType` maps to them and nothing asks for
+them by name). vcod must not invent a canvas suffix.
 
 Alias names are matched case-insensitively (section 1e), so csv `Land_bark`
 satisfies `land_bark`.
 
 ### 7b. `CG_EntityEvent` (`FUN_3001dc10` @ `0x3001dc10`) range ladder
 
-`VERIFIED` (asm `0x3001dc98..0x3001de10`). `EDI` = event id, `ESI` = cent,
+VERIFIED (the asm `0x3001dc98..0x3001de10`): `EDI` = event id, `ESI` = cent,
 `[ESI]` = entity number, `EBX` = `es.clientNum` (0 if out of range).
 `FUN_30021bc0(entnum, handle)` @ `0x30021bc0` plays a handle at
 `cg_entities[entnum].currentState.pos.trBase` (`&DAT_3020db98 + entnum*0x228`;
@@ -632,15 +626,15 @@ that entity number, so the engine tracks the entity from there (section 3);
 | 93-115 | `EV_LANDING_*` | `0x301d5f44 + id*4` = `land_<surf>`; own client only: view bob (`DAT_302094e4 = -eventParm`) |
 | 116-138 | `EV_LANDING_PAIN_*` | `0x301d5ee8 + id*4` = `land_<surf>` (same table), then `land_damage` (`DAT_301d5d64`); own client only: damage kick |
 
-The decompiler shows all three step groups reading `&DAT_301d5fa0 + id*4`.
-The tables are contiguous (`step_run` at `0x301d5fa4`, `step_walk` at
+VERIFIED (the decompiler): all three step groups read `&DAT_301d5fa0 + id*4`.
+VERIFIED (the addresses): the tables are contiguous (`step_run` at `0x301d5fa4`, `step_walk` at
 `0x301d6000` = `+23*4`, `step_prone` at `0x301d605c` = `+46*4`), so that one
 expression lands in the right table per group. The jump group's base
 `0x301d5e8c` puts ids 70-92 back on the `step_run` entries.
 
 ### 7c. Switch cases (139-201)
 
-Each row is `VERIFIED` from the same function. Alias handles come from the
+The rows, each VERIFIED (the decompilation of the same function), name the alias it plays, and `none` is a VERIFIED absence in it. Alias handles come from the
 `syscall(0xbf, "name")` calls in `FUN_30020a00` (`0x30020a00`); `w` = the
 entity's weapon (`es.weapon`, entity-state offset `0xc8`), `wdef` = its weapon def.
 
@@ -698,7 +692,7 @@ Other registered handles (`FUN_30020a00`): `player_gib`,
 
 ### 7d. Pickup aliases
 
-The table's shape is VERIFIED. The weapon rows are INFERRED. `DAT_301dc3fc +
+The table's shape is VERIFIED (the decompilation). The weapon rows are INFERRED. VERIFIED (the decompilation): `DAT_301dc3fc +
 item*0x24` is filled by `FUN_30034cf0` @ `0x30034cf0` from
 `bg_itemlist[item].pickup_sound` (`DAT_300762f4 + item*0x30`). In the DLL's
 static data only items 65-69 carry a name: `grenade_pickup` (65, 66),
@@ -713,7 +707,7 @@ reads the copy of the pickup column, **`ammoPickupSound` is never heard**
 
 ## 8. Weapon-file sound keys
 
-`VERIFIED`. The cgame weapon field table (entries `{name, offset, type}` at
+VERIFIED (the table): the cgame weapon field table (entries `{name, offset, type}` at
 `0x300756d8..`) gives the weapon struct offsets, and `FUN_30034cf0` @
 `0x30034cf0` registers them with syscall `0xbf` into
 per-weapon slots (`0x198` bytes per weapon, base `DAT_301a6a08`):
@@ -740,7 +734,7 @@ per-weapon slots (`0x198` bytes per weapon, base `DAT_301a6a08`):
 | `noteTrackSoundA..D` | `+0xd0..0xdc` | `6a3c..6a48` | animation notetracks (registered in `FUN_30034cf0`, `0x30034xxx`): view-model reload animations, not events |
 | `projExplosionSound` | `+0x328` | `6a8c` | 178, 179, 180 (7c) |
 
-`CG_FireWeapon` = `FUN_30038b70(event, barrel)` @ `0x30038b70`:
+VERIFIED (the decompilation): `CG_FireWeapon` = `FUN_30038b70(event, barrel)` @ `0x30038b70`:
 
 ```
 handle = fireSound[w]
@@ -753,8 +747,8 @@ if wdef.boltAction (+0x2c8) == 0: eject brass effect
 159 `EV_FIRE_WEAPON`, 160 `EV_FIRE_WEAPONB` and 168 `EV_FIRE_WEAPON_MG42`
 play `fireSound`; 161 plays `lastShotSound` when set, else `fireSound`;
 169/170 `EV_FIRE_QUADBARREL_1/2` call it with barrel 0 and 1 (two `fireSound`
-plays at the two `tag_flash` tags). The 1.1 MP client **never uses
-`loopFireSound` or `stopFireSound`**; the eight looping weapons' fire loops in
+plays at the two `tag_flash` tags). INFERRED (no reader found): the 1.1 MP client **never uses
+`loopFireSound` or `stopFireSound`**, so the eight looping weapons' fire loops in
 the csv are SP-only in practice.
 
 VERIFIED, the origin's arms in 1.1's asm: the own-body test at
@@ -856,23 +850,23 @@ method tables at `.so 0x7e7c0` (`ambientplay`, 12-byte entries) and `0x7ea80`
 (`playsound`, `playloopsound`, `stoploopsound`, 8-byte entries) and the player
 method table at `0x73544` (`playlocalsound`).
 
-Shared plumbing, `VERIFIED`:
+Shared plumbing, per item:
 
-- `G_SoundAliasIndex(name)` @ `0x675c0`: linear scan of configstrings
+- VERIFIED (the disassembly): `G_SoundAliasIndex(name)` @ `0x675c0`: linear scan of configstrings
   `0x20c + 1 .. 0x20c + 255` (`CS_SOUNDS = 524`; index 0 is "none"), adding the
   name at the first empty slot via `trap_SetConfigstring`; 256 in use is a
   fatal `"G_FindConfigstringIndex: overflow"`. Both `EV_SOUND_ALIAS` and
   `CG_LocalSound` on the client add `0x20c`.
-- `G_PlaySoundAlias(ent, idx)` @ `0x67b30`: if `ent->client`, appends event
+- VERIFIED (the disassembly): `G_PlaySoundAlias(ent, idx)` @ `0x67b30`: if `ent->client`, appends event
   `0xac` (172, `EV_SOUND_ALIAS`) with `eventParm = idx` to
   `ps.events[ps.eventSequence & 3]` (offsets `0x88`/`0x98`/`0x84` in the
   playerState); else to the entity's `es.events` ring (`0xa8`/`0xb8`/`0xa4`).
   Sets `ent->eventTime` (`+0x180`) and `+0x150` to `level.time`.
-- `G_PlaySoundAliasAtPoint(point, idx)` @ `0x67a2c`: `G_Spawn`, `eType = 0xb8`
-  (`ET_EVENTS 12 + 172`), origin from the rounded point, `+0x184 = 1`
-  (INFERRED: `freeAfterEvent`), links, `eventParm = idx`. In MP only
+- `G_PlaySoundAliasAtPoint(point, idx)` @ `0x67a2c`. VERIFIED (the disassembly): `G_Spawn`, `eType = 0xb8`
+  (`ET_EVENTS 12 + 172`), origin from the rounded point, `+0x184 = 1`.
+  INFERRED: that field is `freeAfterEvent`. VERIFIED (the disassembly): it links, `eventParm = idx`. In MP only
   `hurt_touch` calls it.
-- `G_SetClientSound(ent)` @ `0x41614`: `es.loopSound = 0` (offset 132) and
+- VERIFIED (the disassembly): `G_SetClientSound(ent)` @ `0x41614`: `es.loopSound = 0` (offset 132) and
   nothing else. **No caller** (no `R_386_PC32` reloc, no direct
   `call 41614`): dead code, the Q3 water/lava loop is gone.
 
@@ -1215,21 +1209,20 @@ custom map without one stays silent.
 
 ## 10. Streamed playback
 
-`VERIFIED`. `type=streamed` changes loading (no decode at map load; only a
+VERIFIED (the decompilation): `type=streamed` changes loading (no decode at map load; only a
 file-exists check, `FUN_00433c20`, warning `"streamed sound 'sound/%s' not
 found"`) and the voice pool (a Miles stream, `FUN_0044cf50` @ `0x44cf50`,
-opened from `sound/<file>` on every play, `AIL_open_stream`). It does **not**
-change spatialization; a streamed alias on a 3D channel stores its origin
+opened from `sound/<file>` on every play, `AIL_open_stream`). INFERRED (from the code below): it does **not**
+change spatialization. VERIFIED (the decompilation): a streamed alias on a 3D channel stores its origin
 (`DAT_008e18a0 + slot*0x10`) with the positional flag (`DAT_008e189c`) set for
 channels other than 1 and 6..9, and `FUN_0044f100` @ `0x44f100` updates its
 volume (same linear falloff) and pan (section 3 formula) every frame; it is
 entity-tracked like a 3D sample (`FUN_0044bed0`). A streamed alias on a 2D
-channel is a plain stream at pan `0.5`. The same replacement and
-master/slave rules apply. Only the pool differs: 8 general slots (section 2),
-and a stream whose file was not found at load is refused at play time (`"Tried to play streamed sound '%s' from alias '%s', but it
+channel is a plain stream at pan `0.5`. INFERRED: the same replacement and
+master/slave rules apply, and only the pool differs: 8 general slots (section 2). VERIFIED (the string): a stream whose file was not found at load is refused at play time (`"Tried to play streamed sound '%s' from alias '%s', but it
 was not found at load time.\n"`).
 
-Every `dialog_mp.csv` row and every `ambient_mp_*` row is streamed; the
+VERIFIED (the csv): every `dialog_mp.csv` row and every `ambient_mp_*` row is streamed; the
 announcer lines are 2D (`announcer`), the quick-chat lines are 3D (`voice`),
 the ambients are 2D loops (`local`).
 
@@ -1391,29 +1384,29 @@ Retail has no doppler, and no occlusion in the sound path.
 
 ### 11a. Doppler: no velocity ever reaches Miles
 
-`VERIFIED` (import surface). The `_AIL_*` imports of `CoDMP.exe` hold every
+VERIFIED (the import table): the `_AIL_*` imports of `CoDMP.exe` hold every
 spatial API the engine uses (`AIL_set_3D_position_16`,
 `AIL_set_3D_sample_distances_12`, `AIL_set_3D_distance_factor_8`,
 `AIL_set_3D_sample_volume_8`, `AIL_set_3D_sample_playback_rate_8`,
 `AIL_set_3D_room_type_8`) and **no velocity or doppler entry point**: no
 `AIL_set_3D_sample_velocity`, no `AIL_set_3D_doppler_factor`, nothing with
-velocity in its name. MSS derives doppler only from emitter and listener
-velocities, and `S_Respatialize` (`FUN_0044bd60`, section 3) stores origin
-and axis only. No sound shifts pitch with relative motion in retail; vcod
+velocity in its name. INFERRED (Miles' API shape): MSS derives doppler only from emitter and listener
+velocities. VERIFIED (the decompilation): `S_Respatialize` (`FUN_0044bd60`, section 3) stores origin
+and axis only. INFERRED: no sound shifts pitch with relative motion in retail; vcod
 builds no doppler.
 
 ### 11b. No occlusion term in the audio paths
 
-Sections 2-4 read the per-frame gain of every voice class in full
+VERIFIED (the decompilation, sections 2-4): the per-frame gain of every voice class in full
 (`FUN_0044cb90` start, `FUN_0044eea0` 3D samples, `FUN_0044f070` 2D samples,
 `FUN_0044f100` streams): `s_volume * channelVol * scale * v`, `scale` pure
-distance falloff, plus the master/slave cap. No ray test, wall factor or
-lowpass appears in those paths or in the start path `FUN_0044d670`. Retail
+distance falloff, plus the master/slave cap. VERIFIED (absence in those paths and in the start path `FUN_0044d670`): no ray test, wall factor or
+lowpass. INFERRED: retail
 1.1 MP plays a sound behind a wall at the same gain as one in the open.
 
 ### 11c. What syscall `0xd0` actually is
 
-`VERIFIED` (decompilation). Syscall `0xd0` stores cgame's
+VERIFIED (the decompilation): syscall `0xd0` stores cgame's
 vieworg at `DAT_0143a988..990`; the only reader is `FUN_00414ef0` @
 `0x414ef0`: a six-ray line-of-sight test from that stored listener position
 to a register-passed entity record's origin (`+0x18..0x20`). It traces via
@@ -1429,8 +1422,8 @@ only when **all** rays are blocked:
 | 5 | xy -/+ other-perp*10, z + (-24 or 0) + 52 (or 28) | `_DAT_00569118` = 10, `_DAT_00569110`=28 / `_DAT_0056910c`=52 |
 | 6 | mirrored side, z + (-24 or 0) + 36 (or 16) | `_DAT_00568e9c` = -1.0 mirrors the offsets; `_DAT_00569108` = 36 |
 
-The `+0xe0` flag selects between two height sets, so the fan covers head and
-torso for either stance. Its two callers are both snapshot delta encoders:
+INFERRED: the `+0xe0` flag selects between two height sets, so the fan covers head and
+torso for either stance. VERIFIED (the decompilation): its two callers are both snapshot delta encoders:
 `FUN_00415350 @ 0x415350` (single entity, called for "baseline" and "delta"
 entities) and `FUN_00415460 @ 0x415460` ("unchanged" carry-over loop; debug
 strings `%3i: baseline: %i`, `delta`, `unchanged`, `Entities in packet: %i`).

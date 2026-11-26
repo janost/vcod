@@ -16,7 +16,7 @@ pub struct Node {
     pub loopsync: bool,
     /// Either `loopsync` or `nonloopsync`: a node whose descendants all take
     /// its own time, where a plain node's leaves each step their own
-    /// (cod11-combat.md 3.1, "The clip's float time").
+    /// (cod11-combat.md 3.1.4).
     pub sync: bool,
     /// `: complete`: a group the engine blends its children under, the
     /// MG42 aim groups and UO's vehicle seat groups.
@@ -288,7 +288,7 @@ pub struct PlayerAnims {
 }
 
 /// The leaves under a `complete` node that are not under a sync one: each
-/// steps its own node time (cod11-combat.md 3.1, "The clip's float time").
+/// steps its own node time (cod11-combat.md 3.1.4).
 fn own_time_leaves(tree: &AnimTree) -> Vec<usize> {
     fn walk(tree: &AnimTree, n: usize, under: bool, out: &mut Vec<usize>) {
         let node = &tree.nodes[n];

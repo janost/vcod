@@ -19,7 +19,7 @@ use vcod_gsc::{ArrayKey, Cx, EntId, ErrorKind, Host, Target, Value};
 /// the spot (docs/research/cod11-gsc-object-model.md section 14, from
 /// disassembly). `probe_delete`'s capture is consistent with a defer
 /// somewhere in (0, 150] ms; `probe_entnum`'s pins 100
-/// (docs/research/cod11-combat.md 14.7, "The pass runs after the threads").
+/// (docs/research/cod11-combat.md 14.7.2).
 const DELETE_DEFER_MS: i32 = 100;
 
 use super::Builtin;
@@ -119,7 +119,7 @@ fn set_hint_string(
 /// toggles its link, a gun's `turret_use` mounts a player user, a sine
 /// mover's `Use_BinaryMover` runs it to the world origin and back, and a
 /// map `misc_spawner`'s `misc_spawner_use` drops its item 100 ms on
-/// (cod11-combat.md 5.9, "useBy").
+/// (cod11-combat.md 5.9.3).
 fn use_by(
     host: &mut GameHost,
     cx: &mut Cx,

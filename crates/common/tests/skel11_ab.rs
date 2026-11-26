@@ -1,8 +1,7 @@
 //! The struck target's pose against the engines' own, read under gdb
 //! (`fixtures/skel11/`, each header the recipe): the anim calc's records
 //! off the clips' node times and weights, and the skeleton build off
-//! retail's records, word for word (cod11-combat.md 3.1, "The pose on
-//! 1.1"). Needs a 1.1 `COD_DIR`, and a 1.5 one for the 1.5b dump.
+//! retail's records, word for word (cod11-combat.md 3.1.3). Needs a 1.1 `COD_DIR`, and a 1.5 one for the 1.5b dump.
 
 use vcod_common::model;
 use vcod_common::net::protocol::{PROTOCOL_V6, install_protocol};
@@ -244,7 +243,7 @@ fn the_targets_skeleton_matches_11ds_word_for_word() {
 
 /// 1.5b's knockback kill: the stored walk over the two clips in the order
 /// retail's sampler took them (the run first, `0x80c47de`'s call log), and
-/// its stored build (cod11-combat.md 3.1, "The pose on 1.5 and UO").
+/// its stored build (cod11-combat.md 3.1.2).
 #[test]
 fn the_knockback_kill_matches_15bs_word_for_word() {
     let Some(fs) = vcod_common::testing::game_fs()

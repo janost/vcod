@@ -188,10 +188,10 @@ pub struct BoneTraceCtx<'a> {
     pub now_ms: i32,
     /// `GameHost::dobj_posed`, for a script trace: a bone the frame already
     /// posed keeps that pose, and the trace stamps every other one at
-    /// `now_ms` (movers doc 15, "A bone asked for before the anim update").
+    /// `now_ms` (movers doc 15.9).
     pub posed: Option<&'a mut [DobjStamps]>,
     /// The server build's float arithmetic: 1.5b's and UO's store every
-    /// step of the trace (combat doc 3.1, "The arithmetic on 1.5 and UO").
+    /// step of the trace (combat doc 3.1.1).
     pub arith: Arith,
 }
 
@@ -1482,7 +1482,7 @@ impl BodyPose {
                 .map(|(n, l)| (*n, l.as_slice()))
                 .filter(|_| mounted),
             // A group the gunner left fades on its carried rows past the
-            // dismount as well (cod11-turrets.md 13.9, "The dismount").
+            // dismount as well (cod11-turrets.md 13.9.5.2).
             turret_left: self.turret_left.as_ref().map(|(n, l)| (*n, l.as_slice())),
             controllers: self.eased.or_else(|| self.target_controllers()),
             seat_leaves: match self.seat_ramp.at(now_ms) {
@@ -1508,12 +1508,12 @@ impl BodyPose {
     /// The controls the hook aims at now: a rider's off his seat, anyone
     /// else's off the swings; `None` for a mounted one under 1.1. A dead body
     /// runs them too, its `tag_origin` turned by the legs' world yaw on top
-    /// of the body's frame (combat doc 16.4, "The dying body"). Whether he
+    /// of the body's frame (combat doc 16.4.1). Whether he
     /// rides, where and armed or not, and the `eFlags` the hook tests (a
     /// turret's use frame reads him mounted), come off the entity as his
     /// last cmd left it, the angles off the record as the end frame wrote it
     /// (coduo-vehicles.md 13.7, "The weapon-swap frame"; cod11-turrets.md
-    /// 13.9, "The mount's blend in").
+    /// 13.9.5.3).
     pub fn target_controllers(&self) -> Option<vcod_common::playerpose::Controllers> {
         use vcod_common::playerpose::{BodySeat, Controllers};
         match self.es.seat {
@@ -2555,7 +2555,7 @@ mod tests {
     }
 
     /// The prone frag strike on mp_carentan, read under gdb on 1.5b
-    /// (cod11-combat.md 3.1, "The prone strike on mp_carentan"): a body
+    /// (cod11-combat.md 3.1.6): a body
     /// `setPlayerAngles` turned to (0, 225, 0) traces in `AnglesToAxis`'s
     /// rounding, forward x `0xbf3504f4`, and the hit point rounds `start +
     /// (end - start) * fraction` once, z `0xc12aabc1`.

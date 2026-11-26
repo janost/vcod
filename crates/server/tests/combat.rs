@@ -2790,7 +2790,7 @@ fn a_rocket_that_strikes_a_player_hits_him_directly() {
 /// `legsTimer` and `torsoTimer` at 0 (no game module raises `PAIN`), and
 /// the bullet death, inside the shooter's cmd, sets both to the clip's
 /// length + 50 on the victim's last cmd, which the victim's cmds behind it
-/// run down (cod11-combat.md 16.4, "The dying body"). Ours is held to the
+/// run down (cod11-combat.md 16.4.1). Ours is held to the
 /// same in [`a_shot_takes_health_and_a_second_one_kills`].
 #[test]
 fn a_shot_sets_the_victims_timers_as_retail_does() {
