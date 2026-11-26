@@ -347,7 +347,8 @@ keeps `cg_fov`.
 `moves_ab`'s `the_predictor_replays_uo_seats` rebuilds every snapshot of
 section 8's two seat captures through `predict::from_wire` with its
 vehicle's angles and predicts it to the next under UO's rules. Every
-field matches retail but these (VERIFIED, replay):
+field matches retail but these, which the predictor alone misses
+(VERIFIED, replay):
 
 - `delta_angles` at each `nextvehslot`: the new seat's
   `SetClientViewAngle`, the server's.
@@ -411,6 +412,22 @@ Two rows the gate once carried are closed:
   2026-11-18 misses neither (VERIFIED, replay). Which change closed them is
   not traced. The gate now lists each gap by the commandTimes it misses on
   and fails on a listed row that matches.
+
+Since 2026-11-26 the gate lists no gaps: the replay runs the two server
+writes itself after the cmds (`moves_ab`'s `server_writes`). A seat
+change takes the snapshot's `delta_angles` in place of
+`SetClientViewAngle`'s, the new seat's tag view being the hull's; a new
+`damageEvent` adds the snapshot's `damageCount` to the predicted
+`aimSpreadScale` (capped at 255) and raises the snapshot's `EV_PAIN`, as
+`P_DamageFeedback` does. With them the tank's main-gun snapshot matches on
+`aimSpreadScale` and `eventSequence` (VERIFIED, replay). The server's own
+`delta_angles` write is `vehicle_ab`'s: its absolute value rides each
+side's own cmd angles, so the gate compares each snapshot's step in
+`delta_angles[0]` and `[1]` from the one before. On both seat captures
+ours steps as retail's at every snapshot, the four seat changes included
+(the tank's (-305, -18) at 33536 and (-3812, 385) at 41042, the jeep's
+(-6591, -27029) at 32241 and (-10188, -27097) at 39741 as shorts)
+(VERIFIED, the gate).
 
 With the seat stripped from the playerstate the replay misses
 `delta_angles` on 44 and 230 snapshots, `fWeaponPosFrac` and the driver's
