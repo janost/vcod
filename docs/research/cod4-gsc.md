@@ -2219,9 +2219,9 @@ What the port matches:
   -50..50 box or a dynamic entity's cylinder; the unit tests in
   `ode::tests` pin the last two as read. Class 11 is not ported: vcod
   leaves brush dynamic entities out.
-- `run_frame` refuses a body whose first geom is not a capsule or a
-  brush (3.6.4), so no box or cylinder on worlds 0 or 1 steps until
-  their colliders (P3) come.
+- `run_frame` refuses a body whose first geom is not a capsule, a
+  brush (3.6.4), a cylinder or a transform round one (3.6.5), so no box
+  on worlds 0 or 1 steps until its collider (P3a) comes.
 
 The census (`phys_create::the_stock_zones_phys_geoms_are_brushes_boxes_and_cylinders`,
 every zone of the client's `zone/english/`, one copy of a model for
@@ -2395,6 +2395,175 @@ to 40): all 582 contacts equal the capture's `dCollide` output word for
 word in count, order, position, normal, depth and surface flags, 19 of
 them off triangles, and the cut of each equals the contact pass's
 input word for word. VERIFIED (the run, ours).
+
+#### 3.6.5 The cylinder geom collider and the transform, as ported
+
+I ported IW's collider for a class 13 geom, a `physGeoms` cylinder, into
+`ode::collide::cylinder` and ODE 0.5's geom transform collide (class 6)
+into `ode::collide::transform`: P3c of the world 0/1 port. Addresses are
+`iw3mp.exe`'s (3.6), read with `objdump`; every function stores where
+the binary writes a DWORD and keeps the x87's 53 bits between
+(`cod4-player-anims.md` 10.4). The context and the walk's box are
+3.6.1's.
+
+The transform:
+
+- 0x5aee10, class 6's collider: nothing without an inner geom (+0x4c);
+  the final pose recomputed when the geom's flag +8 & 2 is set
+  (0x5aed50); the inner geom's position and rotation pointers set to
+  +0xc4 and +0x94 and its body to the transform's (+0x10); 0x5a95a0 on
+  the inner geom and `o2`; with `infomode` (+0x54) set each contact's
+  `g1` (+0x24) the transform; the inner geom's pointers and body put
+  back. VERIFIED (0x5aee10..0x5aeeba). Every captured cylinder contact's
+  `g1` is its inner geom, as `infomode` 0 gives. VERIFIED (the frag and
+  car takes). That this is ODE 0.5's `dCollideTransform` with IW's frame
+  fields is INFERRED (the upstream source).
+- 0x5aed50: the final rotation the body's times the frame's (0x5aeec0,
+  each element a stored three-term dot), the final position the body's
+  rotation times the frame's position, stored, plus the body's
+  position, stored. VERIFIED (0x5aed50..0x5aee05, 0x5aeec0..0x5aef84).
+  `transform::final_pose`.
+- The sweep: 0x5a9a20 sends class 6 to 0x5aed10, which sizes the inner
+  geom at the final pose, and class 13 to 0x5a688b: `r` times the
+  double sqrt(1/2) at 0x70ae70, stored, or the +0x54 when it is less.
+  VERIFIED (0x5a9a20..0x5a9aef, 0x5a688b..0x5a68b5). `Geom::bounds` had
+  it (3.6.3); a body whose first geom is a cylinder, or a transform round
+  one, now steps (`PhysWorld::run_frame`, `transform::collide_geom`).
+
+Against a brush (0x5a1330, from 0x5a79b0 while the contacts have room):
+
+- Each face's depth (0x5a11f0), the six axial planes (0x596ae0) then the
+  sides: `-FLT_MAX` (0x70af5c) when the centre and the body's position
+  both lie behind it (each `n . p` stored, then less `d`, stored); else
+  `(dc - c h) - r sqrt(1 - c^2)`, `c` the axis's `|a . n|` (0x401000)
+  made 1 when `1 - c` stored is under 0, `dc - c h` stored and
+  `1 - c^2` stored before its root (0x401050). VERIFIED
+  (0x5a11f0..0x5a1322).
+- A depth of 0 or more ends the collide. The deepest face with edges (a
+  later one only when strictly deeper) is the reference; its winding
+  (0x5998e0, room 0x100) goes to 0x5a0f70 with its material's surface
+  flags (0x5a7970), even when the winding is empty. A narrow cylinder
+  (2 `r` under `phys_narrowObjMaxLength`) then takes axial face `2k`
+  when the centre lies under the brush's `mins` on axis `k`, `2k + 1`
+  when over its `maxs`, and each side whose plane it lies strictly in
+  front of, each but the reference and each with a winding. VERIFIED
+  (0x5a1330..0x5a17a6).
+
+Against a partition's triangles (0x5a17c0): each triangle, its corners
+in index order, that 0x596c70 passes, with 0x596c70's plane `(t0 - t1)
+x (t2 - t0)` normalized by 0x4076d0 and its distance at `t0` (0x5a18c0).
+VERIFIED (0x5a17c0..0x5a18bc, 0x596c70..0x5971fa). The operands' order
+sets the sign of a zero part: the port's first `(t2 - t0) x (t1 - t0)`
+gave four of the frag's collides a -0.0 in a normal where retail has
+0.0. VERIFIED (the run, ours). The cull, a sphere of the context's +0x30
+round the centre against the triangle's bounds, plane and edges, is not
+ported; no captured collide needs it. VERIFIED (the run).
+
+The polygon test (0x5a0f70; the face's plane `(n, d)`, its winding):
+
+- Nothing unless the centre or the body's position lies in front of the
+  plane (`n . p` stored, less `d`, stored, over 0); then the separating
+  axes (0x59fc90), a separation ending it. VERIFIED (0x5a0f70..0x5a1012).
+- 0x59f5d0 on each axis: turned unless its dot with the plane's normal,
+  negated, is at least 0; the reach `sqrt(1 - c^2) r + h c` with `c` the
+  axis's `|a . u|` (made 1 as above), `c^2`, `1 - c^2`, the root and
+  `h c` each stored; each corner's `u . p - u . c` stored, the nearest
+  and farthest taken by a stored difference under 0; apart when the
+  reach is under the nearest or minus the reach over the farthest; the
+  overlap `reach - nearest` stored replaces the best when the best is
+  over it plus the bias, the best's axis the turned one. VERIFIED
+  (0x59f5d0..0x59f9ee).
+- 0x59fc90's axes and codes: the normal negated (1), the axis (2), then
+  for each edge `e_k = p_{k+1} - p_k` code `3 + k`: `a x e_k` turned when
+  it dots over 0 with `n`, normalized, skipped when under 1e-5 long, and
+  only tested when `(e_k x n)` dots under 0 with it; all skipped when
+  `|a . n|` is at most 0.02. Then for each corner `3 + n + k`: `d - a
+  (a . d)`, `d = p_k - c`, normalized, skipped under 1e-5. Then for each
+  corner two rim axes (0x59f9f0), the cap at `c + h a` then at `c - h a`,
+  each `((cap - q) x a) x u` normalized with a bias of 1, `u` the edge
+  `e_k` normalized and `q` its line's point at the cap's height; none when
+  `u` or `|a . u|` is under 1e-5, or when the corner lies behind the
+  centre along `u x n` while that dots over 0 with `a`. VERIFIED
+  (0x59fc90..0x5a02a8, 0x59f9f0..0x59fc85).
+- The arms by the best's code (0x5a1018..0x5a11e1): 1 with `|a . axis|`
+  under 0.9 the side line (0x5a02b0), else the cap (0x5a09a0); 2 the
+  axis (0x59f460); `3 + k` the edge `k` (0x5a0ef0); `3 + n + k` corner
+  `k` (0x5973e0); the rest the rim against edge `(code - 3 - 2n) >> 1`
+  (0x5a0740). Every contact carries the best axis as its normal and its
+  overlap as its depth but where said. VERIFIED (the instructions).
+- The side line: the best axis less its part along `a`, normalized (none
+  under the double 1e-5 at 0x70b720), times `r` off the centre; the
+  segment `+- h a` about it cut by the winding's edge planes (0x597f30:
+  0x5974b0's sense and 0x5975e0's planes as 3.6.4, each cut by 0x597700,
+  the side `n . x <= d` kept, both ends past a plane ending it); each end
+  on or behind the face's plane (0x59ee60, `d - n . p` stored at least 0)
+  a contact that deep. VERIFIED (0x5a02b0..0x5a0432, 0x597f30..0x597fc5,
+  0x597700..0x5977f9, 0x59ee60..0x59eeaf).
+- The cap: the axis turned so it dots at most 0 with `n`, `w`; `v` the
+  normal negated less its part along `w`, normalized (`1 / sqrt`
+  stored), or the rotation's next column when its square is under the
+  double 1e-10 at 0x70b5c0; eight rim points `cc + cs (v x w) + sn v`
+  round the cap's centre `cc`, `(cs, sn)` `r` times (1, 0), (sqrt 1/2,
+  sqrt 1/2), (0, 1), (-sqrt 1/2, sqrt 1/2), (-1, 0), (-sqrt 1/2,
+  -sqrt 1/2), (0, -1), (sqrt 1/2, -sqrt 1/2) (the doubles at 0x70adf0,
+  0x70ae70, 0x70b718, 0x70b2d8, each product stored); the octagon cut
+  to the winding (0x5989f0, 0x597e70 and 0x597800 as 3.6.4), each point
+  strictly behind the plane a contact of depth `d - n . p` along `-n`.
+  VERIFIED (0x5a09a0..0x5a0ee9).
+- The axis: the winding cut to the cylinder's circle (0x59f170: a corner
+  inside when `|a x (p - c)|^2` is at most `r^2` stored, each crossing
+  edge's meets off 0x59eeb0's quadratic, up to 0x100 points, a crossing
+  whose meets miss leaving the last ones on the stack); each point with
+  `s = a . p - a . c` within the cap facing the face a contact along `a`
+  of depth `h - s`, or along `-a` of `s + h` when `a . n` is at least 0.
+  VERIFIED (0x59f460..0x59f5cc, 0x59f170..0x59f45b, 0x59eeb0..0x59f165).
+- The edge: 0x560050's nearest points of the axis's line and the edge's
+  (parallel when 1e-4 `|b a|` at 0x70b000, stored, is at least the
+  determinant squared, then the edge's parameter 0); the contact at the
+  edge's point. VERIFIED (0x5a0ef0..0x5a0f65, 0x560050..0x5601c6).
+- The rim: the cap on the best axis's side (`-h` when `a . axis` is under
+  0); the chord where its circle crosses the plane through the edge's
+  first corner with normal `u x axis` normalized (0x5a0440: the rim's
+  point toward the plane past it, `x = dc r / (dc - dr)`, a half chord
+  `sqrt(r^2 - x^2)` along `v x a`, each stored, none at 0 or less), cut
+  to the edge's span by planes along `u` (0x597700); each end whose
+  `axis . x` less the corner's, stored, is not under 0 a contact that
+  deep. VERIFIED (0x5a0740..0x5a099f, 0x5a0440..0x5a0734).
+- `dCollide` turns every normal round, so each points out of the world
+  into the cylinder, as for the capsule (10.6). INFERRED (the reversed
+  class pair).
+
+The cut (0x5a2320), on top of 3.6.4's rounding: the third seed's larger
+dot is 0x4093c0's rule (`d1` when `d0 - d1` stored is under 0), and the
+squared distance that drops a near contact is under the float's own
+bits at 0x70b87c, 0x3c23d70b, a hair over `0.01f`. VERIFIED
+(0x5a1a1a..0x5a1a49, the bytes at 0x70b87c). In `f32` the cut kept a car
+tyre's step 7 contacts in another order: two read the same along `T1`
+at x87 precision, and `f32` put the later one first. VERIFIED (the run,
+ours).
+
+What the port matches:
+
+- `phys_cylinder_ab::cylinder_contacts_match_the_captures` feeds the
+  port each captured pose of the frag's bottle, can and two tyres and of
+  the car's two tyres on every one of their 240 collides (steps 1 to
+  40): all 666 contacts equal the capture's `dCollide` output word for
+  word in count, order, position, normal, depth and surface flags, and
+  each of the 146 cuts equals the contact pass's input word for word.
+  VERIFIED (the run, ours). The pose is a `body` line's position and its
+  quaternion through `dQtoR`; the sweep after a frame does not move a
+  body in these takes, or a pose would miss. INFERRED (all match).
+- Over those collides the faces that passed the axes took the side line
+  103 times, the cap 107, the axis 44 and the rim once; no edge or
+  corner arm ran, and the narrow pass ran on 8 brushes (the bottle and
+  the can). VERIFIED (a counting run, ours). The edge and corner arms
+  and 0x560050 rest on the instructions alone.
+- `a_cylinder_on_a_floor_meets_it_with_its_cap_or_its_side`: a flat
+  cylinder half a unit into a floor brush gives its eight rim points
+  0.5 deep, one on its side the side line's two ends.
+  `a_tyre_dropped_on_a_floor_rests_on_its_cap`: a tyre in world 0 lands
+  and sleeps 2.50 over the floor, a unit under its +0x54 (`phys_csl`).
+  VERIFIED (the tests, ours).
 
 ## 4. The load
 
