@@ -350,7 +350,7 @@ u32 first_vert          // into lump 25
 u32 first_index         // into lump 26, indices relative to first_vert
 ```
 
-Lump 25 is `f32 xyz` per vertex and lump 26 `u16` per index, shared by both kinds. mp_carentan has 568 terrain and 534 patch records, mp_pavlov 619 in all. The patches are almost all 3x3, 3x5, 5x3 and 9x3 grids; every kerb wall on carentan is a flat 3x3. `bsp.rs` parses the three lumps into `MapWorld::terrain`, `patches`, `collision_verts` and `collision_indices`.
+VERIFIED (shipped files): lump 25 is `f32 xyz` per vertex and lump 26 `u16` per index, shared by both kinds. mp_carentan has 568 terrain and 534 patch records, mp_pavlov 619 in all. The patches are almost all 3x3, 3x5, 5x3 and 9x3 grids; every kerb wall on carentan is a flat 3x3. `bsp.rs` parses the three lumps into `MapWorld::terrain`, `patches`, `collision_verts` and `collision_indices`. INFERRED: `tolerance` is the subdivision distance Q3's `CM_GeneratePatchCollide` takes, from the call in the loader loop.
 
 ### Patch collision
 
