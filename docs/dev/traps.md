@@ -420,11 +420,9 @@ otherwise.
   `x87::angles_to_axis` for `AnglesToAxis`), the same in every engine and
   game module of the three servers, never float products. pmove's turns take
   the move world's `Arith` (`x87::angle_vectors_in`): the Windows cgames
-  multiply by a float `pi / 180` and store `sr * sp` (movers doc 22,
-  "pmove's turns"). The servers' x87 runs at 64 bits, so an `f64` sum of
+  multiply by a float `pi / 180` and store `sr * sp` (movers doc 22.2.1.1). The servers' x87 runs at 64 bits, so an `f64` sum of
   the turn's triple products lands a float ulp off now and then; the turn
-  falls back to `x87::F80` near a float midpoint (movers doc 22, "The
-  stack's precision").
+  falls back to `x87::F80` near a float midpoint (movers doc 22.2.1.2).
 - A trace an entity's clip cuts short of the world's ends where `SV_Trace`
   puts it, off the unshifted points (`sv_trace_endpos`), not where
   `CM_BoxTrace` would (movers doc 21, 22).
@@ -456,7 +454,7 @@ otherwise.
   `CollisionWorld::set_arith(Arith::for_protocol(..))`; a replay world in a
   test sets it too. A 1.5 or UO body's bones for a trace or a tag link come
   from the engine's own unnormalized anim records and skeleton build
-  (`PoseBuffer::stored_worlds`, combat doc 3.1, "The pose on 1.5 and UO"),
+  (`PoseBuffer::stored_worlds`, combat doc 3.1.2),
   not the glam pose. The client's world runs `Arith::for_client()` on every
   protocol: the Windows clients are one MSVC build that stores some of those
   and keeps the rest (8), so a client replay of a Linux capture corrects in
@@ -617,8 +615,7 @@ otherwise.
   until its slot is reused.
 - A temp entity takes its number from `G_Spawn`'s first-in-first-out free
   list like a script `spawn`, rides every snapshot, and is freed on the first
-  entity pass more than 300 ms past its event (combat doc 14.7, "Entity
-  numbers"). Engine notifies raised in the entity pass (`movedone`) wake
+  entity pass more than 300 ms past its event (combat doc 14.7.3). Engine notifies raised in the entity pass (`movedone`) wake
   their waiters on the next frame's threads.
 - A body's head is a random draw from `xmodelalias/head_*`, and the `a` and
   `b` heads' boxes differ. A gate that reads head cells pins it
@@ -695,8 +692,7 @@ otherwise.
   `cod11-turrets.md` 13.7). The two cancel until clips change.
 - A thread due on the last frame's clock runs before the frame's anim update.
   A player bone it asks for keeps that pose, with every bone above it, for
-  the rest of the frame (`GameHost::dobj_posed`, movers doc 15, "A bone asked
-  for before the anim update"). Its `bulletTrace` and `radiusDamage` pose
+  the rest of the frame (`GameHost::dobj_posed`, movers doc 15.9). Its `bulletTrace` and `radiusDamage` pose
   bodies at that clock too and fix every bone they pose for the frame, as a
   bone ask does (`GameHost::dobj_time_ms`, combat doc 3.6). A gate replaying
   a `--probe-uo-weapon direct` capture sends `ProbeHold::framed` cmds: on
@@ -738,15 +734,14 @@ otherwise.
   tree nodes, weighted 1 and 0.01 under a torso anim.
 - A 1.5 or UO server samples a clip at the engine's node time, a float
   stepped by 50 ms frames (`Layer::time`, `PoseInputs::node_time`), not its
-  seconds (combat doc 3.1, "The clip's float time"). A UO seat's leaves each
+  seconds (combat doc 3.1.4). A UO seat's leaves each
   step their own (`SeatRamp::leaf_times`) and stand still with their weights
   while their legs node is faded out (`SeatRamp::fade_held`). An MG42
   gunner's fire group takes its leaves' weighted mean
   (`set_sync_frequency`).
 - A gunner's turret group is a node over row nodes (`skeleton::Blend`), each
   row normalized to its weight. On 1.5 and UO its rows and leaves carry their
-  weights from frame to frame (`turretpose::GunnerTree`, turrets doc 13.9,
-  "The weights across frames"): a trace before the next end frame reads last
+  weights from frame to frame (`turretpose::GunnerTree`, turrets doc 13.9.4): a trace before the next end frame reads last
   frame's goals, a row or leaf just added at 0.001 times its goal, one just
   dropped at its old weight. A node any setter starts from 0 ramps from
   `0.001 * goal` (`Ramp::raised`), so a clip just set never reads 0.

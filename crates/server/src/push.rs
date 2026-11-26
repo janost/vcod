@@ -257,8 +257,7 @@ fn names_pusher(
 /// nothing. The world clips first and a box inside it ends the trace there
 /// (`cod_lnxded` 0x80916f4); past it the first entity in the walk's order
 /// whose clip the box is inside names the trace, skipping `me`, what `me`
-/// owns and what `me`'s owner owns (0x8090f18; movers doc 12, "The
-/// candidate trace").
+/// owns and what `me`'s owner owns (0x8090f18; movers doc 12.5).
 fn first_named(
     owners: &Owners,
     step: &Step,
@@ -354,7 +353,7 @@ fn listed_client(
 /// mover's moved origin (`G_TryPushingEntity`, 0x54956-0x54aae). 1.1d keeps
 /// the turn on the x87 stack and rounds once, adding `org2 - org` to the
 /// stored moved point; 1.5b and UO store `org`, `org2` and `org2 - org`
-/// (cod11-movers.md 21, "The carry's rounding").
+/// (cod11-movers.md 21.4).
 fn carried(step: &Step, at: Vec3, arith: Arith) -> Vec3 {
     let moved = at + (step.to.0 - step.from.0);
     let amove = step.to.1 - step.from.1;

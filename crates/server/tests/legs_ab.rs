@@ -17,22 +17,20 @@
 //! same placement under `client-probes/probe_torso.gsc` with fourteen tags
 //! from the pelvis up through both arms to the weapon tag, while the client
 //! fires, reloads and aims standing, running, strafing and crouched: the
-//! torso clips over the legs (cod11-movers.md 15, "Torso over legs").
+//! torso clips over the legs (cod11-movers.md 15.7.5).
 //!
 //! `-legs-1.5.txt` / `-legs-client-1.5.txt` and `-legs-uo.txt` /
 //! `-legs-client-uo.txt` are the walk on retail 1.5b and UO, which start
-//! the run at their own spread phase (cod11-movers.md 15, "The phase on 1.5
-//! and UO"); ours spawns where retail's probe did ([`SPAWN_15`]).
+//! the run at their own spread phase (cod11-movers.md 15.7.2); ours spawns where retail's probe did ([`SPAWN_15`]).
 //! `-legs-stopgo-1.5.txt` and `-legs-stopgo-uo.txt` (client halves
 //! `-legs-client-stopgo-*.txt`) stop and go inside the legs blends, so the
 //! run comes back while it still has weight and keeps its time
-//! (cod11-combat.md 3.1, "The setter on a weighted node").
+//! (cod11-combat.md 3.1.5).
 //!
 //! `-legs-uo-settle.txt` and `-legs-uo-spawn720.txt` (client halves
 //! `-legs-client-uo-*.txt`) are the UO walk again with the join logged
 //! too, the second on the spawn point the first UO walk drew: their spawn
-//! idle is set on a snapshot the capture shows (cod11-movers.md 15, "The
-//! spawn idle on 1.5 and UO").
+//! idle is set on a snapshot the capture shows (cod11-movers.md 15.7.7).
 //!
 //! `-legs-client-torso-1.5.txt` and `-torso-uo.txt` are the torso walk's
 //! client half on 1.5b and UO, compared for the anim selection alone: there
@@ -102,7 +100,7 @@ const BLEND_MS: i32 = 250;
 /// The level time retail's spawn set the idle, which plays from there
 /// untouched until the run: the bones fit it to 0.11 degrees, and the
 /// client's netchan sequence (389 at 25000) puts its join a few frames
-/// before (cod11-movers.md 15, "The spawn idle's phase").
+/// before (cod11-movers.md 15.7.6).
 const RETAIL_IDLE_MS: i32 = 5750;
 
 /// The torso capture's [`RETAIL_IDLE_MS`], 37 snapshots (1850 ms) later
@@ -116,8 +114,7 @@ const TORSO_IDLE_MS: i32 = 7600;
 /// `-legs-uo-settle` and `-legs-uo-spawn720` captures, which log the join.
 /// A capture that starts at the placement dates its idle from the
 /// placement's message; the 1.5b walks and the UO walk fit only on 5, the
-/// UO stop-and-go only on 6 ([`STOPGO_SPAWN_MSG_UO`]; cod11-movers.md 15,
-/// "The spawn idle on 1.5 and UO"). `LEGS_IDLE_MS` overrides it for a
+/// UO stop-and-go only on 6 ([`STOPGO_SPAWN_MSG_UO`]; cod11-movers.md 15.7.7). `LEGS_IDLE_MS` overrides it for a
 /// sweep.
 const SPAWN_MSG: i32 = 5;
 const STOPGO_SPAWN_MSG_UO: i32 = 6;
@@ -432,8 +429,7 @@ fn run_ours(
     // The probe sent a cmd at the placement's own time, before it saw the
     // placement, and captures before 2026-10-21 did not log it (its cmds
     // end each frame on the frame's time): the fall from the placement runs
-    // from retail's commandTime through it (cod11-movers.md 15, "The cmd at
-    // the placement").
+    // from retail's commandTime through it (cod11-movers.md 15.7.3).
     if let Some(&(c, world)) = walk.cmds.first()
         && c.server_time > placed
     {
@@ -573,7 +569,7 @@ fn a_walking_body_is_posed_like_retail() {
 }
 
 /// The 1.5b walk (`-legs-1.5.txt`): the run out of the settle idle starts
-/// at 1.5's spread phase (cod11-movers.md 15, "The phase on 1.5 and UO").
+/// at 1.5's spread phase (cod11-movers.md 15.7.2).
 #[test]
 fn a_walking_body_is_posed_like_retail_on_15() {
     let Some(fs) = vcod_common::testing::game_fs_15() else {
@@ -930,7 +926,7 @@ const LEAD_MS: i32 = 50;
 
 /// Drawn on a cadence that meets every arrival, the cgame's clock is the end
 /// frame's run a snapshot early: the setter, the rate and the blend all land
-/// on the same clip times (cod11-movers.md 15, "The drawn body's clip").
+/// on the same clip times (cod11-movers.md 15.8).
 #[test]
 fn a_drawn_body_runs_the_end_frame_clips_a_snapshot_early() {
     let Some((compared, worst)) = drawn_feet(10) else {
@@ -1022,7 +1018,7 @@ fn a_body_firing_on_the_move_selects_retails_anims_on_uo() {
 
 /// Fire, reload and aim on the move: the anim selection on every snapshot
 /// and fourteen bones from the pelvis to the weapon tag on every frame
-/// (cod11-movers.md 15, "Torso over legs").
+/// (cod11-movers.md 15.7.5).
 #[test]
 fn a_body_firing_and_reloading_on_the_move_is_posed_like_retail() {
     let Some(run) = ours_torso() else {

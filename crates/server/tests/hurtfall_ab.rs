@@ -508,7 +508,7 @@ fn unpatched(bytes: Vec<u8>) -> Vec<u8> {
 /// `useBy` on a `trigger_once` spends it (`Use_Multi`, freed 150 ms on to
 /// the script), on a `trigger_multiple` or a `trigger_damage` notifies
 /// alone, and on a `func_static` toggles its link, which a `bulletTrace`
-/// sees (combat doc 5.9, "useBy").
+/// sees (combat doc 5.9.3).
 #[test]
 fn use_by_runs_each_entity_s_use_like_retail() {
     replay_alone(

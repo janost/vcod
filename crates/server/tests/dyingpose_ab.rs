@@ -145,7 +145,7 @@ fn retail_timers(p: &Cod1Wire, tag: &str) -> Vec<Timers> {
 /// The death's `legsTimer` and `torsoTimer`: both the clip's duration + 50
 /// on the first dead snapshot, counted from the last cmd's serverTime, then
 /// run down by every cmd's msec, so each reaches 0 at one serverTime
-/// (combat doc 16.4, "The dying body").
+/// (combat doc 16.4.1).
 fn check_timers(fs: vcod_common::pk3::Pk3Fs, p: &Cod1Wire, tag: &str, seed: u64) {
     let retail = retail_timers(p, tag);
     let (_, _, ours) = ours(fs, seed);
@@ -311,7 +311,7 @@ fn check_corpse(fs: vcod_common::pk3::Pk3Fs, p: &Cod1Wire, tag: &str, seed: u64)
 
 /// The dead session's bones: retail's controller hook still runs on a body
 /// with `EF_DEAD` and sets `tag_origin`'s yaw to the legs' world yaw
-/// (combat doc 16.4, "The dying body").
+/// (combat doc 16.4.1).
 #[test]
 fn a_dying_body_poses_like_retail() {
     let Some(fs) = vcod_common::testing::game_fs_11() else {

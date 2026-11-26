@@ -207,7 +207,7 @@ pub fn unget_lean_fraction(f: f32) -> f32 {
 /// "Lean"). `arith` names the build: 1.1d keeps the fraction and the
 /// distance on the stack, 1.5b and UO store both, and the Windows cgames
 /// store both and turn through their own `AngleVectors`
-/// (docs/research/cod11-movers.md 22, "pmove's turns").
+/// (docs/research/cod11-movers.md 22.2.1.1).
 pub fn add_lean(pos: Vec3, yaw: f32, leanf: f32, arith: Arith) -> Vec3 {
     if leanf == 0.0 {
         return pos;
@@ -325,7 +325,7 @@ pub fn eye_bob(ps: &PlayerState, view: [f32; 3]) -> Vec3 {
 /// 0x7b8ea) add to a shot's or a throw's start: [`eye_bob`]'s two factors
 /// at the game module's precision (`BG_GetBobCycle` 1.5 0x40a05 rounds the
 /// cycle to a float), the side one along the right of `ps.viewangles`
-/// (combat doc 2.1, "United Offensive and 1.5"). Returns `at` with the
+/// (combat doc 2.1.1). Returns `at` with the
 /// bob added, up first, in retail's order.
 pub fn add_muzzle_bob(ps: &PlayerState, at: Vec3) -> Vec3 {
     let f = std::f32::consts::PI * (f32::from(ps.bob_cycle) / 255.0);
@@ -1103,7 +1103,7 @@ mod tests {
     /// A weapon the table has no file for runs on weapon 0's zeroed def:
     /// it aims the raw view and the sway records that view, so the next
     /// weapon's first cmd turns off it. Off a spawn's 180 onto 0 the turn
-    /// reads -180, not +180 (combat doc 15.3, "The spawn's view").
+    /// reads -180, not +180 (combat doc 15.3.1).
     #[test]
     fn no_file_aims_the_raw_view_and_records_it() {
         let ps = still(0.0);

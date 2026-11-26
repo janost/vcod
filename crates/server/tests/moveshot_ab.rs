@@ -37,7 +37,7 @@ const PROBE: &str = "probe_moveshot";
 /// tag, round and why. Empty since the captures log the wait's cmds and
 /// the placement's velocity: the street placement's fall then rests on
 /// retail's bits and every round lands on retail's unit (cod11-combat.md
-/// 2.1, "The street placement").
+/// 2.1.1.2).
 const GAPS: &[(&str, &str, usize, &str)] = &[];
 
 /// One part of the probe: its `probe_spot`, the weapon and where the
@@ -364,7 +364,7 @@ fn ours(p: &'static Cod1Wire, mut fs: Pk3Fs, part: Part, cap: &Capture) -> (Vec<
                 shift = Some((s.server_time - r.0).raw());
                 // The placement shares the spawn's frame and keeps what
                 // the cmds run at the spawn point left: retail's, from its
-                // snapshot (cod11-combat.md 2.1, "The street placement").
+                // snapshot (cod11-combat.md 2.1.1.2).
                 sv.test_set_client_velocity(0, r.3);
             }
         }
@@ -462,7 +462,7 @@ fn check(p: &'static Cod1Wire, fs: Pk3Fs, part: Part, tag: &str) {
     let mut bad = Vec::new();
     // Where the placement's fall left the body, at the script's first
     // snapshot: retail's to the bit once the capture logs the wait's cmds
-    // (cod11-combat.md 2.1, "The street placement").
+    // (cod11-combat.md 2.1.1.2).
     if !cap.wait_snaps.is_empty() {
         let r = cap.states.first().expect("a snapshot");
         match our_states.iter().find(|o| o.0 == r.0) {

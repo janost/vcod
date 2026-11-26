@@ -142,7 +142,7 @@ pub(super) struct SlopeCapture {
     /// `--probe-moveshot`: from the first spawned snapshot until the capture
     /// opens, a `!wsnap` line per snapshot and a `!wcmd` per cmd the server
     /// had not run by the first, so a replay falls from the placement on
-    /// retail's cmds (cod11-combat.md 2.1, "The street placement").
+    /// retail's cmds (cod11-combat.md 2.1.1.2).
     pub(super) wait_log: bool,
     pub(super) wait: Vec<String>,
     pub(super) wait_seen: Option<u32>,

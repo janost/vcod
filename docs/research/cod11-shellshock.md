@@ -325,7 +325,7 @@ velocity match exactly on every retail snapshot, the placement's included.
 VERIFIED (capture, replay): the placement snapshot (t 15000) acknowledged
 commandTime 14968, and the client's first logged `!cmd` is 15018. Retail
 also ran an unlogged holding cmd at 15000, sent before the probe saw the
-placement (cod11-movers.md 15, "The cmd at the placement"). The gate runs
+placement (cod11-movers.md 15.7.3). The gate runs
 the placement frame to 14968 and that cmd at 15000 before the log's first.
 Without it the first forward cmd runs from 14950 and leaves a constant 1.66
 units on the origin.

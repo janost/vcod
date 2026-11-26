@@ -85,7 +85,7 @@ VERIFIED, `cod_lnxded` (1.1d):
 
 - The anim loader rebuilds a full key's `w` in 0x080c2598 as `0x3fff0001 - (x^2 + y^2 + z^2)` in integers (0x3fff0001 is 32767 squared): 0 when that is under 1, else its square root plus 0.5 (0x080db988) truncated to a short. A z-only key's in 0x080c264c the same way off `z` alone.
 - The loader 0x080b7160 negates a key whose dot product with the one before is negative (the `< 0` test in the loop after the call that returns to 0x080b7e70), so a track's keys run continuously.
-- Before that a bit per track negates its first key (the `uVar26 & 1` arms after the key rebuilds that return to 0x080b7a96 and 0x080b7dc5). That bit is bitset A, the first after the header (`puVar16`, the read pointer before the copy at 0x080b7838 takes bitset B, the z-only bits, into `__dest`). So a track's keys carry the sign the file chose, and the sampler and the node walk add them as signed (cod11-movers.md 15, "Torso over legs").
+- Before that a bit per track negates its first key (the `uVar26 & 1` arms after the key rebuilds that return to 0x080b7a96 and 0x080b7dc5). That bit is bitset A, the first after the header (`puVar16`, the read pointer before the copy at 0x080b7838 takes bitset B, the z-only bits, into `__dest`). So a track's keys carry the sign the file chose, and the sampler and the node walk add them as signed (cod11-movers.md 15.7.5).
 - The sampler 0x080b8370 lerps the four shorts and scales by the clip weight over 32767 (0x080db1ec) into a per-bone sum.
 
 VERIFIED, vcod measurement, `legs_ab`'s torso gate: without the bitset, and with every sum aligned to its first contributor, ours' `bip01 l hand` turned 178 degrees off retail's through each reload's blend-out; with it, 0.13 at worst. vcod: `xanim::parse`.

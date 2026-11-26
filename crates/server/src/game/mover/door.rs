@@ -296,7 +296,7 @@ pub fn spawn(
             link_brush(host, cx, id);
             // The spawn left the `angles` key in `apos.trBase` too, which
             // `G_SetMovedir` does not clear: the first `G_MoverTeam` turns
-            // the door by it (movers doc 26, "The angles key").
+            // the door by it (movers doc 26.5).
             apos.base = host.vec_field(cx, id, "angles");
             let dir = set_movedir(host, cx, id);
             let (mins, maxs) = brush_box(host, id);

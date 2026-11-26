@@ -184,8 +184,7 @@ fn trace_worlds(
 /// floats on the x87 stack and stores each point moved into a bone's frame
 /// and the fraction; 1.5b's and United Offensive's (1.5b 0x80d2000, UO
 /// `coduo_lnxded` 0x80c7394) store every assignment: each point, each slab
-/// distance, each denominator and each fraction (cod11-combat.md 3.1, "The
-/// arithmetic on 1.5 and UO", "The pose on 1.1"). The Windows
+/// distance, each denominator and each fraction (cod11-combat.md 3.1.1 and 3.1.3). The Windows
 /// cgames' stand in [`bone_trace`].
 pub fn bone_trace_in(
     skel: &Skeleton,

@@ -2248,7 +2248,7 @@ second later switches it there, then raises the earthquake and the
 | `*-uo-overheat.bin` | section 18's tank recipe with `--probe-vehicle overheat` for the gunner |
 | `*-uo-turret.bin` | the turret commands below |
 | `*-uo-bazooka.bin` | the flame recipe with `+set probe_weapon bazooka_mp`, port 31211, the spectator tagged `uo-bazooka` for 55 s and the `--probe-weapsel` shooter 3 s later for 48 s |
-| `*-uo-bazooka-draw.bin` | the bazooka recipe on port 34531 with the server under gdb, which read the round's `gunrandom` pair and its direction's bits (cod11-combat.md 13.6, "The direction's bits"); `the_bazooka_rocket_leaves_on_retails_bits` replays it |
+| `*-uo-bazooka-draw.bin` | the bazooka recipe on port 34531 with the server under gdb, which read the round's `gunrandom` pair and its direction's bits (cod11-combat.md 13.6.1); `the_bazooka_rocket_leaves_on_retails_bits` replays it |
 
 Artillery, smoke and bipod:
 

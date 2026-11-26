@@ -25,7 +25,7 @@
 //!
 //! Each capture holds its client's cmds (`CMDS` lines), and ours replays them
 //! (`ProbeHold::framed`): where a fall lands and slides rides on where its
-//! cmds split it (movers doc 21, "The slide down the slope").
+//! cmds split it (movers doc 21.3).
 //!
 //! `WORLDCOPY_REPORT=1` prints every compared row, `WORLDCOPY_PS=1` the
 //! client's playerstate per snapshot.
@@ -741,7 +741,7 @@ fn a_pitched_copy_blocks_its_rider_like_retail() {
 }
 
 /// The same on 1.5b and UO, whose `G_TryPushingEntity` stores each step of
-/// the carry (cod11-movers.md 21, "The carry's rounding").
+/// the carry (cod11-movers.md 21.4).
 #[test]
 fn a_pitched_copy_blocks_its_rider_like_retail_on_15() {
     pitched_matches(
@@ -946,7 +946,7 @@ fn a_capsule_lands_on_a_tilted_submodel_like_retail_again() {
 
 /// `probe_rollramp`'s capture: a player dropped onto a rolled submodel's
 /// non-axial side, where the turned sphere offset's `-l.z` sign picks the
-/// sphere (movers doc 22, "A rolled submodel's non-axial side").
+/// sphere (movers doc 22.2).
 #[test]
 fn a_capsule_lands_on_a_rolled_submodels_non_axial_side_like_retail() {
     tilt_matches(ROLL, ours_roll());
@@ -954,8 +954,7 @@ fn a_capsule_lands_on_a_rolled_submodels_non_axial_side_like_retail() {
 
 /// The rolled ramp on retail 1.5b: its engine's `AngleVectors` rounds the
 /// turn as 1.1d's does, and a trace the ramp cuts short ends where
-/// `SV_Trace` puts it, its delta stored (movers doc 22, "On 1.5b and United
-/// Offensive").
+/// `SV_Trace` puts it, its delta stored (movers doc 22.2.1).
 #[test]
 fn a_capsule_lands_on_a_rolled_submodels_non_axial_side_like_retail_on_1_5() {
     tilt_matches(ROLL_15, ours_roll_15());

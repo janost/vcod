@@ -1163,8 +1163,7 @@ mod tests {
 
     /// Retail's frame per cmd: `CL_FinishMove` sends the cmd with last
     /// frame's kick, then the cgame, at the next cmd's `serverTime`,
-    /// predicts the shot's cmd, fires and steps (combat doc 15.7, "The
-    /// frame a shot kicks"). `each` gets every cmd's index and kick, and
+    /// predicts the shot's cmd, fires and steps (combat doc 15.7.2). `each` gets every cmd's index and kick, and
     /// stops the run by returning false.
     fn run_kick(
         shot: &Shot,

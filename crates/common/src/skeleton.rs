@@ -287,7 +287,7 @@ pub type ClipAt<'a> = (&'a XAnim, &'a AnimBinding, f64, f32);
 /// A child of an anim tree node in a blend: a clip at its weight, or a node
 /// of its own at a weight over its children (an MG42 group over its rows, a
 /// row over its leaves), which the walk normalizes to that weight before its
-/// parent sums it (cod11-combat.md 3.1, "The pose on 1.5 and UO";
+/// parent sums it (cod11-combat.md 3.1.2;
 /// cod11-turrets.md 13.9).
 #[derive(Clone)]
 pub enum Blend<'a> {
@@ -338,8 +338,7 @@ fn node_sums(n: usize, children: &[Blend]) -> (Vec<glam::Vec4>, Vec<Vec3>, Vec<f
                     }
                     // Raw signed sums, no hemisphere alignment: two nodes on
                     // opposite hemispheres swing the long way round, as
-                    // retail's reload blend-out does (cod11-movers.md 15,
-                    // "Torso over legs").
+                    // retail's reload blend-out does (cod11-movers.md 15.7.5).
                     rot[bi] += r[bi].normalize() * w;
                     pos[bi] += p[bi] / k[bi] * w;
                     weight[bi] += w;
@@ -470,7 +469,7 @@ impl PoseBuffer {
     /// and an offset times the node's weight, and the bone takes the
     /// normalized sum and the offset sum over the weights of the nodes that
     /// key it. A bone one node alone keys takes that node's pose whatever its
-    /// weight. cod11-movers.md 15, "Torso over legs".
+    /// weight. cod11-movers.md 15.7.5.
     pub fn blend_nodes(&mut self, nodes: &[(&[ClipAt], f32)]) {
         let nodes: Vec<Blend> = nodes
             .iter()
@@ -572,7 +571,7 @@ const SHORT_SCALE: f32 = 1.0 / 32767.0;
 /// the skeleton build: the walk's rotation sum, unnormalized, in the keys'
 /// 1/32767 units times the weights, the summed weight, the translation
 /// offset sum, and whether a controller turns it in model space
-/// (cod11-combat.md 3.1, "The pose on 1.5 and UO").
+/// (cod11-combat.md 3.1.2).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Record {
     pub q: [f32; 4],
@@ -1055,7 +1054,7 @@ fn axes_kept(q: [f32; 4], root: bool) -> [Vec3; 3] {
 /// its parent's, a control bone's the other way round, and its offset plus
 /// its bind position turned through the parent's matrix (0x80c4078), the
 /// `x` sum kept on the stack and `y` and `z` stored first
-/// (cod11-combat.md 3.1, "The pose on 1.1").
+/// (cod11-combat.md 3.1.3).
 pub fn build_kept(skel: &Skeleton, records: &[Record]) -> Vec<StoredBone> {
     let mut out: Vec<StoredBone> = Vec::with_capacity(records.len());
     for (b, r) in skel.bones.iter().zip(records) {

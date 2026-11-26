@@ -126,8 +126,7 @@ fn cod4_refuses_to_delete_a_client() {
 
 /// `probe_entnum` on retail: the free a `delete()` schedules 100 ms out
 /// runs in that frame's entity pass, after the frame's threads, so a
-/// thread woken on it still reads the entity (combat doc 14.7, "Entity
-/// numbers").
+/// thread woken on it still reads the entity (combat doc 14.7.3).
 #[test]
 fn a_delete_s_free_runs_after_the_threads_of_its_frame() {
     let mut rt = ScriptRuntime::for_test(

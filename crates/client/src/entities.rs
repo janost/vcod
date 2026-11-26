@@ -864,7 +864,7 @@ struct EntityAnim {
     skeleton: Rc<Skeleton>,
     pose: PoseBuffer,
     /// The cgame's two lerp frames (`ci+0x37c`, `ci+0x3ac`) and the DObj's
-    /// clips under them (cod11-movers.md 15, "The drawn body's clip").
+    /// clips under them (cod11-movers.md 15.8).
     legs: ChannelClock,
     torso: ChannelClock,
     /// Roster-resolved visual from the last frame this entity resolved (body
@@ -1090,7 +1090,7 @@ impl SeatLeaves {
 /// the last node change or the release left, which fades out on the rows it
 /// carried: nothing places it again once `eFlags & 0xc000` clears (cgame
 /// 0x300282bf). The server's `ClientSim::set_gunner_blend` (turrets doc
-/// 13.9, "The dismount").
+/// 13.9.5.2).
 #[derive(Clone, Default)]
 struct TurretLeaves {
     goal: Option<(usize, Vec<vcod_common::turretpose::TurretRow>)>,

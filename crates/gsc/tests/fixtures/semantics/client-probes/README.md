@@ -2651,7 +2651,7 @@ PORT=<p> COD_DIR=<install> SECS=22 tools/run_probe.sh client-probes/probe_yawres
 
 The fixture is `crates/server/tests/fixtures/movers/mp_carentan-dm-yawres.txt`,
 gated by `ride_ab.rs`'s `a_rotated_brush_model_keeps_retails_quantized_angles`
-(cod11-movers.md 12, "The residual yaw").
+(cod11-movers.md 12.1).
 
 ## probe_crush
 
@@ -2673,7 +2673,7 @@ The 2026-10-20 run (port 34213) is
 lines, then the client's `RIDE` and trajectory lines and its `CMDS` lines,
 which carry the `commandTime` of every snapshot it parsed. `ride_ab.rs`'s
 `a_blocked_slab_moves_on_a_frame_without_a_cmd_like_retail` replays the
-cmds (cod11-movers.md 12, "A blocked mover").
+cmds (cod11-movers.md 12.3).
 
 ## probe_anglesnap
 
@@ -2688,8 +2688,7 @@ PORT=<p> COD_DIR=<install> SECS=12 tools/run_probe.sh client-probes/probe_angles
 
 The fixture is `crates/server/tests/fixtures/movers/mp_carentan-dm-anglesnap.txt`
 (1.1d; 1.5b and UO 1.51b print the same lines), gated by `ride_ab.rs`'s
-`every_link_snaps_angles_like_retail` (cod11-movers.md 12, "The snap on
-every link").
+`every_link_snaps_angles_like_retail` (cod11-movers.md 12.2).
 
 ## probe_leanhit
 

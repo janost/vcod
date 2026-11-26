@@ -115,8 +115,7 @@ const TORSO_SCRIPT: &[Step] = &[
 /// Stop and go: the legs leave a run some 350 ms after its keys let go,
 /// once the body has slowed, so each short stop holds 400-500 ms and the
 /// next go takes the run back inside its 120-250 ms blend to the idle,
-/// while it still has weight (`legs_ab.rs`, cod11-combat.md 3.1, "The
-/// setter on a weighted node"); the strafe swap does the same in one
+/// while it still has weight (`legs_ab.rs`, cod11-combat.md 3.1.5); the strafe swap does the same in one
 /// 150 ms step. Each long stop lets every node settle first. Forward runs
 /// 3 s and backward 1.7 s, inside the floor's 680 units.
 const STOPGO_SCRIPT: &[Step] = &[
@@ -164,7 +163,7 @@ impl Walk {
 /// `!cmd` lines at `ms=0`. The probe sends a frame's cmd before it reads
 /// that frame's snapshot, so the ones past the placement snapshot's
 /// `commandTime` ran after the placement on the server and belong in the
-/// log (cod11-movers.md 15, "The cmd at the placement").
+/// log (cod11-movers.md 15.7.3).
 #[derive(Default)]
 pub struct BeforePlacement(std::collections::VecDeque<(i32, String)>);
 
