@@ -2236,6 +2236,166 @@ brush geom sits at the body's point while its brush is in the model's
 frame: its +0x50 is what to take off a brush point before turning it by
 the body. INFERRED (the build above).
 
+#### 3.6.4 The box collider, as ported
+
+I ported 1.7's box (class 1) collider against the world into
+`ode::collide::boxes`, P3a of the world 0/1 port. Addresses are
+`iw3mp.exe`'s (3.6), read with `objdump` and decompiled. The triangle
+test is ODE 0.5's box against a triangle list (`collision_trimesh_box.cpp`)
+as IW rebuilt it; that 0x5b1620 and its callees are that file's is
+INFERRED (their shape against the upstream source).
+
+The arm (0x5a8237), `BoxGeom`:
+
+- The sides (+0x4c..+0x54) times the double 0.5 at 0x70ace8 are the half
+  sides (context +0x8c). The geom's rotation goes in twice, its columns
+  (the axes) at +0x44 and its rows at +0x68 (0x5a8173..0x5a8215); the
+  body's position (body +0xe0) is at +0x98. The walk's box is the
+  position less and plus `(|a1| h1 + |a0| h0) + |a2| h2 + 1` per world
+  axis, `a_k` the axes. The box is narrow when `phys_narrowObjMaxLength`
+  is over a side (0x5a832c..0x5a8362). VERIFIED (the instructions).
+- The walk, the room test before a brush and the normals turned round
+  after are the capsule's (`cod4-player-anims.md` 10.6). A box geom
+  outside a transform sits at its body's point (3.6.3), so the centre and
+  +0x98 are one point for every box the takes hold. VERIFIED (the
+  captures).
+
+Against a brush (0x59a610):
+
+- 0x599da0 runs first. Of the faces whose plane the centre lies in front
+  of, the axial ones in the order `+x -x +y -y +z -z` and then the sides,
+  a separation (the centre's distance less the box's reach) of 0 or more
+  ends the collide. The reach is the world extent for an axial face and
+  `|n . a2| h2 + (|n . a0| h0 + |n . a1| h1)` for a side, each dot
+  stored for 0x401000's `fabs`. The largest separation of a face with
+  edges is the brush's candidate, its plane kept; `-1` when no face has
+  one. VERIFIED (the decompiled code, the compares).
+- Every face's winding (0x5998e0, room for 0x400 corners over all the
+  faces) is taken into the box's frame, `q = R^T (p - c)`. Each box face
+  keeps its least `q_k - h_k` (the plus face) or `-h_k - q_k` (the minus
+  face), from 0; one left at 0, the brush clear of that face, ends the
+  collide. The largest is the box's candidate, a later one only when
+  strictly larger, the axes outer and the sides inner
+  (0x59a6a2..0x59a960). VERIFIED (the decompiled code, the compares).
+- The box's candidate is the reference when the brush's separation is
+  under it, or the brush has no candidate or its winding is empty; else
+  the brush's is (0x59a98f..0x59a9a9). VERIFIED (the compare). So the
+  less deep is the reference, which 3.6.1 left INFERRED. No axis between
+  two edges is tried: 0x59a610 calls nothing but 0x599da0, 0x596ae0,
+  0x5998e0, the debug draw 0x597200, 0x598d60, 0x597fd0, 0x59a2b0 and
+  0x59a500. VERIFIED (the calls).
+- A box face as reference: 0x598d60 picks the face with a winding whose
+  normal dots least with the box face's, under -0.1 (the double at
+  0x70b490, from 2.0 at 0x700c0c). 0x597fd0 walks the box face's corners:
+  `R hs` (the halves, `hs_k` negated for the minus face), then `-2 h`
+  along the next axis, `-2 h` along the one after and `2 h` along the
+  next, each stored, plus the centre, each put onto the brush face's
+  plane. The face's winding is cut by the four edges' planes in order
+  (0x597800). An edge's plane is `e x n`, or `n x e` when the corners
+  wind against the brush normal (0x5974b0: the first corner pair whose
+  cross product with the first edge is over 0.01 squared, the float at
+  0x6df494), unnormalized, through the edge's start; an edge or plane
+  normal under 0.1 squared is skipped (0x5975e0, the double at
+  0x70b040). Fewer than three corners left give no contact. Each corner
+  left with `(n . c + h) - n . p` over 0 is a contact of that depth along
+  the box face's normal, with the brush face's surface flags, while the
+  list has room. VERIFIED (the decompiled code, the instructions).
+- A brush face as reference (0x59a2b0): its normal negated is the
+  contacts'. The box face is the least of `a . n` and `-a . n` over the
+  axes from 1.0 (0x5994c0). Its corners, walked as above from the
+  centre, are cut by the brush face's winding's edge planes, starting
+  with the edge from the last corner (0x5989f0 into 0x597e70). Each
+  corner left with `d - n . p` over 0 is a contact of that depth.
+  VERIFIED (the decompiled code, the instructions).
+- The narrow pass is 3.6.1's loop (0x59aabe..0x59ac8a), its excluded
+  face the one the reference clip took: 0x598d60's pick when a box face
+  was the reference, or `-1` when it found none. A face goes through
+  0x59a2b0 when its winding, cut by the box's six face planes in turn
+  (`a_k . x <= h_k + a_k . c`, then the minus side, 0x59a500), keeps a
+  corner after each cut. VERIFIED (the decompiled code).
+- 0x597800, IW's clip in place to `n . x <= d` (the dot stored): no
+  corner inside gives 0; all inside, the polygon. Else the corner after
+  the last edge leaving and the corner before the last edge entering
+  move onto the plane along those edges, and the run between them goes
+  (0x597440). With one corner outside, a corner goes in after it,
+  taking the meet on its edge to the next corner, and it takes the meet
+  on its edge from the one before. An edge along the plane (its dot 0)
+  moves nothing. VERIFIED (the decompiled code, the instructions).
+- The depths: 0x597fd0 and 0x5989f0 store each dot before the
+  subtraction (0x5986a7, 0x598a52), so a contact a few thousand units
+  out has its depth rounded to the dot's float. VERIFIED (the
+  instructions, and the watermelon take's depths).
+
+Against triangles (0x59c500 into 0x5b1620):
+
+- 0x59c500 hands 0x5b1620 the half sides, the position, the rotation as
+  ODE's 3x4 (0x596b80), the body's position (context +0x98), the room
+  left and the list, and gives each new contact the partition's surface
+  flags (0x59c57f..0x59c593). 0x5b1620 takes each triangle while its
+  count is under the room (`and 0xffff`, 0x5b1749), as ODE's
+  `(v0, v1, v2) = (t2, t1, t0)` (the stores at 0x5b1753..0x5b17cb),
+  through 0x5af410 and, when that passes, 0x5b0590. VERIFIED (the
+  instructions).
+- 0x5af410 against upstream's `_cldTestSeparatingAxes`: a triangle with
+  an edge's squared length under 0.01 (`e0`, `e1`, then `e1 - e0`) or a
+  normal `e0 x e1` under 0.01 long is skipped. The normal is normalized
+  in place (0x4076d0, its length returned and used for upstream's
+  unnormalized dots). One with `n . (v0 - c)` at least 0 and the body's
+  `n . b - n . v0` under 0 is skipped too (0x5af620..0x5af678). VERIFIED
+  (the compares). Then axis 1 with its depth `fR + n . (v0 - c)`, under 0
+  separating. VERIFIED (the instructions). Every value handed to a test
+  is a pushed float. VERIFIED (the pushes).
+- The tests: the normal's (0x5aefa0) scales the depth by the inverse of
+  `sqrt` of the normal's squared length (0x401050) and keeps it strictly
+  under the best. A box axis (0x5af030) turns the axis against the
+  triangle's normal when their dot is over 0 and takes `r + max` then,
+  else `r - min`, where upstream flips by the lesser depth. An edge axis
+  (0x5af170) is upstream's, kept when 1.5 (the double at 0x70ada0) times
+  its scaled depth is under the best. VERIFIED (the instructions).
+- 0x5b0590 against upstream's `_cldClipping`: the edge arm
+  (0x5b05b0..0x5b094a) makes its one contact with no room test, the box
+  corner built an axis at a time. The box face arm
+  (0x5b095c..0x5b0e56) is upstream's. Then every path goes on to the
+  triangle arm at 0x5b0e62 (the jumps at 0x5b094a and 0x5b0956, the fall
+  through at 0x5b0e5c). It picks the box face by the triangle's normal
+  `n`, not the best normal, and makes contacts along `-n`, `-min(0, n .
+  p)` deep. VERIFIED (the jumps, the instructions). So a triangle met on
+  a box axis or an edge gives that arm's contacts and the face's too.
+  INFERRED (the flow above).
+- No contact goes through 0x59c710's merge; the box writes the list
+  directly. VERIFIED (the calls).
+
+The gate, `cod4::phys_box_ab::box_contacts_match_retails_collides`:
+
+- Every class 1 collide of the four takes (3.6.2), fed the captured pose
+  and sides, against the capture's `dCollide` output and its contact
+  pass input: count, order, position, normal, depth within 1e-4,
+  surface flags. Raw contacts: the round's 40 collides, the frag's 160
+  and the car's 160 equal to the bit; the watermelon's 238 of 240 equal
+  to the bit, one within 5e-7, one 2.4e-4 off. The cut through
+  `collide::cut`: 238 of the 240 with a pass input. VERIFIED (the run,
+  ours).
+- A take's `body` line is dumped at 0x5a6e69, before the frame's sweep
+  (0x5a6c10 into 0x5a6930, 3.6.1), so the gate moves each body as that
+  sweep does from the line before: three collides (the car's step 39
+  body 2, the watermelon's steps 28 and 34) match only so. VERIFIED (the
+  run). The one left 2.4e-4 off (step 28) is an ulp of position at x
+  3530, the sweep's stop: vcod's trace and retail's put it an ulp apart.
+  INFERRED.
+- The watermelon's step 13 body 5, raw contacts equal to the bit, cuts
+  to the same five in another order. `cut` dots the normals in `f32`
+  and ties 0x5a18e0's third seed (the larger dot with the two seeds)
+  where retail does not. INFERRED (the values; 0x5a18e0's precision not
+  read).
+- What the takes reach: a box face reference with contacts 114 times,
+  a brush face reference 97 times, the triangle face arm 692 contacts,
+  the box face arm 12 and the edge arm 12; the narrow pass never added
+  one. VERIFIED (the run, counted with a probe not kept).
+  `a_narrow_box_over_a_brushs_edge_takes_its_top_too` pins the narrow
+  pass; `a_clip_past_one_corner_puts_a_corner_in` and
+  `a_clip_past_two_corners_moves_them_onto_the_plane` pin 0x597800's
+  two arms. VERIFIED (the tests, ours).
+
 ## 4. The load
 
 - Zones: `code_post_gfx_mp`, `common_mp`, then the map's: the three names

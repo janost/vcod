@@ -4,6 +4,7 @@
 //! 0x5a2760) and the self collision hook (0x5bd9c0, [`selfcol`]);
 //! cod4-player-anims.md 10.6.
 
+pub mod boxes;
 pub mod capsule;
 pub mod selfcol;
 pub mod world;

@@ -21,6 +21,7 @@ mod moves_ab;
 mod net_decode;
 mod net_hostile;
 mod part_edges;
+mod phys_box_ab;
 mod phys_create;
 mod phys_fixtures;
 mod ragdoll_ab;
