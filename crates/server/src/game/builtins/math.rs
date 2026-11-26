@@ -708,11 +708,8 @@ mod tests {
     fn the_random_builtins_draw_holdrand() {
         let (mut vm, mut host) = fixture();
         host.holdrand = vcod_common::rng::HoldRand(12345);
-        let mut s = 12345u32;
-        let mut next = || {
-            s = s.wrapping_mul(0x343fd).wrapping_add(0x269ec3);
-            (s >> 17) as i32
-        };
+        let mut s = vcod_common::rng::MsvcRand::seed(12345);
+        let mut next = || (s.step() >> 17) as i32;
         vm.with_cx(|cx| {
             let n = |v: i32| Value::Int(v);
             let f = |v: f32| Value::Float(v);

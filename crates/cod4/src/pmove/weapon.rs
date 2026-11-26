@@ -511,21 +511,21 @@ impl super::PlayerState {
     }
 }
 
-/// `Touch_Item` on a dropped `weapon` (def `d`) that `ps` holds: the item's
-/// `rounds` (its clip and stock) into the reserve up to `maxAmmo`, and
-/// `EV_ITEM_PICKUP` with the weapon when any went in (cod4-combat.md 6).
-/// Whether any did.
-pub fn take_ammo(ps: &mut super::PlayerState, d: &WeaponDef, weapon: u32, rounds: i32) -> bool {
+/// `Touch_Item`'s ammo take (`cod4_lnxded` 0x8091d44) on a dropped `weapon`
+/// (def `d`) whose ammo slot `ps` holds a weapon on: the item's `rounds`
+/// into the reserve up to `maxAmmo`, and `EV_ITEM_PICKUP` with the weapon
+/// when any went in (cod4-combat.md 6.2.1). The rounds that went in.
+pub fn take_ammo(ps: &mut super::PlayerState, d: &WeaponDef, weapon: u32, rounds: i32) -> i32 {
     let Some(&have) = ps.ammo.get(d.ammo_index) else {
-        return false;
+        return 0;
     };
     let after = (have + rounds.max(0)).min(d.max_ammo.max(have));
-    if !ps.has_weapon(weapon) || after == have {
-        return false;
+    if after == have {
+        return 0;
     }
     ps.ammo[d.ammo_index] = after;
     ps.add_event(ev::ITEM_PICKUP, weapon);
-    true
+    after - have
 }
 
 fn clip(ps: &super::PlayerState, d: &WeaponDef) -> i32 {
