@@ -5,8 +5,8 @@
 //! modified it, read off the binary (cod4-player-anims.md 10.4). Bodies,
 //! masses, the ball, hinge, angular motor and contact joints, the island
 //! walk and IW's QuickStep; and the ragdoll world's contacts, IW's capsule
-//! colliders and near callback (`collide`, 10.6). Not wired into
-//! `ragdoll` yet.
+//! colliders and near callback (`collide`, 10.6). `ragdoll::pool` runs
+//! the corpses on it (10.7).
 
 pub mod body;
 pub mod collide;

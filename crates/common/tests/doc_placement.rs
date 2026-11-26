@@ -49,10 +49,6 @@ const ALLOWED: &[(&str, &str)] = &[
         "`eFlags` (entity and playerstate, 24 bits).",
     ),
     (
-        "crates/cod4/src/ragdoll.rs",
-        "its share of `ragdoll_explode_force` as a change of momentum.",
-    ),
-    (
         "crates/cod4/src/collision/mod.rs",
         "A hash of every array of `c` the clip reads, each led by its length.",
     ),

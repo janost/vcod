@@ -12,9 +12,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use vcod_cod2::player::{Character, PlayerAnimSet, PlayerBody, PlayerRig, PosedPlayer, RigParts};
 use vcod_cod4::anim::BodySource;
-use vcod_cod4::ragdoll::{
-    CLIP_MASK, Dvars, Explosion, Ragdoll, RagdollDef, State as RagState, Sweep,
-};
+use vcod_cod4::ragdoll::{DObj, Dvars, Explosion, RagdollDef, Ragdolls, SlotId, State as RagState};
 use vcod_common::playerpose::{BG_SWING_SPEED, Cod4Arith, LeanDvars};
 
 use crate::cod4_fly::WeaponModels;
@@ -57,9 +55,6 @@ struct Body {
     corpse: Option<(i32, i32)>,
     /// A corpse's ragdoll once its entity took a ragdoll type.
     ragdoll: Rag,
-    /// A corpse's bones in the world as last drawn, and when: the
-    /// ragdoll's starting velocities.
-    last_world: Option<(Vec<(Vec3, Quat)>, i32)>,
     /// The rig last drawn: its held weapon's world model, the rig (`None`
     /// when it did not build) and its `tag_flash` and `tag_brass` bones.
     rig: Option<HeldRig>,
@@ -72,19 +67,21 @@ struct Body {
 }
 
 type RagSkinsKey = (u64, usize, [u32; 16]);
+/// The def's and the clip map's addresses a pool was made for.
+type RagKey = (usize, usize);
 /// Each rig model's name and skin matrices.
 type Skins = Vec<(String, Vec<glam::Mat4>)>;
 
 type HeldRig = (Option<String>, Option<(Rc<PlayerRig>, [Option<usize>; 3])>);
 
-/// A corpse's ragdoll: not started, running or asleep, or refused (the
-/// tunnel test, a def bone missing, `ragdoll_max_simulating` reached at
-/// its start), whose corpse then keeps its death anim.
+/// A corpse's ragdoll: not started, its slot in [`Ragdolls`], or refused
+/// (no slot under `ragdoll_max_simulating`, a def bone missing, the
+/// tunnel test), whose corpse then keeps its death anim.
 #[derive(Default)]
 enum Rag {
     #[default]
     None,
-    On(Box<Ragdoll>),
+    On(SlotId),
     Refused,
 }
 
@@ -137,6 +134,9 @@ pub struct Cod4Players {
     pub heads: HashMap<u32, Vec3>,
     /// Set by the caller; without it corpses only play their death anims.
     pub ragdoll: Option<RagdollWorld>,
+    /// The ragdolls' pool and world 2, kept while the def and the clip
+    /// map stay (a map load is `Phys_Init`'s new world).
+    ragdolls: Option<(RagKey, Ragdolls)>,
     /// The blasts' jitter draws.
     seed: vcod_common::rng::MsvcRand,
 }
@@ -155,6 +155,7 @@ impl Default for Cod4Players {
             tags: HashMap::new(),
             heads: HashMap::new(),
             ragdoll: None,
+            ragdolls: None,
             seed: Default::default(),
         }
     }
@@ -215,22 +216,16 @@ impl Cod4Players {
             // Over 32767, not the 32768 of `unit`.
             seed.next() as f32 / 32767.0 * 2.0 - 1.0
         };
-        self.bodies
-            .values_mut()
-            .filter_map(|b| match &mut b.ragdoll {
-                Rag::On(r) => Some(r),
-                _ => None,
-            })
-            .map(|r| r.explode(e, &mut rand))
-            .filter(|&hit| hit)
-            .count()
+        self.ragdolls
+            .as_mut()
+            .map_or(0, |(_, r)| r.explode(e, &mut rand))
     }
 
-    /// Body `n`'s ragdoll, once one runs.
+    /// Body `n`'s ragdoll and the pool it runs in, once it has a slot.
     #[cfg(test)]
-    pub fn ragdoll_of(&self, n: u32) -> Option<&Ragdoll> {
+    pub fn ragdoll_of(&self, n: u32) -> Option<(&Ragdolls, SlotId)> {
         match &self.bodies.get(&n)?.ragdoll {
-            Rag::On(r) => Some(r),
+            Rag::On(id) => Some((&self.ragdolls.as_ref()?.1, *id)),
             _ => None,
         }
     }
@@ -284,6 +279,31 @@ impl Cod4Players {
             sampled,
             controls: *body.body.controls(),
         })
+    }
+
+    /// `Ragdoll_Update` once a frame, before the bodies pose: the pool made
+    /// for the level's def and clip map (anew when either changes) and run
+    /// `frametime_ms` on. With no world or `ragdoll_enable` off every slot
+    /// goes and the corpses keep their death anims.
+    fn step_ragdolls(&mut self, frametime_ms: i32) {
+        let Some(w) = self.ragdoll.as_ref().filter(|w| w.dvars.enable) else {
+            if self.ragdolls.take().is_some() {
+                for b in self.bodies.values_mut() {
+                    b.ragdoll = Rag::None;
+                }
+            }
+            return;
+        };
+        let key = (Arc::as_ptr(&w.def) as usize, Arc::as_ptr(&w.clip) as usize);
+        if self.ragdolls.as_ref().is_none_or(|(k, _)| *k != key) {
+            for b in self.bodies.values_mut() {
+                b.ragdoll = Rag::None;
+            }
+            self.ragdolls = Some((key, Ragdolls::new(w.def.clone(), w.dvars)));
+        }
+        let (_, r) = self.ragdolls.as_mut().expect("made above");
+        r.dvars = w.dvars;
+        r.update(frametime_ms, &*w.clip);
     }
 
     /// Steps and poses `bodies` (entity number, its view) at
@@ -340,6 +360,14 @@ impl Cod4Players {
                     render_time,
                 )
             });
+            if let Some(Body {
+                ragdoll: Rag::On(id),
+                ..
+            }) = self.bodies.get(n)
+                && let Some((_, r)) = &mut self.ragdolls
+            {
+                r.release(*id);
+            }
             self.bodies.insert(
                 *n,
                 Body {
@@ -348,19 +376,20 @@ impl Cod4Players {
                     seen_ms,
                     corpse: Some((client, teleport)),
                     ragdoll: Rag::None,
-                    last_world: None,
                     rig: None,
                     rag_skins: None,
                 },
             );
         }
-        self.bodies
-            .retain(|n, _| bodies.iter().any(|(b, _)| b == n));
-        let mut running = self
-            .bodies
-            .values()
-            .filter(|b| matches!(&b.ragdoll, Rag::On(r) if r.state == RagState::Running))
-            .count();
+        let ragdolls = &mut self.ragdolls;
+        self.bodies.retain(|n, b| {
+            let keep = bodies.iter().any(|(k, _)| k == n);
+            if !keep && let (Rag::On(id), Some((_, r))) = (&b.ragdoll, ragdolls.as_mut()) {
+                r.release(*id);
+            }
+            keep
+        });
+        self.step_ragdolls(frametime_ms);
         let mut out = Vec::new();
         for (i, (n, v)) in bodies.iter().enumerate() {
             let body = self.bodies.entry(*n).or_insert_with(|| Body {
@@ -369,7 +398,6 @@ impl Cod4Players {
                 seen_ms: render_time,
                 corpse: None,
                 ragdoll: Rag::None,
-                last_world: None,
                 rig: None,
                 rag_skins: None,
             });
@@ -443,29 +471,22 @@ impl Cod4Players {
                 )
             });
             let turret = crate::cod2_players::place_gunner(&mut frame, placed.as_ref());
-            let rag = self
-                .ragdoll
-                .as_ref()
-                .filter(|w| w.dvars.enable && v.ragdoll);
-            // A corpse whose ragdoll runs or sleeps draws the ragdoll's
-            // bones alone: the death anim's pose under it is never drawn
-            // (cod4-client-perf.md 31), and a corpse fires no tag.
-            if v.corpse && rag.is_some() && matches!(body.ragdoll, Rag::On(_)) {
+            let rag = (v.corpse && v.ragdoll)
+                .then_some(self.ragdolls.as_mut().map(|(_, r)| r))
+                .flatten();
+            // A corpse whose ragdoll simulates or holds its pose draws the
+            // ragdoll's bones alone: the death anim's pose under it is
+            // never drawn (cod4-client-perf.md 31), and a corpse fires no
+            // tag.
+            if let (Some(r), Rag::On(id)) = (rag, &body.ragdoll)
+                && !r.wants_pose(*id)
+                && r.pose(*id).is_some()
+            {
                 let mut drawn = PosedPlayer {
                     transform: frame.transform(),
                     models: Vec::new(),
                 };
-                let r = ragdolled(
-                    body,
-                    rag,
-                    &rig,
-                    &drawn,
-                    &[],
-                    &mut running,
-                    frametime_ms,
-                    render_time,
-                );
-                drawn.models = r.expect("a ragdoll on with its world draws");
+                drawn.models = ragdoll_skins(body, r, *id, &rig, &drawn);
                 out.push((i, rig.clone(), drawn));
                 continue;
             }
@@ -485,16 +506,11 @@ impl Cod4Players {
             let mut drawn = posed_worlds(&rig, &worlds, &frame);
             if v.corpse {
                 let body = self.bodies.get_mut(n).expect("inserted above");
-                if let Some(r) = ragdolled(
-                    body,
-                    rag,
-                    &rig,
-                    &drawn,
-                    &worlds,
-                    &mut running,
-                    frametime_ms,
-                    render_time,
-                ) {
+                let rag = v
+                    .ragdoll
+                    .then_some(self.ragdolls.as_mut().map(|(_, r)| r))
+                    .flatten();
+                if let Some(r) = ragdolled(body, rag, &rig, &drawn, &worlds) {
                     drawn.models = r;
                 }
             }
@@ -586,87 +602,96 @@ fn posed_worlds(
     }
 }
 
-/// A corpse's skins under its ragdoll, its world bones kept for the next
-/// frame's start: the ragdoll starts on the first frame its entity reads
-/// a ragdoll type with `ragdoll_enable` on (fewer than
-/// `ragdoll_max_simulating` running), steps by the frame time and poses
-/// every bone; a corpse whose entity goes back to another type drops it.
+/// A corpse's ragdoll on this frame: its slot taken the first frame its
+/// entity reads a ragdoll type with `ragdoll_enable` on, fed the death
+/// anim's pose (`model_worlds`, the body's frame) until it simulates,
+/// let go once its entity takes another type. Its skins once it draws;
 /// `None` draws the death anim's pose.
 fn ragdolled(
     body: &mut Body,
-    rag: Option<&RagdollWorld>,
+    rag: Option<&mut Ragdolls>,
     rig: &PlayerRig,
     drawn: &PosedPlayer,
     model_worlds: &[(Vec3, Quat)],
-    running: &mut usize,
-    frametime_ms: i32,
-    render_time: i32,
 ) -> Option<Skins> {
-    let (_, turn, at) = drawn.transform.to_scale_rotation_translation();
-    let world: Vec<(Vec3, Quat)> = model_worlds
-        .iter()
-        .map(|&(p, q)| (turn * p + at, turn * q))
-        .collect();
-    let last = body.last_world.replace((world, render_time));
-    let Some(w) = rag else {
+    let Some(r) = rag else {
         body.ragdoll = Rag::None;
         return None;
     };
-    let clip = w.clip.clone();
-    let mut trace = move |a: Vec3, b: Vec3, r: f32| {
-        let e = Vec3::splat(r);
-        let t = clip.trace(a, b, -e, e, CLIP_MASK);
-        Sweep {
-            fraction: t.fraction,
-            normal: t.normal,
-            startsolid: t.startsolid,
-        }
-    };
     if matches!(body.ragdoll, Rag::None) {
-        let now = &body.last_world.as_ref().expect("just set").0;
-        let before = last
-            .as_ref()
-            .map(|(b, t)| (b.as_slice(), render_time.wrapping_sub(*t) as f32));
         body.rag_skins = None;
-        body.ragdoll = match (*running < w.dvars.max_simulating)
-            .then(|| Ragdoll::new(&w.def, &rig.skeleton, now, before, w.dvars, &mut trace))
-            .flatten()
-        {
-            Some(r) => {
-                *running += 1;
-                Rag::On(Box::new(r))
-            }
-            None => Rag::Refused,
-        };
+        body.ragdoll = r.create().map_or(Rag::Refused, Rag::On);
     }
-    let Rag::On(r) = &mut body.ragdoll else {
+    let Rag::On(id) = body.ragdoll else {
         return None;
     };
-    r.step(frametime_ms as f32, &mut trace);
+    if r.state(id).is_none_or(|s| s == RagState::Free) {
+        r.release(id);
+        body.ragdoll = Rag::Refused;
+        return None;
+    }
+    if r.wants_pose(id) {
+        let (_, turn, at) = drawn.transform.to_scale_rotation_translation();
+        let world: Vec<(Vec3, Quat)> = model_worlds
+            .iter()
+            .map(|&(p, q)| (turn * p + at, turn * q))
+            .collect();
+        let mut base = vec![(Vec3::ZERO, Quat::IDENTITY); rig.skeleton.bone_count()];
+        if let Some((_, m)) = rig.models.first() {
+            for (b, &k) in m.bones.iter().zip(rig.skeleton.model_map(0)) {
+                base[k] = (b.pos, b.rot);
+            }
+        }
+        r.feed(
+            id,
+            &DObj {
+                skel: &rig.skeleton,
+                base: &base,
+                origin: at,
+                turn,
+                world: &world,
+            },
+        );
+    }
+    r.pose(id)?;
+    Some(ragdoll_skins(body, r, id, rig, drawn))
+}
+
+/// The skins of a corpse at its ragdoll's pose, kept while the pose, the
+/// rig and the entity's transform hold (cod4-client-perf.md 38).
+fn ragdoll_skins(
+    body: &mut Body,
+    r: &Ragdolls,
+    id: SlotId,
+    rig: &PlayerRig,
+    drawn: &PosedPlayer,
+) -> Skins {
     let key = (
-        r.version(),
+        r.version(id),
         std::ptr::from_ref(rig) as usize,
         drawn.transform.to_cols_array().map(f32::to_bits),
     );
     if let Some((k, skins)) = &body.rag_skins
         && *k == key
     {
-        return Some(skins.clone());
+        return skins.clone();
     }
+    let (_, turn, at) = drawn.transform.to_scale_rotation_translation();
     let inv = turn.inverse();
     let local: Vec<(Vec3, Quat)> = r
-        .pose()
-        .into_iter()
-        .map(|(p, q)| (inv * (p - at), inv * q))
+        .pose(id)
+        .unwrap_or_default()
+        .iter()
+        .map(|&(p, q)| (inv * (p - at), inv * q))
         .collect();
-    let skins: Vec<_> = rig
+    let skins: Skins = rig
         .models
         .iter()
         .enumerate()
         .map(|(i, (name, _))| (name.clone(), rig.skeleton.skin_matrices(&local, i)))
         .collect();
     body.rag_skins = Some((key, skins.clone()));
-    Some(skins)
+    skins
 }
 
 /// The ragdoll push a fired event carries (`CG_EntityEvent`'s

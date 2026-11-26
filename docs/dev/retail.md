@@ -294,7 +294,13 @@ python3 -I tools/re/cod4_ragdoll_summary.py tmp/ragdoll.txt [another dump]
 - The death is at a known frame, not a known pose: the corpse's start pose
   and velocities change from run to run, so a fixture holds the start
   state with the steps.
-- The format and the committed take: `crates/cod4/tests/fixtures/README.md`.
+- Each body's line is followed by a `bone` line: its length, its mass and
+  the two pose snapshots the build read, what `ragdoll_ab` builds the
+  port off. One run on a loaded machine timed its loopback connection
+  out during the map load (`EXE_TIMEDOUT`, back at the menu); the rerun
+  with `+set sv_timeout 600 +set cl_timeout 600 +set cl_connectTimeout
+  600` before `+devmap` went through.
+- The format and the committed takes: `crates/cod4/tests/fixtures/README.md`.
 
 ## Public servers and the master
 

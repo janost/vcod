@@ -13,7 +13,7 @@ use crate::ode::world::Params;
 /// An axial box brush as the zones carry one: each face's neighbours in
 /// the order whose winding (0x5998e0) runs clockwise seen from outside,
 /// as every winding of mp_crash's does (`capsule_world`).
-fn cuboid(mins: [f32; 3], maxs: [f32; 3]) -> BrushFaces {
+pub(crate) fn cuboid(mins: [f32; 3], maxs: [f32; 3]) -> BrushFaces {
     let planes = BrushFaces::axial_planes(mins, maxs).to_vec();
     let n = |i: usize| Vec3::from(planes[i].0);
     let adjacent = (0..6)
@@ -40,7 +40,7 @@ fn cuboid(mins: [f32; 3], maxs: [f32; 3]) -> BrushFaces {
 }
 
 /// A world of brushes alone, every one in reach.
-struct Brushes(Vec<BrushFaces>);
+pub(crate) struct Brushes(pub(crate) Vec<BrushFaces>);
 
 impl Pieces for Brushes {
     fn pieces(&self, _: Vec3, _: Vec3, _: Vec3, _: u32) -> Vec<Piece> {

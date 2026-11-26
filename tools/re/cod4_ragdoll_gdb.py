@@ -119,6 +119,20 @@ def body_line(tag, i, b, body):
         words(body + 0xF0, 4), words(body + 0x130, 3), words(body + 0x140, 3))
 
 
+def bone_line(i, s, b, body):
+    # the slot bone's parent (+0) and length (+0xc), the body's dMass (+0x20:
+    # mass, c[4], I[12]), then the two pose snapshots the build read
+    # (0x2e0 each from +0x2f4, +0x2f0 the latest; 0x20 a bone: pos, pad,
+    # quat x y z w) and the time between them (+0x30)
+    sb = s + 0x38 + b * 0x1C
+    cur = i32(s + 0x2F0)
+    snap = lambda k: s + 0x2F4 + k * 0x2E0 + b * 0x20
+    return "bone %d %d %d %s %d | %s | %s %s | %s %s" % (
+        i, b, i32(sb), words(sb + 0xC, 1), i32(s + 0x30), words(body + 0x20, 17),
+        words(snap(cur), 3), words(snap(cur) + 0x10, 4),
+        words(snap(cur ^ 1), 3), words(snap(cur ^ 1) + 0x10, 4))
+
+
 def world_seed():
     return u32(u32(WORLDS + 8) + 0x30)
 
@@ -135,6 +149,7 @@ def on_run_to_time():
                     log("world %08x seed %08x msec_step %d" % (u32(WORLDS + 8), world_seed(), i32(MSEC_STEP + 8)))
                 st["seen"].add(body)
                 log(body_line("start", i, b, body))
+                log(bone_line(i, s, b, body))
 
 
 def on_step():
