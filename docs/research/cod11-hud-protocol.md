@@ -1,8 +1,9 @@
 # CoD 1.1 HUD protocol: obituaries, scores, status configstrings, fonts
 
-Everything below is read out of CoD 1.1 binaries, stock assets, or a live
-capture against a running 1.1 server. Claims not settled that way are marked
-`UNVERIFIED` with the check that would settle them.
+Each claim carries its own label: VERIFIED when read out of a CoD 1.1
+binary, a stock asset or a live capture against a running 1.1 server;
+INFERRED otherwise. Claims not settled that way are marked `UNVERIFIED` with
+the check that would settle them.
 
 As in `docs/research/cod11-events-and-fx.md`, the client authority is
 `main/cgame_mp_x86.dll`, not the root `cgamex86.dll` (the single-player
@@ -197,12 +198,13 @@ The rest of the handler is INFERRED off the disassembly:
 
 ## 1. `EV_OBITUARY` field mapping
 
-`CG_EntityEvent` @ `0x3001dc10`, `case 0xc9` (201 = `EV_OBITUARY`)
+VERIFIED: `CG_EntityEvent` @ `0x3001dc10`, `case 0xc9` (201 = `EV_OBITUARY`)
 tail-calls `CG_Obituary` @ `0x3001d6c0` with the `entityState_t *` in `EAX`.
 
-Its first three reads are the ints at entityState `0x74`, `0x78` and `0xa0`.
+VERIFIED: its first three reads are the ints at entityState `0x74`, `0x78` and `0xa0`.
 It range-checks the first against `0..63` and aborts with `"CG_Obituary:
-target out of range"` (`0x30020750`), which names `+0x74` the victim:
+target out of range"` (`0x30020750`), which names `+0x74` the victim. VERIFIED, the offsets and widths. INFERRED,
+the Q3 field names in the second column:
 
 | entityState offset | Q3/CoD field | vcod netfield (`crates/common/src/net/cod1/fields_v1.rs`) | bits | Carries |
 |---|---|---|---|---|
@@ -210,10 +212,10 @@ target out of range"` (`0x30020750`), which names `+0x74` the victim:
 | 120 (`0x78`) | `otherEntityNum2` | `attackerEntityNum` | 10 | attacker clientNum, or `1022` |
 | 160 (`0xa0`) | `eventParm` | `eventParm` | 8 | means of death or weapon, section 2 |
 
-The offsets match CoDExtended's `src/shared.h:643-654` (`otherEntityNum
+INFERRED, off CoDExtended's source shape: the offsets match `src/shared.h:643-654` (`otherEntityNum
 //116`, `otherEntityNum2 //120`, `eventParm //160`).
 
-The server side is the GSC `obituary()` builtin at `.so` `0x5a750` (the only
+VERIFIED: the server side is the GSC `obituary()` builtin at `.so` `0x5a750` (the only
 `push 0xc9` in the module). It calls `G_TempEntity` with event `0xc9`
 (`0x5a78d`), stores script argument 0 (victim entity number) at `+0x74`
 (`0x5a7aa`), and stores argument 1 at `+0x78` only when its type is 7
@@ -223,14 +225,15 @@ else `+0x78` gets `0x3fe`, `ENTITYNUM_WORLD` = 1022 (`0x5a7e5`). It sets
 
 So:
 
-- `attackerEntityNum == 1022` is no player attacker. `CG_Obituary` forces
-  any attacker outside `0..63` to `0x3fe`, empties the attacker name and
-  draws only the victim.
-- `victim == attacker` is a suicide; the attacker name is blanked too.
-- The event is `SVF_BROADCAST`, so a spectator sees every obituary
-  regardless of PVS.
+- INFERRED: `attackerEntityNum == 1022` is no player attacker. `CG_Obituary`
+  forces any attacker outside `0..63` to `0x3fe`, empties the attacker name
+  and draws only the victim.
+- INFERRED: `victim == attacker` is a suicide; the attacker name is blanked
+  too.
+- The event is `SVF_BROADCAST` (`0x5a7ec`, above). INFERRED: a spectator
+  sees every obituary regardless of PVS.
 
-Names and colours come from the cgame's clientinfo array at `0x3018bc0c`,
+VERIFIED: names and colours come from the cgame's clientinfo array at `0x3018bc0c`,
 stride `0x448`:
 
 | Offset in clientinfo | Read as |
@@ -240,7 +243,7 @@ stride `0x448`:
 | `+0x2c` | `team` |
 | `+0x30` | `score` (written by the scores parser, section 3) |
 
-Both names get a literal `"^7"` appended (string `0x30065348`, a 2-byte
+VERIFIED: both names get a literal `"^7"` appended (string `0x30065348`, a 2-byte
 store plus NUL). Each name's colour comes from the team-colour helper at
 `0x3002a810`, `(team, vec3 *out)`:
 
@@ -251,16 +254,17 @@ otherwise -> {1,1,1}
              then sscanf(buf, "%f %f %f", &out[0], &out[1], &out[2])
 ```
 
-Team 1 is Axis, team 2 Allies (cross-checked against the server in section
-5). Teams 0 and 3 render white.
+VERIFIED, cross-checked against the server in section 5: team 1 is Axis,
+team 2 Allies. VERIFIED (the helper's `otherwise` arm): teams 0 and 3 render
+white.
 
-The draw is trap `4` with nine arguments: attacker name, attacker colour,
+VERIFIED: the draw is trap `4` with nine arguments: attacker name, attacker colour,
 victim name, victim colour, icon name, icon width (`1.4` or `2.8`), a
 constant `1.4f` (`0x3fb33333`), and a third colour. The row reads attacker,
 icon, victim; the three colour vec4s default to white, alpha 1; the icon
 goes by material name, not handle.
 
-If the local client is the victim, the attacker's name is copied to
+VERIFIED: if the local client is the victim, the attacker's name is copied to
 `0x3020c044` (the "killed by" name). If it is the attacker, a centre print
 comes from one of two localized formats:
 
@@ -404,7 +408,8 @@ separate kill feed.
 
 ## 2. The icon rule
 
-`eventParm` is 8 bits on the wire. `CG_Obituary` tests the byte's sign:
+`eventParm` is 8 bits on the wire (section 1). INFERRED, from `CG_Obituary`
+read without addresses: it tests the byte's sign.
 
 - Bit `0x80` set: the low 7 bits are a means-of-death value, and the icon
   comes from the switch below.
@@ -414,7 +419,7 @@ separate kill feed.
   with 0 and falls through its default, keeping the weapon icon. An empty
   `killIcon` falls back to `killIconDied`.
 
-The two offsets come from the weapon-file parse table at `0x30075c84`
+VERIFIED: the two offsets come from the weapon-file parse table at `0x30075c84`
 (`{keyword, structOffset, type}` triples):
 
 ```
@@ -422,19 +427,19 @@ The two offsets come from the weapon-file parse table at `0x30075c84`
 0x30066414 "wideKillIcon"  offset 0x2e4  type 5 (int)
 ```
 
-The stock files agree: `pak0.pk3:weapons/mp/thompson_mp` has
+VERIFIED, the stock files: `pak0.pk3:weapons/mp/thompson_mp` has
 `killIcon\gfx/hud/hud@death_thompson.tga`, `wideKillIcon\1`;
 `weapons/mp/colt_mp` has `killIcon\gfx/hud/hud@death_colt45.tga`,
-`wideKillIcon\0`. The art matches: `hud@death_thompson.dds` is 11088 bytes,
+`wideKillIcon\0`. VERIFIED, the art: `hud@death_thompson.dds` is 11088 bytes,
 `hud@death_colt45.dds` 5616, half.
 
-`iconWidth` defaults to `1.4f` (`0x30069764`) and becomes `2.8f`
-(`0x40333333`) only for wide weapon icons. The MOD branch never sets it, so
-every MOD icon is 1.4 wide.
+VERIFIED: `iconWidth` defaults to `1.4f` (`0x30069764`) and becomes `2.8f`
+(`0x40333333`) only for wide weapon icons. INFERRED: the MOD branch never
+sets it, so every MOD icon is 1.4 wide.
 
 ### 2.1 Means-of-death enum
 
-From the pointer table at `.so` file offset `0x7cda0`, 25 entries:
+The names are VERIFIED, from the pointer table at `.so` file offset `0x7cda0`, 25 entries:
 
 | # | Name | # | Name | # | Name |
 |---|---|---|---|---|---|
@@ -450,14 +455,18 @@ From the pointer table at `.so` file offset `0x7cda0`, 25 entries:
 
 ### 2.2 Which deaths get the `0x80` flag
 
-The server tags seven. The `obituary()` builtin at `.so` `0x5a7f6` takes
+VERIFIED (the instructions): the server tags seven. The `obituary()` builtin at `.so` `0x5a7f6` takes
 the tag path for mod 7 or 8 (a `mod - 7 <= 1` unsigned compare) and for mods
 22, 21, 19, 16 and 17 (five equality compares), ORs `0x80` into the mod
 (`0x5a817`) and stores it as `eventParm` at `+0xa0` (`0x5a81a`). Every other
-mod stores the weapon index there (`0x5a822`). `{7, 8, 16, 17, 19, 21, 22}`
+mod stores the weapon index there (`0x5a822`). INFERRED: `{7, 8, 16, 17, 19, 21, 22}`
 is the client switch's case set, so the two halves agree.
 
 ### 2.3 The table
+
+VERIFIED, the `eventParm` values (section 2.2's tag path) and the stock art
+column (the shader binding below). INFERRED, the icon-name column's mapping
+from the client switch, read without addresses.
 
 | `eventParm` | Means of death | Icon name the client uses | Stock art |
 |---|---|---|---|
@@ -473,10 +482,11 @@ is the client switch's case set, so the two halves agree.
 | `0x00`..`0x7f` with empty `killIcon` | weapon index | `killIconDied` | `gfx/hud/death_died.dds` |
 | any other `0x80`-flagged value | | `killIconDied` (switch default) | `gfx/hud/death_died.dds` |
 
-- `0x97` has a client case, but the stock server never sets bit 7 for mod
-  23. A mod could.
-- `MOD_LAVA` (18) has neither a server flag nor a client case.
-- The eight `killIcon*` names are precached at cgame init
+- VERIFIED (section 2.2's tag set): the stock server never sets bit 7 for
+  mod 23. INFERRED: `0x97` has a client case, and a mod could set it.
+- VERIFIED (section 2.2's tag set): `MOD_LAVA` (18) has no server flag.
+  INFERRED: it has no client case either.
+- VERIFIED: the eight `killIcon*` names are precached at cgame init
   (`0x30020e9f`..`0x30020ee5`, each `RegisterMaterial(name, 5)`, handle
   discarded), then passed to trap `4` by name.
 
@@ -496,7 +506,7 @@ material.
 
 ## 3. The `scores` server command
 
-Letter `b`, built by `DeathmatchScoreboardMessage` (`.so` `0x459c0`), parsed
+VERIFIED: letter `b`, built by `DeathmatchScoreboardMessage` (`.so` `0x459c0`), parsed
 by `0x3002b920`.
 
 ### 3.2 Grammar
@@ -505,17 +515,17 @@ by `0x3002b920`.
 b <numRows> <axisScore> <alliesScore>{ <client> <score> <ping> <time> <statusIcon>}*
 ```
 
-Server formats (`.so` `0x737f0`, `0x737e0`):
+VERIFIED, server formats (`.so` `0x737f0`, `0x737e0`):
 
 ```
 "b %i %i %i%s"          outer
 " %i %i %i %i %i"       one row, appended numRows times
 ```
 
-The row push order at `0x45a65`..`0x45a78` (right to left on the stack) is
+VERIFIED: the row push order at `0x45a65`..`0x45a78` (right to left on the stack) is
 `sortedClients[i]`, `cl[+0x20e0]`, `ping`, `cl[+0x20e4]`, `cl[+0x20d8]`.
 
-The client reads them with `Argv(4 + 5*i + k)` into a six-int row
+VERIFIED: the client reads them with `Argv(4 + 5*i + k)` into a six-int row
 (`0x3020ba30`, stride `0x18`):
 
 | Token | Client slot | Meaning |
@@ -526,15 +536,15 @@ The client reads them with `Argv(4 + 5*i + k)` into a six-int row
 | 4 | `row[3]` | deaths: `cl[+0x20e4]`, the `deaths` script field (8420 in the client field table, `cod11-gsc-object-model.md`), which every stock `Callback_PlayerKilled` increments |
 | 5 | `row[5]` | status icon; in `1..8` the client resolves configstring `20 + n` to a material handle |
 
-`row[4]` is not on the wire. The client fills it with
+VERIFIED: `row[4]` is not on the wire. The client fills it with
 `clientinfo[client].team` and accumulates per-team row counts
 (`0x3020ba20[team]`) and average ping (`0x3020ba10[team] /= count`), so the
 team blocks come from clientinfo, not the wire.
 
 Header tokens:
 
-- `numRows` is `min(level.numConnectedClients, 64)`; the client clamps to
-  `0x40` again.
+- INFERRED: `numRows` is `min(level.numConnectedClients, 64)`; the client
+  clamps to `0x40` again.
 - The rows stop at 1024 bytes: each row is `Com_sprintf`ed into a
   0x400-byte buffer, and the loop breaks at the first row whose length
   plus the rows' so far is over 0x400; the header's `numRows` is the loop
@@ -544,27 +554,27 @@ Header tokens:
   1.5 `game_mp_x86.dll` 0x2001e9fc, UO `uo_game_mp_x86.dll` 0x200218ac,
   the same test. CoD2's is the same (cod2-protocol.md 3.4). vcod:
   `scoreboard::text`, every game.
-- Token 2 is `level.teamScores[1]` (Axis), token 3 `level.teamScores[2]`
+- VERIFIED: token 2 is `level.teamScores[1]` (Axis), token 3 `level.teamScores[2]`
   (Allies) (section 5). The client stores them at `0x3020ba04` /
   `0x3020ba08`; `-9999` means no score and renders `"-"` (`0x300630c8`).
 
 ### 3.3 Spectators
 
-Spectators are ordinary rows. `DeathmatchScoreboardMessage` walks
-`level.sortedClients[]` and emits every entry. The sort comparator (`.so`
-`0x500ab`) sorts `cl[+0x217c] == 3` (the spectator team) last, but nothing
-filters them out. The client puts them in team bucket 3, which the
-team-colour helper `0x3002a810` renders white. Server-side banner strings
-`g_ScoresBanner_Allies` / `_Axis` / `_None` / `_Spectators` cover the four
-buckets.
+INFERRED: spectators are ordinary rows. `DeathmatchScoreboardMessage` walks
+`level.sortedClients[]` and emits every entry. VERIFIED: the sort comparator
+(`.so` `0x500ab`) sorts `cl[+0x217c] == 3` (the spectator team) last. INFERRED:
+nothing filters them out. VERIFIED: the client puts them in team bucket 3,
+which the team-colour helper `0x3002a810` renders white. INFERRED:
+server-side banner strings `g_ScoresBanner_Allies` / `_Axis` / `_None` /
+`_Spectators` cover the four buckets.
 
 ### 3.4 Live example
 
-The first 90 s probe capture, before vcod sent `score`, logged 49
+VERIFIED, live capture: the first 90 s probe, before vcod sent `score`, logged 49
 `serverCommand` lines (42 `d`, 3 `v`, 2 `f`, 1 `i`, 1 `t`) and no `b`: the
 server sends `b` only on request or at intermission (section 4).
 
-The 2026-08-24 live sweep held the Tab scoreboard open on a populated
+VERIFIED, live capture: the 2026-08-24 sweep held the Tab scoreboard open on a populated
 server and showed the grammar end to end: Axis/Allies sections with team
 icons and totals, score-sorted rows, a Spectators section, `hud unk 0`
 throughout.
@@ -793,17 +803,17 @@ and bar in the objective step.
 
 ## 4. How `scores` is requested
 
-The cgame registers `+scores`, `-scores` and `score` (the only score-ish
-strings in the DLL).
+VERIFIED: the cgame registers `+scores`, `-scores` and `score` (the only
+score-ish strings in the DLL).
 
-The scoreboard draw at `0x3002b650` re-requests while the board is up: it
+VERIFIED: the scoreboard draw at `0x3002b650` re-requests while the board is up: it
 keeps a last-request stamp at `0x3020b9f8`, and once `cg.time` passes it by
 more than 2000 ms it resets the stamp and issues trap `0x18`
 (`trap_SendClientCommand`) with `"score"`. So the client sends the reliable
 command `score` (no `cmd` prefix at this layer) every 2000 ms while the
 board draws.
 
-Server side (`ClientCommand`, `.so` `0x488e3`): `Q_stricmp(argv0, "score")
+VERIFIED, server side (`ClientCommand`, `.so` `0x488e3`): `Q_stricmp(argv0, "score")
 == 0` calls `DeathmatchScoreboardMessage(ent)`, one of two callers. The
 other is `SendScoreboardMessageToAllIntermissionClients` (`.so`
 `0x50bf0`), gated three ways:
@@ -817,14 +827,15 @@ for each connected client:
 level[+0x20c] = 0;
 ```
 
-There is no periodic push during play. A spectator wanting a live board
-sends `score` itself on the same 2 s cadence, as the stock client does.
+INFERRED, from those two callers: there is no periodic push during play. A
+spectator wanting a live board sends `score` itself on the same 2 s cadence,
+as the stock client does.
 
 ---
 
 ## 5. Status configstrings in 1.1 MP
 
-Every index below is a `trap_SetConfigstring` call site in the stock server
+VERIFIED: every index below is a `trap_SetConfigstring` call site in the stock server
 module, recovered by resolving the `R_386_PC32` relocations against
 `trap_SetConfigstring` and reading the immediate pushed two slots earlier.
 Client consumers are `CG_ConfigStringModified` @ `0x3002c6b0` and the init
@@ -863,11 +874,11 @@ path `0x3002c060`.
 | 1244+ | `G_LocalizedStringIndex` | localized strings; hudelem strings are `1244 + n` | |
 | 1500+ | `G_ShaderIndex` | materials | |
 
-This matches the block map in `crates/common/src/net/cod1/mod.rs`, built
-from a live gamestate dump on 2026-08-23. The 2026-08-24 live probe reported
-`354 configstrings` on mp_carentan; `d 5 <n>` / `d 6 <n>` arrived all
-through the TDM round, both climbing (5: 117 to 129, 6: 126 to 153 over 90
-s). All 42 `d` commands in that window went to 5 (13), 6 (28) or 0 (once).
+VERIFIED, live gamestate dump of 2026-08-23: this matches the block map in
+`crates/common/src/net/cod1/mod.rs`. VERIFIED, the 2026-08-24 live probe: it
+reported `354 configstrings` on mp_carentan; `d 5 <n>` / `d 6 <n>` arrived
+all through the TDM round, both climbing (5: 117 to 129, 6: 126 to 153 over
+90 s). VERIFIED, the same capture: all 42 `d` commands in that window went to 5 (13), 6 (28) or 0 (once).
 
 VERIFIED, `CG_ConfigStringModified` @ `0x3002c6b0`: index 8 jumps to
 `0x30036150` (`0x3002c70a`), the gamestate's item walk, so a mid-map CS 8
@@ -892,7 +903,7 @@ a lookup, and weapon files, models and clips are shared by name across rigs
 
 ### 5.1 Which team score is which
 
-`setteamscore` (`.so` `0x5b9dc`):
+VERIFIED: `setteamscore` (`.so` `0x5b9dc`):
 
 ```
 bx = Scr_GetConstString(0)
@@ -903,35 +914,36 @@ else                     { level[+0x1fc] = score; trap_SetConfigstring(5, va("%i
 level[+0x20c] = 1;   // intermission scoreboard dirty flag
 ```
 
-`GScr_LoadConsts` (`.so` `0x58550`) fills `scr_const+4` with
-`Scr_AllocString("allies")` and `scr_const+8` with `"axis"`. So CS 6 is
+VERIFIED: `GScr_LoadConsts` (`.so` `0x58550`) fills `scr_const+4` with
+`Scr_AllocString("allies")` and `scr_const+8` with `"axis"`. VERIFIED (the stores in `setteamscore`): so CS 6 is
 allies, CS 5 axis, `level.teamScores[1]` axis and `level.teamScores[2]`
 allies, matching the cgame's `g_TeamColor_Axis` (team 1) /
 `g_TeamColor_Allies` (team 2) split in section 1.
-`DeathmatchScoreboardMessage` pushes `level[+0x1fc]` before `level[+0x200]`,
+VERIFIED: `DeathmatchScoreboardMessage` pushes `level[+0x1fc]` before `level[+0x200]`,
 so `b`'s token 2 is axis and token 3 allies, the CS 5, CS 6 order.
 
 ### 5.2 Header vs. scoreboard totals can disagree in the same frame
 
-A live capture (2026-08-24, a public TDM server, mp_chateau) caught vcod's
+VERIFIED, live capture (2026-08-24, a public TDM server, mp_chateau): it caught vcod's
 status header, read off CS 5/6, at `219 tdm 214` while the same frame's `b`
-reply carried axis 221 / allies 231. Both are legitimate wire values: a `d`
+reply carried axis 221 / allies 231. INFERRED: both are legitimate wire values; a `d`
 for 5/6 and the next `b` (or the client's own `score` re-request, section 4)
 do not land in the same tick, so the two can read a few points apart.
 
 vcod's header prefers the latest `b` reply's totals while the board is up
 (held, or intermission) and a reply has come since the last gamestate
 (`Scoreboard::totals`, `status::read_status`'s `scoreboard_totals`), and
-reads CS 5/6 otherwise. While the board is up the client re-requests `score`
+reads CS 5/6 otherwise. INFERRED: while the board is up the client re-requests `score`
 every 2 s (section 4), and a `b` reply is answered in one round trip while
 CS 5/6 wait on a `d` push, so `b` is the more current; once the board is
 down no reply comes and CS 5/6 are. The header is vcod's own, drawn for spectators only (`hud/mod.rs`);
-retail draws team totals only on the scoreboard (section 3.1).
+INFERRED, off section 3.1: retail draws team totals only on the scoreboard.
 
 ### 5.3 There is no round-timer configstring
 
-Nothing writes a match or round clock to a configstring, and the cgame's
-clock formatters read none. `0x3001ece0` (`"%i:%02i"` / `"%i:%02i:%02i"`)
+INFERRED, off the call-site list in section 5: nothing writes a match or
+round clock to a configstring, and the cgame's clock formatters read none.
+VERIFIED: `0x3001ece0` (`"%i:%02i"` / `"%i:%02i:%02i"`)
 and `0x3001ed60` (tenths) both take their value from `0x3001ec70`, which
 reads `hudelem[0x17]`, an absolute millisecond timestamp, and picks a
 direction from `hudelem[0]`:
@@ -943,10 +955,10 @@ direction from `hudelem[0]`:
 | 6 | `(t - cg.time) + 99`, count down, tenths |
 | 8 | `t - cg.time` |
 
-The same struct carries `hudelem[0xb]` (a localized-string index, read as
+VERIFIED: the same struct carries `hudelem[0xb]` (a localized-string index, read as
 configstring `0x4dc + n` = 1244 + n) and `hudelem[0x19]` (a numeric value).
-The round clock is a hudelem the gametype's GSC creates. The live serverinfo
-has no `timelimit` key to fall back on:
+INFERRED: the round clock is a hudelem the gametype's GSC creates.
+VERIFIED, live capture: the serverinfo has no `timelimit` key to fall back on:
 
 ```
 \g_gametype\tdm\gamename\Call of Duty\...\mapname\mp_carentan\...\sv_maxclients\64\...
@@ -958,7 +970,7 @@ header (`hud/status.rs`) shows elapsed time since level start
 
 ### 5.4 How a hudelem reaches the client
 
-Hudelems travel in the playerstate, in the two 31-entry arrays of array
+INFERRED, off `docs/protocol-1.1.md`: hudelems travel in the playerstate, in the two 31-entry arrays of array
 block 5, past the 103 scalar fields, so `PLAYER_FIELDS` has no `hudElem*`
 entry. Wire layout, field order and widths: `docs/protocol-1.1.md`, "Block
 5". This is the server half.
@@ -984,10 +996,10 @@ playerstate a follower inherits (the community's `hud.archival` /
 VERIFIED: `G_UpdateHudElemsToClients` (0x5121c) is the same loop and nothing
 calls it (no relocation names it); the live path is `G_RunFrame`'s copy.
 
-So the round clock is a `hudelem_t` in `ps+0x1338`. The connect-time frame
-decoded in `docs/protocol-1.1.md` holds one: type 4, `x` 320, `y` 460, both
+INFERRED: the round clock is a `hudelem_t` in `ps+0x1338`. VERIFIED, the
+connect-time frame decoded in `docs/protocol-1.1.md`: it holds one, type 4, `x` 320, `y` 460, both
 alignments 1, `font` 1, `fontScale` 1.0, colour `0xFFFFFFFF`, `time`
-1800000, field for field `dm.gsc`'s `startGame`.
+1800000. INFERRED: it is field for field `dm.gsc`'s `startGame`.
 
 ### 5.5 A client's elements die with it
 
@@ -1224,18 +1236,18 @@ cod11-front-end.md 20.12) are the front end's `paint::pulse`.
 
 ## 7. The `^N` colour palette
 
-The engine's text renderer handles it at `0x004d7f13`, not the cgame. On a
+VERIFIED: the engine's text renderer handles it at `0x004d7f13`, not the cgame. On a
 `^` it looks at the next byte. If that is not `^` and lies in `'0'..'7'`
 (`0x30..0x37`), it is consumed and the colour changes: `^7` restores the
 caller's colour in full; any other code takes RGB from `colorTable[b & 7]`
 (masked `0x00ffffff`) and alpha from the caller (`callerAlpha << 24`).
 
-So only `^0`..`^7` are codes on 1.1 (`^8`, `^9`, `^a` print literally; 1.5
+VERIFIED (the same renderer): only `^0`..`^7` are codes on 1.1 (`^8`, `^9`, `^a` print literally; 1.5
 and UO add `^8` and `^9`, below), `^^` escapes a caret, and `^N` only ever
 replaces RGB. `^7` restores all four components of the caller's colour
 instead of reading `colorTable[7]`.
 
-`colorTable` is eight RGBA dwords at `0x005405d8`, bytes R,G,B,A:
+VERIFIED: `colorTable` is eight RGBA dwords at `0x005405d8`, bytes R,G,B,A:
 
 | Code | Bytes (R,G,B,A) | Hex | Name |
 |---|---|---|---|
@@ -1248,11 +1260,11 @@ instead of reading `colorTable[7]`.
 | `^6` | 255, 0, 255, 255 | `#FF00FF` | magenta |
 | `^7` | 255, 255, 255, 255 | `#FFFFFF` | white |
 
-The float form (Q3's `colorBlack` .. `colorWhite` / `g_color_table`) is
+VERIFIED: the float form (Q3's `colorBlack` .. `colorWhite` / `g_color_table`) is
 byte-identical in all three modules: `cgame_mp_x86.dll` @ `0x30060868`,
 `CoDMP.exe` @ `0x00541950`, the server module at file offset `0x79fa0`.
 
-The chat handlers (`h`/`i`) pass every incoming string through
+VERIFIED: the chat handlers (`h`/`i`) pass every incoming string through
 `0x3002df00`, which strips every `0x19` byte before display. A renderer
 should do the same, and strip `^N` pairs before measuring width.
 

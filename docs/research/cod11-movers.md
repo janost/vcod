@@ -143,7 +143,7 @@ per-frame origins. A two-second move is two snapshot updates, one at each end.
 | `movegravity` | `pos` | `trType` 5 (`TR_GRAVITY`), `trDuration` = ms, `trDelta` = initial velocity | stationary where it fell to (section 5) |
 | `rotateto`/`rotatepitch`/`rotateyaw`/`rotateroll`/`rotatevelocity` | `apos` | `trType` 3, `trDelta` = deg/s | `trType` 0, `trBase` = angle reached, unnormalized: a full turn read `(0, 360, 0)` |
 
-Measured: `movez(96, 2, 0.5, 0.5)` from `z = 592` sent
+VERIFIED (capture), measured: `movez(96, 2, 0.5, 0.5)` from `z = 592` sent
 
 | trType | trDuration | base z | delta z |
 |---|---|---|---|
@@ -152,9 +152,9 @@ Measured: `movez(96, 2, 0.5, 0.5)` from `z = 592` sent
 | 10 | 500 | 672 | 64 |
 | 0 | | 688 | |
 
-The segments cover 16, 64 and 16 units; 64 = `96 / (2 - 0.25 - 0.25)`.
+INFERRED (arithmetic on the rows above): the segments cover 16, 64 and 16 units; 64 = `96 / (2 - 0.25 - 0.25)`.
 
-A mover is `eType` 8 (`ET_SCRIPTMOVER`) throughout; starting or stopping
+INFERRED: a mover is `eType` 8 (`ET_SCRIPTMOVER`) throughout; starting or stopping
 changes nothing about the entity kind.
 
 ## 10. What is not measured here
@@ -2652,12 +2652,12 @@ them and the slides down the copy's slope included), and the pack rests and is
 carried the same; every `PROBE g` row of `-worldcopy3` matches to the
 ten-thousandth.
 
-The 2026-10-12 captures logged no cmds. Replayed at an even three cmds a
+VERIFIED (vcod measurement): the 2026-10-12 captures logged no cmds. Replayed at an even three cmds a
 frame, with the player reset to retail's rest after each fall, four rows
 differed, each a player in the air: the first lift's slide down the slope
 (0.86 on retail, 0.54 on ours), the fall after a jitter off a blocked turn and
 one off the lowered copy, and the pitch's blocked frame and the jitter's fall
-after it. The pitch's frame was the resync, which put ours' player at
+after it. INFERRED: the pitch's frame was the resync, which put ours' player at
 retail's printed hundredths, up to 0.005 off the real spot, where the turned
 centre's margin at the blocked frame is 0.002.
 

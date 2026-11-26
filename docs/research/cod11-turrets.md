@@ -612,7 +612,7 @@ positioning on turret since 'tag_weapon' does not exist"` (0x75800);
 `trap_XAnimClearTree`; repeated `trap_XAnimGetNumChildren`,
 `trap_XAnimGetAnimName` (with `Com_Error` on `"Player anim '%s' has no
 children"`, 0x75860), `trap_XAnimGetChildAt`, `trap_XAnimGetWeight` and
-`trap_XAnimSetGoalWeight`; constants 0.5 (0x758f0) and 1000.0 (0x758f4);
+`trap_XAnimSetGoalWeight`. VERIFIED, same range: constants 0.5 (0x758f0) and 1000.0 (0x758f4);
 `G_DObjGetLocalTagMatrix` for `tag_aim` (0x75882) with its own warning
 (0x758a0); `trap_XAnimCalcAbsDelta`; `VectorAngleMultiply`; `RotationToYaw`;
 `YawToAxis`; `MatrixMultiply43`; `trap_Trace` with mask 0x2810011 (0x51f6c,
@@ -2248,10 +2248,9 @@ each cell's distance to him. `turret_ab`'s
 retail's clock and hold every mounted cell within `GUNGRID_NEAR` (0.0005)
 with no gap.
 
-vcod measurement, UO: shifting the fire leaves' node time by 0.02 (a third
+VERIFIED (vcod measurement), UO: shifting the fire leaves' node time by 0.02 (a third
 of a frame's step) puts fire-phase cells 0.27 off and by 0.05 2.2 off, so the
-leaves' time is retail's to well under a step. Node time and seconds read
-alike at this resolution: every fire leaf has frequency 6, so `time * 5`
+leaves' time is retail's to well under a step. INFERRED: node time and seconds read alike at this resolution: every fire leaf has frequency 6, so `time * 5`
 frames tracks `seconds * 30`.
 
 #### The mount: the idle the blend fades out
