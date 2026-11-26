@@ -1401,6 +1401,25 @@ impl crate::bots::driver::BotWorld for Server {
                     crate::bots::team::escorts(at, &mates)
                 })
                 .collect();
+            // Per carried objective, the playing defender nearest its goal
+            // holds it (bot-objectives.md 4.2.1).
+            let holders: Vec<usize> = objectives
+                .iter()
+                .filter(|(o, _, _)| o.carried)
+                .filter_map(|(o, _, _)| {
+                    views
+                        .iter()
+                        .filter(|(s, v)| {
+                            team(*s) == *defenders && v.playing && !v.dead && !solo.contains(s)
+                        })
+                        .min_by(|a, b| {
+                            let d =
+                                |v: &crate::bots::BotView| crate::bots::dist_sq(v.origin, o.goal);
+                            d(&a.1).total_cmp(&d(&b.1))
+                        })
+                        .map(|(s, _)| *s)
+                })
+                .collect();
             for (slot, view) in views.iter_mut() {
                 let mine = team(*slot);
                 let role = if mine == *attackers {
@@ -1413,12 +1432,19 @@ impl crate::bots::driver::BotWorld for Server {
                 let mates: Vec<usize> =
                     slots.iter().copied().filter(|s| team(*s) == mine).collect();
                 let alone = solo.contains(slot);
+                let rank = if alone {
+                    mates.iter().filter(|s| *s < slot).count()
+                } else {
+                    crate::bots::team::round_rank(*slot, &mates, mine, round)
+                };
                 view.re = Some(crate::bots::ReView {
                     role,
-                    rank: if alone {
-                        mates.iter().filter(|s| *s < slot).count()
+                    rank,
+                    // Team play off: the first by rank, as before.
+                    holds_goal: if alone {
+                        rank == 0
                     } else {
-                        crate::bots::team::round_rank(*slot, &mates, mine, round)
+                        holders.contains(slot)
                     },
                     escort: alone || escorts.contains(slot),
                     objectives: objectives
@@ -1480,10 +1506,14 @@ impl crate::bots::driver::BotWorld for Server {
                 if mine != script::TEAM_AXIS && mine != script::TEAM_ALLIES {
                     continue;
                 }
-                let rank = slots
-                    .iter()
-                    .filter(|s| team(**s) == mine && *s < slot)
-                    .count();
+                // Dealt per round as `re`'s (bot-objectives.md 9.3).
+                let mates: Vec<usize> =
+                    slots.iter().copied().filter(|s| team(*s) == mine).collect();
+                let rank = if solo.contains(slot) {
+                    mates.iter().filter(|s| *s < slot).count()
+                } else {
+                    crate::bots::team::round_rank(*slot, &mates, mine, round)
+                };
                 // The hull a tank's own shell passes.
                 let tank = view.seat.and_then(|s| s.sight).and_then(|g| {
                     let rt = self.game.module.script.as_ref()?;
