@@ -732,6 +732,6 @@ Code: `crates/client/src/cod4_hud/menus.rs` (the HUD's zone menus drawn item by 
 - Script menus: the other skipped commands, horizontal list boxes' scroll bars, plain-text items taking the focus, and a pixel comparison with retail's team, class and in-game menus.
 - A pixel comparison of the scoreboard (7.1) and its menu's header (23) with retail's.
 - A retail capture of `pingPlayer`'s flash and a talker on the compass (15.9); a live gate of the tickertape's objective icons (22). No capture holds an objective yet.
-- A retail capture of a UAV, a shot ping, a helicopter or planes (no committed fixture holds one; 15.3 and 15.7 rest on INFERRED code reads and the live gates against vcod-server).
+- A retail capture of a UAV or a shot ping (no committed fixture holds one; 15.3 and 15.7 rest on INFERRED code reads and the live gates against vcod-server). A helicopter and planes are now in `play-1.7-hardpoint.txt`, `play-1.7-heli-*.txt` and `play-1.7-planefx.txt` (`cod4-gaps.md` 3, `cod4-server-gaps.md` 6), gated against vcod-server's entities, not through the compass.
 - The XP bar's fill off real rank stats (23).
 - A pixel comparison of the names over heads with retail's, and the smoke's rating of their trace (17.1); the location selector's mouse scale against 1.7's counts (15.8); a foreground offscreen waypoint's place among the hudelems (16.3); the connect screen's key-wait line, a live download through it, and a pixel comparison of the screen with retail's (18).
