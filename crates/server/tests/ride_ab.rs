@@ -180,8 +180,7 @@ const FIRST_SNAP_AFTER_JOIN_MS: i64 = 400;
 /// `PROBE done`. The client joins so its first snapshot falls on retail's
 /// and replays the capture's cmds, each on retail's side of a frame
 /// (`ProbeHold::framed`): where a fall lands, and whether a frame ran with
-/// no cmd from the player, rides on them (movers doc 12, "A blocked
-/// mover", and 21). `late_ms` starts the client that much earlier.
+/// no cmd from the player, rides on them (movers doc 12.3, and 21). `late_ms` starts the client that much earlier.
 fn run_once(probe: &Probe, late_ms: i64) -> Option<Ours> {
     let fs = vcod_common::testing::game_fs_11()?;
     let (mut sv, mut now) = common::Boot {
@@ -264,7 +263,7 @@ fn run_once(probe: &Probe, late_ms: i64) -> Option<Ours> {
 
 /// Every snapshot of the run, falls between phases included, against
 /// retail's to its 3-decimal print: replayed on the capture's cmds, a fall
-/// lands where retail's did (movers doc 21, "The slide down the slope").
+/// lands where retail's did (movers doc 21.3).
 #[test]
 fn every_snapshot_matches_retail() {
     let Some(Ours { wire: ours, .. }) = ours() else {
@@ -585,7 +584,7 @@ fn yaw_rows<'a>(lines: impl Iterator<Item = &'a str>) -> BTreeMap<String, Vec<St
 /// (`Reached_ScriptMover`) and every link snaps a component within a
 /// thousandth of an integer (`SV_LinkEntity`), so `.angles` reads
 /// 1.99951 after `rotateyaw(2, 1)` and the next move turns the slab by
-/// what is left (movers doc 12, "The residual yaw"). Server alone, no
+/// what is left (movers doc 12.1). Server alone, no
 /// client.
 #[test]
 fn a_rotated_brush_model_keeps_retails_quantized_angles() {
@@ -745,7 +744,7 @@ const ANGLESNAP: &str = "tests/fixtures/movers/mp_carentan-dm-anglesnap.txt";
 /// `SV_LinkEntity` snaps `r.currentAngles` on every link, not only a
 /// mover's: a script model, a script origin, an item and a brush model
 /// each read the `.angles` written until an `.origin` write links them,
-/// then the snapped set (movers doc 12, "The snap on every link"). Server
+/// then the snapped set (movers doc 12.2). Server
 /// alone, no client.
 #[test]
 fn every_link_snaps_angles_like_retail() {

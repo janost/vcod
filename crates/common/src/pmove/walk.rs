@@ -516,7 +516,7 @@ fn set_movement_dir(ps: &mut PlayerState, input: &PmInput, dt: f32) {
     // `vectoangles` (0x3de94) puts the yaw in 0..360, and `AngleDelta`
     // (0x3ec9c) and `AngleNormalize180` (0x3eb70) fold through whole 16-bit
     // shorts, so a back key on a body still sliding forward reads +180, not
-    // -180 (cod11-movers.md 15, "A moving body's clip").
+    // -180 (cod11-movers.md 15.7).
     let yaw = {
         let y = (moved.y as f64).atan2(moved.x as f64).to_degrees() as f32;
         if y < 0.0 { y + 360.0 } else { y }

@@ -1660,8 +1660,7 @@ or flinches the body. Addresses lnxded unless named Mac.
 - `G_RunFrame` (0x810a13a) first steps every entity's anim tree by
   `level.frametime` times 0.001 (rodata 0x815ab4c) through 0x80920d0.
   VERIFIED, the loop and the constant. So a clip is sampled at its node
-  time, as on 1.5's and UO's server (cod11-combat.md 3.1, "The clip's
-  float time"). INFERRED.
+  time, as on 1.5's and UO's server (cod11-combat.md 3.1.4). INFERRED.
 - A trace builds the body's skeleton through `G_DObjCalcPose` (0x811e3c0)
   only when none exists under the current `SV_ResetSkeletonCache`
   (0x8091edc) stamp, which `SV_PacketEvent` (each client packet),

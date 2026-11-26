@@ -5,7 +5,7 @@
 //! `BG_PlayerAnimation`'s per-channel updater (`game.mp.i386.so` 0x2aba0) and
 //! its anim setter (0x2a600) drive it once an end frame, and the cgame's copy
 //! of the two (`cgame_mp_x86.dll` 0x30003be0, 0x300036b0) once a drawn frame
-//! (docs/research/cod11-movers.md, section 15, "A moving body's clip" and
+//! (docs/research/cod11-movers.md, section 15.7 and
 //! "The drawn body's clip").
 
 use crate::animscript::{movetype_bit, movetype_bit_hi};
@@ -124,8 +124,7 @@ const HELD: usize = 4;
 ///
 /// Beside the seconds it keeps the engine's own node time, the fraction of
 /// the clip a float sum of per-frame steps has reached ([`Play::time`]),
-/// which 1.5's and UO's stored pose samples at (cod11-combat.md 3.1, "The
-/// clip's float time").
+/// which 1.5's and UO's stored pose samples at (cod11-combat.md 3.1.4).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct Play {
     /// The anim index, toggle off.
@@ -225,8 +224,7 @@ impl Play {
 /// leaves keep it: 0 when the leaf is first given weight, then stepped by
 /// [`Play::step`] at rate 1 each frame (the seat's legs anims carry no
 /// `moveSpeed`, and the groups and leaves are set at rate 1), a nested
-/// node passing its children `dtime * rate` (cod11-combat.md 3.1, "The
-/// clip's float time").
+/// node passing its children `dtime * rate` (cod11-combat.md 3.1.4).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct LeafTime(Play);
 
@@ -871,8 +869,7 @@ impl ChannelClock {
         // 1.5's and UO's setter (1.5b 0x28ced, UO 0x2ce5f) sets the phase
         // only on a node whose weight read 0, and restarts a weighted one
         // only from the torso (a fresh corpse's death never), so a weighted
-        // legs clip plays on from where it stands (cod11-combat.md 3.1,
-        // "The setter on a weighted node").
+        // legs clip plays on from where it stands (cod11-combat.md 3.1.5).
         let (phase, phase_t) = if keeps && back.is_some() {
             (0.0, 0.0)
         } else {
@@ -1232,7 +1229,7 @@ pub fn update_body(
 /// tree, whichever lerp frame set it, and a node both carry once, at the
 /// copy a lerp frame holds as its current clip (the torso's when both do).
 /// CoD2's and CoD4's bodies keep each lerp frame's clips under its own node
-/// ([`Flavour::cod2_tree`]). cod11-movers.md 15, "The drawn body's clip".
+/// ([`Flavour::cod2_tree`]). cod11-movers.md 15.8.
 pub fn body_layers(
     legs: &ChannelClock,
     torso: &ChannelClock,

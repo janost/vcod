@@ -2206,7 +2206,7 @@ const FIXTURE_LINKMG_SCRIPT: &str = concat!(
 
 /// The victim recipe with the gun linked to a script_origin that rises and
 /// turns under the gunner through the yaw sweep and back through the pitch
-/// sweep (`probe_linkmg`, movers doc 16 "A linked turret"): the gunner, the
+/// sweep (`probe_linkmg`, movers doc 16.2): the gunner, the
 /// gun and the target diffed on retail's level clock in every phase but
 /// `target`. The capture logs no target cmds, so the running target stands
 /// off retail's there; `-linkmg2` below logs them (movers doc 16).

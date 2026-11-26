@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 use vcod_gsc::{
-    Atom, Cx, EntId, ErrorKind, FuncRef, Host, Loader, ScriptSource, Target, Value, Vm,
+    Atom, Cx, EntId, ErrorKind, FuncRef, Host, Loader, ScriptSource, Target, Value, Vm, VmProfile,
 };
 
 /// A probe's file plus a stub for the one script it calls across files.
@@ -84,13 +84,14 @@ struct Run {
     path: String,
 }
 
-/// Loads `name`'s probe fresh and returns its `main`, ready to run, or the
-/// compile error that rejected it.
-fn install(name: &str) -> Result<(Vm, FuncRef), String> {
+/// Loads `name`'s probe fresh under `profile`'s VM rules and returns its
+/// `main`, ready to run, or the compile error that rejected it.
+fn install(name: &str, profile: &VmProfile) -> Result<(Vm, FuncRef), String> {
     let path = format!("maps/mp/gametypes/{name}");
     let text = std::fs::read_to_string(format!("tests/fixtures/semantics/{name}.gsc"))
         .unwrap_or_else(|e| panic!("read {name}.gsc: {e}"));
     let mut vm = Vm::new();
+    vm.apply_profile(profile);
     let mut loader = Loader::new(Box::new(ProbeSource {
         path: path.clone(),
         text,
@@ -118,7 +119,12 @@ fn install(name: &str) -> Result<(Vm, FuncRef), String> {
 /// its section holds only [`COMPILE_ERROR`], and a run here that does not
 /// compile has no lines and that error.
 fn run_probe(name: &str) -> Result<Run, String> {
-    let (mut vm, main) = match install(name) {
+    run_probe_as(name, &VmProfile::COD1)
+}
+
+/// [`run_probe`] under another game's VM rules.
+fn run_probe_as(name: &str, profile: &VmProfile) -> Result<Run, String> {
+    let (mut vm, main) = match install(name, profile) {
         Ok(loaded) => loaded,
         Err(path) => {
             return Ok(Run {
@@ -136,7 +142,7 @@ fn run_probe(name: &str) -> Result<Run, String> {
             path: "call_now".into(),
         }),
         Err(e) if e.kind == ErrorKind::SuspendedInImmediateCall => {
-            let (mut vm, main) = install(name)?;
+            let (mut vm, main) = install(name, profile)?;
             let mut host = ProbeHost::default();
             let mut error = None;
             vm.start_thread(&mut host, main, None, Vec::new());
@@ -323,6 +329,45 @@ fn vcod_matches_retail_on_every_probe() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+/// `probe_eq_tol` on 1.5b, UO 1.51b, CoD2 1.3 and CoD4 1.7 (retail,
+/// 2026-11-26) logs 1.1d's lines but for the five where 1.1d's 80-bit
+/// difference falls under 1e-6 and their float one rounds up to it
+/// (cod11-gsc-object-model.md 9.3.1).
+#[test]
+fn probe_eq_tol_matches_retail_stored() {
+    const STORED: &[(&str, &str)] = &[
+        ("eq_thresh_tiny", "0"),
+        ("eq_thresh_e24", "0"),
+        ("eq_thresh_past_tie", "0"),
+        ("ne_thresh_tiny", "1"),
+        ("eq_tiny_thresh", "0"),
+    ];
+    let (kept, _) = captures()
+        .remove("probe_eq_tol")
+        .expect("a probe_eq_tol capture");
+    let stored: Vec<String> = kept
+        .iter()
+        .map(|l| {
+            let name = l.split(' ').nth(1).unwrap_or_default();
+            match STORED.iter().find(|(n, _)| *n == name) {
+                Some((n, v)) => format!("PROBE {n} {v}"),
+                None => l.clone(),
+            }
+        })
+        .collect();
+    assert_ne!(stored, kept, "the 1.1d capture holds the five lines");
+    for profile in [
+        VmProfile::COD1_15,
+        VmProfile::COD1_UO,
+        VmProfile::COD2,
+        VmProfile::COD4,
+    ] {
+        let ours = run_probe_as("probe_eq_tol", &profile).expect("probe_eq_tol runs");
+        assert_eq!(ours.error, None, "{:?}", profile.number_eq);
+        assert_eq!(ours.lines, stored, "{:?}", profile.number_eq);
+    }
 }
 
 /// A skip name that matches no capture section is inert, and an inert skip

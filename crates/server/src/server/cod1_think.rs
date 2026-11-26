@@ -14,7 +14,7 @@ struct Think {
     /// Every linked client's body, the mover's own rewritten after each
     /// of its steps: retail relinks after each `Pmove`. A blocked push
     /// leaves its pair out of the tree until each one's next cmd
-    /// (movers doc 12, "The candidate trace").
+    /// (movers doc 12.5).
     bodies: Vec<Body>,
     /// The server's pmove point contents meet the mount triggers
     /// (coduo-movement.md 11).

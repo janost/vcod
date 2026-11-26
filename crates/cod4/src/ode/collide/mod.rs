@@ -121,8 +121,8 @@ pub fn world_surface(obj: &Obj, dv: &Dvars, world: usize) -> Surface {
 
 /// 0x5a5f20 for a capsule body against the world: its contacts
 /// ([`collide_world`] under the ragdoll mask, room for 0x80); none sets
-/// the state 2; five or more go through 0x5a2320's cut (at most 15,
-/// [`crate::physics`]'s `reduce`); then [`contact_pass`] with the body as
+/// the state 2; five or more go through 0x5a2320's cut ([`cut`], at most
+/// 15); then [`contact_pass`] with the body as
 /// `b1` and the world as `b2`. The impact callback after it (0x5a5de0)
 /// and the jitter regions (0x5a23e0) are left out.
 pub fn near_world(
@@ -154,10 +154,132 @@ pub fn cut(c: &[ContactGeom]) -> Vec<ContactGeom> {
         .iter()
         .map(|c| (Vec3::from(c.pos), Vec3::from(c.normal), c.depth))
         .collect();
-    crate::physics::reduce(&v)
-        .into_iter()
-        .map(|i| c[i])
-        .collect()
+    reduce(&v).into_iter().map(|i| c[i]).collect()
+}
+
+/// The contacts 0x5a2320 keeps of a geom's five or more (0x5a5f20 at
+/// 0x5a6078), by index into `c` (each its position, normal and depth), in
+/// the order it copies them out (cod4-gsc.md 3.6.1): three seeds by normal
+/// (0x5a18e0), five k-means rounds over the normals (0x5a1aa0), clusters
+/// whose means dot over 0.999 merged (0x5a1cc0), and of each cluster the
+/// least and most along two tangents and the deepest, a contact within
+/// 0.1 of an earlier one passed over (0x5a1e40).
+pub fn reduce(c: &[(Vec3, Vec3, f32)]) -> Vec<usize> {
+    let n = c.len();
+    let mut tags = vec![usize::MAX; n];
+    if n == 0 {
+        return Vec::new();
+    }
+    // 0x5a18e0: the seed 104729 mod the count, the contact whose normal is
+    // most against it, then the one most against both.
+    let k0 = 104_729 % n;
+    let least = |f: &dyn Fn(Vec3) -> f32| {
+        let (mut best, mut at) = (f32::MAX, None);
+        for (i, &(_, nm, _)) in c.iter().enumerate() {
+            let d = f(nm);
+            if best > d {
+                (best, at) = (d, Some(i));
+            }
+        }
+        at
+    };
+    let n0 = c[k0].1;
+    let k1 = least(&|nm| nm.dot(n0));
+    tags[k0] = 0;
+    if let Some(k1) = k1 {
+        tags[k1] = 1;
+        let n1 = c[k1].1;
+        if let Some(k2) = least(&|nm| nm.dot(n0).max(nm.dot(n1))) {
+            tags[k2] = 2;
+        }
+    }
+    // 0x5a1aa0: each cluster's mean normal (zero stays zero, 0x4076d0),
+    // then each contact to the cluster it dots most with, five times over.
+    let means = |tags: &[usize]| {
+        let mut m = [Vec3::ZERO; 3];
+        for (i, &t) in tags.iter().enumerate() {
+            if t < 3 {
+                m[t] += c[i].1;
+            }
+        }
+        m.map(|v| v.normalize_or_zero())
+    };
+    let mut m = means(&tags);
+    for _ in 0..5 {
+        for (i, t) in tags.iter_mut().enumerate() {
+            let (mut best, mut at) = (-f32::MAX, usize::MAX);
+            for (k, mk) in m.iter().enumerate() {
+                let d = mk.dot(c[i].1);
+                if best - d < 0.0 {
+                    (best, at) = (d, k);
+                }
+            }
+            *t = at;
+        }
+        m = means(&tags);
+    }
+    // 0x5a1cc0: a later cluster whose mean dots over 0.999 (the double at
+    // 0x70b270) with an earlier one's joins it, off the means as they were.
+    for i in 0..2 {
+        for j in i + 1..3 {
+            if m[i].dot(m[j]) > 0.999 {
+                tags.iter_mut().filter(|t| **t == j).for_each(|t| *t = i);
+            }
+        }
+    }
+    // 0x5a1e40: the clusters' normal sums, each normalized and given two
+    // tangents off z, or off y when |z| is 0.5 or more (0x5a1d80).
+    let mut sums = [Vec3::ZERO; 3];
+    for (i, &t) in tags.iter().enumerate() {
+        if t < 3 {
+            sums[t] += c[i].1;
+        }
+    }
+    let mut out = Vec::new();
+    for (k, sum) in sums.iter().enumerate() {
+        let nm = sum.normalize_or_zero();
+        let u = if nm.z.abs() < 0.5 { Vec3::Z } else { Vec3::Y };
+        let t1 = nm.cross(u).normalize_or_zero();
+        let t = [t1, nm.cross(t1).normalize_or_zero()];
+        let (mut lo, mut hi) = ([f32::MAX; 2], [-f32::MAX; 2]);
+        let (mut lo_at, mut hi_at) = ([usize::MAX; 2], [usize::MAX; 2]);
+        let (mut deepest, mut deep_at) = (-f32::MAX, usize::MAX);
+        let mut members = 0;
+        for i in 0..n {
+            if tags[i] != k {
+                continue;
+            }
+            // The float at 0x70b87c, 0.01, on the squared distance.
+            for j in i + 1..n {
+                if tags[j] == k && (c[j].0 - c[i].0).length_squared() < 0.01 {
+                    tags[j] = usize::MAX;
+                }
+            }
+            members += 1;
+            for a in 0..2 {
+                let p = t[a].dot(c[i].0);
+                if lo[a] > p {
+                    (lo[a], lo_at[a]) = (p, i);
+                }
+                if hi[a] < p {
+                    (hi[a], hi_at[a]) = (p, i);
+                }
+            }
+            if deepest < c[i].2 {
+                (deepest, deep_at) = (c[i].2, i);
+            }
+        }
+        if members == 0 {
+            continue;
+        }
+        let start = out.len();
+        for i in [lo_at[0], lo_at[1], hi_at[0], hi_at[1], deep_at] {
+            if i < n && !out[start..].contains(&i) {
+                out.push(i);
+            }
+        }
+    }
+    out
 }
 
 /// The contact pass (0x5a2760) on contacts for `b1` against `b2` (a body

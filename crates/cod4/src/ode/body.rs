@@ -133,6 +133,18 @@ impl Body {
         self.facc = super::math::add(self.facc, f);
     }
 
+    /// `dBodyAddForceAtPos` (0x5b7000): `f` onto the force, `(p - pos) x
+    /// f` onto the torque, each sum stored (ODE 0.5's `dCROSS`).
+    pub fn add_force_at_pos(&mut self, f: V3, p: V3) {
+        let w = |x: f32| x as f64;
+        self.facc = super::math::add(self.facc, f);
+        let q = super::math::sub(p, self.pos);
+        let t = &mut self.tacc;
+        t[0] = ((w(q[1]) * w(f[2]) - w(q[2]) * w(f[1])) + w(t[0])) as f32;
+        t[1] = ((w(q[2]) * w(f[0]) - w(q[0]) * w(f[2])) + w(t[1])) as f32;
+        t[2] = ((w(q[0]) * w(f[1]) - w(q[1]) * w(f[0])) + w(t[2])) as f32;
+    }
+
     pub fn add_torque(&mut self, t: V3) {
         self.tacc = super::math::add(self.tacc, t);
     }

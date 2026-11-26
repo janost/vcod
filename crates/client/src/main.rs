@@ -86,7 +86,7 @@ mod viewmodel;
 mod voice;
 
 use anyhow::{Context, Result, anyhow, bail};
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches, Parser};
 use glam::Vec3;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -222,687 +222,8 @@ struct Args {
     /// CoD4: answer the class menu with this response (e.g. assault_mp,0)
     #[arg(long)]
     class: Option<String>,
-    /// Overwrite the committed gamestate.bin fixture with the --net-probe capture.
-    /// Off by default: the parser tests pin that file, and a capture from another
-    /// map or a mid-round server is not a drop-in. Otherwise the probe writes to tmp/.
-    #[arg(long)]
-    save_fixture: bool,
-    /// Overwrite the committed snapshots.bin fixture only; gamestate.bin stays pinned.
-    #[arg(long)]
-    save_snapshots: bool,
-    /// Run `record` from the first snapshot into tmp/probe-<tag>.dm_<n> and
-    /// write every server message past the gamestate (not only the snapshot
-    /// ones) as the `--capture-tag` pair in crates/common/tests/fixtures/net/,
-    /// what `net::tests::a_retail_framed_demo_plays_and_vcod_writes_it_alike`
-    /// frames as retail does (cod11-demos.md 10). Needs `--capture-tag`.
-    #[arg(long)]
-    save_demo: bool,
-    /// Write the retail server's non-empty configstring table to
-    /// crates/server/tests/fixtures/configstrings/<map>-<gametype>.txt, the
-    /// fixture crates/server/tests/configstrings_ab.rs diffs against. Separate
-    /// from --save-fixture because that pair pins the parser's byte-exact
-    /// captures and this one pins the game module's table.
-    #[arg(long)]
-    save_configstrings: bool,
-    /// Join a team through the stock menu and write the retail playerstate to
-    /// crates/server/tests/fixtures/playerstate/<map>-<gametype>.txt, the
-    /// fixture crates/server/tests/playerstate_ab.rs diffs against.
-    #[arg(long)]
-    save_playerstate: bool,
-    /// Join a team, then hold each movement input in turn and write the
-    /// retail playerstate settled under each to
-    /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-motion.txt.
-    /// Separate from --save-playerstate because that one pins a standing
-    /// player, which leaves every field the client predicts at zero.
-    #[arg(long)]
-    save_motion: bool,
-    /// Join a team, then run a scripted weapon sequence (single shot,
-    /// sustained fire, reload, fire crouched and prone) and write the retail
-    /// playerstate to
-    /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-combat.txt.
-    /// Separate from --save-motion because that one samples a settled state
-    /// and a shot is a transient: this fixture carries every snapshot, since
-    /// the playerstate event ring holds four slots and overwrites as it fires.
-    /// Each firing step waits for weaponstate to read ready before it taps, and
-    /// the reload holds the weapon file's reloadTime, so a weapon still busy
-    /// from the step before cannot be recorded under a firing label. Each step
-    /// also logs every cmd it sent (`!cmds`, its view and movement included)
-    /// and each snapshot its
-    /// commandTime, which `playerstate_combat_ab` replays frame for frame. The
-    /// sequence takes about 40 s, inside the default --probe-secs.
-    #[arg(long)]
-    save_combat: bool,
-    /// Join a team, then run the sight script (sight held, released, held
-    /// through a reload, through a shot and while walking, plus a hip shot
-    /// and a walk to kick the spread counter) and write every snapshot's
-    /// fWeaponPosFrac and aimSpreadScale to
-    /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-ads.txt.
-    /// The same machine as --save-combat with another script; the two are
-    /// separate fixtures because the ramp is a transient the combat steps
-    /// never hold still for.
-    #[arg(long)]
-    save_ads: bool,
-    /// Join a team, then run the grenade script (one melee swing on the
-    /// rifle, a switch to the frag, a cooked throw, a cook held past the pin,
-    /// a cook cancelled by a weapon switch and a throw at the ground) and
-    /// write every snapshot's grenadeTimeLeft and weaponDelay, plus a !missile
-    /// line per snapshot that had one on the wire, to
-    /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-grenade.txt.
-    /// The same machine as --save-ads with another script; it stands still, so
-    /// a gate replays it from the origin the header carries.
-    #[arg(long)]
-    save_grenade: bool,
-    /// Join a team, raise the sight and tap eight shots down it standing
-    /// still, printing every bullet-impact temp entity's origin beside the
-    /// shooter's eye and view, which is what measures the sight sway
-    /// (docs/research/cod11-combat.md, section 15). A measurement, not a
-    /// fixture: the same machine as --save-ads, and it writes nothing.
-    /// Use it with --probe-weapon kar98k_sniper_mp: adsSpread 0 makes the
-    /// scoped shot deterministic.
-    #[arg(long)]
-    probe_sway: bool,
-    /// Join a team, raise the sight, turn to a wall a few hundred units off
-    /// and tap scoped shots level, leaning left, leaning right and leaning
-    /// crouched, recording every snapshot's leanf and every bullet-impact
-    /// temp entity beside the playerstate it was fired from. Writes
-    /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-lean.txt,
-    /// which lean_ab.rs replays. Use it with --probe-weapon
-    /// kar98k_sniper_mp: adsSpread 0 leaves only the sway on the shot, so the
-    /// impact puts the leaned muzzle on record (combat doc 2.1, 15).
-    #[arg(long)]
-    save_lean: bool,
-    /// The shooter half of the hit capture: join a team, walk toward the other
-    /// player until the eye-to-eye trace through the map's collision is clear,
-    /// then fire a single shot, a burst and until the target dies, and watch
-    /// the corpse and the respawn. Writes
-    /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-hit-shooter.txt.
-    /// Run it against a server that already has a --probe-target on it, on the
-    /// other team. A run that never finds a line of sight says so in the
-    /// fixture header and still records the shots, which then hit the map.
-    #[arg(long)]
-    save_hit: bool,
-    /// The target half of the hit capture: join a team, stand still, kill
-    /// itself 10 s in, press use 3 s after each death and record every
-    /// snapshot that moves a damage or death field, plus the obituaries, the
-    /// corpses and the scoreboards. Writes
-    /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-hit-target.txt.
-    /// Separate from --save-hit because the two roles are two probes: this one
-    /// is the victim, and its `kill` is what makes the death, the corpse and
-    /// the respawn land whether or not the shooter ever gets a shot off.
-    #[arg(long)]
-    probe_target: bool,
-    /// With --probe-target: each `kill` goes out with exactly N usercmds
-    /// behind it, one message each, sent back to back so they reach the
-    /// server inside one frame, and then no cmd for 150 ms, so the next one
-    /// lands past the frame's end. The list is cycled kill by kill (`1,3`),
-    /// a kill every 8 s. Measures how many of a death frame's cmds run
-    /// before `ClientEndFrame` makes the player dead (combat doc 9.2).
-    /// Writes the target fixture with a `!kill` line per kill; tag it
-    /// `killcmds`, `killcmds-1.5` or `killcmds-uo`.
-    #[arg(long, requires = "probe_target", value_delimiter = ',')]
-    probe_kill_cmds: Vec<usize>,
-    /// Join a team, stand still and record what the wire does across a map
-    /// end and the rotation that follows: every gamestate with its serverId,
-    /// every serverCommand with its reliable sequence, every out-of-band
-    /// packet (retail announces a map change with `loadingnewmap` and sends no
-    /// gamestate with it) and one trace line per snapshot that moved. Writes
-    /// crates/server/tests/fixtures/netchan/<map>-<gametype>-mapchange.txt,
-    /// named for the map the run started on. Give it --probe-secs enough to
-    /// span the limit, the intermission and the next map's load. It sends
-    /// `score` every 2 s, since retail answers the `b` scoreboard and never
-    /// pushes one: every `b` in that fixture is an answer to this probe.
-    #[arg(long)]
-    save_mapchange: bool,
-    /// The same recording across a round restart instead of a map change, as
-    /// a pair: with --probe-target it is the half that kills itself 20 s in
-    /// and ends the round, without it the half that walks up and only watches.
-    /// Writes <map>-<gametype>-roundrestart-target.txt and
-    /// -roundrestart-shooter.txt. A restart re-sends no gamestate, so what the
-    /// shooter's weapon column shows either side of it is the pers[] carry the
-    /// stock sd.gsc does by hand. Start the target first.
-    #[arg(long)]
-    save_roundrestart: bool,
-    /// Join a team, walk the --probe-pvs route and write the entity trace to
-    /// crates/server/tests/fixtures/entities/<map>-<gametype>.txt, the fixture
-    /// crates/server/tests/entities_ab.rs diffs against. Separate from
-    /// --probe-pvs because that one only prints: this one overwrites committed
-    /// evidence. Each run appends its stations to the map's fixture, since one
-    /// walk gets one random spawn; delete the file to start that map over.
-    #[arg(long)]
-    save_entities: bool,
-    /// Join a team, then walk a route and print the snapshot entity list at
-    /// each station: which entities the server sent, and every add and removal
-    /// along the way with the position it happened at. Answers whether the
-    /// server culls the entity list by where the client stands. Writes no
-    /// fixture; the route is relative to the spawn, so its stations are
-    /// positions in one run, not reproducible places.
-    #[arg(long)]
-    probe_pvs: bool,
-    /// Walk the --probe-pvs route with the sight held and count, per second
-    /// and for the run, what a slope does to the playerstate: snapshots off
-    /// the ground, fWeaponPosFrac reversals, EV_STEP_VIEW (143) events with
-    /// their parms and the mean speed. Writes no fixture; the same run
-    /// against retail and against ours is the comparison. Pair it with
-    /// --probe-cmd-ms 8 to send usercmds at a high-fps client's rate.
-    #[arg(long)]
-    probe_slope: bool,
-    /// Join a team and walk at the map's trigger brushes, read out of the BSP,
-    /// nearest unvisited first, steering round geometry with a look-ahead
-    /// trace against the map's own collision. It presses use after every death
-    /// so a minefield does not end the run, and kills itself when it wedges.
-    /// The client writes no fixture: the evidence is the *server's*
-    /// games_mp.log, logged by the client-probes/probe_trigger.gsc gametype,
-    /// which is what crates/server/tests/triggers_ab.rs replays. Give it a
-    /// long --probe-secs; most of a stock map's belt is walled off and each
-    /// unreachable brush costs a leg.
-    #[arg(long)]
-    probe_triggers: bool,
-    /// The S&D plant capture: joins the attackers, walks into bombzone_A,
-    /// holds use for 2 s and releases (the abort), then holds use through a
-    /// full plant with a forward walk sent 2 s in (what a link does to
-    /// pmove), and stands still after. Writes
-    /// crates/server/tests/fixtures/playerstate/<map>-sd-plant-attacker.txt.
-    /// Pair with --probe-defuse on the other team, and run
-    /// client-probes/probe_lookat as the gametype so the server's log carries
-    /// the lookat fires. Retail evidence when taken against tools/run_probe.sh;
-    /// a run against vcod-server overwrites it.
-    #[arg(long, conflicts_with = "probe_defuse")]
-    probe_plant: bool,
-    /// The S&D defuse capture: joins the defenders, waits for the plant,
-    /// walks to the bomb, sweeps the view across it with the aim alone (the
-    /// lookat trigger's shape; a held use would let bomb_think finish the
-    /// defuse mid-sweep), then aims true and holds use through the defuse. Writes <map>-sd-defuse-defender.txt.
-    #[arg(long, conflicts_with = "probe_plant")]
-    probe_defuse: bool,
-    /// The item pickup capture: joins allies, waits for
-    /// client-probes/probe_pickup's teleport onto the first fg42, stands on
-    /// it, aims at it and takes it with the use key, takes the second one's
-    /// ammo by touch after the probe's second teleport, then swaps the
-    /// carbine for a panzerfaust and back, logging every cmd and snapshot
-    /// from the spawn on. Writes
-    /// crates/server/tests/fixtures/items/<map>-dm-pickup.txt.
-    /// Retail evidence when taken against tools/run_probe.sh; a run against
-    /// vcod-server overwrites it.
-    #[arg(long)]
-    save_pickup: bool,
-    /// With `--net-probe`: mount mp_carentan's MG at (1712 1830 8), sweep it
-    /// past both arcs, fire it, dismount, remount from a crouch, and try a
-    /// mount from outside the arc; writes
-    /// `crates/server/tests/fixtures/turret/<map>-dm-turret.txt`. Needs
-    /// `client-probes/probe_turret` as the gametype with `probe_teleport 1`.
-    #[arg(long)]
-    save_turret: bool,
-    /// With `--save-turret`: hold the trigger at the axis client this many ms
-    /// instead of 1000. `client-probes/probe_turret`'s `probe_pose 1` mode
-    /// wants several seconds of rounds; pair it with a --capture-tag.
-    #[arg(long, requires = "save_turret")]
-    probe_turret_target_ms: Option<u64>,
-    /// With `--net-probe`: the player-clip walker. Waits for
-    /// `client-probes/probe_bump`'s placement 200 units behind the
-    /// `--probe-bump-target` client on mp_carentan, then walks into it
-    /// head-on, at a 20-unit glance and in a jump once per stance it takes;
-    /// writes `crates/server/tests/fixtures/playerstate/<map>-dm-bump-walker.txt`.
-    /// A `--capture-tag` starting `overlap` runs the overlap script instead
-    /// (stand, then walk through the gsc's `probe_overlap 1` setorigins) and
-    /// writes `<map>-dm-bump-<tag>-walker.txt`. Retail evidence when taken
-    /// against tools/run_probe.sh; a run against vcod-server overwrites it.
-    #[arg(long, conflicts_with = "probe_bump_target")]
-    save_bump: bool,
-    /// With `--net-probe` and `--probe-team allies`: the walk behind the
-    /// moving-body pose capture. Waits for `client-probes/probe_legs` to put
-    /// the player on its mark on mp_carentan, then runs, stops, backs,
-    /// strafes, runs diagonally and crouch-walks at world yaw 0, writing
-    /// every usercmd and snapshot to
-    /// `crates/server/tests/fixtures/movers/<map>-dm-legs-client.txt`, which
-    /// `legs_ab.rs` replays beside the gsc's bone log. Refuses to replace the
-    /// fixture without --overwrite-fixture. A `--capture-tag` starting
-    /// `torso` fires, reloads and aims on the move instead, beside
-    /// `client-probes/probe_torso`, for `torso_ab.rs`; one starting `stopgo`
-    /// stops and goes inside the legs blends, beside `probe_legs`.
-    #[arg(long)]
-    save_legs: bool,
-    /// With `--net-probe` and `--probe-team`: the shellshock capture's
-    /// client half. Waits for `client-probes/probe_shock` to put the player
-    /// on mp_carentan's street, runs forward and back a second each way,
-    /// holds `wbuttons` 0x4 while the playerstate's shellshock runs (as the
-    /// retail cgame does) and writes every usercmd and snapshot to
-    /// `crates/server/tests/fixtures/shellshock/<map>-dm-shock-client.txt`.
-    /// Refuses to replace the fixture without --overwrite-fixture.
-    #[arg(long)]
-    save_shock: bool,
-    /// With `--net-probe`: the player-clip target. Joins, stands where
-    /// `client-probes/probe_bump` puts it and, once the walker stands on its
-    /// mark, stands 35 s, crouches 25 s, stands 1.5 s, lies prone 25 s and
-    /// stands. Writes no fixture; prints its playerstate while a push is on it.
-    #[arg(long, conflicts_with = "save_bump")]
-    probe_bump_target: bool,
-    /// With `--net-probe`: stay a spectator and press the follow buttons
-    /// (attack, attack, melee, the sight held 2 s, attack, 6 s apart from 8 s
-    /// in), printing every snapshot whose clientNum, pm_type, pm_flags or
-    /// eFlags moved. Writes no fixture.
-    #[arg(long)]
-    probe_follow: bool,
-    /// With `--net-probe` and `--probe-team`: the killcam victim. Stands
-    /// still, never sends `kill`, presses use 20 s after each death and once a
-    /// second after that, and prints a `KILLCAM` line per snapshot from the
-    /// death until 3 s after the respawn. Writes no fixture.
-    #[arg(long)]
-    probe_killcam: bool,
-    /// With `--probe-killcam`: press use this many ms after the killcam starts
-    /// (the first frame following another client) instead, to skip it.
-    #[arg(long, requires = "probe_killcam")]
-    probe_killcam_skip_ms: Option<u64>,
-    /// With `--net-probe` and `--probe-team`: stand still and print a `FALL`
-    /// line per snapshot whose ground entity, `pm_flags`, `pm_time`, events
-    /// or health moved, a `CMDS` line of the `serverTime`s it sent every 60
-    /// cmds, and a `SPAWNED` line at the first spawned snapshot (time,
-    /// `commandTime`, origin, view, velocity); `client-probes/probe_fall`
-    /// does the dropping. Writes no fixture.
-    #[arg(long)]
-    probe_fall: bool,
-    /// With `--probe-fall`: hold forward on every cmd at this world yaw, so
-    /// each landing's stun walks the player into whatever is in the way.
-    /// The stun-slide capture walks 315 into the street's south wall.
-    #[arg(long, value_name = "YAW", requires = "probe_fall")]
-    probe_fall_walk: Option<f32>,
-    /// With `--probe-fall`: hold prone on every cmd at this world yaw, the
-    /// client half of `client-probes/probe_pronedrop` (the airborne prone
-    /// refusal, docs/research/cod11-mantle.md, "Prone Blocked").
-    #[arg(
-        long,
-        value_name = "YAW",
-        requires = "probe_fall",
-        conflicts_with = "probe_fall_walk"
-    )]
-    probe_fall_prone: Option<f32>,
-    /// With `--net-probe`: hold this world yaw on every cmd no other mode
-    /// steers, where the plain probe holds 0 (`delta_angles` taken off), so a
-    /// script's turn holds. `client-probes/probe_dyingpose` stands its body
-    /// at 90 with it.
-    #[arg(long, value_name = "YAW")]
-    probe_yaw: Option<f32>,
-    /// With `--net-probe` and `--probe-team`: stand at world yaw 0 and hold
-    /// this view pitch in alternate 400 ms windows (0 between), printing a
-    /// `PITCH` line per snapshot whose pitch moved. The target half of
-    /// `client-probes/probe_turret`'s `probe_pose 1` measurement. Writes no
-    /// fixture.
-    #[arg(long, value_name = "DEG")]
-    probe_pitch_flip: Option<f32>,
-    /// With `--net-probe` and `--probe-team`: stand still and print a `RIDE`
-    /// line per snapshot with the origin, velocity, ground entity and view
-    /// yaw, the mover push and ride capture's wire half, and a `RIDE_NEW`
-    /// line per entity that enters the snapshot, and `--probe-fall`'s `CMDS`
-    /// lines; `client-probes/probe_ride` and `probe_worldcopy` move a brush
-    /// model under the player. Writes no fixture.
-    #[arg(long)]
-    probe_ride: bool,
-    /// With `--net-probe` and `--probe-team`: stand still and print an `ITEM`
-    /// line per snapshot an item entity appeared, changed or left, with its
-    /// index, owner, ground, both trajectories and its event ring, and its
-    /// cmds as `SPAWNED` and `CMDS` lines (`--probe-fall`'s);
-    /// `client-probes/probe_itemdrop` drops, spawns and respawns the items.
-    /// Writes no fixture.
-    #[arg(long)]
-    probe_items: bool,
-    /// With `--net-probe` and `--probe-team`: stand still and print a
-    /// `COMPASS` line per snapshot whose `iCompassFriendInfo`, eye or player
-    /// list changed, the field decoded as the cgame reads it. Two on one team
-    /// measure the out-of-view teammate the server packs there. On a United
-    /// Offensive server the line adds `iCompassTankInfo` and the vehicles
-    /// in the snapshot (`client-probes/probe_tankcompass`). Writes no
-    /// fixture.
-    #[arg(long)]
-    probe_compass: bool,
-    /// With `--net-probe`, `--probe-team` and a United Offensive
-    /// `--game-dir`: a flamethrower victim. Runs the play client's flame
-    /// report (`fx::flame`) off each firing body's eye, holds `wbuttons`
-    /// 0x1 while it does and sends its `fdc`, printing a `FLAME` line per
-    /// `fdc`, flag change and health change. Pairs with
-    /// `client-probes/probe_flame` (docs/research/coduo-diff.md 19). Writes
-    /// no fixture.
-    #[arg(long)]
-    probe_flame: bool,
-    /// With `--net-probe` and `--probe-team`: build every cmd through the
-    /// play client's own input (`play::input::PlayInput`), hold forward at
-    /// this world yaw for 14 s once the join settles, then press weapon
-    /// slot 1 and, 3 s on, `weapnext`, printing a `LADDER` line per snapshot
-    /// whose weapon fields, `pm_flags`, sent weapon byte or 64-unit height
-    /// band moved.
-    /// `client-probes/probe_ladder` puts the player on mp_ship's hold
-    /// ladder. Writes no fixture.
-    #[arg(long, value_name = "YAW")]
-    probe_ladder: Option<f32>,
-    /// With `--probe-ladder`: run the climb script instead of the weapon
-    /// binds (up at several pitches, down, a strafe and its release, off the
-    /// top) and write every cmd and snapshot to
-    /// `crates/server/tests/fixtures/playerstate/<map>-dm-ladder.txt`, which
-    /// `tests/ladder_ab.rs` replays. `--save-ladder climb` runs the short
-    /// script instead: straight up looking 45 up and off the top.
-    /// `--save-ladder turn` sweeps the view past `bg_ladder_yawcap` on the
-    /// rungs and at the foot (`tests/ladder_yawcap_ab.rs`). `--save-ladder
-    /// grab` starts at the first live snapshot, waits for the placement and
-    /// walks forward at the probe's yaw into the rungs
-    /// (`tests/ladder_ab.rs`'s second-grab gate). Retail
-    /// evidence when taken against tools/run_probe.sh; a run against
-    /// vcod-server overwrites it.
-    #[arg(long, requires = "probe_ladder", num_args = 0..=1, default_missing_value = "full", value_name = "SCRIPT")]
-    save_ladder: Option<String>,
-    /// With `--net-probe` and `--probe-team`: build every cmd through the
-    /// play client's own input with the `a` command and the own events
-    /// routed into its weapon selection, pull the trigger every 700 ms from
-    /// 15 s to 19 s after the join settles, and print a `WEAPSEL` line per
-    /// snapshot whose weapon fields or sent weapon byte moved, and one per
-    /// own pickup, dry-fire, drop, raise, putaway and alt event, per `a` and
-    /// per press of `weapalt` (26 s, 30 s, 38 s) and `weapon colt_mp` (34 s).
-    /// `client-probes/probe_weapsel` switches weapons by script, empties the
-    /// rifle and hands over a thompson. Writes
-    /// `crates/server/tests/fixtures/playerstate/<map>-dm-weapsel.txt`
-    /// (`--capture-tag` names another).
-    #[arg(long)]
-    probe_weapsel: bool,
-    /// With `--net-probe` and `--probe-team`: a United Offensive tank crew
-    /// member. `client-probes/probe_vehicle` puts client 0 and 1 beside the
-    /// first tank; `driver` (start it first) climbs in 2 s after its spawn,
-    /// drives, turns, fires the main gun and the coaxial MG, `gunner` climbs
-    /// in 4 s after its spawn and sweeps and fires its MG; `overheat` is the
-    /// gunner holding its MG for 6 s; `sit` (alone, beside
-    /// `client-probes/probe_vehicle_armor`) sits still in each seat in turn
-    /// and gets out. Prints a `VEH`
-    /// line per snapshot per vehicle and seated player. Writes no fixture;
-    /// add `--save-snapshots --capture-tag <tag>` for one.
-    #[arg(long, value_enum, value_name = "ROLE")]
-    probe_vehicle: Option<vehicle_probe::VehicleRole>,
-    /// With `--net-probe` and `--probe-team`: a United Offensive weapon on
-    /// foot, beside `client-probes/probe_uofx` with `probe_weapon` naming
-    /// it. Takes the script's `a` select, then `arty` sights and fires the
-    /// artillery binoculars, `smoke` throws the smoke grenade, `mg` sights
-    /// to deploy the bipod, holds the trigger 3 s and breaks it down, `hold`
-    /// sights and holds the trigger (`client-probes/probe_vehicle_armor`
-    /// aims it), `aim` holds it at the view the gsc sets every frame, `throw`
-    /// pulls a grenade back and lets go twice at that view (`aim` and
-    /// `throw` run on any patch: `client-probes/probe_scriptmodel`), and
-    /// `direct` holds that view with the buttons, lean, stance and keys the
-    /// gsc sends it (`client-probes/probe_leanhit`, `probe_spawnbody`).
-    /// Writes no fixture; a following spectator records it (recipe in
-    /// docs/research/coduo-diff.md section 19).
-    #[arg(
-        long,
-        value_enum,
-        value_name = "SCRIPT",
-        conflicts_with = "probe_vehicle"
-    )]
-    probe_uo_weapon: Option<vehicle_probe::WeaponScript>,
-    /// With `--net-probe`: stay a quiet spectator and print a `CLOCK` line a
-    /// second, the client clock's lag behind the newest snapshot, how often
-    /// it ran past it and how evenly it stepped, beside the same for the
-    /// clock it replaced (`OLD`). `--probe-cmd-ms` is the frame time;
-    /// `VCOD_NETSIM` adds a bad link. Writes no fixture.
-    #[arg(long)]
-    probe_clock: bool,
-    /// With `--net-probe`: a spectator that keeps decoding where a client
-    /// would stop, for the server's edge cases: `silence` (the `sv_timeout`
-    /// drop), `zombie` (a disconnect before entering the world),
-    /// `zombie-active` (one after), `reconnect` (a connect again into the
-    /// held slot), `lean-fly` (the lean bits on a spectator's flight),
-    /// `spec-fly` (forward held, every origin printed, beside
-    /// `client-probes/probe_specspawn`) and `watch` (the entity list as it
-    /// changes).
-    /// Prints `EDGE` lines; writes no fixture (`edge_probe.rs`).
-    #[arg(long, value_enum)]
-    probe_edge: Option<edge_probe::EdgeMode>,
-    /// With `--net-probe` and `--probe-team`: the scripted gametype capture.
-    /// Presses use as the gsc probe's `setClientCvar("probe_use", ...)` says
-    /// (`tap`, `hold`, `0`), keeps the view the server set, sends `score`
-    /// every 2 s and writes every serverCommand and every snapshot whose
-    /// HUD, objectives, roster or players moved to
-    /// crates/server/tests/fixtures/gametypes/<map>-<gametype>-<ROLE>.txt,
-    /// the gametype without its `probe_` prefix. Pairs with
-    /// `client-probes/probe_re` and `probe_bel`; the fixture header carries
-    /// the recipe. Refuses to replace a fixture without --overwrite-fixture.
-    #[arg(long, value_name = "ROLE")]
-    save_scripted: Option<String>,
-    /// With --net-probe: take the download path a joining client takes.
-    /// Every referenced pak no installed pak matches by checksum is fetched
-    /// into DIR/<game>/ (a scratch directory, never the install), named as
-    /// retail names it, then `donedl`; each prints its checksum beside the
-    /// server's `sv_referencedPaks` entry. Writes no fixture. Under
-    /// --vanilla it fetches nothing and searches only the stock paks.
-    #[arg(long, value_name = "DIR")]
-    probe_download: Option<std::path::PathBuf>,
-    /// Walk the --probe-slope route and write every usercmd sent and every
-    /// snapshot's movement fields to
-    /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-slope-<ms>ms.txt,
-    /// which playerstate_slope_ab.rs replays on our mover, origin for origin.
-    /// Retail evidence when taken against tools/run_server.sh; a run against
-    /// vcod-server overwrites it.
-    #[arg(long)]
-    save_slope: bool,
-    /// With --save-slope: keep the snapshots of every `pm_type` (dead,
-    /// spectator, intermission), not only a playing or linked body's. For
-    /// `predict_ab`'s state changes beside `client-probes/probe_uostates`.
-    #[arg(long, requires = "save_slope")]
-    slope_every_state: bool,
-    /// With --save-slope: log from the first playing snapshot, not 3 s
-    /// past the weapon pick, so a `--probe-vehicle` capture holds the
-    /// spawn, the placement and the boarding.
-    #[arg(long, requires = "save_slope")]
-    slope_from_spawn: bool,
-    /// With --save-slope or --probe-slope: a prone crawl instead of the
-    /// route, from where `client-probes/probe_prone` puts the player on
-    /// mp_carentan (`+set probe_teleport 1`, `probe_spot` street or mound),
-    /// with the value the world yaw up the grade (90 on the street, 270 on
-    /// the mound): prone, crawl up, down and across the grade, turn past the
-    /// prone yaw cap, sweep the pitch past the prone pitch clamp, crawl
-    /// looking down and downhill, stand. Tag the fixture with --capture-tag.
-    #[arg(long, value_name = "UPHILL_YAW")]
-    probe_prone: Option<f32>,
-    /// With --save-slope: the movement script instead of the route, from
-    /// where `client-probes/probe_prone` puts the player on mp_carentan's
-    /// street (`+set probe_teleport 1 +set probe_spot street`), facing world
-    /// yaw 0 along it: standing jumps inside and past
-    /// patch 1.5's jump penalty, running jumps, a held jump, crouch and
-    /// prone with their walks, the prone press while running (1.1's dive),
-    /// diagonal runs and semi-automatic shots at the hip and down the sight.
-    /// Tag the fixture with --capture-tag (`moves-1.1`, `moves-1.5`), which
-    /// predict_ab.rs replays through the predictor under that version's
-    /// movement rules.
-    #[arg(long)]
-    probe_moves: bool,
-    /// With --save-slope: the prone turn and gait script instead of the
-    /// route, from the street placement of `client-probes/probe_prone`
-    /// (`+set probe_teleport 1 +set probe_spot street`), facing world yaw 90:
-    /// a crawl back toward the kerb, quarter turns there and while crawling,
-    /// a turn past the prone yaw cap, then a run, lean runs, a lean strafe, a
-    /// sighted walk and a leaning crouch walk. Tag the fixture with
-    /// --capture-tag (`turns-1.1`, `turns-1.5`), which moves_ab.rs replays
-    /// under that version's rules.
-    #[arg(long)]
-    probe_turns: bool,
-    /// With --save-slope, on a United Offensive server: the sprint and
-    /// bipod script instead of the route, from the street placement of
-    /// `client-probes/probe_prone` (`+set probe_teleport 1 +set probe_spot
-    /// street`), facing world yaw 0, with --probe-weapon mg30cal_mp: a
-    /// sprint to exhaustion, its regeneration, sprint with each other gait,
-    /// and the bipod deployed prone and swung past its yaw cap. Tag the
-    /// fixture `sprint-uo`; moves_ab.rs replays it under UO's rules.
-    #[arg(long)]
-    probe_sprint: bool,
-    /// With --save-slope, on a United Offensive server: an automatic held
-    /// from the hip, then down the sight, then tapped, from the street
-    /// placement of `client-probes/probe_prone`, facing world yaw 0, with
-    /// --probe-weapon naming the automatic (`mp44_mp`). Tag the fixture
-    /// `autofire-uo`; moves_ab.rs replays it under UO's rules. On 1.1 with
-    /// `--probe-weapon springfield_mp` it holds a bolt-action's trigger
-    /// through the shot and the rechamber (tag `springfield-held-1.1`).
-    #[arg(long)]
-    probe_autofire: bool,
-    /// With --save-slope: the talk bit (the console or the chat line up)
-    /// held over the sight, a run, a lean, a shot, a jump, a crouch and a
-    /// prone crawl, from the street placement of `client-probes/probe_prone`,
-    /// facing world yaw 0. Tag the fixture `talk-1.1`, `talk-1.5` or
-    /// `talk-uo`; moves_ab.rs replays each under its rules.
-    #[arg(long)]
-    probe_talk: bool,
-    /// With --save-slope, on a 1.5 or United Offensive server: shots whose
-    /// muzzle moves, from a placement of `client-probes/probe_moveshot` on
-    /// mp_carentan facing world yaw 0. `walk` (`+set probe_spot street`,
-    /// --probe-weapon thompson_mp) fires bursts strafing, running,
-    /// crouched, sighted and leaning; `bipod` (UO, `+set probe_spot wall`,
-    /// --probe-weapon mg30cal_mp) from the bipod deployed short of a wall
-    /// with the view swung off it. The wait before the script goes in as
-    /// `!wsnap` and `!wcmd` lines. Tag the fixture `moveshot-<part>-1.5` or
-    /// `-uo`; moveshot_ab.rs replays it (cod11-combat.md 2.1).
-    #[arg(long, value_enum, value_name = "PART")]
-    probe_moveshot: Option<probe::MoveShot>,
-    /// With --save-slope: a move key pressed on a prone body, from the
-    /// street placement of `client-probes/probe_prone` (`+set
-    /// probe_teleport 1 +set probe_spot street`), facing world yaw 0.
-    /// `rifle` (any server, --probe-weapon springfield_mp) presses one
-    /// under the sight, in a rechamber and in a swing's windup, then a
-    /// prone press from a crouched walk back; `lmg` (United Offensive,
-    /// --probe-weapon mg30cal_mp) on the deployed bipod, through its
-    /// breakdown, and with the binoculars; `deploy` (United Offensive,
-    /// --probe-weapon mg30cal_mp, `client-probes/probe_uofoot` with `+set
-    /// probe_spot mound`) deployed standing after a prone up and a prone
-    /// down the mound, pitched past the clamp; `deploy-crouch` the same
-    /// crouched (`probe_spot moundcrouch`). Tag the fixture
-    /// `pronemove-<part>-<version>`; moves_ab.rs and animtimers_ab.rs
-    /// replay it.
-    #[arg(long, value_enum, value_name = "PART")]
-    probe_pronemove: Option<probe::ProneMove>,
-    /// With --save-slope, on a United Offensive server: the bipod and
-    /// grenade cook script from a placement of
-    /// `client-probes/probe_uofoot` on mp_foy (`+set probe_teleport 1
-    /// +set probe_spot stand|crouch|mount`), facing the mount the gsc
-    /// faces, with --probe-weapon mg30cal_mp: the bipod deployed on
-    /// the mount, swung past its cap, fired, broken down, then the frag
-    /// thrown plain, cooked and cooked out. The value is the world yaw
-    /// to face (the probe's view overrides the gsc's): 90 for stand and
-    /// mount, 0 for crouch. Tag the fixture `uofoot-<spot>`; moves_ab.rs
-    /// replays it under UO's rules.
-    #[arg(long, allow_negative_numbers = true)]
-    probe_uofoot: Option<f32>,
-    /// With --save-slope, on a United Offensive server: the mounted MG
-    /// script from a `client-probes/probe_turret` placement on mp_carentan
-    /// (`+set probe_teleport 1`, 40 units behind the gun at (1712 1830)):
-    /// the use tap onto the gun, the view swept past both arcs, a burst,
-    /// the move, jump and stance keys pushed against the mount, the use tap
-    /// off it and a walk away. The value is the gun's world yaw (229 there).
-    /// Tag the fixture `uoturret-uo`; predict_ab.rs replays it under UO's
-    /// rules.
-    #[arg(long, allow_negative_numbers = true)]
-    probe_uoturret: Option<f32>,
-    /// With --save-slope, on a United Offensive server: a run at the wall
-    /// under a window too low for a standing body, a jump and crouch held
-    /// in the air, from a placement of `client-probes/probe_crouchjump`
-    /// (`+set probe_teleport 1 +set probe_spot cassino|streets|low`). The
-    /// value is the world yaw to face: -128 for cassino, 180 for streets,
-    /// -90 for low. Tag the fixture `crouchjump-<spot>`; moves_ab.rs
-    /// replays it under UO's rules (bot-navigation.md, "Walled-in spawns").
-    #[arg(long, allow_negative_numbers = true)]
-    probe_crouchjump: Option<f32>,
-    /// With --probe-crouchjump: the same run and jump with no crouch, the
-    /// control (tag `crouchjump-<spot>-stand`).
-    #[arg(long, requires = "probe_crouchjump")]
-    probe_crouchjump_stand: bool,
-    /// With --save-slope: runs into a patch, slides along it both ways,
-    /// runs at it turned, jumps at it, crouch walks and crawls along it and
-    /// stands up beside it, from a placement of
-    /// `client-probes/probe_patchwalk` on mp_carentan (`+set
-    /// probe_teleport 1 +set probe_spot pole|pillar|kerb`). The value is
-    /// the world yaw to face, which the gsc logs with the placement. Tag
-    /// the fixture `patchwalk-<spot>-<1.1|1.5|uo>`; moves_ab.rs replays it
-    /// under that version's rules (bsp-ibsp59-format.md, "Patch collision
-    /// on 1.5 and UO").
-    #[arg(long, allow_negative_numbers = true)]
-    probe_patchwalk: Option<f32>,
-    /// Milliseconds between usercmds the probe sends. A retail client at 125
-    /// fps sends one every 8 ms; the default is what every capture so far
-    /// was taken with.
-    #[arg(long, default_value_t = 16)]
-    probe_cmd_ms: u64,
-    /// Turns --save-hit into a measurement instead of a capture: the shooter
-    /// taps once per entry of a static table of pitch offsets around the aim
-    /// at the target's eye, echoing the offset on each !trace line, and writes
-    /// no fixture. Pair those lines with the sHitLoc the server's own
-    /// games_mp.log D; records carry and every vertical hit-location boundary
-    /// falls out of the two. Give both probes a long --probe-secs: the sweep
-    /// spends an offset only on a tap that had a live target to hit.
-    #[arg(long, conflicts_with_all = ["probe_melee", "probe_grenade", "probe_grenade_death"])]
-    probe_sweep: bool,
-    /// Runs the hit pair's melee script instead of its bullet one: the shooter
-    /// walks to within 40 units and taps the melee bit rather than the
-    /// trigger. Both halves write <map>-<gametype>-melee-shooter.txt and
-    /// -melee-target.txt, so pass it to the --probe-target half too or that
-    /// half overwrites the committed bullet fixture.
-    #[arg(long, conflicts_with_all = ["probe_sweep", "probe_grenade", "probe_grenade_death"])]
-    probe_melee: bool,
-    /// Runs the hit pair's grenade script: the shooter walks to within 300
-    /// units, switches to the frag, cooks for a second, releases at the
-    /// target's feet, watches the missile out and then throws a second one,
-    /// barely cooked, at the ground beside it. Writes
-    /// <map>-<gametype>-grenade-shooter.txt and -grenade-target.txt; pass it
-    /// to the --probe-target half as well.
-    #[arg(long, conflicts_with_all = ["probe_sweep", "probe_melee", "probe_grenade_death"])]
-    probe_grenade: bool,
-    /// The grenade script with a `kill` sent 500 ms into the cook, which is
-    /// what puts the grenade a death drops on the wire. Writes
-    /// <map>-<gametype>-grenade-death-shooter.txt and -grenade-death-target.txt.
-    #[arg(long, conflicts_with_all = ["probe_sweep", "probe_melee", "probe_grenade"])]
-    probe_grenade_death: bool,
-    /// Suffix for the --save-entities, combat, hit pair (--save-hit,
-    /// --probe-target) and round-restart fixture names, so a capture
-    /// taken under different conditions lands beside the plain one rather
-    /// than on top of it: --capture-tag players writes
-    /// <map>-<gametype>-players.txt. With --save-snapshots it writes the
-    /// gamestate-<tag>.bin and snapshots-<tag>.bin pair and captures for
-    /// all of --probe-secs (the 1.5 pair is tagged 1.5). A tagged write
-    /// refuses a path that already exists, since a tag can spell a
-    /// committed fixture's name; --overwrite-fixture is how you mean it.
-    #[arg(long)]
-    capture_tag: Option<String>,
-    /// Let a --capture-tag write replace a fixture that is already there.
-    /// Without it the run fails rather than putting a capture taken against
-    /// vcod's own server where the retail oracle lives.
-    #[arg(long)]
-    overwrite_fixture: bool,
-    /// Which team --net-probe answers the stock team menu with: allies, axis,
-    /// autoassign or spectator. On its own it makes the probe join and then
-    /// report the roster once a second, which is how two probes on opposite
-    /// teams measured what clientState.team carries.
-    #[arg(long)]
-    probe_team: Option<String>,
-    /// What --net-probe answers the stock weapon menu with, instead of the
-    /// nationality's default rifle: any weapon that menu allows, e.g.
-    /// kar98k_sniper_mp on axis. A weapon the menu refuses reopens it and the
-    /// probe never spawns.
-    #[arg(long)]
-    probe_weapon: Option<String>,
-    /// Seconds --net-probe stays connected; an SD round boundary needs a few minutes
-    #[arg(long, default_value_t = 65)]
-    probe_secs: u64,
-    /// With --net-probe: `SECS:COMMAND`, a client command sent SECS seconds
-    /// after the gamestate, e.g. `5:say_team hello`. Repeatable; keep them
-    /// 800 ms apart or retail's flood window drops the later one. With
-    /// --probe-team the probe joins first, so `kill` between two says
-    /// measures a dead speaker. `{sid}` in COMMAND becomes the current
-    /// serverId, so `12:mr {sid} 0 spectator` answers a menu. Every `h`/`i`
-    /// chat line that comes back is printed with its control bytes escaped.
-    /// Writes no fixture.
-    #[arg(long, value_name = "SECS:COMMAND", value_parser = parse_probe_say)]
-    probe_say: Vec<(f32, String)>,
-    /// With --net-probe: the userinfo `rate` the probe connects with instead
-    /// of 25000. Off the LAN it paces every message (docs/research/
-    /// cod11-server-handshake.md, "Message pacing").
-    #[arg(long)]
-    probe_rate: Option<String>,
-    /// With --net-probe: the userinfo `snaps` instead of 20.
-    #[arg(long)]
-    probe_snaps: Option<String>,
-    /// With --net-probe: the userinfo `name` instead of `vcod`, so two
-    /// probes on one server tell apart (a kick vote names its target).
-    #[arg(long)]
-    probe_name: Option<String>,
+    #[command(flatten)]
+    probe: probe::ProbeArgs,
     /// Run without sound (also what happens when no output device opens).
     #[arg(long)]
     no_audio: bool,
@@ -1506,7 +827,8 @@ fn run() -> Result<()> {
     console::log::init();
     frame_digest::init();
     frame_prof::init();
-    let args = Args::parse();
+    let matches = Args::command().get_matches();
+    let args = Args::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
     log::info!("{TITLE}{}", if args.vanilla { " (vanilla)" } else { "" });
     let default_panic = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -1517,6 +839,22 @@ fn run() -> Result<()> {
     quit::install();
     use vcod_common::game::Game;
     let game = Game::resolve(args.game, &args.game_dir);
+    if args.net_probe.is_some() {
+        // The CoD2 and CoD4 probes read only these; the rest are CoD1's.
+        let read: Option<&[&str]> = match game {
+            Game::Cod4 => Some(&["probe_team", "probe_secs"]),
+            Game::Cod2 => Some(&["probe_team", "probe_weapon", "probe_secs"]),
+            _ => None,
+        };
+        if let Some(read) = read {
+            let unread = probe::ProbeArgs::unread(&matches, read);
+            anyhow::ensure!(
+                unread.is_empty(),
+                "{} not read by the {game:?} --net-probe",
+                unread.join(", ")
+            );
+        }
+    }
     if let Some(addr) = args.connect.as_ref().filter(|_| args.net_probe.is_none()) {
         vcod_common::laps::begin_load_at(format!("{game:?} start --connect {addr}"), started);
     }
@@ -1568,7 +906,7 @@ fn run() -> Result<()> {
             .with_context(|| format!("cannot resolve {addr}"))?;
         let cp = vcod_cod4::net::conn::Cp::Iwds(args.game_dir.join("main"));
         // Headless, a team that plays takes a class even with none named.
-        let team = args.team.clone().or(args.probe_team.clone());
+        let team = args.team.clone().or(args.probe.probe_team.clone());
         let class = args.class.clone().or_else(|| {
             team.as_deref()
                 .filter(|t| *t != "spectator")
@@ -1577,7 +915,7 @@ fn run() -> Result<()> {
         let join = play::cod4_menus::Join { team, class };
         return play::cod4::probe(
             addr,
-            args.probe_secs,
+            args.probe.probe_secs,
             "vcodprobe",
             cp,
             join,
@@ -1591,11 +929,11 @@ fn run() -> Result<()> {
         let dir = args.game_dir.join(&args.mod_dir);
         let fs = vcod_common::asset_source::open_game_fs(game, &dir, None)
             .with_context(|| format!("cannot open game data in {}", dir.display()))?;
-        let join = args.probe_team.clone().map(|team| play::cod2::Join {
+        let join = args.probe.probe_team.clone().map(|team| play::cod2::Join {
             team,
-            weapon: args.probe_weapon.clone(),
+            weapon: args.probe.probe_weapon.clone(),
         });
-        return play::cod2::probe(addr, args.probe_secs, &fs, join);
+        return play::cod2::probe(addr, args.probe.probe_secs, &fs, join);
     }
     // Bare `vcod --game cod2` opens CoD2's main menu (frontend::cod2).
     let cod2_menu = game == Game::Cod2
@@ -1619,12 +957,12 @@ fn run() -> Result<()> {
     let dir = args.game_dir.join(&args.mod_dir);
 
     if let Some(addr) = &args.net_probe
-        && args.probe_clock
+        && args.probe.probe_clock
     {
-        return clock_probe::run(addr, args.probe_secs, args.probe_cmd_ms);
+        return clock_probe::run(addr, args.probe.probe_secs, args.probe.probe_cmd_ms);
     }
-    if let (Some(addr), Some(mode)) = (&args.net_probe, args.probe_edge) {
-        return edge_probe::run(addr, mode, args.probe_secs, args.probe_cmd_ms);
+    if let (Some(addr), Some(mode)) = (&args.net_probe, args.probe.probe_edge) {
+        return edge_probe::run(addr, mode, args.probe.probe_secs, args.probe.probe_cmd_ms);
     }
     if let Some(addr) = &args.net_probe {
         // Sound cue resolution needs the game data, the wire-level prints do
@@ -1639,95 +977,7 @@ fn run() -> Result<()> {
                 None
             }
         };
-        use probe::ShooterScript;
-        let script = match () {
-            _ if args.probe_sweep => ShooterScript::Sweep,
-            _ if args.probe_melee => ShooterScript::Melee,
-            _ if args.probe_grenade => ShooterScript::Grenade,
-            _ if args.probe_grenade_death => ShooterScript::GrenadeDeath,
-            _ => ShooterScript::Hit,
-        };
-        return probe::probe(
-            addr,
-            probe::Save {
-                fixture: args.save_fixture,
-                snapshots: args.save_snapshots,
-                demo: args.save_demo,
-                configstrings: args.save_configstrings,
-                playerstate: args.save_playerstate,
-                motion: args.save_motion,
-                slope: args.save_slope,
-                slope_every_state: args.slope_every_state,
-                slope_from_spawn: args.slope_from_spawn,
-                prone: args.probe_prone,
-                moves: args.probe_moves,
-                turns: args.probe_turns,
-                sprint: args.probe_sprint,
-                autofire: args.probe_autofire,
-                talk: args.probe_talk,
-                moveshot: args.probe_moveshot,
-                pronemove: args.probe_pronemove,
-                uofoot: args.probe_uofoot,
-                uoturret: args.probe_uoturret,
-                crouchjump: args.probe_crouchjump,
-                crouchjump_stand: args.probe_crouchjump_stand,
-                patchwalk: args.probe_patchwalk,
-                combat: args.save_combat,
-                ads: args.save_ads,
-                grenade: args.save_grenade,
-                sway: args.probe_sway,
-                lean: args.save_lean,
-                entities: args.save_entities,
-                hit: args.save_hit,
-                target: args.probe_target,
-                mapchange: args.save_mapchange,
-                roundrestart: args.save_roundrestart,
-                plant: args.probe_plant,
-                defuse: args.probe_defuse,
-                pickup: args.save_pickup,
-                turret: args.save_turret,
-                turret_target_ms: args.probe_turret_target_ms,
-                bump: args.save_bump,
-                legs: args.save_legs,
-                shock: args.save_shock,
-                bump_target: args.probe_bump_target,
-                follow: args.probe_follow,
-                killcam: args.probe_killcam,
-                killcam_skip_ms: args.probe_killcam_skip_ms,
-                kill_cmds: args.probe_kill_cmds.clone(),
-                fall: args.probe_fall,
-                fall_walk: args.probe_fall_walk,
-                fall_prone: args.probe_fall_prone,
-                pitch_flip: args.probe_pitch_flip,
-                yaw: args.probe_yaw,
-                ride: args.probe_ride,
-                items: args.probe_items,
-                compass: args.probe_compass,
-                flame: args.probe_flame,
-                ladder: args.probe_ladder,
-                save_ladder: args.save_ladder.clone(),
-                weapsel: args.probe_weapsel,
-                vehicle: args.probe_vehicle,
-                uo_weapon: args.probe_uo_weapon,
-                scripted: args.save_scripted.clone(),
-                download: args.probe_download.clone(),
-                rate: args.probe_rate.clone(),
-                snaps: args.probe_snaps.clone(),
-                name: args.probe_name.clone(),
-            },
-            args.capture_tag.clone(),
-            args.overwrite_fixture,
-            args.probe_pvs,
-            args.probe_slope,
-            args.probe_triggers,
-            args.probe_cmd_ms,
-            script,
-            args.probe_team.as_deref(),
-            args.probe_weapon.as_deref(),
-            args.probe_secs,
-            &args.probe_say,
-            fs.as_ref(),
-        );
+        return probe::probe(addr, args.probe, fs.as_ref());
     }
 
     let mut fs = if cod4_fly || cod4_watch || cod4_menu {
@@ -5765,6 +5015,47 @@ fn cookie_settings(shell: &console::shell::Shell) -> renderer::CookieSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A probe flag needs `--net-probe`; a default-valued one (`--probe-secs`
+    /// unset) does not trip the rule; the rest of the line parses as before.
+    #[test]
+    fn probe_flags_need_net_probe() {
+        let parse = |a: &[&str]| Args::try_parse_from([&["vcod"], a].concat());
+        let e = parse(&["--save-slope"]).err().expect("needs --net-probe");
+        assert_eq!(e.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+        assert!(parse(&["--probe-secs", "5"]).is_err());
+        assert!(parse(&["--list"]).is_ok());
+        let ok = parse(&[
+            "--net-probe",
+            "127.0.0.1:1",
+            "--save-slope",
+            "--probe-secs",
+            "5",
+        ])
+        .unwrap();
+        assert!(ok.probe.save_slope);
+        assert_eq!(ok.probe.probe_secs, 5);
+        // Flags inside the group keep their own `requires`.
+        assert!(parse(&["--net-probe", "x", "--slope-every-state"]).is_err());
+    }
+
+    /// The CoD2 and CoD4 probes refuse a flag they would drop.
+    #[test]
+    fn unread_probe_flags_are_named() {
+        let line = [
+            "vcod",
+            "--net-probe",
+            "x",
+            "--probe-team",
+            "axis",
+            "--save-slope",
+        ];
+        let m = Args::command().try_get_matches_from(line).unwrap();
+        assert_eq!(
+            probe::ProbeArgs::unread(&m, &["probe_team", "probe_secs"]),
+            ["--save-slope"]
+        );
+    }
 
     /// `exec`'s disk fallback reads a file beside the config, in a
     /// subdirectory too, and nothing a rooted, `..` or drive name points at.

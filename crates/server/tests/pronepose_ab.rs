@@ -612,7 +612,7 @@ fn a_prone_body_on_the_mp_brecourt_field_traces_like_retail() {
 /// spawned on the spot: his origin, the eight bone marks and every
 /// downward `bulletTrace` that stops on him to retail's float. 1.5b's
 /// prone idle moves, so its keys lerp at the engine's float node time
-/// (cod11-combat.md 3.1, "The clip's float time").
+/// (cod11-combat.md 3.1.4).
 #[test]
 fn a_prone_body_on_the_mp_brecourt_field_traces_like_15() {
     let Some(fs) = vcod_common::testing::game_fs_15() else {

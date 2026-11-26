@@ -458,7 +458,7 @@ VERIFIED (`objdump` of `CoDMP15.exe` and `CoDUOMP.exe`):
   clears it on a delta of 0 or less (`0x41748f`, `0x41891c`), and
   `CL_WritePacket` reads it on the no-delta test (`0x40c78d`, `0x40ce82`).
 
-The differences stay those of sections 1 and 3: the `.dm_<n>` number, UO's
+INFERRED: the differences stay those of sections 1 and 3: the `.dm_<n>` number, UO's
 32768-byte buffer and UO's vehicle baselines.
 
 ### 9.4 vcod to retail

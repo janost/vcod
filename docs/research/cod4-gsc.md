@@ -2138,6 +2138,19 @@ What the takes show:
   `play::cod4::tests::live_streaks::cod4_live_airstrike_then_helicopter_in_one_life`.
   VERIFIED (ours).
 
+### 4.3 `==` on two numbers
+
+- `cod4_lnxded` 0x8158844 tests two numbers as CoD2 does: `|a - b| <
+  1e-6`, the difference stored as a float (`fsubs`, `fabs`, `fstps`,
+  `fucomip` against the float at 0x8220c38, 0x81588bf..0x81588de); two
+  ints compare exactly (0x81588a4). 0x8158a30 is `!(a == b)`. VERIFIED
+  (the instructions).
+- Retail `cod4_lnxded` 1.7 (mp_crash, a scratch `war.gsc` under
+  `fs_game` holding `probe_eq_tol`'s 24 lines, 2026-11-26) logged CoD2's
+  lines. VERIFIED (the log). The table: cod11-gsc-object-model.md 9.3.1.
+- vcod: `VmProfile::COD4.number_eq` is `NumberEq::Stored`. Gate:
+  `semantics_ab::probe_eq_tol_matches_retail_stored`.
+
 ## 5. Configstrings
 
 - `CS_LAYOUT_COD4` (`game::cod4`) is the `CS_*` enum. Every slot the

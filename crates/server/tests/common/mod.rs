@@ -380,7 +380,7 @@ pub fn join_pair_staggered(
 
 /// How far a probe client's newest cmd trails the frame that runs it: a
 /// retail 1.1d gunner's `commandTime` read 16 to 35 ms under each frame's
-/// time (cod11-turrets.md 13.9, "The mount's blend in").
+/// time (cod11-turrets.md 13.9.5.3).
 const PROBE_CMD_LAG_MS: i32 = 17;
 
 /// The stamps a probe client running at 60 fps sends from `after` (its
@@ -2235,7 +2235,7 @@ pub struct ProbeHold {
     /// [`ProbeHold::framed`] the cmds sent on a snapshot are the captured
     /// ones past its `commandTime` up to the next snapshot's, which places
     /// each cmd on retail's side of a frame, in place of the 50 ms from
-    /// the frame's time (cod11-combat.md 15.1, "The cmd that fires").
+    /// the frame's time (cod11-combat.md 15.1.1).
     pub ran: Vec<(i32, i32)>,
     /// The newest snapshot's time, view and `delta_angles` at the last
     /// [`ProbeHold::cmds`], and the snapshot's before it: under

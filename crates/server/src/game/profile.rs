@@ -419,7 +419,10 @@ pub static COD1_15: HostProfile = HostProfile {
     ..cod1(&defs::V15, BuiltinSet::v15, Cod1Version::V15)
 };
 /// United Offensive 1.51.
-pub static COD1_UO: HostProfile = cod1(&defs::UO, BuiltinSet::uo, Cod1Version::Uo);
+pub static COD1_UO: HostProfile = HostProfile {
+    vm: VmProfile::COD1_UO,
+    ..cod1(&defs::UO, BuiltinSet::uo, Cod1Version::Uo)
+};
 
 /// CoD2 1.3.
 pub static COD2: HostProfile = HostProfile {
@@ -499,7 +502,7 @@ pub static COD2: HostProfile = HostProfile {
     head_icon_spectator: false,
     model_change_updates_client: false,
     closer: CloserRounding::Floats,
-    math: MathRounding::Float,
+    math: MathRounding::Cod2,
 };
 
 /// CoD2's and CoD4's combat rules: 1.1's where the CoD1 code reads them.

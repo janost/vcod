@@ -27,6 +27,9 @@ them on vcod.
   `RAND_TRACE=1` preloads `tools/re/cod2_rand_trace.c` (built with `gcc
   -m32`) and appends every `srand()` and `rand()` the server made to the
   capture: the seed and the draws a replay pins (`cod2-combat.md` 9.6).
+- `tools/run_probe_cod2_gsc.sh <probe.gsc> [map]` is `run_probe.sh` for
+  CoD2: it installs a gametype, boots `cod2_lnxded` inside `unshare -rn`
+  with no client and prints its `PROBE` lines (`cod2-gsc-diff.md` 7).
 - Run the retail CoD2 and CoD4 Linux servers only inside `unshare -rn`.
   A new namespace's loopback is down: run `ip link set lo up` inside it
   before a probe client joins `127.0.0.1`.
@@ -366,7 +369,7 @@ python3 -I tools/re/cod4_phys_summary.py tmp/phys.txt [--trim OUT]
 `vcod --net-probe <ip:port>` is a headless client that joins, prints a
 per-second snapshot summary, and dumps captures to `tmp/`. Each scripted mode
 (`--save-*`, `--probe-*`) is documented on its flag in
-`crates/client/src/main.rs` (`vcod --help`): what it does, which fixture it
+`crates/client/src/probe.rs`, `ProbeArgs` (`vcod --help`, under "Probe flags"): what it does, which fixture it
 writes, which gsc probe it pairs with. The fixture paths are fixed at build
 time under the checkout the binary was built from, so the fixture modes need
 a source build; a release binary writes to its build machine's path. A multi-shell recipe (gsc probe,
@@ -378,6 +381,10 @@ lines, the slope recipes' `<spot>` and `<yaw>`, and the mp_carentan and
 port 28970 recipes in the sd, pickup, turret and weapsel headers. Correct
 them by hand before committing a fixture. `--net-probe --game cod2` and
 `--game cod4` probe those servers through `play::cod2` and `play::cod4`.
+Every probe flag needs `--net-probe` (clap rejects it alone), and a CoD2 or
+CoD4 probe refuses one it does not read: CoD2 reads `--probe-team`,
+`--probe-weapon` and `--probe-secs`, CoD4 `--probe-team` and `--probe-secs`
+(plus `--team` and `--class`).
 
 - Both servers treat loopback and private addresses as LAN and skip rate
   pacing for them. `tools/offlan_capture.sh retail|ours <dir>` runs a server
