@@ -223,6 +223,10 @@ implementation.
   netfield tables.
 - [cod-asset-importer](https://github.com/mauserzjeh/cod-asset-importer), a
   GPL Blender add-on. The xmodel triangle-strip decoder is ported from it.
+- [Open Dynamics Engine](https://www.ode.org/) 0.5 by Russell L. Smith,
+  BSD-style license. CoD4 runs its ragdolls on a modified ODE 0.5;
+  `vcod_cod4::ode` translates it with IW's changes read from the 1.7
+  binaries. Its licence text sits beside the module.
 - [zk_libcod](https://github.com/ibuddieat/zk_libcod), an MIT CoD2 1.3
   server library. `tools/re` reads its list of named 1.3 addresses to name
   functions in the retail server; some CoD2 docs use those names.
