@@ -29,6 +29,7 @@
 use std::collections::{BTreeMap, HashMap};
 use vcod_common::collision::CollisionWorld;
 use vcod_common::movetrace::MoveWorld;
+use vcod_common::net::event_ids::EV_PAIN;
 use vcod_common::net::msg::{self, NULL_USERCMD, UserCmd};
 use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::patch::Arith;
@@ -343,6 +344,7 @@ fn replay_taped(
             // The cmd that ended the frame was not captured.
             continue;
         }
+        server_writes(p, &mut pred, (&from, pair[0].0), (&to, pair[1].0));
         report.compared += 1;
         if pred.ps.origin == to.ps.origin {
             report.exact += 1;
@@ -382,6 +384,38 @@ fn replay_taped(
         }
     }
     report
+}
+
+/// What the server writes between two snapshots past the cmds, which no
+/// predictor runs (retail's cgame mispredicts both), applied to `pred` from
+/// what the later snapshot `to` shows of its inputs. `vehicle_ab` compares
+/// the server's own writes (coduo-vehicles.md 7, 11.3).
+/// - A seat change (`nextvehslot`): `SetClientViewAngle` (game 0x44301)
+///   writes `delta_angles` as the new seat's view less the last cmd's
+///   angles; the seat's view is the hull's tag, so `to`'s stand in.
+/// - A new `damageEvent`: `P_DamageFeedback` (game 0x3f65a) adds its
+///   `damageCount` to `aimSpreadScale` and raises `EV_PAIN`, whose parm
+///   (the health left) is `to`'s.
+fn server_writes(
+    p: &Cod1Wire,
+    pred: &mut Predicted,
+    (from, from_w): (&Predicted, &msg::PlayerState),
+    (to, to_w): (&Predicted, &msg::PlayerState),
+) {
+    if let (Some(a), Some(b)) = (&from.ps.seat, &to.ps.seat)
+        && a.pos != b.pos
+    {
+        pred.delta_angles = to.delta_angles;
+    }
+    let event = |w: &msg::PlayerState| w.field_i32(p, "damageEvent");
+    if event(from_w) != event(to_w) {
+        let count = to_w.field_i32(p, "damageCount") as f32;
+        pred.ps.aim_spread_scale = (pred.ps.aim_spread_scale + count).min(255.0);
+        let slot = (to.ring.seq.wrapping_sub(1) & 3) as usize;
+        if to.ring.events[slot] == EV_PAIN {
+            pred.ring.add(EV_PAIN, to.ring.parms[slot]);
+        }
+    }
 }
 
 fn print(name: &str, r: &Report) {
@@ -919,27 +953,10 @@ fn the_predictor_replays_uo_seats() {
     }
 }
 
-/// Fields the seat captures' replays may miss, per capture, with how many
-/// snapshots and why. Each is a server write between two snapshots, which
-/// no predictor runs (retail's cgame mispredicts it too); `vehicle_ab`
-/// replays the same captures on vcod-server and compares the server's side.
-/// - `delta_angles` at each `nextvehslot`: the new seat's
-///   `SetClientViewAngle` (game 0x8998d). `vehicle_ab` cannot compare it:
-///   its absolute value rides the replaying client's own cmd angles.
-/// - On the tank, `aimSpreadScale` and `eventSequence` on the main gun's
-///   snapshot: the driver's damage feedback from `Scr_Vehicle_Pain`
-///   (`P_DamageFeedback`: count 44 onto the cone, `EV_PAIN` 100)
-///   (`vehicle_ab`: `eventSequence`, `damageEvent`, `damageCount`).
-///
-/// See docs/research/coduo-vehicles.md 7.
-const SEAT_GAPS: &[(&str, &str, &[i32])] = &[
-    (TANK_SEATS_UO, "delta_angles[0]", &[33536, 41042]),
-    (TANK_SEATS_UO, "delta_angles[1]", &[33536, 41042]),
-    (TANK_SEATS_UO, "aimSpreadScale", &[32433]),
-    (TANK_SEATS_UO, "eventSequence", &[32433]),
-    (JEEP_SEATS_UO, "delta_angles[0]", &[32241, 39741]),
-    (JEEP_SEATS_UO, "delta_angles[1]", &[32241, 39741]),
-];
+/// Fields the seat captures' replays may miss, per capture, with the
+/// commandTimes it misses them on and why. None since [`server_writes`]
+/// stands in for the seat change's and the damage feedback's writes.
+const SEAT_GAPS: &[(&str, &str, &[i32])] = &[];
 
 /// What the server makes of a driver's cmd bytes, off the tank capture
 /// (docs/research/coduo-vehicles.md 2): `forwardmove` drives the hull
