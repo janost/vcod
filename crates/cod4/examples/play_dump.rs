@@ -8,8 +8,8 @@
 //!
 //! `--ent N` prints entity N's non-zero fields in every snapshot carrying it.
 //! `--times` prints every snapshot's `serverTime` (the `sv_fps` captures,
-//! cod4-server-frame.md 8). `--moves` prints each usercmd's time, angles
-//! and buttons.
+//! cod4-server-frame.md 8). `--moves` prints each usercmd's time, angles,
+//! buttons, weapon and the branch it went on.
 
 use anyhow::{Context, Result};
 use std::collections::BTreeSet;
@@ -80,10 +80,10 @@ fn main() -> Result<()> {
                     if let ClOp::Move { cmds, .. } = op
                         && moves
                     {
-                        for (c, _) in cmds {
+                        for (c, w) in cmds {
                             println!(
-                                "{} c2s move t {} angles {:?} buttons {:#x}",
-                                l.ms, c.server_time, c.angles, c.buttons
+                                "{} c2s move t {} angles {:?} buttons {:#x} weapon {} {:?}",
+                                l.ms, c.server_time, c.angles, c.buttons, c.weapon, w.branch
                             );
                         }
                     }

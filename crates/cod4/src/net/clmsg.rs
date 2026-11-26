@@ -144,6 +144,65 @@ impl CmdWire {
     }
 }
 
+/// `MSG_SetDefaultUserCmd`: the base a message's first cmd deltas from.
+/// Zero but the weapon, the offhand, pitch and yaw, and for a player in
+/// the world the stance, the lean, the sight and the sprint (`iw3mp.exe`
+/// 0x505b70, `cod4_lnxded` 0x8130ab0, cod4-netfields.md 14.5). The client
+/// builds it off `cl.snap.ps`, the server off its own playerstate.
+pub fn default_usercmd(ps: &super::delta::PlayerState, side: CmdBaseSide) -> UserCmd {
+    use crate::pmove::{POF_PLAYER, button, pmf};
+    use crate::ps_word;
+    let f = |w: usize| f32::from_bits(ps.word(w));
+    let view = ps_word!(3 "viewangles");
+    let delta = ps_word!(3 "delta_angles");
+    let angle = |i: usize| {
+        let d = f64::from(f(view[i])) - f64::from(f(delta[i]));
+        let s = d * f64::from(vcod_common::x87::SHORT_PER_DEG) + 0.5;
+        match side {
+            CmdBaseSide::Client => s as i32 as u16,
+            CmdBaseSide::Server => s as f32 as i32 as u16,
+        }
+    };
+    let mut c = UserCmd {
+        weapon: ps.word(ps_word!("weapon")) as u8,
+        offhand: ps.word(ps_word!("offHandIndex")) as u8,
+        angles: [angle(0), angle(1), 0],
+        ..UserCmd::default()
+    };
+    if ps.word(ps_word!("otherFlags")) & POF_PLAYER == 0 {
+        return c;
+    }
+    let e_flags = ps.word(ps_word!("eFlags"));
+    if e_flags & super::flags::EF_PRONE != 0 {
+        c.buttons |= button::PRONE;
+    } else if e_flags & super::flags::EF_CROUCH != 0 {
+        c.buttons |= button::CROUCH;
+    }
+    let leanf = f(ps_word!("leanf"));
+    if leanf > 0.0 {
+        c.buttons |= button::LEAN_RIGHT;
+    } else if leanf < 0.0 {
+        c.buttons |= button::LEAN_LEFT;
+    }
+    if f(ps_word!("fWeaponPosFrac")) != 0.0 {
+        c.buttons |= button::ADS_MODE;
+    }
+    if ps.word(ps_word!("pm_flags")) & pmf::SPRINTING != 0 {
+        c.buttons |= button::SPRINT;
+    }
+    c
+}
+
+/// Whose rounding [`default_usercmd`]'s angles take.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CmdBaseSide {
+    /// `iw3mp.exe`: `(int)` of the x87 value, the truncating `_ftol`
+    /// (0x505bbc..0x505bdb, 0x68b360).
+    Client,
+    /// `cod4_lnxded`: stored as a float first (0x8130adc..0x8130b29).
+    Server,
+}
+
 /// The writer's time rule: a byte when the new time is 0 to 255 ms past
 /// the base's, else the whole long (`cmp $0x100` at `iw3mp.exe` 0x505c75).
 fn steps_from(from: &UserCmd, to: &UserCmd) -> bool {
@@ -607,6 +666,51 @@ pub fn compress_ops(huff: &Huffman, ops: &[ClOp], key: i32, base: &UserCmd) -> V
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `MSG_SetDefaultUserCmd` (`iw3mp.exe` 0x505b70, `cod4_lnxded`
+    /// 0x8130ab0): the weapon, the offhand, pitch and yaw always, the
+    /// buttons only for a player in the world, prone over crouch, a lean by
+    /// its sign; the client truncates the double, the server the float.
+    #[test]
+    fn the_default_usercmd_reads_the_playerstate() {
+        use super::super::flags::{EF_CROUCH, EF_PRONE};
+        use crate::pmove::{POF_PLAYER, button, pmf};
+        use crate::ps_word;
+        let mut ps = super::super::delta::PlayerState::default();
+        let set = |ps: &mut super::super::delta::PlayerState, w: usize, v: u32| ps.words[w] = v;
+        let [pitch, yaw, _] = ps_word!(3 "viewangles");
+        set(&mut ps, ps_word!("weapon"), 7);
+        set(&mut ps, ps_word!("offHandIndex"), 3);
+        // 2144.99988 shorts: the float rounds it onto 2145.
+        set(&mut ps, pitch, 0x413c_7b3f);
+        set(&mut ps, yaw, 90f32.to_bits());
+        set(&mut ps, ps_word!(3 "delta_angles")[1], 45f32.to_bits());
+        set(&mut ps, ps_word!("eFlags"), EF_PRONE | EF_CROUCH);
+        set(&mut ps, ps_word!("leanf"), (-0.25f32).to_bits());
+        set(&mut ps, ps_word!("fWeaponPosFrac"), 0.5f32.to_bits());
+        set(&mut ps, ps_word!("pm_flags"), pmf::SPRINTING);
+        let client = default_usercmd(&ps, CmdBaseSide::Client);
+        let held = UserCmd {
+            weapon: 7,
+            offhand: 3,
+            angles: [2144, 8192, 0],
+            ..UserCmd::default()
+        };
+        assert_eq!(client, held, "not POF_PLAYER");
+        set(&mut ps, ps_word!("otherFlags"), POF_PLAYER);
+        let all = button::PRONE | button::LEAN_LEFT | button::ADS_MODE | button::SPRINT;
+        let client = default_usercmd(&ps, CmdBaseSide::Client);
+        assert_eq!(client.buttons, all);
+        assert_eq!(client.angles, [2144, 8192, 0]);
+        let server = default_usercmd(&ps, CmdBaseSide::Server);
+        assert_eq!(server.angles, [2145, 8192, 0]);
+        set(&mut ps, ps_word!("eFlags"), EF_CROUCH);
+        set(&mut ps, ps_word!("leanf"), 0.25f32.to_bits());
+        set(&mut ps, ps_word!("fWeaponPosFrac"), 0);
+        set(&mut ps, ps_word!("pm_flags"), 0);
+        let c = default_usercmd(&ps, CmdBaseSide::Client);
+        assert_eq!(c.buttons, button::CROUCH | button::LEAN_RIGHT);
+    }
 
     fn cmd(t: i32) -> UserCmd {
         UserCmd {

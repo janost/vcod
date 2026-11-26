@@ -1,5 +1,6 @@
 //! The netchan's acceptance and the `donedl` limit on a bare level, one
-//! in-process probe (`test_harness::Probe`); no install needed.
+//! in-process probe (`test_harness::Probe`); no install needed but for
+//! the first cmd's base, which needs `COD4_DIR`.
 
 use std::time::{Duration, Instant};
 
@@ -82,6 +83,70 @@ fn a_cod4_message_that_does_not_read_leaves_the_client_untouched() {
     let l = &sv.core.clients[0].as_ref().unwrap().link;
     assert!(l.netchan.incoming_sequence > before.0);
     assert_eq!(l.addr, p.addr);
+}
+
+/// A 1.7 client writes a move's first cmd off `MSG_SetDefaultUserCmd` of
+/// its newest snapshot's playerstate and the server reads it off its own
+/// (`SV_UserMove` 0x8172664, cod4-netfields.md 14.5): once a crouching
+/// player's snapshot shows the crouch, his cmd that holds it sends only its
+/// time, and the server thinks it crouched.
+#[test]
+fn a_cod4_first_cmd_reads_off_the_servers_playerstate() {
+    let Some(install) = vcod_cod4::testing::cod4_install() else {
+        return;
+    };
+    let mut sv = Cod4Server::new(
+        Cod4Config {
+            map: "mp_crash".into(),
+            gametype: "war".into(),
+            hostname: "vcod".into(),
+            max_clients: 4,
+        },
+        7,
+    );
+    sv.set_cvar("sv_pure", "0");
+    sv.load(Some(&install)).unwrap();
+    let class = "mr {sid} 15 assault_mp,0";
+    let mut p = Probe::new(
+        "base",
+        0,
+        28992,
+        0,
+        &[(1_000, "mr {sid} 8 allies"), (2_500, class)],
+    );
+    p.replay_from = 0;
+    p.natural_moves = true;
+    let mut now = Instant::now();
+    p.join(&mut sv, now);
+    // In the world and past the prematch's freeze.
+    let playing = |sv: &Cod4Server| {
+        let ps = sv.game.level.as_ref().and_then(|l| l.pm_state(0));
+        ps.is_some_and(|ps| ps.pm_type == 0 && ps.pm_flags & vcod_cod4::pmove::pmf::FROZEN == 0)
+    };
+    while !playing(&sv) && sv.core.sv_time_ms < 40_000 {
+        step(&mut sv, &mut p, &mut now);
+    }
+    assert!(playing(&sv), "playing");
+    let crouch = clmsg::buttons::CROUCH;
+    let mut base = UserCmd::default();
+    for _ in 0..40 {
+        let snap = p.snapshots().last().unwrap();
+        base = clmsg::default_usercmd(&snap.ps, clmsg::CmdBaseSide::Client);
+        let svs = sv.core.sv_time_ms;
+        let cmd = UserCmd {
+            server_time: svs + 10,
+            buttons: crouch,
+            ..base
+        };
+        p.replay.push_back((svs, vec![cmd]));
+        step(&mut sv, &mut p, &mut now);
+    }
+    assert_eq!(base.buttons, crouch, "the snapshot shows the crouch");
+    let held = sv.game.level.as_ref().unwrap().players[0]
+        .as_ref()
+        .unwrap()
+        .cmd;
+    assert_eq!(held.buttons, crouch, "{held:?}");
 }
 
 /// Fifty `donedl`s in one message build one gamestate, not fifty: another

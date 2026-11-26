@@ -381,6 +381,9 @@ pub struct Conn {
     /// `cl_nodelta` (`iw3mp.exe` 0x465bc3): every move goes as
     /// `clc_moveNoDelta`.
     nodelta_dvar: bool,
+    /// `MSG_SetDefaultUserCmd` of `cl.snap.ps`: the newest snapshot read
+    /// since the gamestate, the base a move's first cmd deltas from.
+    cmd_base: UserCmd,
     /// The server's voice packets read since the last [`Conn::take_voice`].
     voice_in: voice::Talked,
     /// The server's out-of-band `print`s once joined (rcon's answers),
@@ -449,6 +452,7 @@ impl Conn {
             notes: opts.notes,
             no_delta: false,
             nodelta_dvar: false,
+            cmd_base: UserCmd::default(),
             voice_in: Vec::new(),
             prints: Vec::new(),
             userinfo: String::new(),
@@ -662,9 +666,8 @@ impl Conn {
 
     /// One move message: the unacked commands and the cmds made since the
     /// sequence `cl_packetdup` + 1 back went out, `cmds` the new ones (the
-    /// newest 32 at most), the first on the long branch with every field,
-    /// the rest the fewest bits off the one before (no move op without
-    /// cmds). Before the gamestate it is the
+    /// newest 32 at most), each the fewest bits off the one before, the
+    /// first off `cl.snap.ps`'s base (no move op without cmds). Before the gamestate it is the
     /// bare header the client sends while it waits. The move carries
     /// `origin`'s predicted origin and time and files it in
     /// `cl.clientArchive` (`CL_WritePacket`, `iw3mp.exe` 0x4641cd..0x46428c);
@@ -718,10 +721,8 @@ impl Conn {
                 }
                 let mut wired: Vec<(UserCmd, CmdWire)> = Vec::new();
                 for c in self.cmd_ring.packet(seq, self.packet_dup) {
-                    let wire = match wired.last() {
-                        None => CmdWire::full(&UserCmd::default(), c),
-                        Some((prev, _)) => CmdWire::natural(prev, c),
-                    };
+                    let prev = wired.last().map_or(&self.cmd_base, |(p, _)| p);
+                    let wire = CmdWire::natural(prev, c);
                     wired.push((*c, wire));
                 }
                 if !wired.is_empty() && self.client.gamestate.is_some() {
@@ -746,8 +747,7 @@ impl Conn {
                     }
                 }
                 ops.push(ClOp::Eof);
-                let mut comp =
-                    clmsg::compress_ops(&self.client.huff, &ops, key, &UserCmd::default());
+                let mut comp = clmsg::compress_ops(&self.client.huff, &ops, key, &self.cmd_base);
                 head.server_id = server_id;
                 head.reliable_ack = self.client.server_command_sequence;
                 scramble_client_ops(head.seed(self.challenge), &last, &mut comp);
@@ -864,9 +864,7 @@ impl Conn {
             };
             self.drop_acked_commands();
             self.apply_configstrings(&parsed);
-            if parsed.ops.iter().any(|o| matches!(o, Op::Gamestate)) {
-                self.new_gamestate();
-            }
+            self.take_ops(&parsed.ops);
             out.push(Received {
                 sequence: s,
                 parsed,
@@ -1189,9 +1187,27 @@ impl Conn {
         self.command("wwwdl fail")
     }
 
+    /// A message's gamestate clears `cl`; its snapshot, copied over
+    /// `cl.snap` (`iw3mp.exe` 0x4739d9), gives the next moves their base.
+    fn take_ops(&mut self, ops: &[Op]) {
+        for op in ops {
+            match op {
+                Op::Gamestate => self.new_gamestate(),
+                Op::Snapshot(i) => {
+                    self.cmd_base = clmsg::default_usercmd(
+                        &self.client.snapshots[*i].ps,
+                        clmsg::CmdBaseSide::Client,
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// A gamestate came: `cl` is cleared and the level loads.
     fn new_gamestate(&mut self) {
         self.cmd_ring = CmdRing::default();
+        self.cmd_base = UserCmd::default();
         self.state = ConnState::Loading;
         self.loading = None;
         // The first move's writer builds it otherwise, in the first frame
@@ -1546,6 +1562,7 @@ mod tests {
             notes: None,
             no_delta: false,
             nodelta_dvar: false,
+            cmd_base: UserCmd::default(),
             voice_in: Vec::new(),
             prints: Vec::new(),
             userinfo: String::new(),
@@ -1767,7 +1784,7 @@ mod tests {
         scramble_client_ops(h.seed(c.challenge), &last, &mut block);
         let key = clmsg::usercmd_key(0x1234, h.message_ack, &last);
         let plain = c.client.huff.decompress(&block);
-        clmsg::read_ops(plain, key, &UserCmd::default()).unwrap()
+        clmsg::read_ops(plain, key, &c.cmd_base).unwrap()
     }
 
     fn move_times(ops: &[ClOp]) -> Vec<i32> {
@@ -1781,9 +1798,9 @@ mod tests {
     }
 
     /// `cl_packetdup` N: a packet carries the cmds made since the packet
-    /// N + 1 sequences back went out, the newest 32 at most, the first on
-    /// the long branch (`CL_WritePacket`, cod4-netfields.md 14), on 1.7's
-    /// header and CoD4x 21's.
+    /// N + 1 sequences back went out, the newest 32 at most, oldest first
+    /// (`CL_WritePacket`, cod4-netfields.md 14), on 1.7's header and CoD4x
+    /// 21's.
     #[test]
     fn each_packet_resends_the_cmds_of_the_last_packet_dup_packets() {
         let cmd = |t: i32| UserCmd {
@@ -1814,7 +1831,7 @@ mod tests {
                 ClOp::Move {
                     delta: false,
                     cmds: vec![
-                        (b, CmdWire::full(&UserCmd::default(), &b)),
+                        (b, CmdWire::natural(&UserCmd::default(), &b)),
                         (d, CmdWire::natural(&b, &d)),
                         (e, CmdWire::natural(&d, &e)),
                     ],
@@ -2093,6 +2110,65 @@ mod tests {
             c.set_nodelta(true);
             assert!(!delta(&mut c), "cl_nodelta");
         }
+    }
+
+    /// A move's first cmd deltas off `MSG_SetDefaultUserCmd` of the newest
+    /// snapshot's playerstate, which a gamestate clears (`CL_WritePacket`
+    /// 0x463fa6..0x463fb9, cod4-netfields.md 14.5): a cmd that holds the
+    /// snapshot's weapon, view and stance sends only its time.
+    #[test]
+    fn the_first_cmd_deltas_off_the_snapshots_playerstate() {
+        use super::super::delta::PlayerState;
+        use super::super::parse::Snapshot;
+        use crate::ps_word;
+        let mut ps = PlayerState::default();
+        ps.words[ps_word!("weapon")] = 9;
+        ps.words[ps_word!(3 "viewangles")[1]] = 45f32.to_bits();
+        ps.words[ps_word!("otherFlags")] = crate::pmove::POF_PLAYER;
+        ps.words[ps_word!("eFlags")] = super::super::flags::EF_CROUCH;
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        server
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut c = moving(&server, Dialect::V17);
+        c.client.snapshots.push(Snapshot {
+            message_num: 1,
+            server_time: vcod_common::net::Msec::from_raw(1000),
+            delta_num: 0,
+            base: None,
+            snap_flags: 0,
+            ps,
+            entities: Vec::new(),
+            clients: Vec::new(),
+            wire: Default::default(),
+        });
+        c.take_ops(&[Op::Snapshot(0)]);
+        let held = UserCmd {
+            server_time: 1100,
+            weapon: 9,
+            angles: [0, 8192, 0],
+            buttons: clmsg::buttons::CROUCH,
+            ..UserCmd::default()
+        };
+        let first = |c: &mut Conn, cmd: UserCmd| {
+            c.send(&[cmd], None).unwrap();
+            match sent_ops(&server, c).first() {
+                Some(ClOp::Move { cmds, .. }) => cmds[0].clone(),
+                o => panic!("{o:?}"),
+            }
+        };
+        let (got, wire) = first(&mut c, held);
+        assert_eq!(got, held);
+        assert_eq!(wire.branch, clmsg::Branch::Same);
+        c.take_ops(&[Op::Gamestate]);
+        c.state = ConnState::Active;
+        let (got, wire) = first(&mut c, held);
+        assert_eq!(got, held);
+        assert_eq!(
+            wire.branch,
+            clmsg::Branch::Long,
+            "the gamestate cleared cl.snap"
+        );
     }
 
     /// A side channel gamestate's table takes the `d` commands the
