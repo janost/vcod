@@ -2764,39 +2764,8 @@ impact threshold 10, viewheight lerp 180 deg/s-ish factors, spectator bbox
 (-8,-8,-8)..(8,8,16), ladder probe shrink 6/8, ladder probe distance 30/8,
 step 18/10.
 
-## Port notes (for crates/common/src/pmove.rs)
+## No mantle in retail 1.1
 
-What `crates/common/src/pmove.rs` ports from this doc:
-
-1. `PM_CheckJump` ("Jumps"): standing only, 500 ms cooldown, held-key
-   latch, `vz = sqrt(78 * gravity)` with the horizontal kept, `fJumpOriginZ`
-   and the jump's step, `EV_JUMP_*` and the spread kick. The 34/24 block is
-   the prone dive, not a jump.
-2. Friction 5.5, accelerate 9, stopspeed 100 (flat, not stance-scaled),
-   stance accelerates 12 ducked / 19 prone, and the walk's accel floor of
-   100 ("The walk's accel floor").
-3. Step height 18, 10 while prone (the chooser at 0x35034 tests `pm_flags`
-   0x1, not ladder state).
-4. Ladders: brush flag 0x8, probe reach 30/8, probe box shrunk 6
-   horizontally from 8 above the feet, no prone grab, `-vLadderVec` when
-   airborne, the climb wish at 0.5 scale with the inline floored accelerate
-   and no friction, the 16.0 sideways bleed without a strafe key
-   (`ladder_ab.rs`), the 300 ms re-grab lock after a jump, the push-off
-   (`sqrt(78*g)` then x0.75 vertical, flattened-reflection horizontal reset
-   to exactly 128), the wall glue, the ±75 `movementDir` lock
-   (`LADDER_MOVEMENT_DIR_CAP`), the view cap (`cap_ladder_yaw`) and the
-   climb anims (`playerpose`, `MOVETYPE_CLIMB`). `jumpTime` is a ms counter
-   advanced by the frame time (`PlayerState::since_jump_ms`), not
-   `cmd.serverTime`.
-5. The ground snap of "Step-up and steep slopes": the down pass on every
-   grounded frame, reaching `stepSize * 0.5` past the step;
-   `EV_STEP_VIEW` (143) with the rounded, clamped and biased step as its
-   parm, the post-step velocity scale and the footstep block past 0x3579c
-   ("The step event and the velocity scale"); the
-   `PM_VerifyPronePosition` revert ("The ground samples"). The entry gate
-   is retail's, airborne arm included (a rising climber, and on 1.5 one
-   not blocked too). The collider rules for terrain seams and kerbs are
-   under "What the collider does to a walker on a terrain seam".
-6. No mantle exists in retail 1.1. Ledge-climbing would be a vcod
-   extension with no retail counterpart: choose its constants, don't dig
-   for them in the binary.
+INFERRED, no mantle in the move paths read above: ledge-climbing would be a
+vcod extension with no retail counterpart. Choose its constants, don't dig
+for them in the binary.

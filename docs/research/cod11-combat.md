@@ -5651,9 +5651,9 @@ three ranges against the server's `D;` records, a grenade kill and its
 killfeed line, a melee kill and its icon, a death while cooking and the
 grenade the body drops, and a wall between the eye and the blast.
 
-### 9.6 What the third hand check found
+### 9.6 Three pmove traps from the third hand check, and their pins
 
-Three traps, fixed in `crates/common/src/pmove/weapon.rs` and
+Retail facts, pinned in `crates/common/src/pmove/weapon.rs` and
 `crates/common/src/pmove.rs`:
 
 - A missing def must not end `pm_weapon` before the switch check. INFERRED,
