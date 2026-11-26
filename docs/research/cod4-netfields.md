@@ -1193,10 +1193,17 @@ What the 1.7 client sends from `CA_CONNECTED` to the world, read off
   message off the base of the newest snapshot the capture showed before
   it. Tests: `the_default_usercmd_reads_the_playerstate`,
   `the_first_cmd_deltas_off_the_snapshots_playerstate`,
-  `a_cod4_first_cmd_reads_off_the_servers_playerstate` (a spawned player's
-  cmd held at his snapshot sends only its time; the server thinks it with
-  his weapon and offhand). VERIFIED (the tests).
-- vcod departs: the in-process probe (`test_harness::Probe`) and the
-  examples still write every cmd with every field (`CmdWire::full`), as
-  `cod4_probe` and so every capture did; that reads the same off any base.
-  INFERRED (the code).
+  `a_cod4_first_cmd_reads_off_the_servers_playerstate` (a crouching
+  player's cmd held at his snapshot sends only its time and the server
+  keeps him crouched; read off the zero cmd it stood him up). VERIFIED (the
+  tests).
+- Live: vcod's `--net-probe --team allies` against `cod4_lnxded` on
+  loopback (`tools/cod4x_capture.sh`, mp_crash, 30 s), the capture read
+  through `play_dump --moves`: all 3626 cmds went on the branch that sends
+  only the time, the spawned player's weapon (27) and view among them, and
+  the server kept him in the world with that weapon and view to the end.
+  VERIFIED live.
+- vcod departs: the in-process probe (`test_harness::Probe`, unless
+  `natural_moves`) and the examples still write every cmd with every field
+  (`CmdWire::full`), as `cod4_probe` and so every capture did; that reads
+  the same off any base. INFERRED (the code).
