@@ -130,7 +130,7 @@ that full frame's. vcod: `Recording::waiting`, read by
 
 ## 5. Playback
 
-`CL_SetCGameTime` (Mac 0x17ba76), VERIFIED unless labelled:
+`CL_SetCGameTime` (Mac 0x17ba76), each bullet labelled:
 
 - state 7 (primed): with a demo playing, the first call sets
   `firstDemoFrameSkipped` (`clc` +0x40194) and returns; later calls read
@@ -138,12 +138,14 @@ that full frame's. vcod: `Recording::waiting`, read by
   `snapFlags & 2` is clear the state becomes 8, `serverTimeDelta` is the
   snapshot time minus `cls.realtime`, `oldServerTime` the snapshot time,
   and `clc.timeDemoBaseTime` (+0x401ac) the snapshot time; `activeAction`
-  runs once. The call then carries on into the state 8 arm.
+  runs once. The call then carries on into the state 8 arm. INFERRED, the
+  decompile's flow, no address range.
 - state 8: unless the demo plays with `cl_freezeDemo` set,
   `serverTime = realtime + serverTimeDelta`, never below
   `oldServerTime`. No `cl_timeNudge` term (CoD1 has one).
   `CL_AdjustTimeDelta` (Mac 0x17b544) returns at once while a demo plays
-  (its compare on +0x40188).
+  (its compare on +0x40188). INFERRED, the decompile's flow, no address
+  range.
 - with `timedemo`: while the csv handle (`clc` +0x4019c) is 0 it opens
   `demos/timedemo_%s_mode_%i.csv` through `FS_FOpenFileWrite`, with
   `cl.mapname` (cl +0x24710) cut past its last `/` or `\` and short of
@@ -159,7 +161,8 @@ that full frame's. vcod: `Recording::waiting`, read by
   enum's index, and `atoi` of any other's string (VERIFIED, the type
   test), so `r_mode` reads as its index in the mode list.
 - then messages while `cl.snap.serverTime <= serverTime`, stopping when
-  the state leaves 8 (a gamestate in the demo).
+  the state leaves 8 (a gamestate in the demo). INFERRED, the decompile's
+  flow, no address range.
 
 `CL_DemoCompleted` (Mac 0x14c096): with `timedemo`, when the ms since
 `timeDemoStart` are above 0, `%i frames, %3.1f seconds: %3.1f fps`; the

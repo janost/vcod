@@ -260,20 +260,20 @@ ring a playerstate sent without origin reads (cod4-netfields.md 13).
 
 ## 5. Playback
 
-`CL_SetCGameTime` (0x45c440), VERIFIED unless labelled:
+`CL_SetCGameTime` (0x45c440), each bullet labelled:
 
 - state 8 with a demo playing: the first call sets
   `firstDemoFrameSkipped` and returns; later calls read one record. With
   `cl.newSnapshots` set, `CL_FirstSnapshot` (0x45c250) runs unless the
   snapshot's `snapFlags & 2`: state 9, `serverTimeDelta` the snapshot's
   time less `cls.realtime`, `oldServerTime`, `serverTime` and the
-  timedemo base time the snapshot's.
+  timedemo base time the snapshot's. INFERRED, the flow, no address range.
 - state 9: with a demo playing and `cl_freezeDemo` set the time holds;
   else `serverTime = realtime + serverTimeDelta`, never below
-  `oldServerTime` (0x45c52b..0x45c578).
+  `oldServerTime` (0x45c52b..0x45c578). VERIFIED (the instructions).
 - with `timedemo` (0x45c350): on its first frame the csv opens and the
   start time is taken; the frame count goes up and `serverTime` is
-  `base + frames * 50`.
+  `base + frames * 50`. INFERRED, the flow, no address range.
 - **The csv.** While its handle (0x934e88) is 0, each timed frame opens
   `demos/timedemo_%s_mode_%i.csv` (0x6cefa8) through `FS_FOpenFileWrite`
   (0x55b4d0, 0x45c3d3): the `%s` is `cl.mapname` (0xc84f18,
@@ -294,7 +294,7 @@ ring a playerstate sent without origin reads (cod4-netfields.md 13).
   or a colon opens nothing, as `FS_FOpenFileWrite`'s refusal of `..`
   does (INFERRED for 1.7's client).
 - then records while `serverTime >= cl.snap.serverTime`, stopping when
-  the state leaves 9 (0x45c5dc..0x45c63c).
+  the state leaves 9 (0x45c5dc..0x45c63c). VERIFIED (the instructions).
 
 The state is `clc.state` at 0xc5f900 (a 16-byte stride a local client).
 A gamestate record read in that loop leaves it at 8: `CL_ParseGamestate`

@@ -874,8 +874,8 @@ A connect from a held slot's address and qport (or port), past
 ### Console commands over rcon
 
 Measured 2026-10-08 the same way (retail on a spare port, `rconPassword pw`,
-one `vcod --net-probe` where a client is needed). Reply strings VERIFIED
-(capture) unless marked.
+one `vcod --net-probe` where a client is needed). Each bullet below carries its
+own label.
 
 `SV_AddOperatorCommands` (0x8084a3c) registers `heartbeat`, `kick`, `banUser`,
 `banClient`, `clientkick`, `status`, `serverinfo`, `systeminfo`, `dumpuser`,
@@ -886,7 +886,7 @@ non-zero. VERIFIED (string table at its calls). vcod ports all of them.
 `kick <name>` (`SV_Kick_f` 0x8084288):
 
 - Exactly one argument, else `Usage: kick <player name>\nkick all = kick
-  everyone\n` (0x80d3c80).
+  everyone\n` (0x80d3c80). VERIFIED (capture).
 - `SV_GetPlayerByName` (0x8083aa0) takes the first slot not `CS_FREE` whose
   name matches case-insensitively, raw or after `Q_CleanStr`; a miss prints
   `Player %s is not on the server\n` (0x80d3880). INFERRED (control flow).
