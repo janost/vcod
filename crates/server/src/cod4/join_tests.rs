@@ -161,9 +161,13 @@ pub fn reencodes(lines: &[capture::Line]) -> usize {
                 );
                 server += 1;
             }
-            Some(Item::Client { msg, block, key }) => {
-                let again =
-                    clmsg::compress_ops(&session.client.huff, &msg.ops, key, &UserCmd::default());
+            Some(Item::Client {
+                msg,
+                block,
+                key,
+                base,
+            }) => {
+                let again = clmsg::compress_ops(&session.client.huff, &msg.ops, key, &base);
                 assert_eq!(again, block, "client message {}", msg.sequence);
             }
             _ => {}

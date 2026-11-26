@@ -11,7 +11,7 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use vcod_cod4::net::capture::{self, Item, Line, Session};
-use vcod_cod4::net::clmsg::{CmdWire, compress_ops};
+use vcod_cod4::net::clmsg::{CmdBaseSide, CmdWire, compress_ops};
 use vcod_cod4::net::parse::{Client as Parser, Op, Snapshot};
 use vcod_common::net::netchan::{Netchan, scramble_client_ops};
 
@@ -110,6 +110,11 @@ pub(super) struct Probe {
     /// and so every capture sent: an origin far off at time 0, which keeps
     /// origin and velocity on the wire (cod4-netfields.md 13).
     pub(super) echo_origin: bool,
+    /// Its replayed moves go as 1.7's writer sends them: each the fewest
+    /// bits off the one before, the first off `MSG_SetDefaultUserCmd` of
+    /// its newest snapshot (cod4-netfields.md 14.5). Off, every cmd carries
+    /// every field, as `cod4_probe` and so every capture sent.
+    pub(super) natural_moves: bool,
 }
 
 impl Probe {
@@ -148,6 +153,7 @@ impl Probe {
             stats_due: false,
             cp_feed: None,
             echo_origin: false,
+            natural_moves: false,
         }
     }
 
@@ -296,6 +302,12 @@ impl Probe {
                 && s.ps.get("clientNum") == Some(self.slot)
         });
         let replaying = !self.replay.is_empty() && (spawned || self.view.is_some());
+        let base = match self.parser.snapshots.last() {
+            Some(s) if self.natural_moves => {
+                vcod_cod4::net::clmsg::default_usercmd(&s.ps, CmdBaseSide::Client)
+            }
+            _ => UserCmd::default(),
+        };
         if replaying && self.view.is_none() {
             self.view = Some([0.0; 2]);
         }
@@ -308,11 +320,15 @@ impl Probe {
                 self.replay.pop_front();
             }
             if !cmds.is_empty() {
-                let mut prev = UserCmd::default();
+                let mut prev = base;
                 let wired = cmds
                     .iter()
                     .map(|c| {
-                        let w = CmdWire::full(&prev, c);
+                        let w = if self.natural_moves {
+                            CmdWire::natural(&prev, c)
+                        } else {
+                            CmdWire::full(&prev, c)
+                        };
                         prev = *c;
                         (*c, w)
                     })
@@ -379,7 +395,7 @@ impl Probe {
             });
         }
         ops.push(ClOp::Eof);
-        let mut comp = compress_ops(&self.parser.huff, &ops, key, &UserCmd::default());
+        let mut comp = compress_ops(&self.parser.huff, &ops, key, &base);
         let seed = self.challenge as u32 ^ server_id as u32 ^ self.ack as u32;
         scramble_client_ops(seed as u8, &last, &mut comp);
         pkt.push(server_id as u8);

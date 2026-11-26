@@ -3,7 +3,7 @@
 //! message's last bits (docs/research/cod4-netfields.md).
 
 use vcod_cod4::net::capture::{self, Item, Session};
-use vcod_cod4::net::clmsg::{self, ClientHeader, ClientMessage, UserCmd};
+use vcod_cod4::net::clmsg::{self, ClientHeader, ClientMessage};
 use vcod_cod4::net::parse::{Client, Op, Parsed};
 use vcod_cod4::net::reliable::{self, StatsMsg};
 use vcod_cod4::net::wire::Dialect;
@@ -75,9 +75,13 @@ pub fn walk_as(name: &str, dialect: Dialect, peer: Option<&str>) -> Walk {
                 );
                 parsed.push(p);
             }
-            Some(Item::Client { msg, block, key }) => {
-                let again =
-                    clmsg::compress_ops(&session.client.huff, &msg.ops, key, &UserCmd::default());
+            Some(Item::Client {
+                msg,
+                block,
+                key,
+                base,
+            }) => {
+                let again = clmsg::compress_ops(&session.client.huff, &msg.ops, key, &base);
                 assert_eq!(again, block, "{name} client message {}", msg.sequence);
                 let head = ClientHeader {
                     sequence: msg.sequence,

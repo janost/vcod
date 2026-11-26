@@ -267,16 +267,24 @@ impl Server {
         )
     }
 
-    /// `SV_Frame`'s last step (0x808d258).
+    /// `SV_Frame`'s last step (0x808d258). 1.5 and UO also push an
+    /// `SVC_Status` to the master each 600 s (coduo-diff.md 25).
     pub(super) fn master_heartbeat(&mut self) {
         let mut resolve = self.core.resolver;
+        let now = self.svs_time_ms();
         let beats = self.core.masters.heartbeat(
             self.game.dedicated,
-            self.svs_time_ms(),
+            now,
             crate::master::HEARTBEAT_GAME,
             &mut resolve,
         );
         self.core.outbox.extend(beats);
+        if self.v15() {
+            let argv1 = self.game.argv1.clone();
+            for to in self.core.masters.status(self.game.dedicated, now) {
+                crate::engine::answer_status(self, to, crate::engine::StatusQuery::Status, &argv1);
+            }
+        }
         // The weapon changes are already drained when a script is loaded,
         // and a server without one has nothing to write them to.
         self.game.module.weapon_changes.clear();
@@ -1370,5 +1378,59 @@ mod tests {
         sv.tick(t);
         assert_eq!(beats(&mut sv), ["heartbeat flatline\n"]);
         assert!(sv.quit_requested());
+    }
+
+    /// UO pushes a `statusResponse` to its master each 600 s beside the
+    /// 180 s heartbeat, its `challenge` the last tokenized line's argument
+    /// (coduo-diff.md 25); 1.1 never does. The first waits out the
+    /// heartbeat's second, in which the master's own `getinfo` lands.
+    #[test]
+    fn uo_pushes_a_status_to_the_master_every_ten_minutes() {
+        // The svs times of the statuses `master` got over `frames` frames.
+        fn statuses(sv: &mut Server, master: SocketAddr, frames: u32) -> Vec<(i32, String)> {
+            let mut got = Vec::new();
+            for _ in 0..frames {
+                sv.tick_frames(Instant::now(), 1);
+                for (to, p) in sv.take_outgoing() {
+                    if to == master && p[4..].starts_with(b"statusResponse") {
+                        let text = String::from_utf8_lossy(&p[4..]).into_owned();
+                        got.push((sv.svs_time_ms(), text));
+                    }
+                }
+            }
+            got
+        }
+        let t = Instant::now();
+        let mut sv = Server::new(cfg(), t);
+        sv.set_protocol(&PROTOCOL_V22);
+        sv.set_master_resolver(local_master);
+        sv.set_cvar("dedicated", "2");
+        let master = addr(vcod_common::net::master::UO_MASTER.port);
+        assert!(
+            statuses(&mut sv, master, 1).is_empty(),
+            "held behind the heartbeat"
+        );
+        sv.handle_packet(master, &oob("getinfo 4711"), t);
+        let got = statuses(
+            &mut sv,
+            master,
+            (2 * crate::master::STATUS_MS / FRAME_MS) as u32,
+        );
+        let at: Vec<i32> = got.iter().map(|(ms, _)| *ms).collect();
+        assert_eq!(at, [1050, 600_050, 1_200_050]);
+        let info = got[0].1.lines().nth(1).unwrap();
+        assert_eq!(
+            vcod_common::net::info_value_for_key(info, "challenge"),
+            Some("4711")
+        );
+
+        let mut v1 = Server::new(cfg(), t);
+        v1.set_master_resolver(local_master);
+        v1.set_cvar("dedicated", "2");
+        let master = addr(crate::master::DEFAULT_MASTER.port);
+        assert!(
+            statuses(&mut v1, master, 40).is_empty(),
+            "1.1 has no status timer"
+        );
     }
 }

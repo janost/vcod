@@ -297,7 +297,7 @@ pub const REGISTRY_V22: &[(&str, &str, &str)] = &[
     ("scr_allow_jeeps", "SL", "1"),
     ("scr_allow_tanks", "SL", "1"),
     ("shortversion", "SR", "1.51"),
-    // Retail's `coduomaster.activision.com`; vcod lists on cod.pm's.
+    // vcod's own: retail UO beats a constant `coduomaster.activision.com`.
     ("sv_master1", "", "master.cod.pm"),
     ("sv_night", "R", "0"),
     ("sv_obituary", "", "1"),

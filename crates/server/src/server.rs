@@ -473,6 +473,7 @@ impl Server {
             archive: Default::default(),
             dedicated: 1,
             rcon_password: String::new(),
+            argv1: String::new(),
             redirect: None,
             killed: false,
             shutdown_log: Vec::new(),

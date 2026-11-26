@@ -6,7 +6,7 @@
 //! 21 the side channel's packets too.
 
 use super::clmsg::{self, ClOp, ClientHeader, ClientMessage, UserCmd};
-use super::parse::{Client, Parsed};
+use super::parse::{Client, Op, Parsed};
 use super::reliable::{self, Inbound, Packet};
 use super::wire::Dialect;
 use anyhow::{Context, Result, bail};
@@ -64,6 +64,9 @@ pub enum Item {
         block: Vec<u8>,
         /// The usercmd key the moves were read with.
         key: i32,
+        /// The base their first cmds were read off: the client's
+        /// `cl.snap.ps` as the capture last showed it.
+        base: UserCmd,
     },
     /// A CoD4x side channel packet and the message bodies it completed.
     /// A server gamestate among them is already the client's.
@@ -86,6 +89,8 @@ pub struct Session {
     /// CoD4x: the side channel's streams from the server and to it.
     side_in: Inbound,
     side_out: Inbound,
+    /// `MSG_SetDefaultUserCmd` of the newest snapshot since the gamestate.
+    cmd_base: UserCmd,
 }
 
 impl Session {
@@ -115,6 +120,7 @@ impl Session {
             for m in &messages {
                 if m.get(..4) == Some(&reliable::CMD_GAMESTATE.to_le_bytes()[..]) {
                     self.client.take_side_gamestate(m)?;
+                    self.cmd_base = UserCmd::default();
                 }
             }
         }
@@ -167,6 +173,18 @@ impl Session {
                     .client
                     .parse(sequence, &block)
                     .with_context(|| format!("server message {sequence}"))?;
+                for op in &parsed.ops {
+                    match op {
+                        Op::Gamestate => self.cmd_base = UserCmd::default(),
+                        Op::Snapshot(i) => {
+                            self.cmd_base = clmsg::default_usercmd(
+                                &self.client.snapshots[*i].ps,
+                                clmsg::CmdBaseSide::Client,
+                            );
+                        }
+                        _ => {}
+                    }
+                }
                 Ok(Some(Item::Server {
                     msg: Message {
                         ms: l.ms,
@@ -204,7 +222,8 @@ impl Session {
                     .map_or(0, |g| g.checksum_feed);
                 let key = clmsg::usercmd_key(feed, msg_head.message_ack, &server_cmd);
                 let plain = self.client.huff.decompress(&block);
-                let ops = clmsg::read_ops(plain, key, &UserCmd::default())
+                let base = self.cmd_base;
+                let ops = clmsg::read_ops(plain, key, &base)
                     .with_context(|| format!("client message {}", msg_head.sequence))?;
                 for op in &ops {
                     if let ClOp::Command { sequence, text } = op {
@@ -215,6 +234,7 @@ impl Session {
                     msg: ClientMessage { ops, ..msg_head },
                     block,
                     key,
+                    base,
                 }))
             }
             _ => Ok(None),
