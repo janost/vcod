@@ -13,6 +13,7 @@ use crate::atom::{Atom, Interner};
 use crate::bytecode::Function;
 use crate::heap::{ArrayKey, Heap};
 use crate::value::{ArrayId, EntId, FuncRef, StructId, Value};
+use profile::NumberEq;
 use sched::Thread;
 
 mod interp;
@@ -809,6 +810,8 @@ pub struct Vm {
     /// 1.5b's bracket read on a struct reads undefined, where 1.1d and UO
     /// fail it (`probe_level_bracket_read`).
     struct_index_reads_undefined: bool,
+    /// How `==` and `!=` round the difference of two numbers.
+    number_eq: NumberEq,
     /// `.size` on an array or string, interned once here rather than per
     /// `LoadField`: `_load.gsc` reads it inside three loops.
     size_atom: Atom,
@@ -934,6 +937,7 @@ impl Vm {
             game,
             anim,
             struct_index_reads_undefined: false,
+            number_eq: NumberEq::Kept,
             size_atom,
             threads: Vec::new(),
             next_thread: 0,
@@ -985,6 +989,12 @@ impl Vm {
     /// types the bare globals").
     pub fn set_struct_index_reads_undefined(&mut self, on: bool) {
         self.struct_index_reads_undefined = on;
+    }
+
+    /// How `==`, `!=` and `waittillmatch` round the difference of two
+    /// numbers (VERIFIED live, `probe_eq_tol`, cod11-gsc-object-model.md 9.3.1).
+    pub fn set_number_eq(&mut self, eq: NumberEq) {
+        self.number_eq = eq;
     }
 
     /// CoD2's notify wake order: the waiter whose `waittill` parked last

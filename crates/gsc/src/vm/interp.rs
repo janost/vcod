@@ -18,6 +18,7 @@ use crate::bytecode::{Function, Op};
 use crate::heap::ArrayKey;
 use crate::value::{FuncRef, Value, format_number};
 
+use super::profile::NumberEq;
 use super::sched::ThreadId;
 use super::{Cx, ErrorKind, Host, QueuedSpawn, ScriptError, Target, Vm};
 
@@ -153,16 +154,54 @@ fn array_key(v: Value) -> Option<ArrayKey> {
     }
 }
 
-/// Numeric equality promotes across Int/Float. A number against a string
-/// is rendered and compared textually, and `undefined` against anything
-/// else is an error, both measured
-/// (tests/fixtures/semantics/retail-captures.txt, `# probe_cmp*`).
-pub(crate) fn values_equal(interner: &Interner, a: Value, b: Value) -> Result<bool, ErrorKind> {
+/// Retail's `==` tolerance: the float nearest 1e-6 (1.1d `.rodata`
+/// 0x80d7b88, cod11-gsc-object-model.md 9.3.1).
+const EQ_TOLERANCE: f32 = 1e-6;
+
+/// `|a - b| < 1e-6` as retail tests two floats. Under [`NumberEq::Kept`]
+/// the difference is rounded to 80 bits, as 1.1d's `fsubs` leaves it: that
+/// lands under the tolerance unless the exact difference is within half an
+/// 80-bit ulp (2^-84) of it, the tie rounding up to the tolerance itself.
+fn floats_equal(rule: NumberEq, a: f32, b: f32) -> bool {
+    match rule {
+        NumberEq::Stored => (a - b).abs() < EQ_TOLERANCE,
+        NumberEq::Kept => {
+            // TwoSum: `s + e` is the exact difference.
+            let (x, y) = (f64::from(a), -f64::from(b));
+            let s = x + y;
+            let bv = s - x;
+            let e = (x - (s - bv)) + (y - bv);
+            let (s, e) = if s < 0.0 { (-s, -e) } else { (s, e) };
+            let t = f64::from(EQ_TOLERANCE);
+            // Off the tolerance, `s` sits a whole f64 ulp (2^-72) from it,
+            // more than `e` and 2^-84 together can move it.
+            if s != t {
+                return s < t;
+            }
+            e < -(2f64.powi(-84))
+        }
+    }
+}
+
+/// Numeric equality promotes an Int beside a Float to a float and holds
+/// within [`floats_equal`]'s tolerance; two Ints compare exactly. A number
+/// against a string is rendered and compared textually, and `undefined`
+/// against anything else is an error, all measured
+/// (tests/fixtures/semantics/retail-captures.txt, `# probe_cmp*`,
+/// `# probe_eq_tol`).
+pub(crate) fn values_equal(
+    interner: &Interner,
+    rule: NumberEq,
+    a: Value,
+    b: Value,
+) -> Result<bool, ErrorKind> {
     match (a, b) {
         (Value::Int(x), Value::Int(y)) => Ok(x == y),
-        (Value::Int(_) | Value::Float(_), Value::Int(_) | Value::Float(_)) => {
-            Ok(to_f32(a) == to_f32(b))
-        }
+        (Value::Int(_) | Value::Float(_), Value::Int(_) | Value::Float(_)) => Ok(floats_equal(
+            rule,
+            to_f32(a).expect("a number"),
+            to_f32(b).expect("a number"),
+        )),
         // `"5" == 5` holds, `"5.0" == 5` does not.
         (Value::String(s), n @ (Value::Int(_) | Value::Float(_)))
         | (n @ (Value::Int(_) | Value::Float(_)), Value::String(s)) => {
@@ -1515,13 +1554,13 @@ impl Vm {
                 Op::Eq => {
                     let b = pop!();
                     let a = pop!();
-                    let eq = tri!(values_equal(&self.interner, a, b));
+                    let eq = tri!(values_equal(&self.interner, self.number_eq, a, b));
                     push!(Value::Int(eq as i32));
                 }
                 Op::Ne => {
                     let b = pop!();
                     let a = pop!();
-                    let eq = tri!(values_equal(&self.interner, a, b));
+                    let eq = tri!(values_equal(&self.interner, self.number_eq, a, b));
                     push!(Value::Int(!eq as i32));
                 }
                 Op::Lt => {

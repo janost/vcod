@@ -30,7 +30,7 @@ pub use load::{LoadError, Loader, LoaderState, ScriptSource, canonical};
 // `Thread`/`ThreadState` are not re-exported: no `Vm` API returns one, so
 // there is nothing for a consumer to do with either.
 pub use value::{ArrayId, EntId, FuncRef, StructId, Value, format_g, format_number};
-pub use vm::profile::VmProfile;
+pub use vm::profile::{NumberEq, VmProfile};
 pub use vm::sched::ThreadId;
 pub use vm::{
     ArrayCarry, Cx, ErrorKind, GameCarry, Host, InstallError, Program, ScriptError, Target,
