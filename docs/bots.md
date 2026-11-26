@@ -271,7 +271,8 @@ Behaviour differs by game, never by map.
   UO's `ctf`, `dom`, `hq` and `bas` (bot-objectives.md sections 4 to 7).
 - In Retrieval the team escorts the carrier and holds the goal ahead of
   him; of the defenders, the one nearest the goal holds it while the rest
-  go after the carrier.
+  go after the carrier. A dropped objective the use key cannot reach is
+  waited for where it goes back.
 - In `bas` a bot throws a frag into a charge room where a teammate just
   died before it goes in, when it finds a lob in.
 - UO grenades are cooked; 1.1 has none to cook. A UO bot sprints only on
