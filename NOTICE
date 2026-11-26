@@ -54,6 +54,19 @@ in step):
   crates/common/src/pmove/state.rs
   crates/common/src/pmove/uo.rs
   crates/common/src/pmove/walk.rs
+  crates/cod4/src/ode/body.rs
+  crates/cod4/src/ode/joint/amotor.rs
+  crates/cod4/src/ode/joint/ball.rs
+  crates/cod4/src/ode/joint/contact.rs
+  crates/cod4/src/ode/joint/hinge.rs
+  crates/cod4/src/ode/joint/limot.rs
+  crates/cod4/src/ode/joint/mod.rs
+  crates/cod4/src/ode/mass.rs
+  crates/cod4/src/ode/math.rs
+  crates/cod4/src/ode/mod.rs
+  crates/cod4/src/ode/quickstep.rs
+  crates/cod4/src/ode/rotation.rs
+  crates/cod4/src/ode/world.rs
   crates/server/src/engine/ratelimit.rs
   crates/server/src/game/missile.rs
   crates/server/src/server.rs
@@ -78,6 +91,16 @@ They are ports of routines from:
 
 All three are used here under GPL-3.0. Where a routine is a port, the comment in
 the source names the file it came from.
+
+The rigid body core in crates/cod4/src/ode/ is a translation of the Open
+Dynamics Engine 0.5 (2004-05-29), as Infinity Ward modified it for Call of
+Duty 4, the modifications read from the 1.7 binaries. ODE is dual-licensed;
+it is used here under its BSD-style license, whose text is
+crates/cod4/src/ode/LICENSE-ODE-BSD.txt.
+
+  Open Dynamics Engine
+  Copyright (c) 2001-2004, Russell L. Smith. All rights reserved.
+  https://www.ode.org/
 
 The triangle-strip decoder in crates/common/src/xmodel.rs is ported from
 cod-asset-importer by mauserzjeh, licensed under GPL-3.0.

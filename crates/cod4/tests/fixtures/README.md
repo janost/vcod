@@ -17,7 +17,7 @@ recipe; the parsers skip `#` lines (`vcod_cod4::net::capture::parse` for
 | `pins` | Not retail: the pmove model's own step lines behind each self-pin digest, written by the lib tests under `PIN_DUMP=1` (`src/pmove/pin.rs`); a `#` line of field names, then a line of values a step | `src/pmove/pin.rs`, on a digest miss |
 | `tapes` | Not retail: a trace tape, every trace a `moves_ab` replay asked of mp_crash's clip and the answer it got, the weapon list's move scales in its header, written under `RECORD_TAPES=1` at `COD4_DIR` (docs/dev/testing.md, "Trace tapes") | `tests/moves_ab.rs` |
 | `skel` | `cod4_lnxded` under gdb, a pose or anim dump per header | `tests/skel_ab.rs`, `crates/common/src/playerpose.rs` |
-| `ragdoll` | Not the server: the Windows client `iw3mp.exe` under Wine and gdb (`tools/cod4_wine/run.sh` with `tools/re/cod4_ragdoll_gdb.py`, docs/dev/retail.md, "A ragdoll from spawn to rest"), its own player killed on mp_crash and its corpse's ragdoll dumped step by step to rest; format below | `tools/re/cod4_ragdoll_summary.py`; the oracle for a port of 1.7's solver (`cod4-player-anims.md` 10.4) |
+| `ragdoll` | Not the server: the Windows client `iw3mp.exe` under Wine and gdb (`tools/cod4_wine/run.sh` with `tools/re/cod4_ragdoll_gdb.py`, docs/dev/retail.md, "A ragdoll from spawn to rest"), its own player killed on mp_crash and its corpse's ragdoll dumped step by step to rest; format below | `tools/re/cod4_ragdoll_summary.py`; the oracle for a port of 1.7's solver (`cod4-player-anims.md` 10.5) |
 
 ## `ragdoll/` lines
 

@@ -409,19 +409,20 @@ for its team, with `g_timeoutBank` and `g_timeoutRecovery` beside them
 (`Cmd_MatchTimeout_f` 0x45a91, decompile, INFERRED).
 
 Measured on 1.5b, tdm, `g_timeoutsAllowed 2`, `g_timeoutLength 15000`,
-`g_timeoutRecovery 5000`, a probe on axis (live, VERIFIED unless marked):
+`g_timeoutRecovery 5000`, a probe on axis:
 
 - `matchtimeout` brings `cs 1628 "15000"`,
   `cs 1629 "PATCH_1_5_TIMEOUT_CALLED\x14GAME_AXIS"` and
   `e "PATCH_1_5_TIMEOUT_CALLED_PLAYERNAME\x15vcod"`. The cvar mirror's
   `timescale` value (227) changes; configstring 1 does not. The game sets
-  `timescale` to `0` (the `trap_Cvar_Set` arguments, VERIFIED).
+  `timescale` to `0` (the `trap_Cvar_Set` arguments, VERIFIED). The rest of
+  this bullet is VERIFIED live.
 - Snapshots keep coming at 20 a second, all at the serverTime of the call,
-  43600 for 13 s.
+  43600 for 13 s (VERIFIED live).
 - `matchtimein` brings `cs 1628 "5000"`,
   `cs 1629 "PATCH_1_5_TIMEOUT_ENDING\x15"` and
   `e "PATCH_1_5_TIMEIN_CALLED_PLAYERNAME\x15vcod"`. 5 s later `cs 1628 ""`
-  arrives and serverTime moves again.
+  arrives and serverTime moves again (VERIFIED live).
 - `CheckMatchTimeout` sends `e "PATCH_1_5_TIMEOUT_EXPIRED"` and the recovery's
   1628 when the length runs out, and sets `timescale 1` with an empty 1628
   when the recovery does (decompile, INFERRED).

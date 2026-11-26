@@ -327,8 +327,8 @@ does the same, so the explode plays.
 ### 9.1 Model elements' axes
 
 `FX_DrawElem_Model`'s axes (`iw3mp.exe` 0x497cc0, called at 0x4983fe)
-and the draw state 0x4991e0 fills before it. VERIFIED (the
-instructions) unless labelled:
+and the draw state 0x4991e0 fills before it. The bullets are VERIFIED (the
+instructions) at the addresses they name, or carry their own label:
 
 - The draw state: `+0x44` the spawn's random index (0x49921d), `+0x48`
   the life in ms drawn off `lifeSpanMsec` (0x499250), `+0x4c` the ms

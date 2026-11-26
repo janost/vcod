@@ -272,7 +272,7 @@ host:
 ### A ragdoll from spawn to rest
 
 `tools/re/cod4_ragdoll_gdb.py` drives the client's own player to a death
-and dumps world 2 per step (`cod4-player-anims.md` 10.4):
+and dumps world 2 per step (`cod4-player-anims.md` 10.5):
 
 ```
 COD4_DIR=<1.7 install> RAGDOLL_OUT=$PWD/tmp/ragdoll.txt \

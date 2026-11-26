@@ -1,7 +1,7 @@
 # gdb python for the CoD4 1.7 Windows client (iw3mp.exe) under
 # tools/cod4_wine/run.sh: drives its own player to a death and dumps every
 # step of the ragdoll world (world 2) from the first ragdoll to rest
-# (cod4-player-anims.md 10.4; the line format is
+# (cod4-player-anims.md 10.5; the line format is
 # crates/cod4/tests/fixtures/README.md's, ragdoll/).
 #
 #   COD4_DIR=<install> RAGDOLL_OUT=$PWD/tmp/ragdoll.txt \

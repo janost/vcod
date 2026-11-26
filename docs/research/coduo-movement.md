@@ -673,7 +673,7 @@ instructions). vcod applies both (`hold_still_sighted`).
 
 ## 14. The client: sounds and the sprint pose
 
-Sounds, all VERIFIED from the cgame and the csvs:
+Sounds, each VERIFIED from the cgame and the csvs:
 
 - 140 plays `fatigue_breath` (section 4); vcod's cue table plays it on the
   event's entity.

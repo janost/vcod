@@ -700,7 +700,7 @@ Line numbers are `maps/mp/gametypes/sd.gsc` in UO's `pakuo00.pk3`.
   and defuses 224 later again.
 
 Weapons, from UO's menus (`ui_mp/scriptmenus/weapon_*.menu`,
-`pakuo00.pk3`) and `weapons/mp/*` (`pakuo07.pk3`), all VERIFIED (the
+`pakuo00.pk3`) and `weapons/mp/*` (`pakuo07.pk3`), each VERIFIED (the
 files):
 
 - UO's menus add `mg30cal_mp` to the American and British, `svt40_mp` and
@@ -2088,8 +2088,10 @@ stops boarding and gets a seated bot out (`SeatView::off`, 10.4).
   box of 0.75 of the vehicle's half width fits on (clear of the world and
   the vehicle clip, contents 0x201, from 18 over the node up 48), leaving
   out jump and leap edges and any edge rising more than a step; a goal out
-  of reach routes to the node nearest it. The waypoint is the first route
-  node 220 or more across from the hull; nodes within 110 are passed. A
+  of reach routes to the node nearest it. Entering a node with no room for
+  a box of the full half width costs two grid steps more, one with room
+  for that but not for the hull's half length one more (10.13). The
+  waypoint is the first route node 220 or more across from the hull; nodes within 110 are passed. A
   route goes again when its goal moves 300, after 5 s without closing on
   its next node, and every 15 s.
 - A node's fit is a box position test (about 3.5 us on mp_foy), tested
@@ -2112,7 +2114,9 @@ stops boarding and gets a seated bot out (`SeatView::off`, 10.4).
   took the hull under 45 units in 1.5 s (30 units/s), or turned a tank
   in place under 15 degrees, backs off for 1.5 s with the steer held one
   way; four back-offs, or 8 s of driving, with no 300 units made get it
-  out. The window counts ground made, not speed: a hull wedged on a wall
+  out. A window is judged by the keys it opened under, and a change
+  between turning in place and driving opens a new one (10.13). The
+  window counts ground made, not speed: a hull wedged on a wall
   bounces, and read off its speed it never stalled. Ground made counts
   from where a hold (a fight, a crew wait) left the hull: from the spot
   before a 5 s fight, seed 25's tank read its drive back across it as
@@ -2171,7 +2175,8 @@ stops boarding and gets a seated bot out (`SeatView::off`, 10.4).
   while shelling a base), 10 s shelling a base with the gun's line never
   on it, four
   stalls or 8 s of driving under 300 units, the same 8 s for a rider
-  with nobody to shoot, 2 s idle in a vehicle nobody drives, 5 s of
+  with nobody to shoot, 2 s idle in a vehicle nobody drives once the
+  tries at its driver's seat are spent (10.14), 5 s of
   the hull's unbroken contact (10.3), or `vc_bot_vehicles` set to 0. Seed 45's gunner, without the
   rider's own headway window, sat out the driver's 8 s and then the
   undriven seat's 2 s and walked off past the 12 s gate. The bot taps
@@ -2696,6 +2701,148 @@ ON_ONLY=1 VEH_LOG=1 MAP=mp_kharkov`, `tdm`, 6 bots, 3 min, seeds 1 to
   coduo-vehicles.md 11.3: a gunner left in an undriven hull gets out
   rather than move to the wheel) and an aim error by skill on the seat
   guns. Open.
+
+### 10.13 A hull's route keeps to open ground, 2026-11-26
+
+Retail has no bots; this section is measured on vcod-server only. It
+takes the first "Left" item of 10.12, a graph of the hull's own, from the
+nav build the walk already has rather than from a second census.
+
+- The hull's own collision is six probe boxes, 48 across and 11 high,
+  swept from its origin to points ahead and behind (`physics.rs`
+  `PROBES`, the vectors at 0xa6660, coduo-vehicles.md 12): a Panzer IV's
+  front probes reach 129 ahead and its back ones 136 behind, 70 to each
+  side; a jeep's 84 ahead and 45 to each side. The route's fit (10.3)
+  tests a square of 0.75 of the half width, 52.5 for a tank, so a node
+  it passes can stand a tank's length from a wall it meets. VERIFIED (the
+  vehicle files in `pakuo*.pk3`: `collisionFrontDist` 105,
+  `collisionBackDist` 112, box 70 for `panzerIV_mp`; 60, 46 and 45 for
+  `willyjeep_mp`).
+- What a driven hull struck, logged at each strike over mp_kharkov seeds
+  1 to 7 odd: 282 strikes, 84 % on the world and 16 % on another
+  vehicle's collmap; 73 % on a front corner probe (0 or 2), 94 % 20 to 60
+  units over the origin. VERIFIED (the runs, a temporary log in
+  `Physics::collide`).
+- The stall window misjudged a tank's turns. It opened on the first
+  keyed tick and was judged after 30 ticks by the last tick's keys: a
+  tank that turned in place for 25 ticks and drove for 5 read as
+  stalled on ground, and one that drove and then turned in place on a
+  bend read as stalled on its turn. Of 111 stall back-offs over
+  mp_kharkov seeds 1 to 15 odd, 40 were such windows. VERIFIED (the runs,
+  a temporary log of each back-off's keys, ground and turn). Now a
+  change between the two opens a new window
+  (`a_tank_that_pivots_and_then_drives_off_is_no_stall`).
+- The rule: `plan_route` tests two more boxes at a node as it first
+  comes off the heap, the full half width and the half length (the
+  farther probe reach plus 24, `HullSize`). Each is cached as the fit is
+  (10.3) and warmed with it. Entering a node with no room for the half
+  width costs `TIGHT_STEPS` (2) grid steps more; one with room for that
+  but not for the length costs `NARROW_STEPS` (1) more. A node's cost is
+  found as it comes off the heap, so it goes back on and waits its turn.
+  The fit stays the only hard test, so every route found before is
+  still found, but round open ground where there is some
+  (`a_route_keeps_off_a_node_with_no_room_for_the_full_width`).
+- VERIFIED (measured, ours, release, UO stock paks, `bot_vehicles
+  ON_ONLY=1`, `tdm`, 6 bots, 3 min; mp_kharkov seeds 1 to 239 odd, 120
+  games; mp_cassino seeds 1 to 59 odd, 30 games; a temporary measuring
+  arm, taken out before the commit). "Contact" is the share of driving
+  bot-ticks whose hull had struck something within the second
+  (`SeatView::contact_ms` over 0). "Stall exits" are rides the driver
+  ended on 8 s without 300 units or on four back-offs. "Routes driven
+  out" are routes driven to their last node, of all planned; most are
+  planned again first (a goal that moves 300, 15 s). "Vehicle kills" are
+  `K;` lines off a tank's gun or MG, a jeep's gunner or a crush.
+
+  mp_kharkov:
+
+  | | kills | vehicle kills | stuck kills | contact | back-offs | stall exits | routes driven out | seated bot-ticks | units driven | teammate crush hits |
+  |---|---|---|---|---|---|---|---|---|---|---|
+  | master | 854 | 79 | 9 | 28.3 % | 2303 | 904 | 60 of 4452 | 412 096 | 2 086 223 | 26 |
+  | stall window | 804 | 100 | 15 | 28.8 % | 1994 | 903 | 79 of 5377 | 469 363 | 2 423 048 | 25 |
+  | and room costs 2 / 1 | 722 | 188 | 19 | 16.4 % | 1625 | 773 | 162 of 5408 | 664 281 | 3 835 850 | 54 |
+  | and room costs 4 / 2 | 697 | 194 | 16 | 15.3 % | 1641 | 735 | 159 of 5537 | 739 962 | 4 424 032 | 51 |
+
+  mp_cassino:
+
+  | | kills | vehicle kills | stuck kills | contact | back-offs | stall exits | routes driven out | seated bot-ticks | units driven | teammate crush hits |
+  |---|---|---|---|---|---|---|---|---|---|---|
+  | master | 809 | 292 | 3 | 19.1 % | 309 | 135 | 100 of 2031 | 153 503 | 412 131 | 50 |
+  | stall window | 804 | 332 | 1 | 19.9 % | 221 | 127 | 107 of 2007 | 164 024 | 427 504 | 43 |
+  | and room costs 2 / 1 | 793 | 349 | 2 | 9.5 % | 139 | 100 | 122 of 2071 | 175 654 | 514 452 | 55 |
+  | and room costs 4 / 2 | 797 | 353 | 3 | 9.4 % | 150 | 106 | 133 of 2160 | 178 663 | 523 290 | 57 |
+
+- Both kept, the costs at 2 / 1. On both maps the hull's contact share
+  halves, back-offs and stall exits fall, more routes are driven out,
+  and the vehicle kills rise (on mp_kharkov the tank kills go from 73 to
+  177 and the jeep kills from 6 to 11). Costs of 4 / 2 move nothing past
+  the run-to-run spread and make longer detours. VERIFIED (the tables).
+- mp_kharkov's kills fall by 132 as the rides grow longer: seated
+  bot-ticks rise from 16 % of all bot-ticks to 26 %, and a bot in a hull
+  is out of a rifle's reach, so the fights on foot lose victims as well
+  as shooters. Kills per seated bot-tick rise from 1.9 to 2.8 in 10 000;
+  on foot they fall from 3.6 to 2.8. INFERRED (from the table: the
+  vehicle kills over the seated ticks, the rest over the rest). Stuck
+  kills and teammate crushes grow with the driving: per driving bot-tick,
+  stuck kills go from 2.6 to 3.3 in 100 000 and teammate crush hits from
+  7.4 to 9.4. VERIFIED (the table).
+- The cost: a plan's mean time on mp_kharkov rose from 3.6 to 5.4 ms and
+  its longest from 83 to 106 ms (seeds 1 to 31 odd, the costs at 0 / 0
+  against 2 / 1), and the warm pass takes 0.43 s a game for three radii
+  per hull kind, where it took one. VERIFIED (the runs). The longest plan
+  is a cold cache's at the game's start, as before (10.3).
+- Left: no plan reads another vehicle's collmap (16 % of the strikes
+  above). Testing the box against the live collmaps at plan time,
+  skipping the hull's own, would cover them. Open.
+
+### 10.14 A rider takes the empty driver's seat, 2026-11-26
+
+Retail has no bots; this section is measured on vcod-server only, except
+the seat change itself, read out of the UO game module.
+
+- `nextvehslot` and `prevvehslot` run `G_VEH_CycleSlot` (coduo-vehicles.md
+  11.3; game.mp.uo 0x8da1e). The Windows module does the same:
+  `uo_game_mp_x86.dll` names the two commands at 0x2007553c and
+  0x20075530, whose handlers 0x20024e90 and 0x20024eb0 call 0x2004a910.
+  There a free-seat search from seat 0 (0x20047390) that finds none ends
+  the change. A tank (vehicle type 2 at +0x22c) on its first change since
+  the entry (the count at client +0x4730) clears its stamp (+0x468c). A
+  stamp later than `level.time - 250` refuses the change, with
+  `e "GMI_GAME_VEHICLE_DELAY_IGNORE"` at most every 500 ms (+0x4690).
+  Otherwise the change counts, unlinks the rider (0x20048020), searches
+  from his seat (+0x614), links him there (0x20047bb0) and stamps
+  `level.time + 1500`. VERIFIED (the instructions, 0x2004a910 to
+  0x2004aa4c). The search steps forward, or back for `prevvehslot`,
+  wrapping 6 to 1 (`seat::next_free_seat`, 0x88c78), so `prevvehslot`
+  from seat 2 takes an empty seat 1 at once.
+- Before this change, a gunner or passenger whose driver died or got out
+  sat out 2 s idle (`UNDRIVEN_TICKS`) and got out too (10.4; 10.12
+  lists it as left).
+- The rule: a rider in seat 2 or up, with the driver's seat empty, sends
+  `prevvehslot` (`Bot::take_seat_change`, sent as a client command as
+  `kill` is): in a tank always, as its driver lays the main gun too; in a
+  four-wheel only with nobody to shoot, as the gunner's MG is the jeep's
+  only gun. It asks at most every 2 s (`CYCLE_TICKS`, past the change's
+  1750 ms), three times a seat (`CYCLE_TRIES`), and while it asks the
+  undriven seat's 2 s does not get it out. Not while it leaves, in a
+  wedged hull or with `vc_bot_vehicles 0`. A tank's driver alone keeps
+  his seat: the gunner's MG has no shell for an enemy hull and no
+  wheel (`a_gunner_moves_to_an_empty_drivers_seat`).
+- VERIFIED (measured as 10.13, the same seeds, on top of its two rules):
+
+  | | kills | vehicle kills | stuck kills | seated bot-ticks | driving bot-ticks | changes asked | changes made |
+  |---|---|---|---|---|---|---|---|
+  | mp_kharkov, 10.13 | 722 | 188 | 19 | 664 281 | 573 579 | | |
+  | mp_kharkov, the rule | 727 | 200 | 19 | 674 569 | 585 645 | 46 | 42 |
+  | mp_cassino, 10.13 | 793 | 349 | 2 | 175 654 | 114 358 | | |
+  | mp_cassino, the rule | 827 | 363 | 3 | 174 824 | 116 208 | 59 | 59 |
+
+  "Changes made" are seat 1 taken from a higher seat: 42 of 46 asks on
+  mp_kharkov and 59 of 59 on mp_cassino; the four that did not go
+  through are not traced. Kills and vehicle kills move up, inside the
+  spread: the case comes up once in three games on mp_kharkov and twice
+  a game on mp_cassino. Kept.
+- Left: a driver who moves to the gunner's seat for an enemy on foot
+  the jeep cannot run over, and a passenger who takes a free gun. Open.
 
 ## 11. CoD2's `sd`, `ctf` and `hq`
 

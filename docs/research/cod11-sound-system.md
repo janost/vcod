@@ -640,7 +640,7 @@ expression lands in the right table per group. The jump group's base
 
 ### 7c. Switch cases (139-201)
 
-`VERIFIED` from the same function unless marked. Alias handles come from the
+Each row is `VERIFIED` from the same function. Alias handles come from the
 `syscall(0xbf, "name")` calls in `FUN_30020a00` (`0x30020a00`); `w` = the
 entity's weapon (`es.weapon`, entity-state offset `0xc8`), `wdef` = its weapon def.
 

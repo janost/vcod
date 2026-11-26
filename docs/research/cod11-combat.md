@@ -67,7 +67,7 @@ wide at `0x366b1`. VERIFIED: `BG_GetInfoForWeapon` (`0x3ac68`) is the accessor,
 and `weaponDef+0x4` is the weapon's name string, which `Scr_PlayerDamage`
 passes to script (`0x5ca84`).
 
-The fields the combat path reads, all VERIFIED out of that table:
+The fields the combat path reads, each VERIFIED out of that table:
 
 | offset | field | offset | field |
 |---|---|---|---|
@@ -319,7 +319,7 @@ boolean `PM_Weapon` threads into the melee check, the rechamber check, the
 reload machine, the trigger-release check and the fire function, so "the delay
 expired this frame" is the one edge the whole machine is written around.
 
-Which weapon-file time each state runs on, all VERIFIED off the store that
+Which weapon-file time each state runs on, each VERIFIED off the store that
 sets `weaponTime` or `weaponDelay` in the dll:
 
 | state | `weaponTime` from | `weaponDelay` from | address |

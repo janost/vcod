@@ -886,15 +886,15 @@ cod2-d3dbsp-format.md, lumps 2 and 3.
   The sun visibility comes from the same texel's alpha (VERIFIED, file).
   Under `r_rendererInUse` 2 (dx7) the cache keeps the floats instead
   (VERIFIED).
-- What a static model caches (`R_LoadEntities` mac 0xe2b6c, VERIFIED
-  unless marked): the grid at its bounds' centre, or, when its xmodel's
+- What a static model caches (`R_LoadEntities` mac 0xe2b6c): the grid at its bounds' centre, or, when its xmodel's
   flag bit 0 is set and the entity has a `gndLt` key, the ground colour:
   `gndLt` is read as `%02x%02x%02x%02x`, red, green, blue and sun over
   255, and every corner takes the rgb (`R_GetStaticModelLightingFromGround`
   mac 0x107070). Then `directLightScale` scales the sun visibility and
   `indirectLightScale` the 24 values (`R_ScaleStaticModelLighting` mac
   0x106970), each 1 without the key and an error when negative; the keys
-  compare without case.
+  compare without case. VERIFIED (the key reads, the calls and the
+  addresses named).
 - Census: 253 `misc_model`s on mp_toujane carry `gndLt` (VERIFIED, the
   entity text); only the 32 grass and shrub descriptors set the flag
   (cod2-xmodel-v20-format.md), so the rest are lit from the grid.

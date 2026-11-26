@@ -914,15 +914,13 @@ const INVERSE_SAWTOOTH_TABLE: [f32; FUNCTABLE_SIZE] = build_inverse_sawtooth_tab
 const fn build_noise_tables() -> ([f32; 256], [u8; 256]) {
     let mut table = [0.0f32; 256];
     let mut perm = [0u8; 256];
-    let mut hold: u32 = 1001;
+    let mut rng = crate::rng::MsvcRand::seed(1001);
     let mut i = 0;
     while i < 256 {
-        hold = hold.wrapping_mul(214013).wrapping_add(2531011);
-        let r = (hold >> 16) & 0x7fff;
+        let r = rng.next();
         let c = (1.0f32 / 32767.0) as f64;
         table[i] = (r as f64 * c * 2.0 - 1.0) as f32;
-        hold = hold.wrapping_mul(214013).wrapping_add(2531011);
-        let r = (hold >> 16) & 0x7fff;
+        let r = rng.next();
         perm[i] = (r >> 7) as u8;
         i += 1;
     }
