@@ -1251,8 +1251,52 @@ triggers; the box test is `game::cod4::item::player_touches`, held by
   arithmetic of the above).
 - Order: retail walks one `CM_AreaEntities` list, triggers and items mixed
   in the tree's order; vcod's items are not in its area tree, so a client's
-  items come after its triggers. INFERRED. The two `"touch"` notifies on an
-  item and its toucher (6.2) are not raised for items.
+  items come after its triggers. INFERRED.
+- The notifies. For each item `BG_PlayerTouchesItem` meets, with the
+  script up (0x815cfe0 with 1, 0x80a5538), `G_TouchTriggers` pushes the
+  player (0x80c7770) and notifies the item `touch` (`scr_const` word
+  0x836f15a, one argument, `Scr_Notify` 0x80c7604 at 0x80a556d), then pushes
+  the item and notifies the player `touch` (0x80a5593), then calls the
+  item's touch with `touched` 1 (0x80a54c1). VERIFIED (the instructions).
+  So both are raised every frame of contact ahead of `Touch_Item`'s tests:
+  for the dropper's own item, a toucher with no health or weapons off.
+  vcod queues both on `engine_notifies` for each item
+  `game::cod4::item::player_touches` meets, from a playing client only
+  (`otherFlags` 4, session playing). A follower's copied `pm_type` 0 passes
+  0x80a5367 on retail; what the unlinked spectator's area query then finds
+  is not measured. INFERRED.
+- The take with `touched` 1 (0x80921cf..0x8092253). Past the grab test it
+  needs the item's weapon held (`ps+0x55c` bit) or, failing that, any held
+  weapon whose def+0x328 (the ammo slot) is the item weapon's (0x8060dd4,
+  called at 0x8092211); else nothing. VERIFIED (the instructions). Then
+  0x8091d44 (`ent`, `other`, held, `&event`, 0): per item slot with a
+  weapon, `Add_Ammo` (0x8091af0) of `ammoCount` (+0x1b4) plus, held,
+  `clipAmmoCount` (+0x1b8) (0x8091da3..0x8091db0); what went in comes off
+  `ammoCount`, a negative rest off the clip, both floored at 0
+  (0x8091eb3..0x8091ec4, 0x8091f7f..0x8091f9a). Any taken sets the event
+  to 9 (0x8091ed0); it returns that only when held (0x8091e6e..0x8091e79).
+  With `pickupPrints` (dvar 0x84bc380, default 0, registered at 0x80b544f)
+  the toucher is sent `GAME_PICKUP_AMMO` or `GAME_PICKUP_CLIPONLY_AMMO`.
+  VERIFIED (the instructions, the strings at 0x8215e1c, 0x8215d90).
+- With the event set (0x8092240) the item is notified `trigger` (`scr_const`
+  0x836f15c, two arguments) with the toucher and undefined, an undefined
+  pushed first (0x815ee82) and the toucher last, so the toucher is the
+  first (0x80926a5..0x80926ce). Then `EV_ITEM_PICKUP` on the toucher and,
+  for a held weapon's take only, the item freed (0x809235c..0x80923a3).
+  VERIFIED (the instructions). A take for the ammo slot alone leaves the
+  item with its clip and the stock not taken.
+- vcod: `Cod4Level::touch_items` takes for a held weapon or one on the
+  slot (`vcod_cod4::pmove::weapon::take_ammo` returns the rounds that went
+  in), queues `trigger` with the toucher and `Value::Undefined`, and frees
+  a held weapon's item through `free_next`, after the frame's notifies
+  reached it. `a_dropped_weapon_is_notified_touch_then_trigger` (a bot on
+  its own drop: `touch` each frame of the dropper's 1000 ms, then the take
+  and `trigger`) and `a_weapon_on_the_same_ammo_slot_takes_the_stock_only`
+  (`m16_gl_mp`'s item to a holder of `g36c_gl_mp`: 60 stock taken, the
+  clip of 30 left) hold it. VERIFIED (the tests, ours). Left out:
+  `pickupPrints`' lines, the item's second slot (vcod's items carry one
+  weapon) and `Touch_Item`'s `offhandClass` test (0x8052526, called at
+  0x80921c2), which a dropped primary always passes.
 - `cod4_damage_survives_every_transition` stalled with these rules at
   `KillInKillcam(1)`'s check: the shooter, killed there, never left its
   killcam. The cause was the script VM's notify index, not the
