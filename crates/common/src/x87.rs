@@ -658,7 +658,51 @@ impl F80 {
         let v = (q as f64 * 2f64.powi(self.e + sh as i32)) as f32;
         if self.neg { -v } else { v }
     }
+
+    /// `fsin`. The FPU reduces by its own 66-bit pi, [`FPU_PI`], so a
+    /// multiple of the double pi lands off its zero by the gap (`sin(M_PI)`
+    /// is 1.2246063e-16, not 1.2246469e-16), and an operand of 2^63 or more
+    /// comes back unchanged (C2 set). Measured by `probe_math` on 1.1d
+    /// (cod11-gsc-object-model.md 9.3).
+    pub fn fsin(self) -> F80 {
+        self.fpu_sin(false)
+    }
+
+    /// `fcos`: [`F80::fsin`] a quarter turn of [`FPU_PI`] on.
+    pub fn fcos(self) -> F80 {
+        self.fpu_sin(true)
+    }
+
+    fn fpu_sin(self, cos: bool) -> F80 {
+        if self.m == 0 {
+            return if cos { F80::from_f64(1.0) } else { self };
+        }
+        if self.e >= 0 {
+            return self;
+        }
+        // Under 2^-2 no reduction happens; from 2^62 the shift below would
+        // overflow, so that band takes the double's (unmeasured).
+        if self.e < -65 || self.e == -1 {
+            let x = self.to_f64();
+            return F80::from_f64(if cos { x.cos() } else { x.sin() });
+        }
+        // In 2^-65 units: |x|, a half turn 2 * FPU_PI, a quarter turn FPU_PI.
+        let mut units = u128::from(self.m) << (self.e + 65);
+        if cos {
+            units += FPU_PI;
+        }
+        let k = (units + FPU_PI) / (2 * FPU_PI);
+        let rest = units.wrapping_sub(k * 2 * FPU_PI) as i128;
+        let s = (rest as f64 * 2f64.powi(-65)).sin();
+        let odd = k & 1 == 1;
+        let flip = odd != (self.neg && !cos);
+        F80::from_f64(if flip { -s } else { s })
+    }
 }
+
+/// The x87's internal pi, `0x3.243f6a8885a308d3`, in 2^-64 units: 66 bits,
+/// 4.0e-21 under pi.
+pub const FPU_PI: u128 = 0x3_243f_6a88_85a3_08d3;
 
 /// `fchs`.
 impl std::ops::Neg for F80 {

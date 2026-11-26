@@ -10,8 +10,9 @@
 //! satisfies `semantics_ab.rs`'s `every_probe_file_and_capture_section_are_paired`
 //! guard, which checks this file's text for the name.
 //!
-//! `probe_vectordot` and `probe_closer` are claimed here for the same
-//! reason as `probe_cvar` below: they call builtins only this crate answers.
+//! `probe_vectordot`, `probe_closer` and `probe_math` are claimed here for
+//! the same reason as `probe_cvar` below: they call builtins only this crate
+//! answers.
 //!
 //! `probe_cvar` and `probe_not_string` are claimed here for a different
 //! reason: they call `getCvar`/`setCvar`/`getCvarInt`/`getCvarFloat`/
@@ -336,6 +337,59 @@ fn probe_closer_matches_retail_uo() {
             "PROBE closer_first_rounds 1" => "PROBE closer_first_rounds 0".into(),
             "PROBE closer_diff_rounds 0" => "PROBE closer_diff_rounds 1".into(),
             _ => l,
+        })
+        .collect();
+    assert_eq!(host.script_log, uo);
+}
+
+/// `probe_math` on 1.1d: the differences and roots kept on the x87 stack,
+/// `fsin` and `fcos` reducing by the FPU's own pi
+/// (cod11-gsc-object-model.md 9.3).
+#[test]
+fn probe_math_matches_retail() {
+    let (mut vm, main) = install("probe_math");
+    let mut host = GameHost::new(
+        &vcod_server::game::profile::COD1_11,
+        vec![String::new(); 2048],
+    );
+    vm.call_now(&mut host, main, None, Vec::new())
+        .unwrap_or_else(|e| panic!("probe_math main errored: {e:?}"));
+
+    assert_eq!(host.script_log, retail_probe_lines("probe_math"));
+}
+
+/// `probe_math` on UO: 1.5b and UO 1.51b logged the same lines, each
+/// difference a float, the normalize's reciprocal stored, libm's `sin` and
+/// `cos`; these are the lines that differ from 1.1d's.
+#[test]
+fn probe_math_matches_retail_uo() {
+    const UO: &[(&str, &str)] = &[
+        ("dist_diff_kept", "8388608p1"),
+        ("dsq_diff_kept", "8388608p25"),
+        ("norm_a", "0 0 16777215p-24"),
+        ("norm_b", "0 8389632p-35 8388608p-23"),
+        ("norm_c", "15486662p-26 -10324441p-25 15486662p-24"),
+        ("sin_180", "9253170p-76"),
+        ("sin_36000", "9276554p-71"),
+        ("cos_90", "9253170p-77"),
+        ("sin_1e24", "-12107095p-24"),
+    ];
+    let (mut vm, main) = install("probe_math");
+    let mut host = GameHost::new(
+        &vcod_server::game::profile::COD1_UO,
+        vec![String::new(); 2048],
+    );
+    vm.call_now(&mut host, main, None, Vec::new())
+        .unwrap_or_else(|e| panic!("probe_math main errored: {e:?}"));
+
+    let uo: Vec<String> = retail_probe_lines("probe_math")
+        .into_iter()
+        .map(|l| {
+            let name = l.split(' ').nth(1).unwrap_or_default();
+            match UO.iter().find(|(n, _)| *n == name) {
+                Some((n, v)) => format!("PROBE {n} {v}"),
+                None => l,
+            }
         })
         .collect();
     assert_eq!(host.script_log, uo);
