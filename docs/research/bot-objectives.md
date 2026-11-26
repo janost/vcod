@@ -2470,6 +2470,40 @@ the stock script lines, read out of `pakuo01.pk3`.
   empty `wrecks`. INFERRED (the vehicle pool is filled only by a
   `script_vehicle` spawn with the vehicle files loaded, `game/spawn.rs`).
 
+### 10.10.1 A wrecked tank's duplicate read as a wreck, 2026-11-26
+
+- `tank_respawn` (`_tankdrive_gmi.gsc` 142-160) waits `self.delay`
+  after the `death`, then `spawnduplicate`s the hull where it spawned
+  and threads `wait_for_safe_respawn` on the duplicate, which unlinks it
+  and only after `scr_tank_respawn_wait` and a clear `verifyposition`
+  runs `init_tank` (223). `init_tank` threads `init_tank_hud`, whose
+  first lines set `health` to 2900 (549-554), and `tank_death` and
+  `tank_respawn`, the hull's `death` waiters, in the same call.
+  VERIFIED (the stock files, `pakuo01.pk3`).
+- `uo_tdm_games_that_stalled_or_never_sprinted` seed 13 on this branch:
+  Panzer IV 186 died at 51.3 s, 38 units off its spawn point; its
+  duplicate 307 took `MOD_COLLISION` 329999 at 61.4 s with `health` 0,
+  before its `init_tank`. `vehicle_damage` raised its `death` (nobody
+  waited on it) and set `Vehicle::dead`, and nothing cleared it: the
+  script then gave 307 its health and it stood usable, but
+  `ParkedVehicles` recorded it as a burning hull at its spawn for the
+  rest of the game. Bot 4, walking to board it, met the wreck's reach:
+  inside it its goal was away from the hull, just outside the goal was
+  the hull itself, which reads as a hold inside a reach (10.10). Each
+  hold reset the flight's plan, so it turned on the reach's edge, 12 s
+  within 150 units of (4353, -1919, 27). VERIFIED (per-tick traces of
+  the bot's goal, the vehicles it saw and the wreck records).
+- Now a hull struck to 0 before the script gave it health is not
+  `dead`: the `death` notify and the riders' exits stand as before,
+  only the bots' wreck flag waits for a hull with health. Seed 13
+  passes; `a_wrecked_tanks_duplicate_is_no_wreck` (`tests/bot_vehicles.rs`)
+  wrecks mp_cassino's first tank and finds no wreck 30 s on, where
+  before the fix the duplicate stood as one at (4676, -1979). VERIFIED
+  (the runs).
+- The run-over numbers in 10.12 were measured before this fix. Whether
+  retail's duplicate, unlinked, takes that collision at all is not
+  checked. Open.
+
 ### 10.11 A tank's shell over the hull it aimed at, 2026-11-23
 
 Retail has no bots; this section is measured on vcod-server only.
