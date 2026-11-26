@@ -37,6 +37,7 @@ impl Skill {
                 hearing: 0.75,
                 fov_deg: 100.0,
                 walk_turn_deg: 18.0,
+                fire_pause: (4, 8),
                 ..Skill::default()
             },
             1 => Skill::default(),
@@ -119,6 +120,7 @@ mod tests {
             assert!(hi.noise_ticks > lo.noise_ticks && hi.hearing > lo.hearing);
             assert!(hi.fov_deg > lo.fov_deg);
             assert!(hi.walk_turn_deg > lo.walk_turn_deg);
+            assert!(hi.fire_pause <= lo.fire_pause);
         }
         assert_eq!(Skill::level(MAX_LEVEL + 5), Skill::level(MAX_LEVEL));
     }

@@ -143,6 +143,10 @@ pub struct Skill {
     /// The most the walking view turns in one tick, degrees: the keys
     /// keep the path while it comes round ([`Bot::walk_turn`]).
     pub walk_turn_deg: f32,
+    /// Ticks the trigger stays up past each burst or tap, as (least,
+    /// spread): easy lets go between bursts, the one choice a level makes
+    /// that cuts its fire (bot-combat.md 3.2).
+    pub fire_pause: (u32, u32),
 }
 
 impl Default for Skill {
@@ -168,6 +172,7 @@ impl Default for Skill {
             hearing: 1.0,
             fov_deg: 120.0,
             walk_turn_deg: 24.0,
+            fire_pause: (0, 0),
         }
     }
 }

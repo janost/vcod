@@ -206,6 +206,7 @@ plays as before the presets (section 2's matches print the same lines).
 | walking view's turn per tick, degrees (section 11) | 18 | 24 | 30 | 36 |
 | flick landing spread, share of the angle (section 18) | 0.15 | 0.1 | 0.075 | 0.05 |
 | sway and recoil taken back, share, ticks late (section 18) | 0.5, 4 | 0.7, 3 | 0.8, 2 | 0.9, 2 |
+| trigger up past a burst or tap, ticks (least + rand(spread), 3.2) | 4 + 8 | 0 | 0 | 0 |
 
 The measurements in this section predate section 9, when normal's
 reaction was 5 + 6, its error start 48 and its decay 0.88.
@@ -257,7 +258,8 @@ kills at hard, 3.4 : 1 at expert). Nothing here is tuned against a human;
 how a level feels to play against is pending a hand check.
 
 The levels set numbers only: what the bot chooses (cover, a retreat, a
-frag, an objective's route) is the same at every level. INFERRED
+frag, an objective's route) is the same at every level, but for easy's
+pause between bursts (3.2). INFERRED
 (sections 4.5 and 5): cover and the retreat each move a side's deaths by
 less than the seed spread at one level, so a level that took them less
 often would not show in `bot_match` either; no decision rule is tied to
@@ -291,7 +293,34 @@ seeds 1..=8, one row per level before and after):
   loses from its own.
 - So no decision is tied to the level yet. A decision that makes a
   level easier against bots would have to cut its fire, not its care;
-  how a level plays against a human is a hand check. Open.
+  how a level plays against a human is a hand check. 3.2 took it up.
+
+### 3.2 Easy lets the trigger up between bursts (2026-11-26)
+
+Two ways for level 0 to cut its fire, levels 1 to 3 untouched, each
+against the same seeds with neither. VERIFIED (measured, ours, release,
+1.1, `dm`, `SKILLS=0,1,2,3,0,1,2,3`, 12000 ticks, mp_carentan and
+mp_depot, kills : deaths of the two easy bots a match summed):
+
+| Rule at level 0 | Seeds | mp_carentan | mp_depot | Both | Easy's shots |
+|---|---|---|---|---|---|
+| none | 1-16 | 612 : 963 | 407 : 810 | 1019 : 1773 (0.57) | 7812 |
+| flinch: no fire for 500 ms after a hit | 1-16 | 556 : 974 | 450 : 778 | 1006 : 1752 (0.57) | |
+| pause: 4 to 11 ticks more past each burst or tap | 1-16 | 462 : 989 | 404 : 844 | 866 : 1833 (0.47) | 6237 |
+| none | 17-32 | 593 : 942 | 471 : 779 | 1064 : 1721 (0.62) | 7549 |
+| pause | 17-32 | 471 : 971 | 423 : 788 | 894 : 1759 (0.51) | 6205 |
+
+- The pause cuts easy's kills by 16% on both seed sets (2083 to 1760
+  over 64 matches) and its K/D from 0.60 to 0.49; it fires a fifth fewer
+  rounds at a hair better accuracy (31.3% against 29.8% and 30.5%).
+  Levels 1 to 3 take the kills easy gives up: 10 530 to 10 830 over the
+  64 matches. VERIFIED (the table).
+- The flinch moves nothing past the spread (a map's row by 50 either
+  way): an easy bot that is hit first mostly dies in the fight anyway
+  (78% of its wounds dead in 5 s). Not kept. VERIFIED (the table).
+- Kept: `Skill::fire_pause`, (4, 8) at level 0, none at the others,
+  which draw nothing for it, so a server at levels 1 to 3 plays as
+  before. How it plays against a human is a hand check.
 
 ## 4. Cover and lean
 
@@ -302,28 +331,30 @@ The brain is `crates/server/src/bots/cover.rs`; the server fills
 
 A spot is a place the bot's body hides from the threat's eye while a peek
 from it still has a line to the point the bot aims at on the threat
-(`cover::Sight::peek`). Two peeks:
+(`cover::Sight::peek`). One peek since 2026-11-26:
 
 - `Peek::Stand`: crouched (eye 40) the body is hidden, standing (eye 60)
   the eye sees the threat. A wall waist to chest high.
-- `Peek::Lean(side)`: standing, the body is hidden, and leaning `side`
-  (retail's lean keys, `wbuttons` 0x10 left and 0x20 right) the eye sees
-  the threat. A corner, or a wall edge.
+
+Until then a body hidden standing whose lean (retail's lean keys,
+`wbuttons` 0x10 left and 0x20 right) saw the threat was a spot too,
+`Peek::Lean(side)`, at a corner or a wall edge; it lost its fights and
+went (4.7). A spot's second way to show, a crouched lean, stays (10).
 
 "Hidden" is four bullet segments (`CollisionWorld::shot_trace`, props
 included) from the threat's eye, all blocked: to the eye, the chest (two
 thirds of the eye's height) and the chest 10 units either side across the
-line. The leaned eye is `aim::lean_offset` at the standing lean's limit
-(1 on 1.1, 0.5 on 1.5 and UO, `pmove::lean_scale`), cut by the fraction
-of `PM_UpdateLean`'s 16-unit box sweep a wall leaves, as pmove cuts it.
+line. The leaned eye is `aim::lean_offset` at the crouched lean's limit
+(0.5 on every server, `pmove::lean_scale`), cut by the fraction of
+`PM_UpdateLean`'s 16-unit box sweep a wall leaves, as pmove cuts it.
 
 ### 4.2 The search
 
 `cover::find` walks level edges (no jump, no risky edge, no step past
 `STEPSIZE`) out from the node nearest the body, five rings and at most
 128 units across, and tests the body's own spot first, then the nodes
-nearest first. The first `Peek::Stand` in reach wins; a lean spot is
-taken only where there is none (4.5). The server re-checks the spot it
+nearest first. The nearest spot in reach wins (a `Peek::Stand` before a
+lean until 2026-11-26, 4.5 and 4.7). The server re-checks the spot it
 gave last every 250 ms against the threat's current eye and keeps it
 while it still hides and peeks; it searches again only when it does not.
 Within 300 units of the threat there is no search: the bot fights where
@@ -343,9 +374,9 @@ and the `nav_census` floors do not move.
   it, sights down beyond 64 units. It aims and fires on the way as the
   fight allows (`Bot::cover_keys`).
 - On the spot it holds still. While the weapon is ready it peeks
-  (stands, or holds the lean key); while it reloads or the weapon is busy
-  past 300 ms (a bolt's rechamber, not a semi-automatic's tap spacing)
-  it crouches behind a `Peek::Stand` wall or comes back off a lean.
+  (stands, or crouched holds the lean key); while it reloads or the
+  weapon is busy past 300 ms (a bolt's rechamber, not a semi-automatic's
+  tap spacing) it crouches behind the wall with no lean.
 - With the threat out of sight the spot is held for 3 s
   (`cover::WAIT_TICKS`; a wary bot draws its own, section 10), peeking
   where the threat was last aimed at; the target is not counted lost
@@ -427,7 +458,50 @@ ours, release, master af564b3c7 plus 5.3, `COVER=alt`, `tdm`, 8 bots,
 - On master the cover side now loses its fights by 3%, where 4.5 had it
   6% ahead: the fights round it changed since (sections 9 to 13, the
   retreat's cover, 18's aim). INFERRED. Lean break-even, node-only spots
-  and a prone peek (backlog) are left untried. Open.
+  and a prone peek: 4.7.
+
+### 4.7 Lean spots dropped; prone peeks and spots off the nodes not kept (2026-11-26)
+
+Each rule was played by one side against master's cover on the other,
+sides swapped by seed (a measuring build's per-side arm, the `COVER=alt`
+split with cover on both sides). VERIFIED (measured, ours, release,
+1.1, `tdm`, 8 bots, 6000 ticks, mp_carentan, mp_harbor, mp_depot and
+mp_brecourt, 128 matches a row; "margin" is the rule's side's kills less
+the other's a match, mean and standard error):
+
+| Rule on one side | Seeds | Its kills : the other's | Margin | Cover hold, its / other's bot-ticks |
+|---|---|---|---|---|
+| none (both sides master) | 1-32 | 4977 : 5122 | -1.1 +- 1.2 | 958 142 / 968 062 |
+| no lean spots | 1-32 | 5460 : 5086 | +2.9 +- 1.3 | 391 928 / 844 864 |
+| no lean spots | 33-64 | 5470 : 5320 | +1.2 +- 1.2 | 401 403 / 855 962 |
+| no lean spots | 65-96 | 5584 : 5047 | +4.2 +- 1.3 | 340 010 / 823 123 |
+| lean spots only 800 or more from the threat | 1-32 | 5298 : 5212 | +0.7 +- 1.3 | 650 516 / 898 464 |
+| a prone peek | 1-32 | 5031 : 4912 | +0.9 +- 1.2 | 1 026 390 / 912 999 |
+| spots on edge midpoints too | 1-32 | 5056 : 4871 | +1.5 +- 1.1 | 1 032 354 / 943 268 |
+| no lean spots, against no cover at all | 1-32 | 5946 : 5833 | +0.9 +- 1.4 | 344 177 / 0 |
+
+- Lean break-even: with no lean spot the side outscores master's cover
+  on all three seed sets, +2.8 +- 0.7 kills a match pooled over 384
+  matches (16 514 : 15 453, 7%). Lean ticks fall from 146 747 to 4417
+  (a crouched lean's), cover holds by half. VERIFIED (the table). Kept:
+  `Sight::peek` passes no body hidden standing, so every spot is a low
+  wall's and its second way out a crouched lean (`Peek::Lean` and the
+  standing lean's limit are gone).
+- Against no cover at all the stand spots break even (+0.9 +- 1.4),
+  where master's cover lost 3% (4.6). VERIFIED (the table). INFERRED
+  (4.5's last bullet): the lean shows the head, which the threat aims
+  at, and the lean peeks are what lost.
+- A lean only at range (800 units or more, where a head is a small
+  mark) is inside the spread. Not kept. VERIFIED (the table).
+- A prone peek (`Peek::Prone`: a body hidden prone behind a wall lower
+  than a crouch's, which peeks crouched and drops prone to reload, 400
+  ms each way, `VIEW_LERP_PRONE_MS`) and spots on the midpoints of the
+  level edges between the searched nodes (24 units apart on the 48-unit
+  grid, where only nodes were tested) each lengthen the cover holds a
+  tenth and sit inside the spread. Neither kept. VERIFIED (the table).
+- Measured on 1.1 only. The rule is the shared brain's, so 1.5, UO,
+  CoD2 and CoD4 bots take no lean spot either; their lean is half 1.1's
+  (`pmove::lean_scale`) and was not measured against. Open.
 
 ## 5. Retreat
 
@@ -1162,7 +1236,8 @@ Now, with `Bot::wary` on (the default; `WARY=` and
 
 - `cover::Sight::alt` gives a spot a second way to show: the other lean
   side, or from a body hidden crouched a crouched lean (`Peek::LowLean`,
-  the 0.5 lean limit of `pmove::lean_scale`). `cover::find` also keeps
+  the 0.5 lean limit of `pmove::lean_scale`); since 4.7 a spot is a low
+  wall's, so the crouched lean is its one second way. `cover::find` also keeps
   the next nearest spot at least 48 units off (`Spot::next`). The server
   rechecks the spot the bot holds, not the one it handed out
   (`Bot::held_spot`).
@@ -2218,7 +2293,8 @@ for each rule below.
   bot's sight (`SMOKE_*`). Retail's crosshair smoke test
   (`SV_FX_GetVisibility`, cod2-combat.md 9.2) is not ported, so a human's crosshair
   names see through it.
-- Cover peeks use CoD2's leans at 0.5 of the lean standing, as 1.5. A
+- Cover peeks lean crouched at 0.5, as 1.5; no spot is a standing
+  lean's since section 4.7. A
   hit is read off the playerstate: a new `damageEvent`, `damageYaw` and
   `damagePitch`, the attacker the last client to hurt the bot.
 - Dropped guns (`bots/cod2/fetch.rs`). With every primary dry and no
