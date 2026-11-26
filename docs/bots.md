@@ -281,9 +281,10 @@ Behaviour differs by game, never by map.
   Drivers head for the objective or an enemy and wait for a teammate
   walking up. A tank stops to shell enemies, and in `bas` the other
   side's bases. A jeep's driver runs over an enemy on foot in front of
-  it. Gunners fire the machine gun, and a bot on foot fires a rocket
+  it. Gunners fire the machine gun and take the driver's seat when it
+  empties (in a jeep only with nobody to shoot), and a bot on foot fires a rocket
   launcher at an enemy-crewed vehicle (bot-objectives.md sections 10,
-  10.12 and 10.13).
+  10.12 to 10.14).
 - A bot on foot keeps out of a burning hull's reach until its second
   blast (section 10.10).
 
@@ -294,7 +295,7 @@ Cannot:
   can still wedge itself. Its crew gets out before the engine's stuck
   kill, but a tank sliding into a wall with nobody aboard still destroys
   itself (sections 10.3, 10.4 and 10.13).
-- Change seats or use the hatch.
+- Change seats other than to an empty driver's seat, or use the hatch.
 - Fetch a rocket launcher outside `bas`.
 - Throw a satchel or call artillery at a `bas` base.
 

@@ -2175,7 +2175,8 @@ stops boarding and gets a seated bot out (`SeatView::off`, 10.4).
   while shelling a base), 10 s shelling a base with the gun's line never
   on it, four
   stalls or 8 s of driving under 300 units, the same 8 s for a rider
-  with nobody to shoot, 2 s idle in a vehicle nobody drives, 5 s of
+  with nobody to shoot, 2 s idle in a vehicle nobody drives once the
+  tries at its driver's seat are spent (10.14), 5 s of
   the hull's unbroken contact (10.3), or `vc_bot_vehicles` set to 0. Seed 45's gunner, without the
   rider's own headway window, sat out the driver's 8 s and then the
   undriven seat's 2 s and walked off past the 12 s gate. The bot taps
@@ -2792,6 +2793,56 @@ nav build the walk already has rather than from a second census.
 - Left: no plan reads another vehicle's collmap (16 % of the strikes
   above). Testing the box against the live collmaps at plan time,
   skipping the hull's own, would cover them. Open.
+
+### 10.14 A rider takes the empty driver's seat, 2026-11-26
+
+Retail has no bots; this section is measured on vcod-server only, except
+the seat change itself, read out of the UO game module.
+
+- `nextvehslot` and `prevvehslot` run `G_VEH_CycleSlot` (coduo-vehicles.md
+  11.3; game.mp.uo 0x8da1e). The Windows module does the same:
+  `uo_game_mp_x86.dll` names the two commands at 0x2007553c and
+  0x20075530, whose handlers 0x20024e90 and 0x20024eb0 call 0x2004a910.
+  There a free-seat search from seat 0 (0x20047390) that finds none ends
+  the change. A tank (vehicle type 2 at +0x22c) on its first change since
+  the entry (the count at client +0x4730) clears its stamp (+0x468c). A
+  stamp later than `level.time - 250` refuses the change, with
+  `e "GMI_GAME_VEHICLE_DELAY_IGNORE"` at most every 500 ms (+0x4690).
+  Otherwise the change counts, unlinks the rider (0x20048020), searches
+  from his seat (+0x614), links him there (0x20047bb0) and stamps
+  `level.time + 1500`. VERIFIED (the instructions, 0x2004a910 to
+  0x2004aa4c). The search steps forward, or back for `prevvehslot`,
+  wrapping 6 to 1 (`seat::next_free_seat`, 0x88c78), so `prevvehslot`
+  from seat 2 takes an empty seat 1 at once.
+- Before this change, a gunner or passenger whose driver died or got out
+  sat out 2 s idle (`UNDRIVEN_TICKS`) and got out too (10.4; 10.12
+  lists it as left).
+- The rule: a rider in seat 2 or up, with the driver's seat empty, sends
+  `prevvehslot` (`Bot::take_seat_change`, sent as a client command as
+  `kill` is): in a tank always, as its driver lays the main gun too; in a
+  four-wheel only with nobody to shoot, as the gunner's MG is the jeep's
+  only gun. It asks at most every 2 s (`CYCLE_TICKS`, past the change's
+  1750 ms), three times a seat (`CYCLE_TRIES`), and while it asks the
+  undriven seat's 2 s does not get it out. Not while it leaves, in a
+  wedged hull or with `vc_bot_vehicles 0`. A tank's driver alone keeps
+  his seat: the gunner's MG has no shell for an enemy hull and no
+  wheel (`a_gunner_moves_to_an_empty_drivers_seat`).
+- VERIFIED (measured as 10.13, the same seeds, on top of its two rules):
+
+  | | kills | vehicle kills | stuck kills | seated bot-ticks | driving bot-ticks | changes asked | changes made |
+  |---|---|---|---|---|---|---|---|
+  | mp_kharkov, 10.13 | 722 | 188 | 19 | 664 281 | 573 579 | | |
+  | mp_kharkov, the rule | 727 | 200 | 19 | 674 569 | 585 645 | 46 | 42 |
+  | mp_cassino, 10.13 | 793 | 349 | 2 | 175 654 | 114 358 | | |
+  | mp_cassino, the rule | 827 | 363 | 3 | 174 824 | 116 208 | 59 | 59 |
+
+  "Changes made" are seat 1 taken from a higher seat: 42 of 46 asks on
+  mp_kharkov and 59 of 59 on mp_cassino; the four that did not go
+  through are not traced. Kills and vehicle kills move up, inside the
+  spread: the case comes up once in three games on mp_kharkov and twice
+  a game on mp_cassino. Kept.
+- Left: a driver who moves to the gunner's seat for an enemy on foot
+  the jeep cannot run over, and a passenger who takes a free gun. Open.
 
 ## 11. CoD2's `sd`, `ctf` and `hq`
 
