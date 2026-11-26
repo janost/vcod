@@ -103,10 +103,10 @@ the cell walk's node tests on maps with many portal paths.
 ## 5. The soak
 
 `tools/cod2_soak.sh <outdir> [map...]` (`COD2_DIR`, the lavapipe env;
-`tools/cod4_soak.sh` with `GAME=cod2`) runs `play::cod2_soak::cod2_soak`,
+`tools/cod4_soak.sh` with `GAME=cod2`) runs `tools::cod2_soak::cod2_soak`,
 one map a process, every stock map without arguments. It is the CoD4 soak
 (`cod4-map-sweep.md`, "The soak") on the same harness
-(`play::cod4_sweep`: `Game`, `SoakServer`, `Player`, `Tally`).
+(`tools::cod4_sweep`: `Game`, `SoakServer`, `Player`, `Tally`).
 
 - Server: per map, vcod-server `--game cod2` loads it with six shooting
   bots and rotates through dm, tdm, sd, ctf and hq (dm again last) at

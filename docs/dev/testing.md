@@ -44,7 +44,7 @@ needs, and the soak, perf and off-LAN scripts stop on the first one missing
 | `COD_DIR` | CoD1 1.5 (`main/` with stock paks only: `--example stock_tree`, below) | `configstrings_15_ab`, `timeout_15_ab`, `legs_ab`'s 1.5 walks (the stop and go too), `turret_ab`'s 1.5 replay |
 | `COD_DIR` | UO (`uo/` beside 1.5's `main/`) | the UO tests and what reads only data 1.5 and UO share: `moves_ab`'s UO replays (sprint, mounts, cook), `configstrings_uo_ab`, `playerstate_uo_ab`, `playerstate_combat_ab`'s UO capture, `mount_uo_ab`, `uo_weapons_ab`, `legs_ab`'s UO walks, `turret_ab`'s UO replay |
 | `COD2_DIR` | CoD2 1.3 | the CoD2 tests, `cod2_map_census` |
-| `COD4_DIR` | CoD4 1.7 | the CoD4 tests, `cod4_live_*`, `cod4_map_sweep`, `cod4_soak` |
+| `COD4_DIR` | CoD4 1.7 | the CoD4 tests, `cod4_live_*`, the `cod4_map_sweep` and `cod4_soak` tools |
 
 `cargo run -p vcod-common --example stock_tree -- <install> <out>` links
 the stock-only tree the 1.5 and UO rows want: the paks `--vanilla` keeps,
@@ -241,11 +241,11 @@ ignored_tests_named` fails on one that is not.
 | CoD4 bots | `cargo test -p vcod-server --lib -- --ignored cod4::bots::` (`COD4_DIR`) | ~4 s |
 | CoD4 hit boxes per map | `--lib -- --ignored cod4_every_map_poses_both_teams` (`COD4_DIR`) | ~22 s |
 | CoD2 gametypes | `--lib -- --ignored cod2_gametype_census` (`COD2_DIR`) | ~18 s |
-| CoD2 play: level effects, model pipelines, view weapons, muzzle flash and brass | `cargo test -p vcod --lib -- --ignored play::cod2_soak::cod2_live_` (`COD2_DIR`, a Vulkan adapter) | each plays 16 ms frames for its seconds after the spawn, client and server on one `sim` clock (`tests::run_held`), with a 120 to 180 s deadline on it |
+| CoD2 play: level effects, model pipelines, view weapons, muzzle flash and brass | `cargo test -p vcod --lib -- --ignored play::cod2_soak::cod2_live_` (`COD2_DIR`, a Vulkan adapter) | each plays 16 ms frames for its seconds after the spawn, client and server on one `sim` clock (`harness::run_held`), with a 120 to 180 s deadline on it |
 | 1.5 stuck seed | `--lib -- --ignored the_15_overlap_spectator_seed_is_the_only_fit` | ~2 s |
 | shaders or render layouts | `cargo test -p vcod --lib -- renderer::pipeline_check` (not ignored: it skips without a Vulkan adapter; lavapipe env below) | |
 | CoD2 maps, CoD2 load path | `cod2_map_census`, `cod2_load_profile` | |
-| CoD4 maps, gametypes | `cod4_map_sweep` | 6-8 min and ~3 GB a map |
+| CoD4 maps, gametypes | `client_tools cod4_map_sweep` (below) | 6-8 min and ~3 GB a map |
 | the CoD4x join (`net::conn`'s 21 dialect, `net::reliable::Link`) | `COD4X_DEDRUN=<the release's cod4x18_dedrun> cargo test -p vcod --lib -- --ignored --exact play::cod4::tests::cod4x::cod4x_live_join_spawns_and_leaves` (`COD4_DIR`; `COD4X_OUT=<dir>` keeps the capture) | ~12 s past the build |
 | the CoD4x join's gamestate timeout (`conn::GAMESTATE_WAIT`) | the same with `--exact play::cod4::tests::cod4x::cod4x_live_withheld_gamestate_times_out` | ~22 s past the build |
 | CoD4x downloads (`net::download`'s `XDownloadMsg`, `XAsk`, `Downloads::on_side`) | the same with `--exact play::cod4::tests::cod4x::cod4x_live_download_fetches_the_mods_files` (a mod under `fs_game mods/vcodx`, www, side channel and op 7) | ~55 s past the build |
@@ -382,8 +382,8 @@ table, frames and per-map warnings to `tmp/cod2-map-census/`
 
 ## CoD4 map sweep
 
-`COD4_DIR=... cargo test -p vcod --lib -- --ignored cod4_map_sweep
---nocapture` runs every stock CoD4 map under war, dm, sd, sab, dom and koth.
+`COD4_DIR=... cargo run -p vcod --example client_tools -- cod4_map_sweep`
+runs every stock CoD4 map under war, dm, sd, sab, dom and koth.
 Per map: a vcod-server with six shooting bots rotating through the six
 gametypes (30 s limits) and one client playing it through `Cod4Client::pump`
 into a headless renderer (lavapipe env as for `pipeline_check`).
@@ -392,7 +392,7 @@ into a headless renderer (lavapipe env as for `pipeline_check`).
   rotate, client spawn, script errors, bot stalls, client and server
   warnings, panics) and the ranked errors.
 - Run one map a process (`VCOD_SWEEP_MAPS=<map>`, `VCOD_SWEEP_JOBS=1`) under
-  `taskset -c 0-7` with `LP_NUM_THREADS=1` (`play/cod4_sweep.rs` header).
+  `taskset -c 0-7` with `LP_NUM_THREADS=1` (`tools/cod4_sweep.rs` header).
 - Results: `cod4-map-sweep.md`.
 
 ## CoD4 live tests
@@ -456,8 +456,8 @@ the one missing.
 ### CoD4
 
 `tools/cod4_soak.sh <outdir> [map...]` (`COD4_DIR`, the lavapipe env; `WRAP`
-names a wrapper command, default `nice -n 10`) runs `cod4_soak` in
-`play/cod4_sweep.rs`.
+names a wrapper command, default `nice -n 10`) builds the `client_tools`
+example and runs its `cod4_soak` (`tools/cod4_sweep.rs`).
 
 - One map a process: war, dm, sd, koth and sab at 3 min limits.
 - The client plays as a player through `main`'s whole CoD4 frame, render and

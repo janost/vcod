@@ -10,15 +10,20 @@ publish = false
 build = "../version.rs"
 description = "Client and map viewer for Call of Duty 1.1 and 1.5, United Offensive, Call of Duty 2 and Call of Duty 4"
 
-# The client is a lib holding every module and a bin calling its `main`,
-# so tools under `examples/` reach the crate. Its unit tests run under
-# `--lib`; the bin has none.
+# The client is a lib holding every module and a bin calling its `main`.
+# Its unit tests run under `--lib`; the bin has none.
 [lib]
 doctest = false
 
 [[bin]]
 name = "vcod"
 test = false
+
+# `testing`: the live harness and the rigs the gates and the tools share,
+# and `vcod::tools`, which `examples/client_tools.rs` runs. On in every
+# test and example build through the dev-dependency on this crate.
+[features]
+testing = ["dep:vcod-server", "vcod-common/testing", "vcod-cod4/testing"]
 
 [dependencies]
 vcod-common.workspace = true
@@ -41,11 +46,10 @@ pollster.workspace = true
 symphonia.workspace = true
 winit.workspace = true
 wgpu.workspace = true
+vcod-server = { path = "../server", features = ["testing"], optional = true }
 
 [dev-dependencies]
-vcod-common = { workspace = true, features = ["testing"] }
-vcod-cod4 = { path = "../cod4", features = ["testing"] }
-vcod-server = { path = "../server", features = ["testing"] }
+vcod = { path = ".", features = ["testing"] }
 tempfile.workspace = true
 zip.workspace = true
 

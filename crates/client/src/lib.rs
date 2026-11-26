@@ -52,7 +52,7 @@ mod frame_prof;
 mod frontend;
 mod fx;
 mod gamma;
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 mod harness;
 mod head_icon;
 mod hud;
@@ -84,6 +84,8 @@ mod ssao;
 mod sun_flare;
 mod sun_shafts;
 mod texture_settings;
+#[cfg(all(feature = "testing", not(test)))]
+pub mod tools;
 mod turret;
 mod vehicle_probe;
 mod video;

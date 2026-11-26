@@ -51,8 +51,8 @@ logs into `soak.md`, one row per (map, gametype):
   line);
 - the resident set at the level's start and end.
 
-The CoD2 and CoD4 soaks (`play::cod2_soak`, `play::cod4_sweep`) run a
-session's `pump` in a test into a headless renderer. CoD1 has no such
+The CoD2 and CoD4 soaks (`tools::cod2_soak`, `tools::cod4_sweep`) run a
+session's `pump` in process into a headless renderer. CoD1 has no such
 pump: its frame is `lib.rs`'s `App`, menus, HUD and render included. So
 this soak drives the real binary and shares only the frame profile.
 

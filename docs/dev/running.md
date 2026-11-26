@@ -124,7 +124,7 @@ are its `KNOBS` table's.
 | `VCOD_LIVE_NET=1` | `master_list_live`, `lan_scan_live` | Lets the two ignored tests that contact a public master or the LAN run. |
 | `VCOD_C4_SHOTS=<dir>` | CoD4 live tests | Writes their frames ([testing.md](testing.md#cod4-live-tests)). |
 | `VCOD_C1_SHOTS=<dir>` | `cod1_renderer_builds_and_draws_without_validation_errors`, `cod1_chateau_window_draws_through_its_blend` | Writes their frames (`mp_carentan.tga`, `mp_chateau_window.tga`) as TGAs ([testing.md](testing.md#headless-render-pipeline_check)). |
-| `VCOD_SWEEP_MAPS`, `VCOD_SWEEP_GAMETYPES`, `VCOD_SWEEP_JOBS`, `VCOD_SWEEP_LEVEL_SECS`, `VCOD_SWEEP_OUT` | `cod4_map_sweep`, the soaks | Which maps and gametypes, how many at once, each level's length, the output directory (`play/cod4_sweep.rs`). |
+| `VCOD_SWEEP_MAPS`, `VCOD_SWEEP_GAMETYPES`, `VCOD_SWEEP_JOBS`, `VCOD_SWEEP_LEVEL_SECS`, `VCOD_SWEEP_OUT` | `client_tools`' `cod4_map_sweep` and the soaks | Which maps and gametypes, how many at once, each level's length, the output directory (`tools/cod4_sweep.rs`). |
 | `VCOD_SOAK_MINUTES`, `VCOD_SOAK_RENDER_HZ`, `VCOD_SOAK_TICK_LOG_MS`, `VCOD_SOAK_CLIENT_LOG_MS`, `VCOD_SOAK_TICK_WATCH` | CoD4 and CoD2 soaks | `tools/cod4_soak.sh`'s header. |
 | `VCOD_CENSUS_MAPS`, `VCOD_CENSUS_SECS`, `VCOD_CENSUS_OUT`, `VCOD_CENSUS_FRAMES=0` | `cod2_map_census` | Its maps, time a map, output directory; no headless frame (`play/cod2_census.rs`). |
 | `VCOD_CENSUS_VIEWS` | `renderer/cod4_draws_live.rs` | The views the joined-draws test holds byte for byte. |

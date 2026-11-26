@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # cod4_soak.sh <outdir> [map...]: the CoD4 client soak
-# (`play::cod4_sweep::cod4_soak`, docs/research/cod4-map-sweep.md), one
+# (`client_tools cod4_soak`, `tools::cod4_sweep::cod4_soak`,
+# docs/research/cod4-map-sweep.md), one
 # (PAIR=2: two) a process, every stock map without arguments. GAME=cod2
-# runs the CoD2 one instead (`play::cod2_soak`, tools/cod2_soak.sh). Each group's
+# runs the CoD2 one instead (`tools::cod2_soak`, tools/cod2_soak.sh). Each group's
 # `soak.md` and `warnings.txt` land in <outdir>/<map>[+<map>]/, its log
 # beside it; a group that fails (a panic, a kill) is listed at the end
 # and the next one runs.
@@ -14,7 +15,7 @@
 #   VCOD_SOAK_MINUTES, VCOD_SOAK_RENDER_HZ, VCOD_SWEEP_GAMETYPES,
 #   VCOD_SWEEP_LEVEL_SECS, VCOD_SOAK_TICK_LOG_MS, VCOD_SOAK_CLIENT_LOG_MS,
 #   VCOD_SOAK_TICK_WATCH
-#   pass through (the test's header says what they do)
+#   pass through (the tool's module doc says what they do)
 #   LVP_ICD       lavapipe's ICD json: sets VK_DRIVER_FILES and
 #                 WGPU_BACKEND=vulkan (or pass those two through)
 #   VK_DRIVER_FILES / WGPU_BACKEND pass through: the soak draws, so it
@@ -51,10 +52,11 @@ fi
 export LP_NUM_THREADS=${LP_NUM_THREADS:-4}
 read -r -a wrap <<<"${WRAP:-nice -n 10}"
 # One build, copied out, so the checkout can change under a long run.
-bin=$(cd "$here" && "${wrap[@]}" cargo test -p vcod --lib --no-run 2>&1 |
-  sed -n 's/.*Executable unittests src\/lib.rs (\(.*\))/\1/p' | tail -1)
+bin=$(cd "$here" && "${wrap[@]}" cargo build -p vcod --example client_tools \
+  --message-format=json-render-diagnostics |
+  sed -n 's/.*"executable":"\([^"]*client_tools\)".*/\1/p' | tail -1)
 [ -n "$bin" ] || { echo "soak: build failed" >&2; exit 1; }
-cp "$here/$bin" "$out/vcod-tests"
+cp "$bin" "$out/client_tools"
 # One map a process; PAIR=2 runs two (`VCOD_SWEEP_JOBS`, at most 2).
 per=${PAIR:-1}
 failed=()
@@ -64,8 +66,8 @@ while [ $i -lt ${#maps[@]} ]; do
   i=$((i + per))
   echo "soak: $group" >&2
   if ! (cd "$here/crates/client" && VCOD_SWEEP_MAPS=$group VCOD_SWEEP_JOBS=$per \
-      VCOD_SWEEP_OUT="$out/${group//,/+}" "${wrap[@]}" taskset -c 0-7 "$out/vcod-tests" \
-      --ignored "${GAME}_soak" --nocapture --test-threads=1) >"$out/${group//,/+}.log" 2>&1; then
+      VCOD_SWEEP_OUT="$out/${group//,/+}" "${wrap[@]}" taskset -c 0-7 "$out/client_tools" \
+      "${GAME}_soak") >"$out/${group//,/+}.log" 2>&1; then
     failed+=("$group")
   fi
 done
