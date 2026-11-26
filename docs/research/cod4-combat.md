@@ -187,6 +187,49 @@ INFERRED) runs when a reload's `weaponDelay` runs out.
   (0x80624e4..0x806255d, 0x806260a..0x806265d). VERIFIED (the
   instructions). vcod: `pmove::weapon::reload_delay_out`.
 
+### 2.3 The hip spread's step
+
+`PM_AdjustAimSpreadScale` is `cod4_lnxded` 0x8060688 (`pm`, `pml`;
+`ps.aimSpreadScale` at ps+0x628). INFERRED (the name). Its arithmetic,
+VERIFIED (the instructions 0x8060688..0x80609dc):
+
+- The rate is the def's `hipSpreadDecayRate` (+0x468); 0 drops the scale
+  by 255 (-255 at 0x820e268). On the ground (`groundEntityNum` not 0x3ff,
+  or `pm_type` 1) a prone body (`eFlags` 8) multiplies it by
+  `hipSpreadProneDecay` (+0x47c), a crouched one (4) by
+  `hipSpreadDuckedDecay` (+0x478); in the air it halves (0.5 at
+  0x8209628). The product stays on the stack.
+- Not under the override: `rate * frametime` is stored as a float
+  (0x8060715..0x8060718) before it is taken 255 times off the scale.
+- The growth, unless `fWeaponPosFrac` is 1: for pitch then yaw, the cmd's
+  and the old cmd's angle ints (pm+0xc, +0x2c; +0x10, +0x30) times
+  360/65536 (0x820deb0), their difference times the float 1/360
+  (0x8209630), less `floor` of it plus 0.5 under round-down (stored as a
+  double, then a float), times 360, `fabs`, stored as a float. The yaw's
+  turns are stored as a float (0x80608c4) before the subtraction, the
+  pitch's stay on the stack. Each turn times 0.01 (0x8209644), times
+  `hipSpreadTurnAdd` (+0x470), over `frametime`. A move key down
+  (pm+0x1a, both bytes) with `hipSpreadMoveAdd` (+0x474) set adds it times
+  `fsqrt` of `vx^2 + vy^2` on the stack over `ps.speed` (`fidivl`), when
+  that sum passes the dvar at 0x827afbc squared. The air adds 1.28
+  (0x820e26c) twice. Times `frametime`, when above 0 it opens the scale
+  by 255 times it; else the decay above runs.
+- The override (`spreadOverrideState` 1, ps+0x100) divides the decay by
+  the override's place in the stance's min..max, both kept, and clears
+  the state once the scale times that place falls under 255, storing
+  that product. The clamp to 0..255 comes last.
+
+vcod: `pmove::weapon::adjust_aim_spread` on `x87::F80`. It had kept each
+sum in a double, the stance's rate stored as a float, the flat speed
+squared stored and its root a float's, which put the swaying target's
+`aimSpreadScale` one or two ulps off retail's on eleven snapshots of
+`cod4_trace_read_ab`; ported, it matches every snapshot. VERIFIED (the
+gate). Every weapon the capture gates fire has `hipSpreadTurnAdd` 0,
+so the turn's arm rests on the instructions alone, and that the cmd's
+angle ints run 0..65535, not signed shorts, is INFERRED (the wire's 16
+bits read unsigned). The override arm runs on doubles; no capture holds
+it.
+
 ## 3. The shot
 
 INFERRED: `ClientEvents` after each cmd reads its events; a fire event
@@ -1001,8 +1044,8 @@ prone and killcam runs. VERIFIED (the gates).
   prints each living player's `j_head` and, the frame after each
   `weapon_fired`, the shooter's `tag_weapon_right` and its angles, in
   tenths. The reads also find each goal weight the last end frame set a
-  step on (cod4-player-anims.md 3). Ours matches every frame but 2.
-  VERIFIED (the gate). The strafe's eight rows were the torso's share of
+  step on (cod4-player-anims.md 3). Ours matches every frame. VERIFIED
+  (the gate). The strafe's eight rows were the torso's share of
   the move, 0 on 1.7 (`player_move_factor_on_torso`), which closed three
   of the five tenth rows too, and the spawn's four the spawn's own end
   frame swinging the angles once more (cod4-player-anims.md 8). VERIFIED
@@ -1015,10 +1058,20 @@ prone and killcam runs. VERIFIED (the gates).
   0x80a484d and the tag read's return 0x80c0053) replayed on ours then
   matched 932 of 940 `j_head` origins and 906 axes word for word, where
   the quaternion had matched 918 origins and no axis; the rest sit a few
-  ulps off where the skeleton is. VERIFIED (gdb, ours). The
-  gate's `GAPS` hold the other two tenth rows (48350, 49850, the target's
-  head under 0.1 units off), which fit those ulps across the truncation.
-  INFERRED. Open.
+  ulps off where the skeleton is. VERIFIED (gdb, ours). The gate's last
+  two tenth rows (48350, 49850) were not ulps: a second gdb run of the
+  recipe (breaks at 0x804cf90, 0x80a484d, `BG_SwingAngles` 0x804b3ba and
+  its five returns, 0x80cc7f6 and 0x80c0053;
+  `tools/re/cod4_tagread_gdb.py`), replayed on ours, read the
+  target's `j_head` 0.049 and 0.034 units off on the frame the strafe
+  started and the frame the back-off started, and every other frame
+  within 4e-6. On each, retail's legs had swung a frame before ours: the
+  updater read the `MOVETYPE` the frame's cmds wrote, ours the one the
+  last end frame wrote (cod4-player-anims.md 8.1). VERIFIED (gdb, ours).
+  With that, ours matches the run's swings on 706 of 716 frames and the
+  target's eased controls on every frame; the 10 are the two spawns'
+  frames, whose joins under gdb ours does not replay exactly (the
+  shooter's spawn rows differ too). VERIFIED (gdb, ours).
 - `LaunchItem` (0x80910ec): angles (0, the body's yaw plus the offset,
   0); `G_Spawn`; `eType` 3, `index` the item, mins -1 and maxs 1 on every
   axis (0x809141b..0x8091453), +0x120 0x407c0108, `clientNum` the dropper;

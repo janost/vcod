@@ -4090,6 +4090,41 @@ in its queue when the session ends.
   rule only). VERIFIED (the test). vcod lists the host's interfaces where
   retail resolves its hostname (`lan.rs`). INFERRED (the code).
 
+#### 18.4.2 The states the gate reads
+
+- **The stores.** The state word 0x609fe0 takes 5 at `connectResponse`
+  (0x40ec51, with -9999 into 0x609fec beside it, 0x40ec61), at
+  `loadingnewmap` (0x40f18f: the string 0x5a362c compared at 0x40f0e0,
+  the server's base address at 0x40f151, two lines read, 0x412160
+  called) and when a download starts (0x40e04b, and 0x40e0ac after
+  `Need iwds: %s` 0x5a38c8). 0x40dc25's last arm stores 6 (0x40dd02);
+  its arm with 0x966ff0 set queues `donedl` (0x5a3a1c at 0x40dcb7) when
+  0x966dac is clear, clears the byte 0x966eb0 (0x40dcca) and returns
+  without a store. 0x402c87 stores 6 and 0x402cae 7 around the call at
+  0x402c98; 0x402ede stores 8 unless bit 2 of 0x96b66c is set (0x402ec0).
+  VERIFIED (the instructions and the strings). That these are
+  `CL_DownloadsComplete`, `CL_InitCGame` and `CL_FirstSnapshot`, the
+  last behind `SNAPFLAG_NOT_ACTIVE`, is INFERRED (the stores and the
+  CoD4 1.7 shape, cod4-netfields.md 14.3).
+- **The cmds.** 0x408bb0 makes a cmd only from state 7 (`cmp eax,0x7`
+  and `jl` at 0x408bb8..0x408bbb), adding 1 to 0x9d0c2c. Each of the
+  three send paths calls it and then 0x408c10 (0x4092b0, 0x4092e0 from
+  state 5 but not in 8, 0x409320 in 8). VERIFIED (the instructions).
+- So from `connectResponse` to the gamestate, after `loadingnewmap` until
+  the next one, and after `donedl` the client makes no cmd and sends once
+  a second; while a file downloads, 50 ms apart; from 7 on, by the LAN
+  test and `cl_maxpackets` (18.4.1). INFERRED (the stores and the gate
+  above, the download byte's set read without addresses).
+- vcod: `Cod2Session::packet_wait` takes 50 ms while `downloads` holds a
+  list, a second until `settled` (a gamestate in, no download running or
+  owed, no `loadingnewmap` since), then 0 on the LAN and `PACKET_MS` off
+  it; cmds are made only when settled with the `cp` queued. Test:
+  `the_packet_gap_follows_the_connection_state`. VERIFIED (the test).
+  vcod departs: its `PACKET_MS` holds `cl_maxpackets` at 30, a packet
+  with no new cmd still repeats the last one, and while the map loads on
+  `Cod2Session::pump` (the `cp` owed) packets keep the settled pace where
+  retail loads inside one frame. INFERRED (the code).
+
 ### 18.5 The snapshots a frame draws between
 
 The cgame keeps two snapshot buffers, `cg` +0x28 and +0x12de8, with `cg.snap`

@@ -15,14 +15,6 @@ ones are kept at the end for the causes they name.
 
 By how much a player notices.
 
-- `cod4_tag_read_ab`'s 2 `GAPS` frames, the target's head a tenth off
-  across the truncation, which fit the skeleton's few ulps off retail's
-  in a gdb run (cod4-combat.md 6.1); `cod4_trace_read_ab`'s 11, the
-  swaying target's `aimSpreadScale` an ulp off (cod4-gsc.md 3.3).
-  The strafe's rows hit traces on a strafing body too. Unread: the legs'
-  swing and the controls' ease on a strafe under gdb (cod4-combat.md
-  6.1).
-
 - The use key's weapon swap against its capture
   (`cod4_use_key_swap_ab`, `#[ignore]`d): 1.7 rings `EV_ITEM_PICKUP` with
   the new weapon, reads `weapon` 0 on the pickup frame and leaves the old
@@ -282,6 +274,12 @@ and `bravo` (a spectator); the console commands went over rcon, then
   a prone body's legs lie along the view; the spawn swings the angles
   twice; a tag read places the bone through 1.7's `AnglesToAxis` on the
   x87 stack (cod4-player-anims.md 8, cod4-combat.md 6.1).
+- The end frame's swing reads the `MOVETYPE` the frame's cmds wrote, so a
+  strafe's legs start their swing on retail's frame; `cod4_tag_read_ab`'s
+  last two `GAPS` frames, the head 0.05 off on a strafe's start and a
+  back-off's (cod4-player-anims.md 8.1). The hip spread steps on the x87
+  stack, `cod4_trace_read_ab`'s eleven `aimSpreadScale` rows
+  (cod4-combat.md 2.3).
 - A script's `bulletTrace` meets a player as its capsule where its last
   cmd linked it, under 1.7's capsule dispatch, and poses no body
   (`cod4_trace_read_ab`, cod4-gsc.md 3.3).
