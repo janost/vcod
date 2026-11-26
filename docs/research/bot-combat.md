@@ -319,8 +319,8 @@ mp_depot, kills : deaths of the two easy bots a match summed):
   way): an easy bot that is hit first mostly dies in the fight anyway
   (78% of its wounds dead in 5 s). Not kept. VERIFIED (the table).
 - Kept: `Skill::fire_pause`, (4, 8) at level 0, none at the others,
-  which draw nothing for it, so a server at levels 1 to 3 plays as
-  before. How it plays against a human is a hand check.
+  which draw no random number for it, so the rule moves no bot at levels
+  1 to 3. How it plays against a human is a hand check.
 
 ## 4. Cover and lean
 
