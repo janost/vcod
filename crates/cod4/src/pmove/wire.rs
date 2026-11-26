@@ -383,9 +383,12 @@ pub fn player_entity(slot: usize, ps: &delta::PlayerState) -> delta::EntityState
     let origin = ix!(3 "origin");
     let angles = ix!(3 "viewangles");
     let (pos, apos) = (ex!(3 "lerp.pos.trBase"), ex!(3 "lerp.apos.trBase"));
+    // `cvttss2si` and `fild` (0x80529fc..0x8052a4e): a fraction under 0
+    // snaps to +0, not `trunc`'s -0.
+    let snap = |v: f32| (v as i32 as f32).to_bits();
     for i in 0..3 {
-        put(pos[i], float(ps, origin[i]).trunc().to_bits());
-        put(apos[i], float(ps, angles[i]).trunc().to_bits());
+        put(pos[i], snap(float(ps, origin[i])));
+        put(apos[i], snap(float(ps, angles[i])));
     }
     put(ex!("lerp.u.player.leanf"), word(ps, ix!("leanf")));
     let (torso, waist) = prone_pitches(ps);
@@ -519,6 +522,20 @@ mod tests {
         set_named(&mut ps, "viewHeightLerpDown", 1);
         let e = player_entity(3, &ps);
         assert_eq!(ent_f32(&e, "fTorsoPitch"), 5.0);
+    }
+
+    /// A view just under 0 snaps to +0, which the -100 field sends as a
+    /// clear zero bit; -0 would go out as the smallest float (the swap and
+    /// SAW captures' bodies, cod4-gsc.md 9.1.1).
+    #[test]
+    fn a_view_just_under_zero_snaps_to_plus_zero() {
+        let mut ps = delta::PlayerState::default();
+        set_named(&mut ps, "viewangles[0]", (-0.3f32).to_bits());
+        set_named(&mut ps, "origin[0]", (-0.5f32).to_bits());
+        let e = player_entity(3, &ps);
+        assert_eq!(ent_f32(&e, "lerp.apos.trBase[0]").to_bits(), 0);
+        assert_eq!(ent_f32(&e, "lerp.pos.trBase[0]").to_bits(), 0);
+        assert_eq!(ent_f32(&e.sent(), "lerp.apos.trBase[0]").to_bits(), 0);
     }
 
     /// Others see the held weapon's camo: `weaponModel` is

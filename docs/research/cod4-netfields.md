@@ -1040,9 +1040,9 @@ What the 1.7 client sends from `CA_CONNECTED` to the world, read off
   stats loop (a look each 10 ms), one packet by 0x46ae60's pick; a
   `statResponse` is read in 6 only; `send` writes nothing in 6. A
   gamestate puts it in 7, where `ready_to_send` says no as in 6;
-  `Cod4Session::step` calls `Conn::cgame_up` first, which in 7 goes to 8
-  and sends the three packets, and the window loads the level between the
-  step that reads a gamestate and the next. That step drops its due
+  `Cod4Session::step` calls `Conn::cgame_up` first, which in 7 goes to 8,
+  queues the `cp` and sends the three packets (14.3.1), and the window
+  loads the level between the step that reads a gamestate and the next. That step drops its due
   packet and cmds; cmds are made only from 8 (`live_frame`).
   `loadingnewmap` and `requeststats` are ignored while
   `Conn::set_downloading` holds; the join's download loop sets it while a
@@ -1067,11 +1067,47 @@ What the 1.7 client sends from `CA_CONNECTED` to the world, read off
   after the gamestate. The server sent `requeststats` twice, where the
   cycle run's probe, which sent its stats in a burst and kept moving,
   drew nine (cod4-map-cycle.md 1). VERIFIED live.
-- vcod departs: the `cp` goes in the first packet after any gamestate,
-  queued at the gamestate; 1.7 queues it once the cgame is up, so it
-  sends none on a gamestate whose files it then downloads. A look every
-  10 ms stands in for a frame, and the join's stats wait 15 s at most.
-  INFERRED (the code).
+- vcod departs: a look every 10 ms stands in for a frame, and the join's
+  stats wait 15 s at most. INFERRED (the code).
+
+#### 14.3.1 The `cp` at the cgame's start
+
+- **Where 1.7 queues it.** `CL_DownloadsComplete` (0x46a8d0) has three
+  arms: with 0x8f4ccc set it clears it, calls 0x4696b0 and returns
+  (0x46a8d9..0x46a938); with 0xc5b698 set (a file was fetched, 14.3) it
+  queues `donedl` and returns in state 5 (0x46a939..0x46a9a7); else it
+  loads the level and calls `CL_SendPureChecksums` (0x46a0f0 at 0x46aae0)
+  after `CL_InitCGame`, with no test of the checksum feed between
+  (0x46a9a8..0x46aae0). VERIFIED (the instructions). So each gamestate
+  that reaches the third arm queues its own `cp`, the one `donedl` brings
+  included, and a gamestate whose files `CL_InitDownloads` starts to
+  fetch (0x46ad95, 14.3) queues none. VERIFIED (the instructions above).
+- vcod: `Conn::cgame_up` queues the `cp` (`send_pure_checksums`) before
+  its three packets, only in state 7; a gamestate only clears `cl` and
+  puts the connection in 7 (`new_gamestate`). The join's download loop
+  holds 5 while a file is in flight, so that gamestate's `cgame_up` does
+  nothing; the gamestate after `donedl` (or CoD4x's `XAsk::Done`) is
+  answered at the session's first step. Test:
+  `a_gamestate_whose_files_download_sends_no_cp`. VERIFIED (the test).
+  The two CoD4x live gates (`cod4x_live_join_spawns_and_leaves`,
+  `cod4x_live_download_fetches_the_mods_files`, cod4x-protocol.md 18.5)
+  pass with it. VERIFIED live.
+- **The headless probe.** `--net-probe` runs the window's order each
+  16 ms step: `take_map_change` (`App::cod4_level`), then
+  `Cod4Session::step`, then `Cod4Session::scene`, which sends the due
+  packet. It had sent a packet due on one step after reading the next
+  step's messages, and never took the map change, so the level's state
+  (cmd clock, cmds, prediction) carried over the gamestate. Live against
+  `cod4_lnxded` on loopback (`tools/cod4x_capture.sh`, `rcon map
+  mp_backlot` 12 s into the join): no packet between `loadingnewmap` and
+  the first stats packet 582 ms later (the last move had gone 16 ms
+  before it); 16-byte packets a second apart until the gamestate; three
+  178-byte packets in one millisecond after its last fragment, a fourth
+  with a move beside them, then a packet each step, all but five of the
+  1173 in the run's last 19 s with a move. VERIFIED live. Those five, 330 ms after the
+  gamestate, carried no cmd: the step's cmd time was not past the last
+  cmd's. That it is the clock's slew after the new level's first
+  snapshot is INFERRED (not traced).
 
 ### 14.4 A snapshot off a base the client no longer holds
 

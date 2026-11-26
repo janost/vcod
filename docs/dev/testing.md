@@ -248,7 +248,9 @@ ignored_tests_named` fails on one that is not.
 | CoD4 maps, gametypes | `cod4_map_sweep` | 6-8 min and ~3 GB a map |
 | the CoD4x join (`net::conn`'s 21 dialect, `net::reliable::Link`) | `COD4X_DEDRUN=<the release's cod4x18_dedrun> cargo test -p vcod --bins -- --ignored --exact play::cod4::tests::cod4x::cod4x_live_join_spawns_and_leaves` (`COD4_DIR`; `COD4X_OUT=<dir>` keeps the capture) | ~12 s past the build |
 | the CoD4x join's gamestate timeout (`conn::GAMESTATE_WAIT`) | the same with `--exact play::cod4::tests::cod4x::cod4x_live_withheld_gamestate_times_out` | ~22 s past the build |
-| CoD4x downloads (`net::download`'s `XDownloadMsg`, `XAsk`, `Downloads::on_side`) | the same with `--exact play::cod4::tests::cod4x::cod4x_live_download_fetches_the_mods_files` (a mod under `fs_game mods/vcodx`, www and side channel) | ~45 s past the build |
+| CoD4x downloads (`net::download`'s `XDownloadMsg`, `XAsk`, `Downloads::on_side`) | the same with `--exact play::cod4::tests::cod4x::cod4x_live_download_fetches_the_mods_files` (a mod under `fs_game mods/vcodx`, www, side channel and op 7) | ~55 s past the build |
+| a CoD4x download refusal (`sv_allowDownload 0`) | the same with `--exact play::cod4::tests::cod4x::cod4x_live_download_refused_ends_the_join` | ~10 s past the build |
+| CoD4x `sv_wwwDlDisconnected` (the reconnects on one qport) | the same with `--exact play::cod4::tests::cod4x::cod4x_live_www_disconnected_reconnects` | ~20 s past the build |
 
 `nav_census` builds every stock nav graph (at UO, the 19-map UO census).
 `server/tests/bots.rs` and `bot_vehicles.rs` hold one map scenario a test,

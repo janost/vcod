@@ -747,10 +747,33 @@ fn tally(lines: &[Line], ours: &[Sample]) -> Tally {
         })
         .collect();
     let mut t = Tally::default();
+    let da = |ps: &PlayerState| {
+        ["delta_angles[0]", "delta_angles[1]", "delta_angles[2]"].map(|n| ps.field_i32(p, n))
+    };
     for (k, (r, o)) in snaps.iter().zip(ours).enumerate() {
         for (name, kind) in PS_FIELDS {
             let i = PlayerState::field_index(p, name).unwrap();
             t.check(k, name, r.wire.get(*name).copied(), o.ps.fields[i], *kind);
+        }
+        // `delta_angles` ride each side's own cmd angles, so only their step
+        // between snapshots compares: a seat change's `SetClientViewAngle`
+        // and a clamp's push (coduo-vehicles.md 11.3).
+        if k > 0 {
+            let (r0, o0) = (snaps[k - 1].delta_angles(), da(&ours[k - 1].ps));
+            let (r1, o1) = (r.delta_angles(), da(&o.ps));
+            for (i, name) in ["delta_angles step[0]", "delta_angles step[1]"]
+                .into_iter()
+                .enumerate()
+            {
+                let step = |a: i32, b: i32| (b - a) & 0xffff;
+                t.check(
+                    k,
+                    name,
+                    Some(step(r0[i], r1[i])),
+                    step(o0[i], o1[i]),
+                    Kind::Int,
+                );
+            }
         }
         if let (Some(rv), Some(ov)) = (&r.veh, &o.veh) {
             for (name, kind) in VEH_FIELDS {

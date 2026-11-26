@@ -6,7 +6,7 @@
 //! `PROBE` lines and every `ITEM`/`ITEM_GONE` line the `--probe-items`
 //! client printed.
 //!
-//! Two gates per patch:
+//! Three gates per patch:
 //!
 //! - every flight retail sent is replayed through our `G_RunItem` from the
 //!   trajectory retail put on the wire, on the map's own collision: each
@@ -14,14 +14,16 @@
 //!   the hundredth, and the landing on the same frame, at the same x and y,
 //!   at most the patch's random lift above our sweep's end, aligned to the
 //!   same angles and on the same ground;
-//! - the probe runs on our server with a client holding its view the way the
-//!   probe client did, and its items are held to retail's frame by frame,
-//!   timed from `PROBE start`: what the client sees and when it sees it.
-//!   Ours takes the `rand()` draws retail's climbs and spins read back to
-//!   (`Server::pin_item_draws`) and each landing's lift off retail's rest,
-//!   so every launch's climb and spin is retail's to the bit (to the printed
-//!   thousandth on 1.1d's older fixture) and each drop lands on retail's
-//!   frame.
+//! - the probe runs on our server, the player spawned on the capture's
+//!   frame and sent its cmds on their logged times, and its items are held
+//!   to retail's frame by frame, timed from `PROBE start`: what the client
+//!   sees and when it sees it. Ours takes the `rand()` draws retail's
+//!   climbs and spins read back to (`Server::pin_item_draws`) and each
+//!   landing's lift off retail's rest, so every launch's climb and spin is
+//!   retail's to the bit and each drop lands on retail's frame;
+//! - `client-probes/probe_respawnsign` the same way: six returns of a colt
+//!   with `random` 4, each on retail's frame off the draw its delay reads
+//!   back to, inside the patch's `crandom()` range (items doc 14.3).
 //!
 //! `ITEM_REPORT=1` prints both sides' item lines.
 //!
@@ -38,34 +40,46 @@ use std::time::{Duration, Instant};
 
 use glam::Vec3;
 use vcod_common::net::flags::ET_ITEM;
-use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
+use vcod_common::net::msg::NULL_USERCMD;
 use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::net::trajectory::{TR_GRAVITY, TR_LINEAR, TR_STATIONARY, Trajectory};
 use vcod_server::game::item::{LAUNCH_CLIPMASK, RUN_CLIPMASK, Ran, bounds, run_flight};
 
 const MAP: &str = "mp_carentan";
-const PROBE_PATH: &str = "maps/mp/gametypes/probe_itemdrop";
-const PROBE_SRC: &str = "../gsc/tests/fixtures/semantics/client-probes/probe_itemdrop.gsc";
+/// A `client-probes/` gametype as ours runs it: its name, source and the
+/// `+set`s of its recipe.
+struct Recipe {
+    gametype: &'static str,
+    src: &'static str,
+    cvars: &'static [(&'static str, &'static str)],
+}
+
+const ITEMDROP: Recipe = Recipe {
+    gametype: "probe_itemdrop",
+    src: "../gsc/tests/fixtures/semantics/client-probes/probe_itemdrop.gsc",
+    cvars: &[],
+};
+const RESPAWNSIGN: Recipe = Recipe {
+    gametype: "probe_respawnsign",
+    src: "../gsc/tests/fixtures/semantics/client-probes/probe_respawnsign.gsc",
+    cvars: &[("g_weaponrespawn", "20")],
+};
+/// `probe_respawnsign`'s `g_weaponrespawn` and its colt's `random`.
+const RESPAWN_BASE: i32 = 20;
+const RESPAWN_RANDOM: f64 = 4.0;
 const FRAME_MS: i32 = 50;
-/// Where the two sides' start positions may differ in a capture without
-/// the probe client's `CMDS` lines: a player resting a fifth of a unit off
-/// retail's (items doc 13.4). A capture with them replays its cmds and
-/// holds every position to the print.
-const START_TOL: f32 = 0.5;
-/// Where a drop may start off retail's, against the dropper's origin, in a
-/// capture without `CMDS` lines: the tag sways with the idle animation,
-/// which runs from the spawn on both sides once the client joins after the
-/// probe's watcher wakes; ours reads 0.13 at worst (items doc 14). With
-/// them the spawn is retail's frame and the sway retail's to the print.
-const TAG_TOL: f32 = 0.2;
-/// [`START_TOL`] and [`TAG_TOL`] in a capture with `CMDS` lines: the drops'
-/// launch points sit up to 0.00026 off retail's floats, every printed
-/// position on retail's (items doc 14.1).
-const REPLAYED_TOL: f32 = 0.0005;
-/// How long after a client connects ours spawns him, with the server run
-/// alone for `common::PROBE_JOIN_MS` before: a capture's `SPAWNED` time
-/// less this is how much longer ours runs alone.
+/// Where the two sides' positions and a drop's start against its dropper
+/// may differ, with ours spawned on the capture's frame and sent its cmds:
+/// the drops' launch points sit up to 0.00026 off retail's floats, every
+/// other printed position on retail's (items doc 14.1).
+const TOL: f32 = 0.0005;
+/// How long after a client connects ours first guesses it spawns him, with
+/// the server run alone for `common::PROBE_JOIN_MS` before; [`run_ours`]
+/// reruns with the guess corrected by its spawn's miss.
 const SPAWNED_MS: i64 = 1000;
+/// The probe's printed hundredth as a float at a map coordinate's scale:
+/// two positions a fraction of it apart can print a step apart.
+const PRINT_STEP: f32 = 0.0101;
 /// Angles the same surface aligns to.
 const ANGLE_TOL: f32 = 0.05;
 /// The drops, whose climb, spin and so landing frame are random draws.
@@ -77,29 +91,34 @@ const SPIN: [f64; 3] = [50.0, 40.0, 60.0];
 /// One patch's capture and the draws its module makes.
 struct Patch {
     fixture: &'static str,
+    /// The patch's `probe_respawnsign` capture.
+    respawn: &'static str,
     proto: &'static Cod1Wire,
     /// `crandom()`'s sign: 1.1d's reads `2 * rand() * -2^-31 - 1`, (-3, -1];
     /// 1.5b's and UO's `2 * rand() / 2^31 - 1`, [-1, 1) (items doc 14.2).
     negative: bool,
-    /// How far apart two printings of one float may be: 1.1d's fixture
-    /// printed the thousandth, the later ones the float itself.
+    /// How far apart two printings of one float may be: 0 where the
+    /// fixture printed the float itself.
     printed: f32,
 }
 
 const V1: Patch = Patch {
     fixture: "tests/fixtures/items/mp_carentan-dm-itemdrop.txt",
+    respawn: "tests/fixtures/items/mp_carentan-dm-respawnsign.txt",
     proto: &PROTOCOL_V1,
     negative: true,
-    printed: 0.0005,
+    printed: 0.0,
 };
 const V15: Patch = Patch {
     fixture: "tests/fixtures/items/mp_carentan-dm-itemdrop-15.txt",
+    respawn: "tests/fixtures/items/mp_carentan-dm-respawnsign-15.txt",
     proto: &PROTOCOL_V6,
     negative: false,
     printed: 0.0,
 };
 const UO: Patch = Patch {
     fixture: "tests/fixtures/items/mp_carentan-dm-itemdrop-uo.txt",
+    respawn: "tests/fixtures/items/mp_carentan-dm-respawnsign-uo.txt",
     proto: &PROTOCOL_V22,
     negative: false,
     printed: 0.0,
@@ -250,7 +269,7 @@ impl Run {
         let start = probe
             .iter()
             .find_map(|l| l.strip_prefix("PROBE start "))
-            .and_then(|t| t.trim().parse().ok())
+            .and_then(|t| t.split_whitespace().next()?.parse().ok())
             .expect("a PROBE start line");
         let mut tags = BTreeMap::new();
         for l in &probe {
@@ -288,8 +307,7 @@ impl Run {
     }
 }
 
-fn retail(patch: &Patch) -> Run {
-    let path = patch.fixture;
+fn retail(path: &str) -> Run {
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
     let probe = text
         .lines()
@@ -340,7 +358,7 @@ fn flights_land(patch: &Patch) {
     let Some(fs) = patch.fs() else {
         return;
     };
-    let retail = retail(patch);
+    let retail = retail(patch.fixture);
     let world = world(&fs, patch.proto);
     let (lift_lo, lift_hi) = patch.lift();
     let mut rows = Vec::new();
@@ -513,112 +531,155 @@ fn retail_lifts(patch: &Patch, retail: &Run) -> vcod_server::game::host::ItemLif
         let floor = Vec3::from(floor);
         rests
             .iter()
-            .filter(|r| (r.truncate() - floor.truncate()).abs().max_element() <= START_TOL)
+            .filter(|r| (r.truncate() - floor.truncate()).abs().max_element() <= TOL)
             .map(|r| r.z - floor.z)
             .find(|l| (lo - 0.01..=hi + 0.01).contains(l))
             .map_or((lo + hi) * 0.5, |l| l.clamp(lo, hi))
     })
 }
 
-/// Our server under the probe, with a client sending the probe client's
-/// cadence and a zero view, until `PROBE done`.
-fn run_ours(patch: &Patch, fs: vcod_common::pk3::Pk3Fs, retail: &Run) -> Run {
-    let probe = std::fs::read_to_string(PROBE_SRC).expect("read the probe");
-    let world = world(&fs, patch.proto);
+/// The `rand()` values `probe_respawnsign`'s respawns read back to, one
+/// per take: each return comes `RESPAWN_BASE + (int)(RESPAWN_RANDOM *
+/// crandom())` seconds after the frame before the one it left the snapshot
+/// on, its first line after that, and the draw is the middle of the range
+/// that truncates to it.
+fn respawn_draws(patch: &Patch, retail: &Run) -> Vec<i32> {
+    let lines = retail.of("colt");
+    let mut draws = Vec::new();
+    for (k, l) in lines.iter().enumerate() {
+        let Line::Gone { t, .. } = l else {
+            continue;
+        };
+        let Some(back) = lines[k..].iter().find_map(|l| match l {
+            Line::Item(i) => Some(i.t),
+            Line::Gone { .. } => None,
+        }) else {
+            continue;
+        };
+        let secs = (back - (t - FRAME_MS)) / 1000;
+        let m = f64::from(secs - RESPAWN_BASE);
+        let v = (m + 0.5 * m.signum()) / RESPAWN_RANDOM;
+        assert!(
+            patch.in_range(v as f32, 1.0),
+            "{}: a return {secs} s after its take, outside the patch's crandom",
+            patch.respawn
+        );
+        draws.push(patch.draw_for(v as f32, 1.0));
+    }
+    draws
+}
+
+/// Our server under `recipe`, on `fixture`'s clock, until `PROBE done`:
+/// ours spawns the player when retail did (the probe client's `SPAWNED`
+/// line) and sends every cmd on the times its `CMDS` lines logged with a
+/// zero view, so each teleport's fall and the idle animation the drops'
+/// tag reads are retail's. Every item draw takes `draws` first, and every
+/// landing retail's lift.
+fn run_ours(
+    patch: &Patch,
+    recipe: &Recipe,
+    fixture: &str,
+    fs: vcod_common::pk3::Pk3Fs,
+    retail: &Run,
+    draws: &[i32],
+) -> Run {
+    let text = std::fs::read_to_string(fixture).expect("the capture");
+    let spawned = text
+        .lines()
+        .find_map(|l| {
+            l.strip_prefix("SPAWNED t=")?
+                .split_whitespace()
+                .next()?
+                .parse::<i32>()
+                .ok()
+        })
+        .expect("the capture's SPAWNED line");
+    let fs = Rc::new(fs);
+    // Ours' connect-to-spawn delay is its own handshake's, so the first run
+    // measures it and the second lands on retail's frame.
+    let mut late_ms = i64::from(spawned) - common::PROBE_JOIN_MS - SPAWNED_MS;
+    let run = |late_ms| run_ours_late(patch, recipe, &fs, retail, draws, &text, late_ms);
+    let (_, first) = run(late_ms);
+    late_ms += i64::from(spawned - first.expect("ours spawns"));
+    let (run, at) = run(late_ms);
+    assert_eq!(at, Some(spawned), "ours spawns on retail's SPAWNED frame");
+    run
+}
+
+/// [`run_ours`] with the server run alone `late_ms` longer before the
+/// client connects, and the time of ours' first spawned snapshot.
+fn run_ours_late(
+    patch: &Patch,
+    recipe: &Recipe,
+    fs: &Rc<vcod_common::pk3::Pk3Fs>,
+    retail: &Run,
+    draws: &[i32],
+    text: &str,
+    late_ms: i64,
+) -> (Run, Option<i32>) {
+    let probe = std::fs::read_to_string(recipe.src).expect("read the probe");
+    let world = world(fs, patch.proto);
     let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "probe_itemdrop"), now);
+    let mut sv = vcod_server::Server::new(common::cfg(MAP, recipe.gametype), now);
     sv.set_protocol(patch.proto);
-    sv.overlay_script(PROBE_PATH, &probe);
+    for (k, v) in recipe.cvars {
+        sv.set_cvar(k, v);
+    }
+    sv.overlay_script(&format!("maps/mp/gametypes/{}", recipe.gametype), &probe);
     sv.load_world(world);
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
-    // A capture with the probe client's `SPAWNED` and `CMDS` lines runs on
-    // its clock: ours spawns the player when retail did, and every cmd goes
-    // out on the times the lines logged, so each teleport's fall and the
-    // idle animation the drops' tag reads are retail's.
-    let text = std::fs::read_to_string(patch.fixture).expect("the capture");
-    let spawned = text.lines().find_map(|l| {
-        l.strip_prefix("SPAWNED t=")?
-            .split_whitespace()
-            .next()?
-            .parse::<i64>()
-            .ok()
-    });
-    let late_ms = spawned.map_or(0, |t| t - common::PROBE_JOIN_MS - SPAWNED_MS);
+    sv.load_scripts(fs.clone()).expect("load the scripts");
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS + late_ms);
     let q = Rc::new(RefCell::new(common::Queues::default()));
     let mut hold = common::ProbeHold {
         framed: true,
         base: Some([0.0; 3]),
-        times: common::cmds_times(&text, ""),
-        ran: common::cmds_ran(&text, ""),
+        times: common::cmds_times(text, ""),
+        ran: common::cmds_ran(text, ""),
         ..Default::default()
     };
-    let (mut cl, mut join) = match spawned {
-        Some(_) => (
-            common::connect(&mut sv, &q, &mut now),
-            Some(common::Join::new("allies", "m1carbine_mp")),
-        ),
-        None => (
-            common::join(&mut sv, &q, &mut now, "allies", "m1carbine_mp").0,
-            None,
-        ),
-    };
-    sv.pin_item_draws(retail_draws(patch, retail));
+    let mut cl = common::connect(&mut sv, &q, &mut now);
+    let mut join = common::Join::new("allies", "m1carbine_mp");
+    sv.pin_item_draws(draws.to_vec());
     sv.test_item_lifts(retail_lifts(patch, retail));
     let p = patch.proto;
-    let carbine = vcod_server::defs::Defs::of(p)
-        .weapon_index("m1carbine_mp")
-        .unwrap() as u8;
-    let mut raised = false;
     let mut last: BTreeMap<u32, Item> = BTreeMap::new();
     let mut lines = Vec::new();
     let mut seen_time = i32::MIN;
-    for _ in 0..1600 {
+    let mut first_spawned = None;
+    for _ in 0..4000 {
         // Every cmd carries the weapon the playerstate holds, as the probe
         // client's do; a 0 would read as a holster and pose another torso.
-        // The join's null cmds holstered the spawn's carbine, so it is
-        // asked for again until the playerstate holds it.
         let held = cl
             .snapshots()
             .newest()
             .map_or(0, |s| s.ps.field_i32(p, "weapon") as u8);
-        raised |= held == carbine;
-        let weapon = if raised { held } else { carbine };
-        if join.is_some() {
-            now += Duration::from_millis(common::FRAME_MS as u64);
-            cl.pump_at(now);
-            let mut cmds = match cl.state() {
-                vcod_common::net::NetState::Active => hold.cmds(&cl, 0),
-                _ => Vec::new(),
-            };
-            if cmds.is_empty()
-                && let Some(c) = cl.send_frame(&NULL_USERCMD)
-            {
-                hold.last = c.server_time;
-            }
-            for c in &mut cmds {
-                c.weapon = held;
-            }
-            cl.send_cmds(&cmds);
+        now += Duration::from_millis(common::FRAME_MS as u64);
+        cl.pump_at(now);
+        let mut cmds = match cl.state() {
+            vcod_common::net::NetState::Active => hold.cmds(&cl, 0),
+            _ => Vec::new(),
+        };
+        if cmds.is_empty()
+            && let Some(c) = cl.send_frame(&NULL_USERCMD)
+        {
+            hold.last = c.server_time;
         }
-        for ms in [16, 17, 17].into_iter().filter(|_| join.is_none()) {
-            now += Duration::from_millis(ms);
-            cl.pump_at(now);
-            cl.send_frame(&UserCmd {
-                weapon,
-                ..NULL_USERCMD
-            });
+        for c in &mut cmds {
+            c.weapon = held;
         }
+        cl.send_cmds(&cmds);
         for e in common::step(&mut sv, &q, &mut cl, now) {
-            if let (vcod_common::net::NetEvent::ServerCommand(tokens), Some(j)) = (e, join.as_mut())
-            {
-                j.on_server_command(&tokens, &mut cl, now);
+            if let vcod_common::net::NetEvent::ServerCommand(tokens) = e {
+                join.on_server_command(&tokens, &mut cl, now);
             }
         }
         if let Some(s) = cl.snapshots().newest()
             && s.server_time != Msec::from_raw(seen_time)
         {
             seen_time = s.server_time.raw();
+            if s.ps.field_i32(p, "pm_type") == 0 {
+                first_spawned.get_or_insert(seen_time);
+            }
             let mut here = BTreeMap::new();
             for (&num, e) in &s.entities {
                 if e.field_i32(p, "eType") != ET_ITEM {
@@ -665,7 +726,7 @@ fn run_ours(patch: &Patch, fs: vcod_common::pk3::Pk3Fs, retail: &Run) -> Run {
         .filter(|l| l.starts_with("PROBE "))
         .map(|l| l.trim_end().to_string())
         .collect();
-    Run::new(probe, lines)
+    (Run::new(probe, lines), first_spawned)
 }
 
 fn vec3(s: &str) -> Vec3 {
@@ -720,17 +781,46 @@ fn probe_runs(patch: &Patch) {
     let Some(fs) = patch.fs() else {
         return;
     };
-    let retail = retail(patch);
-    let ours = run_ours(patch, fs, &retail);
-    let mut rows = Vec::new();
-    let replayed = std::fs::read_to_string(patch.fixture)
-        .expect("the capture")
-        .lines()
-        .any(|l| l.starts_with("CMDS "));
-    let (tag_tol, start_tol) = match replayed {
-        true => (REPLAYED_TOL, REPLAYED_TOL),
-        false => (TAG_TOL, START_TOL),
+    let retail = retail(patch.fixture);
+    let draws = retail_draws(patch, &retail);
+    let ours = run_ours(patch, &ITEMDROP, patch.fixture, fs, &retail, &draws);
+    compare_runs(patch, &retail, &ours);
+}
+
+#[test]
+fn a_respawn_draws_like_retail() {
+    respawns(&V1);
+}
+
+#[test]
+fn a_respawn_draws_like_retail_15() {
+    respawns(&V15);
+}
+
+#[test]
+fn a_respawn_draws_like_retail_uo() {
+    respawns(&UO);
+}
+
+/// `probe_respawnsign`: six takes of a colt whose `random` 4 spreads each
+/// return over 8 s, every return on retail's frame with the draws read
+/// back off them, each inside the patch's `crandom()` range (items doc
+/// 14.3).
+fn respawns(patch: &Patch) {
+    let Some(fs) = patch.fs() else {
+        return;
     };
+    let retail = retail(patch.respawn);
+    let draws = respawn_draws(patch, &retail);
+    assert_eq!(draws.len(), 6, "{}: six returns", patch.respawn);
+    let ours = run_ours(patch, &RESPAWNSIGN, patch.respawn, fs, &retail, &draws);
+    compare_runs(patch, &retail, &ours);
+}
+
+/// Both runs' probe lines and each tag's item lines, timed from each
+/// side's `PROBE start`.
+fn compare_runs(patch: &Patch, retail: &Run, ours: &Run) {
+    let mut rows = Vec::new();
 
     let r: Vec<_> = retail
         .probe
@@ -760,7 +850,7 @@ fn probe_runs(patch: &Patch) {
             // The start against the dropper: the tag's sway, the player's
             // rest aside (items doc 14.1).
             let (ra, oa) = (rv[2] - rv[0], ov[2] - ov[0]);
-            if (ra - oa).abs().max_element() > tag_tol {
+            if (ra - oa).abs().max_element() > TOL {
                 rows.push(format!(
                     "{rw}: retail starts {ra} off the player, ours {oa}"
                 ));
@@ -768,8 +858,8 @@ fn probe_runs(patch: &Patch) {
             start_off.insert(w[2], (rv[2] - ov[2]).abs().max_element());
         }
         let tol = match start_off.get(w[2]) {
-            Some(off) if matches!(w[1], "at" | "rest") => 0.01 + 1.5 * off,
-            _ => start_tol,
+            Some(off) if matches!(w[1], "at" | "rest") => PRINT_STEP + 1.5 * off,
+            _ => TOL,
         };
         for (a, b) in rv.iter().zip(ov) {
             if (*a - *b).abs().max_element() > tol {
@@ -786,16 +876,7 @@ fn probe_runs(patch: &Patch) {
             eprintln!("{tag} ours:");
             o.iter().for_each(|l| eprintln!("  {l:?}"));
         }
-        compare_item(
-            patch,
-            tag,
-            &r,
-            retail.start,
-            &o,
-            ours.start,
-            start_tol,
-            &mut rows,
-        );
+        compare_item(patch, tag, &r, retail.start, &o, ours.start, &mut rows);
     }
     assert!(rows.is_empty(), "{}", rows.join("\n"));
 }
@@ -808,7 +889,6 @@ fn compare_item(
     rs: i32,
     o: &[Line],
     os: i32,
-    start_tol: f32,
     rows: &mut Vec<String>,
 ) {
     let kind = |l: &Line| match l {
@@ -888,7 +968,7 @@ fn compare_item(
         let tol = match start_off {
             Some(off) if a.pos.tr_type == TR_STATIONARY => 0.01 + 1.5 * off,
             _ if a.pos.tr_type == TR_STATIONARY => 0.01,
-            _ => start_tol,
+            _ => TOL,
         };
         let off = (a.pos.base - b.pos.base).abs().max_element();
         if report() && a.pos.tr_type == TR_STATIONARY {

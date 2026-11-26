@@ -12,7 +12,7 @@
 use std::collections::BTreeMap;
 
 use glam::Vec3;
-use vcod_cod4::net::delta::{ENTITYNUM_NONE, EntityState};
+use vcod_cod4::net::delta::{ENTITYNUM_NONE, EntityState, PlayerState as PlayerState4};
 use vcod_cod4::pmove::{self, ef, pmf};
 use vcod_gsc::{EntId, Value};
 
@@ -54,11 +54,14 @@ fn angle_delta_kept(a: f32, b: f32) -> f64 {
     (t - (t + 0.5).floor()) * 360.0
 }
 
-/// `AngleDelta` stored, as the aim's clamp reads it.
-fn angle_delta(a: f32, b: f32) -> f32 {
-    let t = ((f64::from(a) - f64::from(b)) as f32 as f64 * INV_360) as f32;
-    let fl = (f64::from(t) + 0.5).floor() as f32;
-    ((f64::from(t) - f64::from(fl)) * 360.0) as f32
+/// `turret_clientaim`'s inlined `AngleDelta` (`cod4_lnxded`
+/// 0x80b7aed..0x80b7b3c): the view less the gun's angle, its turns and
+/// their fraction all on the x87 stack, only the floor stored; the clamp
+/// reads the unstored result.
+fn angle_delta(a: f32, b: f32) -> f64 {
+    let t = (f64::from(a) - f64::from(b)) * INV_360;
+    let fl = (t + 0.5).floor() as f32;
+    (t - f64::from(fl)) * 360.0
 }
 
 /// `turret_use`'s `AngleNormalize360` of the clamp's base: the turns'
@@ -88,9 +91,9 @@ impl Arc {
     /// (the capture's yaw 45 for a view 70 past, cod4-gsc.md 9.2).
     fn pin(self, look: f32, rest: f32) -> f32 {
         match angle_delta(look, rest) {
-            off if off >= self.high => self.high.max(self.low),
-            off if off <= self.low => self.low,
-            off => off,
+            off if off >= f64::from(self.high) => self.high.max(self.low),
+            off if off <= f64::from(self.low) => self.low,
+            off => off as f32,
         }
     }
 
@@ -109,6 +112,34 @@ impl Arc {
 fn barrel_for(rec: &TurretRecord, view: [f32; 3], gun: [f32; 3]) -> [f32; 3] {
     let [pitch, yaw] = Arc::pair(rec);
     [pitch.pin(view[0], gun[0]), yaw.pin(view[1], gun[1]), 0.0]
+}
+
+/// A gun's own `BG_PlayerStateToEntityState` of its gunner: `pos` and
+/// `apos` both `TR_INTERPOLATE`, the box packed off `box_flags`'s stance
+/// where it is not the playerstate's.
+fn body_entity(slot: usize, ps: &PlayerState4, box_flags: Option<u32>) -> EntityState {
+    let mut e = vcod_cod4::pmove::wire::player_entity(slot, ps);
+    set_field(&mut e, "lerp.pos.trType", 1);
+    if let Some(flags) = box_flags {
+        let mut boxed = ps.clone();
+        boxed.set(ps!("pm_flags"), flags);
+        let solid = super::level::ent_u32(
+            &vcod_cod4::pmove::wire::player_entity(slot, &boxed),
+            "solid",
+        );
+        set_field(&mut e, "solid", solid);
+    }
+    e
+}
+
+/// Entity field `name` of `e`'s type.
+fn set_field(e: &mut EntityState, name: &str, v: u32) {
+    if let Some(f) = EntityState::table(e.etype())
+        .iter()
+        .find(|f| f.name == name)
+    {
+        e.0[f.word()] = v;
+    }
 }
 
 /// A playerstate vector field `name[0..3]` as floats.
@@ -456,6 +487,9 @@ impl Cod4Level {
             for k in 0..3 {
                 p.ps.setf(ps!(3 "origin")[k], at[k]);
             }
+            // The body rebuilt off the placed playerstate, interpolated
+            // (0x80b863b).
+            p.turret_entity = Some(body_entity(slot, &p.ps, None));
         }
         self.rt.set_client_origin(slot, at.to_array());
     }
@@ -531,6 +565,7 @@ impl Cod4Level {
         p.turret_active = 0;
         p.trigger_down = false;
 
+        let linked_box = p.ps.word(ps!("pm_flags"));
         let mut body = pmove::PlayerState::from_wire(&p.ps);
         if let Some((bit, height, event)) = stance.map(stance_restore) {
             body.pm_flags = (body.pm_flags & !(pmf::PRONE | pmf::DUCKED)) | bit;
@@ -539,12 +574,18 @@ impl Cod4Level {
         }
         body.write_wire(&mut p.ps);
 
-        let flags = (p.ps.word(ps!("eFlags")) ^ 2) & !ef::TURRET;
+        let flags = p.ps.word(ps!("eFlags")) ^ 2;
         p.ps.set(ps!("eFlags"), flags);
         let to = [spot[0], spot[1], spot[2] + 1.0];
         let yaw = ps_vec(&p.ps, ps!(3 "viewangles"))[1];
         let cmd = p.cmd;
         super::level::place_player(&mut p.ps, to, [0.0, yaw, 0.0], Some(&cmd));
+        // The body rebuilt still on the gun (0x80b7815), its box the last
+        // link's, then its `otherEntityNum` cleared (0x80b794e).
+        let mut e = body_entity(slot, &p.ps, Some(linked_box));
+        set_field(&mut e, "otherEntityNum", 0);
+        p.turret_entity = Some(e);
+        p.ps.set(ps!("eFlags"), flags & !ef::TURRET);
         lock_view(&mut p.ps, 0, ENTITYNUM_NONE);
         self.rt.set_client_origin(slot, to);
     }
@@ -663,7 +704,7 @@ mod tests {
 
     /// The capture's crouch SAW at yaw 0 with arcs 45 either side and
     /// -15..30 of pitch: the view clamp's yaw range 45 at base 360 and its
-    /// pitch range 22.5 at base 7.4999995 (`play-1.7-saw.txt`, VERIFIED
+    /// pitch range 22.5 at base 7.4999995 (`play-1.7-saw-gunner.txt`, VERIFIED
     /// live).
     #[test]
     fn the_mount_centres_the_view_clamp_on_the_arcs_as_1_7_rounds_it() {

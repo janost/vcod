@@ -383,38 +383,44 @@ impl Loadout {
         *clip = (*clip).min(d.clip_size);
     }
 
+    /// What `w`'s ammo slot may keep without `w` (0x805f538 with `w`
+    /// left out): its shared cap, a clip-only weapon's clip size, else the
+    /// other held users' `maxAmmo` summed (the first shared cap met ends
+    /// it), 0 for none.
+    pub fn kept_without(&self, t: &Cod4Weapons, w: usize) -> i32 {
+        let Some(d) = t.get(w) else { return 0 };
+        match (d.shared_ammo_cap, d.clip_only) {
+            (Some(cap), _) => cap,
+            (None, true) => d.clip_size,
+            (None, false) => {
+                let mut sum = 0;
+                for j in (0..t.defs.len()).filter(|&j| j != w && self.has(j)) {
+                    let Some(o) = t.get(j).filter(|o| o.ammo_slot == d.ammo_slot) else {
+                        continue;
+                    };
+                    if let Some(cap) = o.shared_ammo_cap {
+                        return cap;
+                    }
+                    sum += o.max_ammo;
+                }
+                sum
+            }
+        }
+    }
+
     /// `BG_TakePlayerWeapon(ps, w, 1)` (`cod4_lnxded` 0x806206c), as
     /// `takeWeapon`, `takeAllWeapons` and `Drop_Weapon` call it: nothing
-    /// unless `w` is held; else its bit, its clip, its reserve down to what
-    /// the weapons left can keep (its shared cap, a clip-only weapon's clip
-    /// size, else the other held users' `maxAmmo` summed, none for none,
-    /// 0x8062145..0x8062246), then each held alt down the chain with its
-    /// ammo and clip (0x806224b), and the current weapon when it was `w`.
-    /// The offhand goes with it here too.
+    /// unless `w` is held; else its bit, its clip, its reserve down to
+    /// [`Self::kept_without`] (none for 0, 0x8062145..0x8062246), then each
+    /// held alt down the chain with its ammo and clip (0x806224b), and the
+    /// current weapon when it was `w`. The offhand goes with it here too.
     pub fn take(&mut self, t: &Cod4Weapons, w: usize) {
         if !self.has(w) {
             return;
         }
+        let keep = self.kept_without(t, w);
         set_bit(&mut self.weapons, w, false);
         if let Some(d) = t.get(w) {
-            let keep = match (d.shared_ammo_cap, d.clip_only) {
-                (Some(cap), _) => cap,
-                (None, true) => d.clip_size,
-                (None, false) => {
-                    let mut sum = 0;
-                    for j in (0..t.defs.len()).filter(|&j| j != w && self.has(j)) {
-                        let Some(o) = t.get(j).filter(|o| o.ammo_slot == d.ammo_slot) else {
-                            continue;
-                        };
-                        if let Some(cap) = o.shared_ammo_cap {
-                            sum = cap;
-                            break;
-                        }
-                        sum += o.max_ammo;
-                    }
-                    sum
-                }
-            };
             let ammo = &mut self.ammo[d.ammo_slot];
             *ammo = if keep != 0 { keep.min(*ammo) } else { 0 };
             self.ammoclip[d.clip_slot] = 0;

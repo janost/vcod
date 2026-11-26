@@ -1128,8 +1128,9 @@ checks keys and both arms. VERIFIED (the test).
   (`--script sway --aim-z 150`), and every frame three `bulletTrace`s
   from the idle shooter's eye run past the target's origin at 64, 56 and
   44 up, printing the entity, the point in tenths and the normal in
-  thousandths. Ours matches every print. VERIFIED (the gate). Its `GAPS`
-  hold eleven frames of the target's `aimSpreadScale` an ulp off. Open.
+  thousandths. Ours matches every print and every playerstate word,
+  the target's `aimSpreadScale` with 1.7's spread step on the x87 stack
+  (cod4-combat.md 2.3); its `GAPS` are empty. VERIFIED (the gate).
 
 vcod, INFERRED (the code):
 
@@ -2552,12 +2553,7 @@ bot-objectives.md 12).
   the weapon dropped in its place: `_weapons.gsc`'s `watchPickup` waits
   for `"trigger", player, droppedItem` and reads a missing `droppedItem`
   as an ammo pickup. VERIFIED (the stock script).
-- vcod's swap (`swap_weapon`): with two primaries held and the item a
-  primary, the weapon in hand goes into the world with its clip and
-  reserve as `dropItem` launches one; the item's weapon is given with the
-  item's clip and reserve and switched to (`a <weapon>`); the item is
-  freed the next entity pass. INFERRED (vcod's CoD2 swap rule; 1.7's
-  `Touch_Item` is unread).
+- vcod's swap (`swap_weapon`) is 1.7's `Touch_Item` arm, 9.1.2.
 - Missiles and turrets are on the list (9.2, 9.3). A `trigger_use`'s
   `requireLookAt` is left out (`useTriggerRequireLookAt` has no handler).
   A dropped weapon's middle is its rest point, not its bounds' middle.
@@ -2578,15 +2574,129 @@ bot-objectives.md 12).
   runs it on a live mp_crash level: a bot's gun dropped through the stock
   `dropWeaponForDeath`, taken by another player holding use over it.
 
+#### 9.1.1 The swap capture
+
+`play-1.7-swap-target.txt` and `-shooter.txt` (mp_crash, war): the
+shooter (`cod4_probe --script swap --weapon 27`) kills the target
+(`--class specops_mp,0`), walks to the MP5 he dropped and holds use while
+the hint is up. VERIFIED live, in the frame of the pickup (44400):
+
+- the taker's playerstate rings `EV_ITEM_PICKUP` (9) with the new weapon
+  (16) as its parm, `weapon` reads 0 that frame and the `a 16` server
+  command selects the new one;
+- the M16 given up is item 321 lying at rest where the taken MP5 lay
+  (203 2310 237, `groundEntityNum` 1022, yaw 124 and roll 90), not
+  launched from the taker;
+- the hint then names it: weapon 27 plus 4 (31) on entity 321.
+
+`cod4::capture_ab::cod4_use_key_swap_ab` replays the pair and matches
+every playerstate word and entity but its `GAPS`. VERIFIED (the gate).
+Before 9.1.2's port it failed on about 6000 rows. What else it took:
+
+- The two probes' sends of the frame ending at 43700 tie to the ms on
+  the target's clock (both 7819), and retail ran the shooter's first: the
+  target's 43700 snapshot is dead with a dead pmove run on it
+  (`viewHeightTarget` 8, the death anim's timers 50 down, no knockback
+  `pm_time`). VERIFIED (the capture). The harness's `Pair::ties` names
+  that order; with the target first ours kills after its cmds and the
+  corpse, the dropped MP5 and the M16 left in its place all lie a unit
+  off.
+- `BG_PlayerStateToEntityState` snaps the body's origin and angles with
+  `cvttss2si` and `fild` (0x80529fc..0x8052a4e), so a view a fraction under
+  0 goes out +0, a clear zero bit. VERIFIED (the instructions). Rust's
+  `trunc` kept -0, which the -100 field sent as the smallest float: the
+  shooter's pitch after the pickup, and the SAW gate's let go (9.2.1).
+- The shooter's spawn point (-850 2204 254.125) has angles 0 270 0
+  (VERIFIED, its fields on ours' loaded level); the capture's view reads
+  -90. With the spawn pinned at -90 the body's first two frames
+  went out a degree off retail's; the pin takes the spot's own angles on
+  CoD4 (`pinned_spot`).
+- Left in `GAPS`: the target's killcam from 46600 (the shooter's 43400
+  on, `deltaTime` 3200). Retail's frames there carry the shooter's
+  `delta_angles` and, from 47650, its yaw as its own snapshots coded them
+  once (`delta_angles[1]` 0xc1ed8640, yaw 0xc2b3fd30); ours codes the
+  archive twice, a short nearer zero (0xc1ed7b00, 0xc2b3fa60), as retail's
+  own killcam frames 45700..46550 read. VERIFIED (the capture). What makes
+  retail's archive read once there is unread (cod4-server-gaps.md 1).
+
+#### 9.1.2 `Touch_Item`'s use-key arm
+
+`Touch_Item` is `cod4_lnxded` 0x8091ffc (`ent`, `other`, `touched`); the
+touch callback at 0x8092a44 sets the item's byte +0x16c and jumps in.
+`Player_UseEntity` reaches it with `touched` 0. Port:
+`game::cod4::use_key` (`swap_weapon`, `drop_for_swap`, `place_swapped`).
+VERIFIED (the instructions) where no label says otherwise:
+
+- It returns at once unless the byte +0x16c is set (cleared on entry), the
+  toucher has a client (+0x15c) and health (+0x1a0) above 0, and the word
+  at 0x836f6e0 is 0 (0x8092008..0x8092043).
+- The grab test 0x805301e failing takes nothing; with `touched` 0 a
+  dropper's own item stays silent, else the toucher is told
+  `GAME_CANT_GET_PRIMARY_WEAP_MESSAGE` (weapon not held) or 0x8215db4's
+  line (0x8092079..0x8092110).
+- A missile (`eType` 4, a live frag) rings 10 and frees (0x8092666, 9.3).
+  Otherwise the item's flag 0x1000000 (+0x180) is set for the take
+  (0x809227c) and cleared after it (0x8092350, 0x8092427); `LaunchItem`
+  never frees an item holding it.
+- A weapon whose `inventoryType` (+0x13c) is not 0 is given on the item's
+  camo (`index >> 7`, 0x80a327c at 0x8092415).
+- A primary: with `ps.weapon` (+0xe8, read at 0x80922c2) set but not
+  held, nothing is taken. With fewer than two primaries held (0x806120e
+  counts held weapons of `inventoryType` 0; called at 0x80922f3) it is
+  given. Otherwise the weapon in hand, or an alt mode's (`inventoryType`
+  3) `altWeapon` (+0x540), must be a held primary, else the toucher is
+  told `GAME_CANT_GET_PRIMARY_WEAP_MESSAGE` and nothing is taken
+  (0x8092314).
+- That gun goes through `Drop_Weapon(ent, gun, weaponmodels[gun], 0)`
+  (0x8091642, called at 0x8092768): `LaunchItem` (0x80910ec) spawns it
+  with no tag, its three `crandom`s drawn; its `ammoCount` (+0x1b4) is the
+  reserve less what the ammo slot keeps without it (0x805f538), floored at
+  0, `clipAmmoCount` (+0x1b8) the clip, the alt's into the second slot
+  (+0x1c0..); then `BG_TakePlayerWeapon(ps, gun, 1)` (0x806206c), which
+  zeroes `ps.weapon` when it was the gun: the pickup frame's `weapon` 0.
+- The drop takes the item's +0x17c less bit 1 and its `groundEntityNum`
+  (+0x7c) (0x809277b..0x8092796). With the item unlinked (+0x218 empty)
+  the drop's box (±1) is traced from the item's `r.currentOrigin`
+  (+0x13c) to 2 (0x820964c) above it, passing the drop's owner less one
+  (1023 for none) with the item's `clipmask` (+0x190, 0x491 for 0); unless
+  that trace is all solid (+0x28, INFERRED `allsolid`) a second goes back
+  down to the origin, each end `(end - start) * fraction + start` on the
+  x87 stack and stored; `G_SetOrigin` (0x80ca218) at the last end,
+  `G_SetAngle` (0x80ca276) to the item's `r.currentAngles` (+0x148), and
+  linked (0x809285b..0x8092a2a). A linked item's drop is linked to its tag
+  instead (0x80cba78 at 0x809280b); vcod's items are never linked.
+- The item's weapon is given on its camo (0x8092836). Each item slot
+  with a weapon writes its clip into `ammoclip` when not negative and
+  `Add_Ammo`s (0x8091af0) its count, filling the clip for a clip of -1
+  (0x8092438..0x80925be). The drop's count then goes through 0x8091d44
+  with no event (0x80925eb): only a held weapon on its ammo slot takes any
+  back, out of the drop.
+- `trigger` on the item with the player and the drop, or undefined for
+  none (0x80925f0..0x8092622, 0x80926d8); `a <weapon>` (0x80a2148) unless
+  the weapon's `weapType` (+0x12c) is 1 and it has an `offhandClass`
+  (0x8092627..0x809265c).
+- `EV_ITEM_PICKUP` (9) with the item's weapon (`index & 0x7f`) on the
+  toucher, `G_AddPredictableEvent` (0x80ca0d2) or 0x80ca454 by the
+  client's +0x2fd4 (0x809236c..0x80923d9); the item freed (0x80cc040 at
+  0x80923a3). The taker's `cursorHintEntIndex` reads 1023 from the
+  pickup frame on, where ours had kept the freed item's number. VERIFIED
+  live.
+
+vcod leaves out the drop's alt slot (an item carries one clip and
+stock), the tag link, the `offhandClass` 2 and 3 test on `ps+0xe4`
+(0x8052526) and the select's offhand exception: no use-key item reaches
+them.
+
 ### 9.2 Mounted SAWs
 
-VERIFIED live (capture not kept): every VERIFIED in this section without
-a gate or an address rests on one retail run, `cod4_probe --script saw`
-behind mp_backlot's crouch SAW 393 (`devmap mp_backlot`, war,
-`setviewpos -770 68 320 0`, `--face 0`), whose `play-1.7-saw.txt` was
-never committed, so no A/B gate replays it (cod4-server-gaps.md, Open).
-Live gate: the client's
-`cod4_live_saw_mounts_fires_clamps_and_lets_go`. Port: `game::cod4::turret`
+VERIFIED live: every VERIFIED in this section without a gate or an
+address rests on a retail run of `cod4_probe --script saw` behind
+mp_backlot's crouch SAW 393 (`devmap mp_backlot`, war, `setviewpos -770
+68 320 0`, `--face 0`). The first run's capture was not kept; the second,
+under `sv_clientSideBullets` 0 with a watcher behind the gunner, is
+`play-1.7-saw-gunner.txt` and `-watcher.txt`, which
+`cod4::capture_ab::cod4_mounted_saw_ab` replays (9.2.1). Live gate: the
+client's `cod4_live_saw_mounts_fires_clamps_and_lets_go`. Port: `game::cod4::turret`
 over the shared `TurretRecord`. Names and order are INFERRED where no
 label says otherwise.
 
@@ -2673,6 +2783,49 @@ label says otherwise.
   (`play::cod4_players::GunInfo`, the gun's `animHorRotateInc` at
   `WeaponDef` +2004), keeping the wire's height. The first-person eye on a
   gun is `tag_player` (`cod4_client::turret_eye`).
+
+#### 9.2.1 The A/B
+
+`cod4_mounted_saw_ab` replays both probes of the second run on ours and
+matches every playerstate word and every entity but its `GAPS`. VERIFIED
+(the gate). What it took:
+
+- `PmoveSingle`'s gunner arm ends in 0x8060d8e (called at 0x805c2df):
+  `weapFlags` 2 and `pm_flags` 0x200 cleared, both weapon clocks 0,
+  state ready and, under `pm_type` 7, the idle anim restarted. The capture's
+  gunner `weapAnim` reads 0x200 and 0 by turns every manned frame, one
+  flip a cmd. VERIFIED (the instructions, the gate). `PM_Weapon`
+  (0x8062e1c) returns at once on `eFlags` 0x300. VERIFIED (the
+  instructions). The arm's 0x8061a3c, between the duck and the
+  footsteps, zeroes `fWeaponPosFrac` and `adsDelayTime` on a gun; vcod
+  leaves it out (the capture never sights). INFERRED.
+- `G_PlayerTurretPositionAndBlend` rebuilds the gunner's entity off the
+  placed playerstate (`BG_PlayerStateToEntityState` at 0x80b863b, after
+  the point trace on either branch), so a placed gunner goes out with
+  `pos.trType` 1, not the end frame's 3 (0x80a6db3). VERIFIED (the
+  instructions, the watcher's rows).
+- The release rebuilds the entity inside 0x80b778a (0x80b7815), after the
+  stance, the spot a unit up, the teleport flip and `SetClientViewAngle`
+  but before 0x80b791d clears 0x300, then zeroes its `otherEntityNum`
+  (0x80b794e): the watcher reads `eFlags` 0x204, `trType` 1 and the
+  crouched box (`solid` 0x52010f, the last link's) on the release frame.
+  VERIFIED (the instructions, the capture).
+- `turret_clientaim`'s `AngleDelta` (0x80b7aed..0x80b7b3c) subtracts the
+  gun's angle from the view on the x87 stack, stores only the floor and
+  clamps the unstored fraction. VERIFIED (the instructions). vcod's
+  doubles cut the barrel's rows from 104 to 76. VERIFIED (the gate).
+- Still differing, the gate's `GAPS`: the barrel's angles 1 to 5 ulps off
+  where the view is still near 0 or walking home, and the unmanned gun's
+  roll residuals (4.8e-8) where ours reads 0, with the gunner's origin an
+  ulp off where the body hangs off them; and the watcher's spawn. The
+  gunner's yaw after the let go went out as the smallest float (ours -0,
+  retail +0) until the body's snap read as 1.7's (9.1.1). The last: the watcher's spectator view read 94
+  and its spot's yaw is 0 (mp_backlot's `mp_tdm_spawn` at -670 -2176 88,
+  angles 0 2.5e-6 0, VERIFIED, the zone's entity string). Retail's spawn
+  frame shows `viewangles` 94, `delta_angles` 94 and the body's yaw 0 for
+  two frames (VERIFIED live), so the snapshot's view is not the spot's,
+  and the harness's spawn pin (off the snapshot's view) puts ours at 94.
+  How the spawn frame keeps 94 is unread. INFERRED.
 
 ### 9.3 The live grenade's throw back
 

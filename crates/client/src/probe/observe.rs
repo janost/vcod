@@ -492,7 +492,8 @@ impl CompassProbe {
 /// first appears in or changes in, and an `ITEM_GONE` line when it leaves:
 /// the flight a `dropItem` launches, the landing, and a respawn's return
 /// with its `EV_ITEM_RESPAWN`. Trajectories are `trType,trTime,base,delta`,
-/// floats to three decimals. `client-probes/probe_itemdrop` makes the items.
+/// shortest round-trip floats. `client-probes/probe_itemdrop` and
+/// `probe_respawnsign` make the items.
 /// Writes no fixture.
 #[derive(Default)]
 pub(super) struct ItemsProbe {

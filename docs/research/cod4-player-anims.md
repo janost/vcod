@@ -463,6 +463,31 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   13 to the side it leans to. VERIFIED (the test). That the bend looks
   right is pending a human's look.
 
+### 8.1 The movetype the swing reads
+
+- `BG_PlayerAngles` (0x804c636) reads the `MOVETYPE` condition at
+  `ci+0x470` ahead of its swings for a body off a turret (`eFlags & 0x300`
+  clear, 0x804c68d, into 0x804cb4a): `& 0xc0000` swings all three, `& 6`
+  clear (a body not idle) sets the legs and torso swinging
+  (0x804cb4d..0x804cb6b). VERIFIED (the instructions). Further on, the
+  same function writes the legs record's 64-bit movetype mask (+0x54,
+  +0x58) there when it differs (0x804ca1f..0x804ca65). VERIFIED (the
+  instructions). That write comes after the swings. INFERRED (the
+  layout).
+- pmove's anim script writes the condition at each cmd, ahead of the
+  frame's end, as on CoD2 (cod2-player-anims.md 5): in a gdb run of the
+  tag read recipe the target's `ci+0x470` read 2 at the 40300 controller
+  run and 0x800 at the 40350 one, a tag read before that frame's end
+  frame, and the 40350 end frame's three swings entered with their flags
+  set, so the legs' swing to the strafe's heading began there. VERIFIED
+  (gdb). vcod's end frame had read the last end frame's write and swung
+  the legs a frame later, the head 0.05 units off retail's on the frame
+  the strafe started and the one the back-off started. VERIFIED (gdb,
+  `cod4_tag_read_ab`). The server writes the condition off the end
+  frame's legs record ahead of the step (`PlayerBody::script_movetype`,
+  as CoD2's), which stands in for the cmd's bit. INFERRED (the
+  stand-in's limits are CoD2's).
+
 ## 9. A corpse's models and its death anim
 
 - `CG_ResetEntity` runs for an entity new to the snapshot or whose

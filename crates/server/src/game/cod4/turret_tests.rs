@@ -242,11 +242,11 @@ fn the_saw_mounts_at_its_arc_limits_and_lets_go_on_death() {
     );
     assert_eq!(
         tracked,
-        "owner Some(0) busy 1 barrel [-14.999986, 45.0, 0.0] teleport true firing false stance Some(Stand) spot [-770.0, 68.0, 258.125]; active 1 eFlags 0x204 pm_flags 0x2 viewlocked 1 393 clamp 7.4999995 22.5 360.0 45.0 origin -751.03937 48.727333 258.125 view 45.0 hint (12, 1, 1023)"
+        "owner Some(0) busy 1 barrel [-14.999991, 45.0, 0.0] teleport true firing false stance Some(Stand) spot [-770.0, 68.0, 258.125]; active 1 eFlags 0x204 pm_flags 0x2 viewlocked 1 393 clamp 7.4999995 22.5 360.0 45.0 origin -751.03937 48.727333 258.125 view 45.0 hint (12, 1, 1023)"
     );
     assert_eq!(
         dead,
-        "owner None busy 0 barrel [-14.999986, 45.0, 0.0] teleport true firing false stance None spot [-770.0, 68.0, 258.125]; active 0 eFlags 0x4 pm_flags 0x0 viewlocked 0 1023 clamp 7.4999995 22.5 360.0 45.0 origin -770.0 68.0 259.125 view 45.0 hint (0, 1, 1023)"
+        "owner None busy 0 barrel [-14.999991, 45.0, 0.0] teleport true firing false stance None spot [-770.0, 68.0, 258.125]; active 0 eFlags 0x4 pm_flags 0x0 viewlocked 0 1023 clamp 7.4999995 22.5 360.0 45.0 origin -770.0 68.0 259.125 view 45.0 hint (0, 1, 1023)"
     );
     assert_eq!(
         fire,

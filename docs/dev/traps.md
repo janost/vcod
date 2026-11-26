@@ -511,6 +511,10 @@ otherwise.
 - A 1.1 shot, swing or throw starts at the truncated eye over the truncated
   origin. 1.5's and UO's start at the unsnapped origin's eye plus the walk
   bob, never truncated (`combat::muzzle_point_in`, combat doc 2.1).
+- `trap_SightTraceToEntity` (the `trigger_damage` walks) clips a brush
+  with no `SURFACE_CLIP_EPSILON`: a round's end 1/16 short of a face
+  misses. Test it with `collision::sight_meets_brush`, never a trace
+  (combat doc 14.8.1).
 - 1.1 MP has no grenade cook; "cooking" in the code means held.
   `grenadeTimeLeft` is `fuseTime` at the pullback and 0 at the throw, and the
   fuse always runs in full from release. UO has a cook (see its section).
@@ -946,7 +950,15 @@ otherwise.
   frame as the two clients' packets arrived. A gate replaying two retail
   captures sends each frame's packets in the order retail got them
   (`cod4::capture_ab`); a fixed order read as damage applied a frame late
-  (cod4-combat.md 15).
+  (cod4-combat.md 15). Two probes' sends can tie to the ms: the pair's
+  `ties` names retail's order off its snapshots (cod4-gsc.md 9.1.1).
+- 1.7 snaps with `(int)` casts, which give +0 where Rust's `trunc` gives
+  -0, and a -100 angle field sends -0 as the smallest float: snap with
+  `as i32 as f32` (cod4-gsc.md 9.1.1).
+- The end frame's swing reads the `MOVETYPE` the frame's cmds wrote, as on
+  CoD2: call `PlayerBody::script_movetype` ahead of `animate`. Without it
+  a strafe's legs swing a frame late and the head reads 0.05 units off
+  (cod4-player-anims.md 8.1).
 - Inline: `cod4-combat.md` 3.2 (the eye and gun angle bytes), 5 (the
   corpse's bit, `suicide`, the end-frame draw), 7.1 (the last-cmd word),
   10.2, 10.3, 10.8, 10.10 (missiles, the burst, flash and concussion,

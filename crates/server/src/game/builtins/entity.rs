@@ -313,8 +313,7 @@ fn client_spawn(
             .as_ref()
             .and_then(|p| p.borrow_mut().get_mut(slot)?.pop_front().flatten())
     {
-        (origin, angles) = pin;
-        origin = pinned_spot(host, cx, origin);
+        (origin, angles) = pinned_spot(host, cx, pin);
     }
 
     // `ClientSpawn`'s `Scr_SetString(ent->classname, "player")` (0x4271d).
@@ -411,14 +410,21 @@ fn client_spawn(
 /// A spawn pin's origin is a capture's `%g` print of a placed spawnpoint,
 /// six digits of a float whose last bits steer the spawn think (a fall from
 /// rest ties `PmoveSingle`'s velocity clamp, cod15-movement.md 4): the
-/// entity it names lends its own origin.
-fn pinned_spot(host: &mut GameHost, cx: &mut Cx, pin: [f32; 3]) -> [f32; 3] {
+/// entity it names lends its own origin. On CoD4 it lends its angles too
+/// where the pin's yaw is theirs rounded, as the stock script passes
+/// `spawnPoint.angles`: a spot's yaw of 270 that the capture's view reads
+/// as -90 sends the body's first frames otherwise (cod4-gsc.md 9.1.1).
+fn pinned_spot(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    (pin, yaw): ([f32; 3], [f32; 3]),
+) -> ([f32; 3], [f32; 3]) {
     // Half a unit in the sixth significant digit.
     let near = |a: f32, b: f32| {
         let unit = 10f32.powi(b.abs().max(1e-3).log10().floor() as i32 - 5);
         (a - b).abs() <= unit * 0.5
     };
-    let field = cx.intern_folded("origin");
+    let (field, angles) = (cx.intern_folded("origin"), cx.intern_folded("angles"));
     let ids: Vec<EntId> = host
         .ents
         .iter_inuse()
@@ -428,12 +434,20 @@ fn pinned_spot(host: &mut GameHost, cx: &mut Cx, pin: [f32; 3]) -> [f32; 3] {
     let mut found = ids
         .into_iter()
         .filter_map(|id| match host.get_field(cx, id, field) {
-            Value::Vector(o) if (0..3).all(|i| near(o[i], pin[i])) => Some(o),
+            Value::Vector(o) if (0..3).all(|i| near(o[i], pin[i])) => Some((id, o)),
             _ => None,
         });
-    match (found.next(), found.next()) {
-        (Some(o), None) => o,
-        _ => pin,
+    let (Some((id, o)), None) = (found.next(), found.next()) else {
+        return (pin, yaw);
+    };
+    let turn = |a: f32| (f64::from(a) - f64::from(yaw[1]) + 0.5).rem_euclid(360.0);
+    match host.get_field(cx, id, angles) {
+        Value::Vector(a)
+            if host.as_cod4().is_some() && turn(a[1]) < 1.0 && a[0] == yaw[0] && a[2] == yaw[2] =>
+        {
+            (o, a)
+        }
+        _ => (o, yaw),
     }
 }
 

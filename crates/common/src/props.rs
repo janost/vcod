@@ -5,7 +5,7 @@
 
 use crate::asset_source::{AssetSource, RawFile};
 use crate::bsp;
-use crate::collision::ModelTri;
+use crate::collision::{ModelSurf, ModelTri};
 use crate::deform;
 use crate::mapworld::{DrawVert, MapWorld};
 use crate::mesh::IndexRange;
@@ -634,6 +634,35 @@ pub fn placed_collision_tris(p: &Placement, model: &model::Model, out: &mut Vec<
             surface_flags: surf.flags,
         }));
     }
+}
+
+/// A model's collision triangles in its own frame, unposed, with each
+/// surface's run, bind bone frame and stored bounds for
+/// [`crate::collision::clip_model_surfs`]: how the engine clips a script
+/// model, a surface at a time (docs/research/cod11-combat.md 2.7.1).
+pub fn bind_collision_surfs(model: &model::Model) -> (Vec<ModelTri>, Vec<ModelSurf>) {
+    let (mut tris, mut surfs) = (Vec::new(), Vec::new());
+    for surf in model.collision.iter().filter(|s| s.contents != 0) {
+        let first = tris.len();
+        tris.extend(surf.tris.iter().map(|&tri| ModelTri {
+            tri,
+            contents: surf.contents,
+            surface_flags: surf.flags,
+        }));
+        let (pos, rot) = model
+            .bones
+            .get(surf.bone)
+            .map_or((Vec3::ZERO, glam::Quat::IDENTITY), |b| (b.pos, b.rot));
+        let to_bone = rot.inverse();
+        surfs.push(ModelSurf {
+            tris: first..tris.len(),
+            rot: to_bone,
+            pos: -(to_bone * pos),
+            mins: surf.bounds.0,
+            maxs: surf.bounds.1,
+        });
+    }
+    (tris, surfs)
 }
 
 /// A map's placements and each distinct model they name, decoded once, so

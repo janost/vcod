@@ -15,7 +15,8 @@
 //! second where he lay: on mp_carentan the first rests on him with his
 //! number as its ground, on mp_brecourt the second rolls down terrain.
 //! On 1.5b and UO the same part checks where each frag leaves from against
-//! the thrower's logged origin.
+//! the thrower's logged origin. The `surfs` part traces a multi-surface
+//! model where two surfaces meet, on all three builds (combat doc 2.7.1).
 //!
 //! `SM_REPORT=1` prints both logs. The 1.1d tests need `COD_DIR` at a 1.1
 //! install, the 1.5b one at a 1.5 install, the UO ones at a UO one; each
@@ -156,6 +157,125 @@ fn a_script_model_stops_bullettrace_until_deleted() {
         include_str!("fixtures/scriptmodel/mp_carentan-scriptmodel.txt"),
         log,
     );
+}
+
+/// The surfs part's traces: phase, segment, whether the model stopped it,
+/// fraction, normal and position.
+fn surf_traces(lines: &[String]) -> Vec<(String, String, bool, f32, [f32; 6])> {
+    let models: Vec<&str> = lines
+        .iter()
+        .filter_map(|l| l.strip_prefix("PROBE smodel "))
+        .filter_map(|r| r.split(' ').nth(2))
+        .collect();
+    let nums = |s: &str| -> Vec<f32> {
+        s.split(|c: char| "(), ".contains(c))
+            .filter(|t| !t.is_empty())
+            .map(|t| t.parse().unwrap())
+            .collect()
+    };
+    lines
+        .iter()
+        .filter_map(|l| l.strip_prefix("PROBE strace "))
+        .map(|l| {
+            let t: Vec<&str> = l.splitn(6, ' ').collect();
+            let v = nums(t[5]);
+            (
+                t[1].to_string(),
+                t[2].to_string(),
+                models.contains(&t[3]),
+                t[4].parse().unwrap(),
+                std::array::from_fn(|i| v[i]),
+            )
+        })
+        .collect()
+}
+
+/// `xmodel` placed by the surfs part on mp_brecourt: every segment stops on
+/// the surface retail's surface-by-surface clip meets, each under its
+/// stored bounds, not the one a clip of every triangle would (combat doc
+/// 2.7.1); the world alone meets none.
+fn surfs_gate(
+    fs: vcod_common::pk3::Pk3Fs,
+    proto: &'static vcod_common::net::protocol::Cod1Wire,
+    xmodel: &str,
+    fixture: &str,
+) {
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(proto),
+        script: Some(SCRIPT),
+        cvars: &[("probe_part", "surfs"), ("probe_model", xmodel)],
+        ..common::Boot::new("mp_brecourt", "probe_scriptmodel")
+    }
+    .start(fs);
+    common::run_alone(&mut sv, &mut now, 3000);
+    let retail = probe_lines(fixture.lines().map(str::to_string));
+    let ours = probe_lines(sv.script_log().to_vec());
+    report(&retail, &ours);
+    let (r, o) = (surf_traces(&retail), surf_traces(&ours));
+    assert!(r.len() >= 32, "{retail:?}");
+    assert_eq!(o.len(), r.len(), "{ours:?}");
+    for (r, o) in r.iter().zip(&o) {
+        assert_eq!(
+            (&o.0, &o.1, o.2),
+            (&r.0, &r.1, r.2),
+            "retail {r:?}, ours {o:?}"
+        );
+        assert!((o.3 - r.3).abs() < 0.0005, "retail {r:?}, ours {o:?}");
+        if r.2 {
+            assert!(
+                o.4.iter().zip(&r.4).all(|(a, b)| (a - b).abs() < 0.015),
+                "retail {r:?}, ours {o:?}"
+            );
+        }
+    }
+}
+
+/// The Kübelwagen's 17 bone-framed surfaces on 1.1d.
+#[test]
+fn a_script_model_clips_surface_by_surface() {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
+        return;
+    };
+    surfs_gate(
+        fs,
+        &PROTOCOL_V1,
+        "xmodel/vehicle_german_kubelwagen",
+        include_str!("fixtures/scriptmodel/mp_brecourt-scriptmodel-surfs.txt"),
+    );
+}
+
+/// The same on 1.5b.
+#[test]
+fn a_script_model_clips_surface_by_surface_on_15() {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
+        return;
+    };
+    surfs_gate(
+        fs,
+        &PROTOCOL_V6,
+        "xmodel/vehicle_german_kubelwagen",
+        include_str!("fixtures/scriptmodel/mp_brecourt-scriptmodel-surfs-1.5.txt"),
+    );
+}
+
+/// The same on UO, and the Panzer IV hull's five surfaces.
+#[test]
+fn a_script_model_clips_surface_by_surface_on_uo() {
+    for (xmodel, fixture) in [
+        (
+            "xmodel/vehicle_german_kubelwagen",
+            include_str!("fixtures/scriptmodel/mp_brecourt-scriptmodel-surfs-uo.txt"),
+        ),
+        (
+            "xmodel/mp_vehicle_panzeriv",
+            include_str!("fixtures/scriptmodel/mp_brecourt-scriptmodel-surfs-panzeriv-uo.txt"),
+        ),
+    ] {
+        let Some(fs) = vcod_common::testing::uo_fs() else {
+            return;
+        };
+        surfs_gate(fs, &PROTOCOL_V22, xmodel, fixture);
+    }
 }
 
 /// The jeep's damage notifies in each phase of the barrel: shown, hidden,
@@ -368,8 +488,8 @@ fn ours_pair_run(
     // The script draws the target's variant (`randomInt(3)`) and head
     // (`randomInt(20)`) off `holdrand`, which retail seeds from its clock
     // (map-cycle doc 4.8). This seed draws variant 0, the `load1` gear the
-    // 1.1d prone captures' rests sit on (INFERRED, off ours matching them
-    // in it and not in variant 1), and head `a_01`.
+    // 1.1d prone captures' rests sit on (the brecourt retake's `PROBE body`
+    // logs it, combat doc 12.4), and head `a_01`.
     sv.pin_script_rand(1);
     let (join_ms, late_ms) = match (target_play, target_log) {
         (Some((t, _)), Some(log)) => {
@@ -815,8 +935,9 @@ fn missile_grounds(lines: &[String]) -> Vec<Vec<MissileRow>> {
     out.into_iter().map(|(_, v)| v).collect()
 }
 
-/// How far ours' frames may sit from retail's off a prone body: his pose
-/// strikes half a unit off retail's.
+/// How far ours' frames may sit from retail's off a prone body in a capture
+/// that logged no cmds: the even 16 ms cadence ours sends there settles him,
+/// and so the strike, up to a unit off retail's (combat doc 12.4).
 const PRONE_NEAR: f32 = 1.0;
 
 /// mp_carentan on 1.1d: a frag thrown onto a prone player's back rests
@@ -861,6 +982,20 @@ fn a_frag_rests_on_a_prone_players_back_like_retail() {
         "mp_carentan",
         225.0,
         include_str!("fixtures/scriptmodel/mp_carentan-scriptmodel-prone-rest-cmds.txt"),
+    );
+}
+
+/// [`a_frag_rests_on_a_prone_players_back_like_retail`] on mp_brecourt's
+/// grade, on a retake whose probe logged the target's gear (`load1`, the
+/// pinned draw's): both frags on retail's snapshots to the bit, the first
+/// struck off his back and resting there, the second rolling down the
+/// terrain (docs/research/cod11-combat.md 12.4).
+#[test]
+fn a_frag_rests_on_a_prone_players_back_on_a_grade_like_retail() {
+    prone_cmds_gate(
+        "mp_brecourt",
+        270.0,
+        include_str!("fixtures/scriptmodel/mp_brecourt-scriptmodel-prone-rest-gear.txt"),
     );
 }
 

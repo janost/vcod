@@ -1,5 +1,6 @@
 //! The capture pairs of cod4-combat.md 15 on ours. Each is a retail
-//! `cod4_lnxded` 1.7 run (`+devmap mp_crash`, `war`, `sv_pure 0`) of two
+//! `cod4_lnxded` 1.7 run (`+devmap mp_crash` unless the pair says
+//! otherwise, `war`, `sv_pure 0`; ours reads both off the serverinfo) of two
 //! `cod4_probe`s: `target` (allies, `--goto "207 2291 296"`) and, a second
 //! later, `shooter` (axis, `--goto "123 2110 300"`), each logged into
 //! `play-1.7-<name>-target.txt` and `-shooter.txt` (recipes on each
@@ -39,6 +40,10 @@ struct Pair {
     until: Option<i32>,
     /// The probes, in the order they joined: `play-1.7-<name>-<probe>.txt`.
     probes: &'static [&'static str],
+    /// The ticks whose packets' sends tie to the probes' ms, each with the
+    /// probe retail took first (its snapshots show it); a tie otherwise goes
+    /// to the probe that joined first.
+    ties: &'static [(i32, &'static str)],
     /// Dvars retail's command line set that its serverinfo leaves out.
     cvars: &'static [(&'static str, &'static str)],
 }
@@ -195,8 +200,13 @@ fn run(install: &vcod_cod4::install::Install, pair: &Pair, hook: &mut Hook) -> R
     let twins: Vec<Twin> = lines.iter().map(|l| twin(l)).collect();
     let retail_sides: Vec<Side> = lines.iter().map(|l| side(l)).collect();
     let cs0 = String::from_utf8_lossy(retail_sides[0].gs.configstring(0)).into_owned();
-    let mut sv = Cod4Server::new(test_cfg("mp_crash", "war"), 7);
-    for (k, v) in vcod_common::net::connectionless::info_pairs(&cs0) {
+    let info = vcod_common::net::connectionless::info_pairs(&cs0);
+    let get = |key: &str| info.iter().find(|(k, _)| *k == key).map(|(_, v)| *v);
+    let mut sv = Cod4Server::new(
+        test_cfg(get("mapname").unwrap(), get("g_gametype").unwrap()),
+        7,
+    );
+    for &(k, v) in &info {
         if !matches!(k, "protocol" | "shortversion" | "fs_game") {
             sv.set_cvar(k, v);
         }
@@ -262,7 +272,8 @@ fn run(install: &vcod_cod4::install::Install, pair: &Pair, hook: &mut Hook) -> R
             }
         }
         hook(&mut sv, svs);
-        let mut order: Vec<(i64, usize)> = sends
+        let tie = pair.ties.iter().find(|(at, _)| *at == svs).map(|(_, w)| *w);
+        let mut order: Vec<(i64, bool, usize)> = sends
             .iter_mut()
             .enumerate()
             .map(|(k, q)| {
@@ -273,11 +284,11 @@ fn run(install: &vcod_cod4::install::Install, pair: &Pair, hook: &mut Hook) -> R
                     first = first.min(ms);
                     q.pop_front();
                 }
-                (first, k)
+                (first, tie != Some(pair.probes[k]), k)
             })
             .collect();
         order.sort();
-        for k in order.into_iter().map(|(_, k)| k) {
+        for k in order.into_iter().map(|(_, _, k)| k) {
             let p = &mut probes[k];
             if !p.joined {
                 continue;
@@ -519,6 +530,7 @@ const ROCKET: Pair = Pair {
     gsc: None,
     until: None,
     probes: TWO,
+    ties: &[],
     cvars: &[],
 };
 
@@ -531,6 +543,7 @@ const THROWBACK: Pair = Pair {
     gsc: None,
     until: None,
     probes: TWO,
+    ties: &[],
     cvars: &[],
 };
 
@@ -542,6 +555,7 @@ const PRONE: Pair = Pair {
     gsc: None,
     until: None,
     probes: TWO,
+    ties: &[],
     cvars: &[],
 };
 
@@ -553,6 +567,7 @@ const KCENT: Pair = Pair {
     gsc: Some("killcam_entity"),
     until: None,
     probes: TWO,
+    ties: &[],
     cvars: &[],
 };
 
@@ -615,6 +630,7 @@ const TOUCH: Pair = Pair {
     gsc: Some("touch_pass"),
     until: None,
     probes: &["target", "walker", "flyer"],
+    ties: &[],
     cvars: &[("scr_game_spectatetype", "2")],
 };
 
@@ -640,6 +656,7 @@ const CSB0: Pair = Pair {
     gsc: None,
     until: None,
     probes: TWO,
+    ties: &[],
     cvars: &[("sv_clientSideBullets", "0")],
 };
 
@@ -665,6 +682,7 @@ const CSB0_CORPSE: Pair = Pair {
     gsc: None,
     until: None,
     probes: TWO,
+    ties: &[],
     cvars: &[("sv_clientSideBullets", "0")],
 };
 
@@ -690,6 +708,7 @@ const CSB0_DRAG: Pair = Pair {
     gsc: None,
     until: None,
     probes: TWO,
+    ties: &[],
     cvars: &[("sv_clientSideBullets", "0")],
 };
 
@@ -717,20 +736,13 @@ const TAG_READ: Pair = Pair {
     // The target's probe left before the last frame's print reached it.
     until: Some(63650),
     probes: TWO,
+    ties: &[],
     // The weapon defs come off the weapon files under a mod: the M16's
     // `fireTime` reads 65 (cod4-fastfile.md, "Weapon files").
     cvars: &[("fs_game", "mods/vcodtag")],
 };
 
-/// A coordinate's tenth one off, the target's head under 0.1 units from
-/// retail's across the truncation: the skeleton a few ulps off retail's
-/// (cod4-combat.md 6.1).
-const TENTH: &str = "a tenth across the truncation";
-
-const TAG_READ_GAPS: &[(&str, &str)] = &[
-    ("* command * ours Some((48350,", TENTH),
-    ("* command * ours Some((49850,", TENTH),
-];
+const TAG_READ_GAPS: &[(&str, &str)] = &[];
 
 /// A thread's `getTagOrigin` and `getTagAngles` on a player place the
 /// frame's pose where the cmds since the last end frame moved and turned
@@ -753,29 +765,14 @@ const TRACE_READ: Pair = Pair {
     // The target's probe left before the last frame's print reached it.
     until: Some(65050),
     probes: TWO,
+    ties: &[],
     cvars: &[
         ("fs_game", "mods/vcodtrace"),
         ("scr_player_maxhealth", "3000"),
     ],
 };
 
-/// The swaying target's `aimSpreadScale` a float ulp off retail's on
-/// eleven frames (cod4-gsc.md 3.3).
-const SPREAD_ULP: &str = "the sway's spread scale an ulp off";
-
-const TRACE_READ_GAPS: &[(&str, &str)] = &[
-    ("target ps aimSpreadScale 47800:", SPREAD_ULP),
-    ("target ps aimSpreadScale 54950:", SPREAD_ULP),
-    ("target ps aimSpreadScale 55000:", SPREAD_ULP),
-    ("target ps aimSpreadScale 55050:", SPREAD_ULP),
-    ("target ps aimSpreadScale 55100:", SPREAD_ULP),
-    ("target ps aimSpreadScale 60500:", SPREAD_ULP),
-    ("target ps aimSpreadScale 60550:", SPREAD_ULP),
-    ("target ps aimSpreadScale 60600:", SPREAD_ULP),
-    ("target ps aimSpreadScale 60650:", SPREAD_ULP),
-    ("target ps aimSpreadScale 60700:", SPREAD_ULP),
-    ("target ps aimSpreadScale 62650:", SPREAD_ULP),
-];
+const TRACE_READ_GAPS: &[(&str, &str)] = &[];
 
 /// A script's `bulletTrace` meets a player as its capsule where its last
 /// cmd linked it, under CoD4's capsule dispatch, and poses no body
@@ -783,4 +780,79 @@ const TRACE_READ_GAPS: &[(&str, &str)] = &[
 #[test]
 fn cod4_trace_read_ab() {
     pair_ab("cod4_trace_read_ab", &TRACE_READ, TRACE_READ_GAPS);
+}
+
+const SAW: Pair = Pair {
+    // `+set sv_clientSideBullets 0 +devmap mp_backlot`; gunner (axis)
+    // `--script saw --face 0 --goto "-770 68 320 0"` behind the crouch SAW
+    // 393, watcher (allies, `--qport 4022`) `--goto "-860 68 320 0"` behind
+    // him: the gunner mans the gun, fires, swings past both arcs, lets go
+    // and fires his own rifle (cod4-gsc.md 9.2).
+    name: "saw",
+    seed: 352_939_491,
+    gsc: None,
+    until: None,
+    probes: &["gunner", "watcher"],
+    ties: &[],
+    cvars: &[("sv_clientSideBullets", "0")],
+};
+
+/// The barrel's angles a few float ulps off retail's where the view is
+/// still or walking home (`turret_clientaim`'s x87 `AngleDelta` and the
+/// unmanned gun's walk, not matched to the ulp; cod4-gsc.md 9.2.1).
+const BARREL_ULPS: &str = "the barrel's angles a few ulps off";
+/// The watcher's spawn off a spectator view of 94: retail's spawn frame
+/// keeps the view and turns `delta_angles` by the spot's yaw alone, ours
+/// takes the spawn snapshot's view for the spot's yaw (cod4-gsc.md 9.2.1).
+const SPAWN_VIEW: &str = "the spawn off a spectator view not 0";
+
+const SAW_GAPS: &[(&str, &str)] = &[
+    ("* entity 393:11 lerp.u.anonymous.data[", BARREL_ULPS),
+    // The body hangs off the barrel's last frame.
+    ("gunner ps origin[1]", BARREL_ULPS),
+    ("watcher ps delta_angles[1]", SPAWN_VIEW),
+    ("gunner entity 1:1 lerp.apos.trBase[1]", SPAWN_VIEW),
+];
+
+/// A mounted SAW: the hint, the mount's view clamp and crouch, the barrel
+/// clamped to the arcs, the gunner placed off the legs' `turretanim`, the
+/// gun's rounds and their impacts naming the gun, and the let go
+/// (cod4-gsc.md 9.2, cod4-effects.md 12.4).
+#[test]
+fn cod4_mounted_saw_ab() {
+    pair_ab("cod4_mounted_saw_ab", &SAW, SAW_GAPS);
+}
+
+const SWAP: Pair = Pair {
+    // Target `--class specops_mp,0`, shooter `--script swap --weapon 27`:
+    // the shooter kills the target, walks to the MP5 he dropped and holds
+    // use over it, swapping his M16 for it (cod4-gsc.md 9.1).
+    name: "swap",
+    seed: 353_034_228,
+    gsc: None,
+    until: None,
+    probes: TWO,
+    // Both sends at the target's 7819 ms; the target's 43700 snapshot ran
+    // its cmds dead (`viewHeightTarget` 8, the death anim's timers 50 down).
+    ties: &[(43650, "shooter")],
+    cvars: &[],
+};
+
+/// The target's killcam from 46600 (the shooter's 43400 on): the shooter's
+/// `delta_angles` and yaw as its own snapshots coded them once, where ours
+/// codes the archive twice (a short nearer zero); retail's earlier killcam
+/// frames read twice-coded as ours (cod4-gsc.md 9.1.1).
+const KILLCAM_CODED: &str = "the killcam's archived angles coded once";
+
+const SWAP_GAPS: &[(&str, &str)] = &[
+    ("target ps delta_angles", KILLCAM_CODED),
+    ("target ps viewangles[1]", KILLCAM_CODED),
+];
+
+/// The use key's swap: the dead target's gun dropped as an item, its hint
+/// under the shooter, the pickup's `EV_ITEM_PICKUP`, the M16 left where
+/// the taken gun lay and the `a` switch (cod4-gsc.md 9.1.1).
+#[test]
+fn cod4_use_key_swap_ab() {
+    pair_ab("cod4_use_key_swap_ab", &SWAP, SWAP_GAPS);
 }

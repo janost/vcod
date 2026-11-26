@@ -1295,6 +1295,18 @@ lines. A second probe, `client-probes/probe_nodrop`, ran on a patched map
 yaw 0, so the probe's `setplayerangles` calls do not stick. VERIFIED, the drop
 fixture: every `PROBE drop` line logs the player's `angles` as (0, 0, 0).
 
+The figures 14.1 to 14.4 cite as "the drop fixture" are the 2026-10-06
+capture's, in git history since the 2026-11-26 recapture (the client's
+`SPAWNED` and `CMDS` lines appended, the trajectories as round-trip floats)
+replaced it. VERIFIED, the recapture repeats each claim with that run's
+draws: climbs 120.157, 87.420, 101.651 and 142.854, spins inside their (-3k,
+-k], weapon starts against the dropper of (+6.24, -4.84, +48.13), (+4.14,
+-7.88, +46.28) and (+4.08, -4.63, +47.33), the health pack 35.00 up, the
+wall drop moved to `trBase` x 893.875 on its contact frame, rolls 87.612 and
+98.861, the `random` pack back 1000 ms after its take and the colt 5000 ms,
+the second return carrying `events` 197, 197, and the `air` carbine's
+`trTime` its spawn frame.
+
 ### 14.1 The launch
 
 VERIFIED, `Drop_Weapon` (0x4de00..0x4deb4): a yaw of `0 + ent+0x144`, the
@@ -1341,11 +1353,10 @@ two live runs of the probe against ours: (+6.22, -4.94, +48.11), (+4.09,
 for the colt on the other, with the same anims and a different legs-anim
 start time. INFERRED: the start is `tag_weapon_right` on the dropper's model
 at its yaw, and it sways with the idle anim, which runs from the spawn.
-VERIFIED, `itemdrop_ab`: with ours' client joined on the server's first
-frame, before the probe's watcher wakes, the three weapon drops start 0.58,
-0.31 and 0.68 units off retail's; with the client held back
-(`common::PROBE_JOIN_MS`, movers doc 15) they start 0.10, 0.09 and 0.13 off,
-and the gate allows 0.2 (`TAG_TOL`).
+VERIFIED, `itemdrop_ab` on the 2026-10-06 capture: with ours' client joined
+on the server's first frame, before the probe's watcher wakes, the three
+weapon drops started 0.58, 0.31 and 0.68 units off retail's; with the client
+held back (`common::PROBE_JOIN_MS`, movers doc 15) 0.10, 0.09 and 0.13 off.
 
 VERIFIED, the 2026-11-14 1.5b recapture (`mp_carentan-dm-itemdrop-15.txt`
 since, the `--probe-items` client's `SPAWNED` and `CMDS` lines appended):
@@ -1356,10 +1367,15 @@ at the first). `itemdrop_ab` runs ours alone until its spawn lands on 6850
 and sends every cmd on the logged times (`ProbeHold::framed`): every `PROBE`
 position, the three weapon drops' start against the dropper included,
 matches retail's print, and the launch points sit at most 0.00026 off
-retail's floats. VERIFIED, the gate, which holds that capture to 0.0005
-(`REPLAYED_TOL`) in place of `TAG_TOL` and `START_TOL`; the 1.1d and UO
-captures, without `CMDS` lines, keep those two. INFERRED: the 0.13 and the
-fifth of a unit were the spawn's frame and the cmd split.
+retail's floats. VERIFIED, the 2026-11-26 1.1d and UO recaptures, taken
+the same way, replay as that one does: every printed position retail's,
+the launch points within 0.0002 of retail's floats. The gate holds all
+three to 0.0005 (`TOL`), where the older captures took 0.2 at the tag and
+0.5 at the player. INFERRED: the 0.13 and the fifth of a unit were the
+spawn's frame and the cmd split. VERIFIED, the gate: ours' own join takes
+a different time from connect to spawn per protocol (the 1.1d capture's
+spawn lands 200 ms early, UO's 150 late off one guess), so the gate runs
+ours once to measure it and again on retail's `SPAWNED` frame.
 
 VERIFIED, `Drop_Item` (0x4ed30): the yaw is `ent+0x144` plus its third
 argument; a non-zero fourth argument zeroes the velocity, else the same 150
@@ -1422,7 +1438,8 @@ and UO's lift [0.5, 1). VERIFIED, the same divide in both modules'
 `Touch_Item` respawn draw (game15 0x89fb4, game.mp.uo 0xb0434), `Drop_Item`'s
 climb (0x89fdc, 0xb045c) and `Drop_Weapon`'s spin (0x89ff0, 0xb0470).
 INFERRED: their `crandom()` reads [-1, 1), so a 1.5b or UO drop climbs at 150
-to 250 units a second and spins either way, as the captures of 14.7 show.
+to 250 units a second and spins either way, as the captures of 14.7 show,
+and a respawn's `random` reaches both ways (14.10).
 VERIFIED, `crates/server/tests/fixtures/touchorder/`, three `item_health`
 spawned 16 over mp_pavlov's floor at (-10928.5, 12051), (-10936.5, 12059)
 and (-10944.5, 12051): ours' sweeps end at z -29.635, -30.173 and -29.880 on
@@ -1624,12 +1641,10 @@ its printed thousandth.
 
 VERIFIED, `itemdrop_ab` with retail's draws pinned (`Server::pin_item_draws`)
 and each landing's lift taken off retail's rest: every drop on all three
-patches lands on retail's frame. Each rests 0.0001 to 0.09 off retail's,
-under half again its start's offset; the start is off by where the player
-rests and the hand sways (13.4, 14.1), up to 0.19 for 1.1d's and UO's health
-drops, whose dropper ours rests that much lower after the probe's
-`setorigin`. Against the dropper's origin each start is within 0.2 of
-retail's.
+patches lands on retail's frame. On the captures without `CMDS` lines each
+rested 0.0001 to 0.09 off retail's, the start off by where the player rests
+and the hand sways (13.4, 14.1); on the recaptures each rests within 0.0002
+of retail's, as its start does.
 
 ### 14.8 The team pick
 
@@ -1732,4 +1747,32 @@ as `RespawnItem` is. The free on two solid starts keeps the slot counted by
 `G_FindTeams`, which ran at the load, so the chain loses the member as
 retail's does (14.8). VERIFIED, `game::teams_ab`: every `PROBE` line of the
 six captures is retail's. CoD2 and CoD4 keep the inline drop.
+
+### 14.10 The respawn draw's sign
+
+The captures 14.3 and 14.7 read have `random` 0.5 on a pack whose base is
+-1, so every respawn floors to 1 s whatever the draw's sign.
+`client-probes/probe_respawnsign` spawns a colt with spawnflags 8 and
+`random` 4 under `+set g_weaponrespawn 20` and takes it six times, 25 s
+apart; a return is `20 + (int)(4 * crandom())` seconds after the take,
+which reads 9 to 16 under 1.1d's (-3, -1] and 16 to 23 under [-1, 1). Runs
+on all three servers (`crates/server/tests/fixtures/items/mp_carentan-dm-respawnsign*.txt`,
+2026-11-26, recipes in the headers).
+
+VERIFIED, the three captures, each return's snapshot against the frame
+before the one its take left the snapshot on:
+
+| patch | seconds |
+|---|---|
+| 1.1d | 13, 15, 10, 13, 11, 16 |
+| 1.5b | 23, 23, 20, 21, 23, 19 |
+| UO | 17, 18, 17, 20, 22, 17 |
+
+INFERRED: 1.1d's draws all fall in (-3, -1], and 1.5b's and UO's
+`Touch_Item` draw (game15 0x89fb4, game.mp.uo 0xb0434, 14.2) reads [-1, 1),
+four of the twelve at 0.5 or above. vcod's `crandom` takes the sign by protocol
+(`item::unit_draw`). VERIFIED, `itemdrop_ab::a_respawn_draws_like_retail`
+and its `_15` and `_uo`: with each return's draw read back to the middle of
+the range its delay truncates from, ours returns the colt on retail's frame
+all six times on each patch, every item line retail's.
 

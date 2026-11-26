@@ -29,6 +29,10 @@
 //	script puts them every frame. The site is the first tdm spawn point
 //	past the first with 256 units of level, clear ground on its facing:
 //	the allies player stands on it, the axis player 256 ahead facing back.
+//	Once both are in, the target's model and attachments (the gear the dm
+//	script drew):
+//
+//	PROBE body <time> <model> [ <tag>:<attached model>]...
 //
 //	rounds: the shooter (`--probe-uo-weapon aim`, a Thompson) is turned
 //	every frame onto the target's waist, 30 above its feet, and a barrel
@@ -77,13 +81,31 @@
 //	A player's damage callback only logs, by team, and takes no health:
 //
 //	PROBE hit <time> <team> dmg <amount> mod <mod> loc <location>
+//
+//	surfs, any patch, no client needed: `+set probe_model <xmodel>`, one
+//	surf_segs lists, is spawned as a `script_model` 300 over the first tdm
+//	spawn point with 600 units of open sky above it, at yaw 0 and then at
+//	yaw 90, and each listed segment, given in the model's frame, is traced
+//	with `bulletTrace` (hitting characters) against it; then once more with
+//	the model deleted, the world alone. Each segment ends just past two of
+//	the model's collision surfaces where they meet, so a clip that walks
+//	the surfaces one at a time, each culled by its stored bounds, meets
+//	another than one that tries every triangle (combat doc 2.7.1):
+//
+//	PROBE smodel <time> <phase> <entity number> <origin>
+//	PROBE strace <time> <phase> <segment> <entity number or -1> <fraction> <normal> <position>
 
 main()
 {
 	precacheModel("xmodel/barrel_black1");
 	precacheItem("fraggrenade_mp");
 	part = getcvar("probe_part");
-	if (part == "")
+	if (part == "surfs")
+	{
+		precacheModel(getcvar("probe_model"));
+		thread surfs_part(getcvar("probe_model"));
+	}
+	else if (part == "")
 	{
 		thread trace_part();
 		thread watch_places();
@@ -350,6 +372,7 @@ pair_part(part)
 			if (!isdefined(placed))
 			{
 				placed = now;
+				logPrint("PROBE body " + now + " " + target.model + attached(target) + "\n");
 				if (part == "grenade" || part == "rounds")
 				{
 					model = spawn("script_model", ground_at(bpos));
@@ -460,4 +483,121 @@ pair_part(part)
 		}
 		wait 0.05;
 	}
+}
+
+//	A player's attached models, as ` <tag>:<model>` words: the gear the dm
+//	script drew, which a frag off his back strikes.
+attached(p)
+{
+	out = "";
+	for (i = 0; i < p getAttachSize(); i++)
+		out = out + " " + p getAttachTagName(i) + ":" + p getAttachModelName(i);
+	return out;
+}
+
+//	The segments the surfs part traces for `name`, start and end in turn, in
+//	the model's frame: the first two of each list are controls, one surface
+//	alone in the way.
+surf_segs(name)
+{
+	s = [];
+	if (name == "xmodel/vehicle_german_kubelwagen")
+	{
+		s[s.size] = (0, 0, 120);
+		s[s.size] = (0, 0, -40);
+		s[s.size] = (120, 0, 30);
+		s[s.size] = (-40, 0, 30);
+		s[s.size] = (46.90625, -28.984375, 15.484375);
+		s[s.size] = (63.328125, -31.890625, -3.96875);
+		s[s.size] = (1.640625, 26.296875, 47.875);
+		s[s.size] = (2.859375, 29.234375, 38.71875);
+		s[s.size] = (46.8125, 29.09375, 17.28125);
+		s[s.size] = (56.890625, 30.828125, 10.296875);
+		s[s.size] = (1.125, 34.390625, 29.359375);
+		s[s.size] = (-3.578125, 5.875, 35.546875);
+		s[s.size] = (28.21875, -15.1875, 41.4375);
+		s[s.size] = (19.015625, -15.109375, 69.5);
+		s[s.size] = (21.796875, -6.359375, 61.609375);
+		s[s.size] = (26.328125, -4.015625, 47.359375);
+		s[s.size] = (0.265625, 28.625, 44.390625);
+		s[s.size] = (-4.25, 11.015625, 43.671875);
+		s[s.size] = (3.109375, 26.359375, 18.0625);
+		s[s.size] = (-10.046875, 26.1875, 45.015625);
+	}
+	else if (name == "xmodel/mp_vehicle_panzeriv")
+	{
+		s[s.size] = (0, 0, 160);
+		s[s.size] = (0, 0, -40);
+		s[s.size] = (200, 0, 40);
+		s[s.size] = (-60, 0, 40);
+		s[s.size] = (-129.71875, -59.171875, 41.9375);
+		s[s.size] = (-125.9375, -62.15625, 35.75);
+		s[s.size] = (-129.8125, 44.6875, 41.59375);
+		s[s.size] = (-125.140625, 41.9375, 36.15625);
+		s[s.size] = (-8.015625, -44.234375, 0.125);
+		s[s.size] = (-16.4375, -52.875, 4.609375);
+		s[s.size] = (98.140625, 68.9375, 10.34375);
+		s[s.size] = (105.203125, 47.015625, 22.65625);
+		s[s.size] = (115.0625, 71.015625, 54.90625);
+		s[s.size] = (111.046875, 55.015625, 29.375);
+		s[s.size] = (64.171875, 69.453125, 60.90625);
+		s[s.size] = (71.671875, 53.8125, 42.171875);
+	}
+	return s;
+}
+
+//	`p` in the model's frame to the world, the model at `at` turned `yaw`
+//	0 or 90.
+surf_world(at, yaw, p)
+{
+	if (yaw == 90)
+		p = (0 - p[1], p[0], p[2]);
+	return at + p;
+}
+
+surf_traces(phase, at, yaw, segs)
+{
+	for (i = 0; i + 1 < segs.size; i += 2)
+	{
+		tr = bullettrace(surf_world(at, yaw, segs[i]), surf_world(at, yaw, segs[i + 1]), true, undefined);
+		logPrint("PROBE strace " + gettime() + " " + phase + " " + i / 2 + " " + entnum(tr["entity"]) + " " + tr["fraction"] + " " + tr["normal"] + " " + tr["position"] + "\n");
+	}
+}
+
+surfs_part(name)
+{
+	wait 2;
+	segs = surf_segs(name);
+	spawns = getentarray("mp_teamdeathmatch_spawn", "classname");
+	if (!spawns.size)
+		spawns = getentarray("mp_tdm_spawn", "classname");
+	at = undefined;
+	for (i = 0; i < spawns.size && !isdefined(at); i++)
+	{
+		o = spawns[i].origin;
+		if (bullettrace(o + (0, 0, 16), o + (0, 0, 600), false, undefined)["fraction"] == 1)
+			at = o + (0, 0, 300);
+	}
+	if (!isdefined(at))
+	{
+		logPrint("PROBE smodel none\n");
+		return;
+	}
+	yaws = [];
+	yaws[0] = 0;
+	yaws[1] = 90;
+	for (k = 0; k < yaws.size; k++)
+	{
+		model = spawn("script_model", at);
+		model setmodel(name);
+		model.angles = (0, yaws[k], 0);
+		phase = "yaw" + yaws[k];
+		logPrint("PROBE smodel " + gettime() + " " + phase + " " + model getEntityNumber() + " " + model.origin + "\n");
+		wait 0.1;
+		surf_traces(phase, at, yaws[k], segs);
+		model delete();
+		wait 0.1;
+		surf_traces("world" + yaws[k], at, yaws[k], segs);
+	}
+	logPrint("PROBE sdone " + gettime() + "\n");
 }
