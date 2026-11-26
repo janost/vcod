@@ -101,11 +101,13 @@ const OFFHAND_STATES: std::ops::RangeInclusive<i32> = 15..=20;
 
 impl Cod4Level {
     /// `G_RunFrame`'s first pass: `G_TouchTriggers` for every
-    /// client in use (the pass itself skips a `pm_type` past linked).
+    /// client in use (the pass itself skips a `pm_type` past linked), the
+    /// triggers then the dropped weapons (cod4-combat.md 6.2.1).
     pub(super) fn touch_triggers(&mut self, now_ms: i32) {
         for slot in 0..self.players.len() {
             if self.players[slot].is_some() && self.rt.client_entity(slot).is_some() {
                 self.rt.touch_triggers(slot, now_ms);
+                self.touch_items(slot);
             }
         }
     }

@@ -49,6 +49,25 @@ pub fn evaluate(it: &Item4, at_ms: i32) -> Vec3 {
     }
 }
 
+/// Whether a player at `origin` whose box is `height` tall touches `it` at
+/// `level.time` `now` in `G_TouchTriggers` (`cod4_lnxded` 0x80a5352,
+/// cod4-combat.md 6.2.1): the item's link box meets the player's grown by
+/// 20 (0x8209654), both boxes grown 1 as [`crate::area::Link::boxed`]
+/// does, and `BG_PlayerTouchesItem` (0x8053910) finds `pos` within 36
+/// across and from 18 below to 88 above the origin. Falling or at rest.
+pub fn player_touches(it: &Item4, origin: Vec3, height: f32, now: i32) -> bool {
+    const REACH: f32 = 20.0;
+    let lo = origin + vcod_cod4::pmove::PLAYER_MINS - (1.0 + REACH);
+    let hi = origin + vcod_cod4::pmove::PLAYER_MAXS.with_z(height) + (1.0 + REACH);
+    let (alo, ahi) = (it.origin + ITEM_MINS - 1.0, it.origin + ITEM_MAXS + 1.0);
+    if (alo.cmpgt(hi) | ahi.cmplt(lo)).any() {
+        return false;
+    }
+    // The difference on the x87 stack, exact.
+    let d = origin.as_dvec3() - evaluate(it, now).as_dvec3();
+    (-36.0..=36.0).contains(&d.x) && (-36.0..=36.0).contains(&d.y) && (-88.0..=18.0).contains(&d.z)
+}
+
 /// One `G_RunItem` at level time `now` against `world` (the clip map and
 /// the brush entities). `moves` says whether an entity's `pos.trType` is
 /// set (a client's always is); `contents` is `SV_PointContents` at a
@@ -264,6 +283,27 @@ mod tests {
             clip: 0,
             stock: 0,
         }
+    }
+
+    /// 1.7's reach: 36 across, 18 below and 88 above a standing player's
+    /// origin; a prone one's box, 30 tall, cuts the top at 53; a falling
+    /// item is met where its arc puts it at the frame's time.
+    #[test]
+    fn a_player_touches_an_item_within_1_7_s_reach() {
+        let o = Vec3::new(100.0, 200.0, 50.0);
+        let at = |d: Vec3| player_touches(&dropped(o + d), o, 70.0, 0);
+        assert!(at(Vec3::new(36.0, -36.0, 88.0)) && at(Vec3::new(-36.0, 36.0, -18.0)));
+        assert!(!at(Vec3::new(36.5, 0.0, 0.0)) && !at(Vec3::new(0.0, -36.5, 0.0)));
+        assert!(!at(Vec3::new(0.0, 0.0, 88.5)) && !at(Vec3::new(0.0, 0.0, -18.5)));
+        let prone = |dz: f32| player_touches(&dropped(o + Vec3::Z * dz), o, 30.0, 0);
+        assert!(prone(53.0) && !prone(53.5));
+        // Linked at 80 above, falling from 100: out of reach at its start,
+        // 84 above 200 ms on.
+        let mut falling = dropped(o + Vec3::Z * 80.0);
+        falling.tr_type = TR_GRAVITY;
+        falling.base = o + Vec3::Z * 100.0;
+        assert!(!player_touches(&falling, o, 70.0, 0));
+        assert!(player_touches(&falling, o, 70.0, 200));
     }
 
     /// With no ground it falls from where it is; free of the floor it goes
