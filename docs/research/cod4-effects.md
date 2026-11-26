@@ -964,10 +964,13 @@ Addresses are `iw3mp.exe` 1.7.
   under 0
   (`cod4_probe --script saw --face 0 --goto "-770 68 320 0"` on
   mp_backlot's SAW 393, a spectator beside it) all 75 of the gunner's
-  impacts read 393. VERIFIED live (capture not kept, like
-  `play-1.7-saw.txt`, cod4-gsc.md 9.2). Ours passes `Fire_Lead`'s gun to `bullet_fire_round`;
+  impacts read 393. VERIFIED live (that run's capture not kept). Ours
+  passes `Fire_Lead`'s gun to `bullet_fire_round`;
   `turret_tests::a_mounted_guns_impacts_name_the_gun` holds it. VERIFIED
-  (the test, ours).
+  (the test, ours). A second run under 0, a watcher behind the gunner
+  (`play-1.7-saw-gunner.txt`, cod4-gsc.md 9.2.1), is replayed by
+  `cod4::capture_ab::cod4_mounted_saw_ab`, every impact entity both
+  probes see word for word. VERIFIED (the gate).
 - vcod's client: `cod4_fx::client_side_bullets` reads the systeminfo;
   `cod4_fx::frame_rounds` runs no client-side round under 0, and
   `cod4_fx::server_round` gives every bullet hit event its muzzle, end

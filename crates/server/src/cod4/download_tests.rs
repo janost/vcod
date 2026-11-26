@@ -43,6 +43,7 @@ fn fetch(base: &Path, home: &Path, wanted: Vec<Wanted>, sets: &[(&str, &str)]) -
             let busy = waiting || dls.as_ref().is_some_and(|d| !d.is_done());
             let cmds = match (&conn.client.gamestate, busy) {
                 (Some(_), false) => {
+                    conn.cgame_up().unwrap();
                     let snap = conn
                         .client
                         .snapshots

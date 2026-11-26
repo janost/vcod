@@ -397,6 +397,28 @@ fn a_uo_body_refuses_legs_bent_up_past_45_degrees() {
     assert!(prone_on(&MoveWorld::bare(&low), o, true, MoveRules::Uo).is_some());
 }
 
+/// UO's chest sample landing more than 24 under the origin plus 6 misses
+/// (game.mp.uo 0x22841..0x22866): a lie-down 26 over the floor refuses,
+/// an airborne check lays the body flat, and 1.5 fits it.
+#[test]
+fn a_uo_chest_sample_far_under_the_origin_misses() {
+    let floor = test_world(&[(
+        Vec3::new(-200.0, -200.0, -16.0),
+        Vec3::new(200.0, 200.0, 0.0),
+    )]);
+    let w = MoveWorld::bare(&floor);
+    let high = Vec3::new(0.0, 0.0, 26.0);
+    let body = prone_on(&w, high, true, MoveRules::V1_5).expect("a fit");
+    assert!(body.torso_height < -24.0, "{body:?}");
+    assert!(prone_on(&w, high, true, MoveRules::Uo).is_none());
+    assert_eq!(
+        prone_on(&w, high, false, MoveRules::Uo),
+        Some(ProneBody::default())
+    );
+    let low = Vec3::new(0.0, 0.0, 20.0);
+    assert!(prone_on(&w, low, true, MoveRules::Uo).is_some());
+}
+
 /// 1.5's `BG_CheckProneValid` refuses a body whose samples land on a
 /// plane steeper than 0.7 (0x1d842, 0x1dd86, 0x1def4); 1.1 lays it down.
 #[test]

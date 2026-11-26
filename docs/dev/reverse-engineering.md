@@ -47,6 +47,9 @@ CoD1 (1.1d, 1.5b, UO):
   every `G_Damage` (cod11-movers.md 26.9).
 - `gdb_bullet.py`: a gdb script for the 1.1d server that logs every
   `Bullet_Fire_Extended` leg's trace and glass test and every `G_Damage`.
+- `gdb_missile.py`: a gdb script for the 1.1d server, read only, that logs
+  every `G_RunMissile` move and ground-snap trace, its ends and its trace
+  result, every float as its bits (cod11-combat.md 12.4).
 - `gdb_teams.py`: a gdb script for the 1.1d, 1.5b and UO servers, read
   only, that logs the team pick of `Use_Item` and `RespawnItem`
   (cod11-items.md 14.8).
@@ -105,6 +108,10 @@ CoD4 1.7:
   table the stat writes check).
 - `d3d9dis.py`: a small D3D9 shader bytecode disassembler for a technique's
   pixel shader.
+- `cod4_tagread_gdb.py`: a gdb script for `cod4_lnxded` that logs each
+  player body's end-frame swings, controller runs and script tag reads,
+  and each `srand` (its header has the line format and the run;
+  cod4-player-anims.md 8.1).
 
 Ghidra helpers: `ExportDecomp.java` decompiles every function of a program
 into one `.c` file. `DecompAt.java <hex addr>...` decompiles just those,
