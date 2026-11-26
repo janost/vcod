@@ -1125,8 +1125,8 @@ waits for the spawn and plays a script: a cmd every 11 or 12 ms and a
 packet every 33 to 36 ms carrying the new cmds and the previous packet's
 (retail's `com_maxfps` 85, `cl_maxpackets` 30, `cl_packetdup` 1
 defaults), the view held at the spawn's. `tools/run_probe_cod2.sh` runs
-both; each fixture's header holds its command line. Every result in this
-section is VERIFIED off those captures unless labelled.
+both; each fixture's header holds its command line. Each result in this
+section carries its own label.
 
 The fixtures log each cmd as sent and each snapshot's changed playerstate
 netfields as raw words. Every snapshot's `commandTime` equalled the

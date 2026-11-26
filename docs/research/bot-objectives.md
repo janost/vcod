@@ -700,7 +700,7 @@ Line numbers are `maps/mp/gametypes/sd.gsc` in UO's `pakuo00.pk3`.
   and defuses 224 later again.
 
 Weapons, from UO's menus (`ui_mp/scriptmenus/weapon_*.menu`,
-`pakuo00.pk3`) and `weapons/mp/*` (`pakuo07.pk3`), all VERIFIED (the
+`pakuo00.pk3`) and `weapons/mp/*` (`pakuo07.pk3`), each VERIFIED (the
 files):
 
 - UO's menus add `mg30cal_mp` to the American and British, `svt40_mp` and

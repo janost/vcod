@@ -1006,7 +1006,7 @@ walk never resynced from). VERIFIED (the gate).
   idle teammate's match retail on all 789 rows (cod4-player-anims.md 8).
 - The triggers' touch pass runs at the head of `G_RunFrame`
   (`Cod4Level::touch_triggers`); 1.7's `ClientThink_real` calls
-  0x80d3762 after `ClientImpacts`, which has not been read. The weapon
+  0x80d3762 after `ClientImpacts` (read and gated since 4d277fd7b, 15.3); 0x80d3762 has not been read. The weapon
   half and the shots are cod4-combat.md's.
 - No capture walks into a brush entity or a script model.
 - The client's prediction (`play::cod4_predict`) clips another player

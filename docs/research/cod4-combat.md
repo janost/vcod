@@ -1900,7 +1900,9 @@ those anims.
   (cod4-gsc.md 9.1.1, 9.1.2), the killcam's archived angles in its
   `GAPS`; the mounted SAW's pair is gated, a few ulps in its `GAPS`
   (cod4-gsc.md 9.2.1).
-- The terrain triangle normal's last bit.
+- The terrain triangle normal's last bit: closed. The frag's bounce off a
+  terrain triangle takes 1.7's point sweep (cod4-collision.md 3) and
+  `FRAG_GAPS` is empty (10.2).
 - The corpse's drag uses CoD2's yaw turn shape; no 1.7 capture of a death
   anim whose root turns. No retail capture holds a shellshock's torso
   anim.

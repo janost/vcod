@@ -38,7 +38,7 @@ flow.
 and `...-moves-1.5.txt`: `moves_script` (`crates/client/src/probe/scripts.rs`,
 `--probe-moves`) on the street placement of `client-probes/probe_prone`,
 run against `tools/run_probe.sh` on each server, cmds every 8 ms, every
-snapshot's decoded playerstate logged. They show, all VERIFIED:
+snapshot's decoded playerstate logged. They show, each VERIFIED from the logs:
 
 - 1.5 sets `pm_flags` 0x2000 at a jump's takeoff and keeps it about 1.8 s
   past the landing (`pm_time` 1765 on the first snapshot after the
@@ -182,16 +182,16 @@ the flags.
   lean and `BG_PlayerStateToEntityState` read it (INFERRED from the
   callers).
 - `PM_CheckDuck` still sets `pm_flags` 0x1 and 0x2 from the keys with
-  1.1's traces and events. Changes (VERIFIED unless marked):
+  1.1's traces and events. Changes:
   - every stance trace masks bodies out (`tracemask & ~0x2000000`, 0x23a18
-    and six more), so another player no longer blocks a rise;
+    and six more), so another player no longer blocks a rise (VERIFIED);
   - an airborne press on a body not already prone is dropped with no
-    flag, 0x8000 or event (0x237d6, 0x23921);
+    flag, 0x8000 or event (0x237d6, 0x23921; VERIFIED);
   - a prone fit clears 0x2 (0x2390c), as does every cmd that holds prone,
-    so 0x1 and 0x2 never stand together;
-  - no dive: no write of 0x4, no `sqrt`, no vz (by absence);
+    so 0x1 and 0x2 never stand together (VERIFIED);
+  - no dive: no write of 0x4, no `sqrt`, no vz (INFERRED, by absence, no address);
   - `BG_CheckProne` takes a body length, 60 here (0x237e3): 1.1's fixed
-    54 plus the box's 6.
+    54 plus the box's 6 (VERIFIED).
 - The target steps only while no leg of the eye runs
   (`viewHeightLerpTime == 0`, 0x23e3c). Prone asked: a standing target
   goes to crouch, any other non-prone target to prone (arming the
@@ -505,17 +505,18 @@ script's `setOrigin` (cod11-combat.md 2.1, "The thrower's slide").
 - `PM_Friction`: under one unit of speed 1.5 zeroes x, y and z (0x1eb4f),
   1.1 only x and y. Air moves call it, so a vertical jump's apex can snap
   vz to 0. VERIFIED.
-- `PM_StepSlideMove` (VERIFIED unless marked):
+- `PM_StepSlideMove`:
   - the jump step tests 0x2000 and climbs to `fJumpOriginZ + 39`
-    (0x75ca8);
-  - a rising climber steps whether blocked or not;
+    (0x75ca8; VERIFIED);
+  - a rising climber steps whether blocked or not (INFERRED, no address);
   - the ground snap reaches 9 (0x75cb4), where 1.1 reaches half the step
-    size (5 prone);
+    size (5 prone; VERIFIED);
   - the ground-plane flag is `pml.groundPlane`, a steep plane's included
     (INFERRED);
   - the step event, its velocity scale, its footstep and the prone check
     run only for a move that started on a ground plane off a ladder
-    (0x2a46f), where 1.1 ran them for every move past the entry gate.
+    (0x2a46f), where 1.1 ran them for every move past the entry gate
+    (VERIFIED).
 - `PM_CheckLadderMove`: skipped only while `pm_time` runs with 0x100 or
   0x200 set (0x2734f-0x27369), not under the penalty; a new grab needs a
   second hit along the face's normal (0x27652, 0x277a9); leaving the rungs
@@ -750,26 +751,26 @@ kerb (ct 62946) rides the capsule tie fixes.
   playerstate: a server-side aim offset off the server's RNG, nothing on
   the wire, nothing to predict. The cgame's own view kick is 1.1's.
   VERIFIED, by a capture; the reads are in the next section.
-- Bob. VERIFIED unless marked:
+- Bob:
   - the cvars are `cg_bobAmplitudeStanding` 0.007,
     `cg_bobAmplitudeDucked` 0.0075, `cg_bobAmplitudeProne` 0.03 and
-    `cg_bobMax` 8; `bg_bob*` are the C variables behind them;
+    `cg_bobMax` 8 (VERIFIED, the registration tables below); `bg_bob*` are the C variables behind them (INFERRED, no address);
   - 1.1's cgame already registers the four (table
     0x30074d70..0x30074da0, flag 0x200); 1.5's game module adds them
     (`.data` 0x83990..0x839d8, flag 0x800) and 1.5's cgame registers them
     with 0xa00 (0x30077220..0x30077250), so a 1.5 server's values reach
-    its clients through the 140/204 mirror;
+    its clients through the 140/204 mirror (VERIFIED, the tables);
   - they scale the gun bob (cgame 1.5 0x30013520, capped at 10) and the
     eye's walk bob (`CG_OffsetFirstPersonView` 1.1 0x30032ae0, 1.5
     0x30034180, through `BG_GetVerticalBobFactor` and
     `BG_GetHorizontalBobFactor`, 1.5 game 0x30a54 and 0x30b37, capped at
-    `cg_bobMax`), each amplitude the speed times the stance's cvar;
+    `cg_bobMax`), each amplitude the speed times the stance's cvar (VERIFIED);
   - the sight's view bob (capped at 45) reads the same three, as it
     shares the gun bob's stance multiplier in 1.1's game module
     (INFERRED);
-  - 1.5 picks the stance by `viewHeightTarget`, the stepped eye target;
-  - 1.5's `CalcMuzzlePoint` adds the eye bob to the server's shot origin;
-  - the eye is never set below the origin plus 8 (cgame 1.1 0x30032de5).
+  - 1.5 picks the stance by `viewHeightTarget`, the stepped eye target (INFERRED, no address);
+  - 1.5's `CalcMuzzlePoint` adds the eye bob to the server's shot origin (INFERRED, no address);
+  - the eye is never set below the origin plus 8 (cgame 1.1 0x30032de5; VERIFIED).
 - `PM_Weapon`'s other states, the ADS flag, the walking flag and the
   spread are 1.1's (side-by-side decompile, INFERRED).
 
@@ -862,8 +863,8 @@ it in. A spawn clears it with the rest of the aim state.
 1.5b's and UO's modules store every float variable where 1.1d's keep the
 x87 stack, so a fall's last bits differ between the builds. Addresses:
 1.5b `game.mp.i386.so` and `cod_lnxded`, UO `game.mp.uo.i386.so` and
-`coduo_lnxded`. Four stores reach a player's origin and velocity, all
-VERIFIED:
+`coduo_lnxded`. Four stores reach a player's origin and velocity, each
+VERIFIED at the addresses in its row:
 
 | Store | 1.5b | UO | 1.1d |
 |---|---|---|---|
