@@ -48,6 +48,7 @@ On foot:
 - An LMG's sight deploys its bipod on sandbags, at a `trigger_mount` or
   prone.
 - The sight cooks a pulled grenade.
+- No lying down in water: the prone check treats it as UO's does.
 - Prediction runs UO's movement: 1.5's plus sprint, the fatigue bar, the
   bipod's locks and yaw cap, the cook and automatic fire, replayed against
   retail captures ([coduo-movement.md](../research/coduo-movement.md)).
