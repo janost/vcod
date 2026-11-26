@@ -15,14 +15,6 @@ ones are kept at the end for the causes they name.
 
 By how much a player notices.
 
-- `cod4_tag_read_ab`'s 2 `GAPS` frames, the target's head a tenth off
-  across the truncation, which fit the skeleton's few ulps off retail's
-  in a gdb run (cod4-combat.md 6.1); `cod4_trace_read_ab`'s 11, the
-  swaying target's `aimSpreadScale` an ulp off (cod4-gsc.md 3.3).
-  The strafe's rows hit traces on a strafing body too. Unread: the legs'
-  swing and the controls' ease on a strafe under gdb (cod4-combat.md
-  6.1).
-
 - Two retail captures were never committed, so their claims are VERIFIED
   live with no gate replaying them: the mounted SAW on mp_backlot
   (`play-1.7-saw.txt`, cod4-gsc.md 9.2, cod4-effects.md 12.4) and the use
@@ -279,6 +271,12 @@ and `bravo` (a spectator); the console commands went over rcon, then
   a prone body's legs lie along the view; the spawn swings the angles
   twice; a tag read places the bone through 1.7's `AnglesToAxis` on the
   x87 stack (cod4-player-anims.md 8, cod4-combat.md 6.1).
+- The end frame's swing reads the `MOVETYPE` the frame's cmds wrote, so a
+  strafe's legs start their swing on retail's frame; `cod4_tag_read_ab`'s
+  last two `GAPS` frames, the head 0.05 off on a strafe's start and a
+  back-off's (cod4-player-anims.md 8.1). The hip spread steps on the x87
+  stack, `cod4_trace_read_ab`'s eleven `aimSpreadScale` rows
+  (cod4-combat.md 2.3).
 - A script's `bulletTrace` meets a player as its capsule where its last
   cmd linked it, under 1.7's capsule dispatch, and poses no body
   (`cod4_trace_read_ab`, cod4-gsc.md 3.3).
