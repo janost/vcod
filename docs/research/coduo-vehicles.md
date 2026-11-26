@@ -1413,6 +1413,27 @@ hair inside the terrain, so `PM_GroundTrace`'s start in solid lets the
 body off the ground (cod11-mantle.md, "A start in solid on the ground
 trace").
 
+### 11.7.1 The corpse's strikes on the predictor
+
+`predict_ab`'s UO slope replay misses the jeep-die capture's two snapshots
+after the death (ct 18743 and 18793; `REPLAY_GAPS`). Both are game writes
+ahead of a cmd's `Pmove`. The snapshots read `pm_flags` 0x200 with
+`pm_time` 166 and 157 (VERIFIED, capture). Counted back over the cmds'
+msecs, that is 200 set ahead of cmd 18718 (9 + 8 + 8 + 9 = 34 ms run
+since) and again ahead of cmd 18759 (9 + 8 + 8 + 8 + 10 = 43) (INFERRED,
+`PM_DropTimers` taking each cmd's msec). The velocities carry z (274, then
+267), which the resting arm's `200 dir` never does, so both are the moving
+hull's `VEH_PlayerCollision` (11.6 step 4) (INFERRED). That strike reads
+the hull's record velocity (`rec+0xe8`) and its `r.currentOrigin`. The
+capture logs the hull's entity only while the probe is seated (`veh=`),
+and a vehicle's `pos.trType` 1 sends no velocity at all, so no predictor
+replay of this capture can run it. Closing the gap needs a recapture that
+logs the hull's state per think beside the slope lines
+(`tools/re/gdb_vehicle.py`'s `think` lines), and a replay-side port of the
+overlap test with the hull's collmap posed there. `vehicle_ab` replays the
+same capture on vcod-server, and the corpse's velocity matches retail's to
+the bit on both snapshots (VERIFIED, the gate).
+
 ## 12. The drive step
 
 - `Scr_Vehicle_Think` (0x8c7cc) is every vehicle's think, a fixed 50 ms
