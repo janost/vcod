@@ -1,5 +1,6 @@
 //! The capture pairs of cod4-combat.md 15 on ours. Each is a retail
-//! `cod4_lnxded` 1.7 run (`+devmap mp_crash`, `war`, `sv_pure 0`) of two
+//! `cod4_lnxded` 1.7 run (`+devmap mp_crash` unless the pair says
+//! otherwise, `war`, `sv_pure 0`; ours reads both off the serverinfo) of two
 //! `cod4_probe`s: `target` (allies, `--goto "207 2291 296"`) and, a second
 //! later, `shooter` (axis, `--goto "123 2110 300"`), each logged into
 //! `play-1.7-<name>-target.txt` and `-shooter.txt` (recipes on each
@@ -195,8 +196,13 @@ fn run(install: &vcod_cod4::install::Install, pair: &Pair, hook: &mut Hook) -> R
     let twins: Vec<Twin> = lines.iter().map(|l| twin(l)).collect();
     let retail_sides: Vec<Side> = lines.iter().map(|l| side(l)).collect();
     let cs0 = String::from_utf8_lossy(retail_sides[0].gs.configstring(0)).into_owned();
-    let mut sv = Cod4Server::new(test_cfg("mp_crash", "war"), 7);
-    for (k, v) in vcod_common::net::connectionless::info_pairs(&cs0) {
+    let info = vcod_common::net::connectionless::info_pairs(&cs0);
+    let get = |key: &str| info.iter().find(|(k, _)| *k == key).map(|(_, v)| *v);
+    let mut sv = Cod4Server::new(
+        test_cfg(get("mapname").unwrap(), get("g_gametype").unwrap()),
+        7,
+    );
+    for &(k, v) in &info {
         if !matches!(k, "protocol" | "shortversion" | "fs_game") {
             sv.set_cvar(k, v);
         }
@@ -783,4 +789,74 @@ const TRACE_READ_GAPS: &[(&str, &str)] = &[
 #[test]
 fn cod4_trace_read_ab() {
     pair_ab("cod4_trace_read_ab", &TRACE_READ, TRACE_READ_GAPS);
+}
+
+const SAW: Pair = Pair {
+    // `+set sv_clientSideBullets 0 +devmap mp_backlot`; gunner (axis)
+    // `--script saw --face 0 --goto "-770 68 320 0"` behind the crouch SAW
+    // 393, watcher (allies, `--qport 4022`) `--goto "-860 68 320 0"` behind
+    // him: the gunner mans the gun, fires, swings past both arcs, lets go
+    // and fires his own rifle (cod4-gsc.md 9.2).
+    name: "saw",
+    seed: 352_939_491,
+    gsc: None,
+    until: None,
+    probes: &["gunner", "watcher"],
+    cvars: &[("sv_clientSideBullets", "0")],
+};
+
+/// The barrel's angles a few float ulps off retail's where the view is
+/// still or walking home (`turret_clientaim`'s x87 `AngleDelta` and the
+/// unmanned gun's walk, not matched to the ulp; cod4-gsc.md 9.2.1).
+const BARREL_ULPS: &str = "the barrel's angles a few ulps off";
+/// The gunner's yaw after the let go -0 where retail's is +0, which the
+/// body's zero-bit angle sends as the smallest float (cod4-gsc.md 9.2.1).
+const RELEASE_ZERO: &str = "the let go's yaw -0 against +0";
+/// The watcher's spawn off a spectator view of 94: retail's spawn frame
+/// keeps the view and turns `delta_angles` by the spot's yaw alone, ours
+/// takes the spawn snapshot's view for the spot's yaw (cod4-gsc.md 9.2.1).
+const SPAWN_VIEW: &str = "the spawn off a spectator view not 0";
+
+const SAW_GAPS: &[(&str, &str)] = &[
+    ("* entity 393:11 lerp.u.anonymous.data[", BARREL_ULPS),
+    // The body hangs off the barrel's last frame.
+    ("gunner ps origin[1]", BARREL_ULPS),
+    (
+        "watcher entity 0:1 lerp.apos.trBase[1] * ours 0x1 retail 0x0",
+        RELEASE_ZERO,
+    ),
+    ("watcher ps delta_angles[1]", SPAWN_VIEW),
+    ("gunner entity 1:1 lerp.apos.trBase[1]", SPAWN_VIEW),
+];
+
+/// A mounted SAW: the hint, the mount's view clamp and crouch, the barrel
+/// clamped to the arcs, the gunner placed off the legs' `turretanim`, the
+/// gun's rounds and their impacts naming the gun, and the let go
+/// (cod4-gsc.md 9.2, cod4-effects.md 12.4).
+#[test]
+fn cod4_mounted_saw_ab() {
+    pair_ab("cod4_mounted_saw_ab", &SAW, SAW_GAPS);
+}
+
+const SWAP: Pair = Pair {
+    // Target `--class specops_mp,0`, shooter `--script swap --weapon 27`:
+    // the shooter kills the target, walks to the MP5 he dropped and holds
+    // use over it, swapping his M16 for it (cod4-gsc.md 9.1).
+    name: "swap",
+    seed: 353_034_228,
+    gsc: None,
+    until: None,
+    probes: TWO,
+    cvars: &[],
+};
+
+const SWAP_GAPS: &[(&str, &str)] = &[];
+
+/// The use key's swap: the dead target's gun dropped as an item, its hint
+/// under the shooter, the pickup's `EV_ITEM_PICKUP`, the M16 left where
+/// the taken gun lay and the `a` switch (cod4-gsc.md 9.1.1).
+#[test]
+#[ignore = "open: ours swaps unlike retail's capture (cod4-gsc.md 9.1.1)"]
+fn cod4_use_key_swap_ab() {
+    pair_ab("cod4_use_key_swap_ab", &SWAP, SWAP_GAPS);
 }

@@ -810,9 +810,10 @@ fn mid_burst(ps: &super::PlayerState, d: Option<&WeaponDef>) -> bool {
 }
 
 /// The gun at rest: no offhand on the view, the prone move given back, both
-/// clocks cleared, ready with its idle anim restarted. Where a melee, an
-/// offhand throw or a sprint's lowered gun ends.
-fn settle_ready(ps: &mut super::PlayerState) {
+/// clocks cleared, ready with its idle anim restarted (`cod4_lnxded`
+/// 0x8060d8e). Where a melee, an offhand throw or a sprint's lowered gun
+/// ends, and every step of a gunner's.
+pub(super) fn settle_ready(ps: &mut super::PlayerState) {
     ps.weap_flags &= !wf::USING_OFFHAND;
     ps.pm_flags &= !pmf::PRONE_STILL;
     (ps.weapon_time, ps.weapon_delay) = (0, 0);
