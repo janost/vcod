@@ -3236,11 +3236,37 @@ drives under the fields (`playerstate/mp_peaks-tdm-slope-8ms-jeep-closespeed-uo.
   (`Entities::reissue`) with a fresh script object, carries UO's own
   entity fields (`vehicletype`, `capturing`, `vehicle_owner`, script
   fields in vcod) across, and sends it as `eType` 13 standing still
-  (`Vehicles::corpses`). Riders are not measured: retail leaves them on a
-  freed record. vcod's seats go with the record, and each rider gets a
-  forced exit where he sits (`SeatOp::Exit` with no spot) so his sim is
-  not left on a freed number; a `delete()` of an occupied vehicle does the
-  same.
+  (`Vehicles::corpses`). Riders: 17.4.1.
+
+#### 17.4.1 Freeing a vehicle with riders
+
+Captured 2026-11-26 on retail UO, mp_cassino's Panzer IV with a driver and
+a gunner seated (`probe_vehdie` with `probe_kill free` and `free_quiet`,
+fixtures `vehicles/mp_cassino-tank-free{,-quiet}-uo.txt`, gate
+`vehicle_die_ab`).
+
+- Nothing touches the riders: on the calling thread's next line both read
+  `isInVehicle` 1, health 100, the same origins (VERIFIED, capture).
+- Stock MP scripts: a rider's `tank_death_player_damage`
+  (`_tankdrive_gmi.gsc`; the jeep's `death_player_damage` has the same
+  body), started 0.2 s after his seat, wakes on the `death` and reads
+  `tank.last_attacker` off the freed handle: `dead entity is not an object`
+  at line 461, which at `developer 1` ends the server (VERIFIED, capture).
+  The gunner's had not started yet, 50 ms after his seat.
+- With those threads ended first (`notify("deactivated_player")` on each
+  rider), the level thread's `death` waiter runs and the server segfaults
+  before the next frame's script (VERIFIED, capture). Under
+  `tools/re/gdb_fault.py` the fault is `ClientThink_real` 0x40fea: with
+  the client's `eFlags & 0x100000` (0x40fbf) it reads
+  `g_entities[ent->r.ownerNum (+0x154)]`'s record pointer (+0x164), which
+  `G_FreeVehicle` zeroed (0x8afcf), and loads its +0xd0 through it
+  (VERIFIED, gdb and the instructions). INFERRED: every occupied
+  `freeVehicle` ends a retail server this way, at any `developer`.
+- vcod does not fault: the seats go with the record and each rider gets a
+  forced exit where he sits (`SeatOp::Exit` with no spot), `isInVehicle`
+  reading the stale bit until his end frame, so the same-frame lines match
+  retail's; a frame on ours reads 0 where retail has crashed. A `delete()`
+  of an occupied vehicle does the same.
 
 ### 17.5 The closespeed drives' two parts
 
