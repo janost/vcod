@@ -175,7 +175,10 @@ by doc and section. Grep `Trap:` in the subsystem doc you were sent to.
 - `PM_CheckJump` refuses a jump inside 500 ms of the last, and the graph's
   walks set off on every edge with one to hand. A bot on a jump edge waits on
   its foot until the jump is ready (`Follower::jump_wait`), and on 1.5 and UO
-  until the jump penalty has run out (`nav::jump_ready`).
+  until the jump penalty has run out (`nav::jump_ready`). One already down on
+  the top's floor, nearer the top than the foot, walks on: sent back to a foot
+  level with its top, it walks off the ledge it jumped onto
+  (bot-navigation.md 3.16).
 - Every walk's body moves by the rules `nav::with_rules` set on its thread
   (`nav::body`). The build, `par_map`'s workers and every server's bot pass
   set them (CoD2's through its graph's `NavGraph::moving`). A walk that
