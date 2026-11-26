@@ -278,8 +278,8 @@ fn cassino_world() -> vcod_common::collision::CollisionWorld {
     let fs = vcod_common::testing::uo_fs().unwrap();
     let bsp_path = fs.resolve_map(MAP).expect("the map in the UO paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let props = vcod_common::props::collision_tris(&fs, &bsp.entities);
-    vcod_common::collision::CollisionWorld::build(&bsp, &props)
+    let props = vcod_common::props::static_models(&fs, &bsp.entities);
+    vcod_common::collision::CollisionWorld::with_statics(&bsp, &props)
 }
 
 /// A 16-bit wire angle as the snapshot decodes it: degrees truncated to

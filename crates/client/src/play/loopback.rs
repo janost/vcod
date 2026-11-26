@@ -172,10 +172,8 @@ fn run(c: Conditions, weapon: &str) -> Option<Outcome> {
     let uo = p.is_uo();
     let bsp_path = fs.resolve_map("mp_carentan").expect("mp_carentan");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let world = CollisionWorld::build(
-        &bsp,
-        &vcod_common::props::collision_tris(&fs, &bsp.entities),
-    );
+    let world =
+        CollisionWorld::with_statics(&bsp, &vcod_common::props::static_models(&fs, &bsp.entities));
     world.unlink_script_brushes(&bsp.entities, "dm");
     world.set_arith(vcod_common::patch::Arith::for_client());
     let fs = Rc::new(fs);

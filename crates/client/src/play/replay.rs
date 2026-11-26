@@ -232,7 +232,8 @@ fn dispatch(t: &mut Tally, ev: &GameEvent, ctx: &ResolveCtx, cue_ctx: &CueCtx) {
 fn load_world(fs: &Pk3Fs, map: &str) -> CollisionWorld {
     let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).expect("read the bsp")).expect("parse");
-    let world = CollisionWorld::build(&bsp, &vcod_common::props::collision_tris(fs, &bsp.entities));
+    let world =
+        CollisionWorld::with_statics(&bsp, &vcod_common::props::static_models(fs, &bsp.entities));
     world.unlink_script_brushes(&bsp.entities, "dm");
     world
 }

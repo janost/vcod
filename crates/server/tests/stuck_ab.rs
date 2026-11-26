@@ -819,10 +819,8 @@ fn a_pushed_player_slides_along_a_wall_as_retail_does() {
     let weapons = vcod_common::weapon_table::from_configstring(&fs, cs7);
     let bsp_path = fs.resolve_map("mp_carentan").unwrap();
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let world = CollisionWorld::build(
-        &bsp,
-        &vcod_common::props::collision_tris(&fs, &bsp.entities),
-    );
+    let world =
+        CollisionWorld::with_statics(&bsp, &vcod_common::props::static_models(&fs, &bsp.entities));
     world.unlink_script_brushes(&bsp.entities, "dm");
     let mw = MoveWorld::bare(&world);
     let (cmds, snaps) = wall_capture();

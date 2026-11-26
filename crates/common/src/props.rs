@@ -1,11 +1,11 @@
 //! `misc_model` props from the BSP entity lump: baked to world space in the
 //! map vertex format with their lighting in the vertex colour, so they draw
-//! through the map pipeline (`build`), and their collision triangles for the
-//! collision world (`collision_tris`).
+//! through the map pipeline (`build`), and their collision surfaces for the
+//! collision world (`static_models`; CoD2's `collision_tris`).
 
 use crate::asset_source::{AssetSource, RawFile};
 use crate::bsp;
-use crate::collision::{ModelSurf, ModelTri};
+use crate::collision::{ModelSurf, ModelTri, StaticModel, StaticModels};
 use crate::deform;
 use crate::mapworld::{DrawVert, MapWorld};
 use crate::mesh::IndexRange;
@@ -702,8 +702,8 @@ impl Placed {
             .filter_map(|p| Some((p, self.models[&p.model].as_ref()?)))
     }
 
-    /// Every collision triangle of every placed prop, for
-    /// `CollisionWorld::build`.
+    /// Every collision triangle of every placed prop in world space, for
+    /// CoD2's `CollisionWorld::build`, which clips them a triangle at a time.
     pub fn collision_tris(&self) -> Vec<ModelTri> {
         let mut out = Vec::new();
         let mut collidable = 0usize;
@@ -716,6 +716,47 @@ impl Placed {
             "props: {collidable}/{} placements collide, {} triangles",
             self.placements.len(),
             out.len()
+        );
+        out
+    }
+
+    /// Every placed prop with collision, each model's surfaces once in its
+    /// own frame at the bind of their bones, for
+    /// `CollisionWorld::with_statics`: the engine clips a static model as a
+    /// script model, a surface at a time (docs/research/cod11-combat.md
+    /// 2.7.2).
+    pub fn static_models(&self) -> StaticModels {
+        let mut out = StaticModels::default();
+        let mut runs: HashMap<&str, std::ops::Range<usize>> = HashMap::new();
+        for (p, model) in self.each() {
+            let run = runs
+                .entry(p.model.as_str())
+                .or_insert_with(|| {
+                    let (tris, surfs) = bind_collision_surfs(model);
+                    let (base, first) = (out.tris.len(), out.surfs.len());
+                    out.tris.extend(tris);
+                    out.surfs.extend(surfs.into_iter().map(|mut s| {
+                        s.tris = s.tris.start + base..s.tris.end + base;
+                        s
+                    }));
+                    first..out.surfs.len()
+                })
+                .clone();
+            if run.is_empty() {
+                continue;
+            }
+            out.placed.push(StaticModel {
+                origin: p.origin,
+                axis: rotation(p.angles) * Mat3::from_diagonal(p.scale),
+                surfs: run,
+            });
+        }
+        log::info!(
+            "props: {}/{} placements collide, {} triangles in {} models",
+            out.placed.len(),
+            self.placements.len(),
+            out.tris.len(),
+            runs.values().filter(|r| !r.is_empty()).count()
         );
         out
     }
@@ -756,9 +797,14 @@ impl Placed {
     }
 }
 
-/// [`Placed::collision_tris`] off a fresh load.
+/// [`Placed::collision_tris`] off a fresh load: CoD2's static models.
 pub fn collision_tris(fs: &dyn AssetSource, entities: &str) -> Vec<ModelTri> {
     Placed::load(fs, entities).collision_tris()
+}
+
+/// [`Placed::static_models`] off a fresh load.
+pub fn static_models(fs: &dyn AssetSource, entities: &str) -> StaticModels {
+    Placed::load(fs, entities).static_models()
 }
 
 /// [`Placed::area_bounds`] off a fresh load.
@@ -848,10 +894,10 @@ mod tests {
             return;
         };
         let bsp = bsp::parse(&crate::testing::real_bsp().unwrap()).unwrap();
-        let tris = collision_tris(&fs, &bsp.entities);
-        assert!(tris.len() > 1000, "{}", tris.len());
+        let statics = static_models(&fs, &bsp.entities);
+        assert!(statics.placed.len() > 50, "{}", statics.placed.len());
         let bare = CollisionWorld::build(&bsp, &[]);
-        let world = CollisionWorld::build(&bsp, &tris);
+        let world = CollisionWorld::with_statics(&bsp, &statics);
         let blocked = placements(&bsp.entities).iter().any(|p| {
             let (top, bottom) = (p.origin + Vec3::Z * 200.0, p.origin - Vec3::Z * 10.0);
             let with = world.shot_trace(top, bottom);

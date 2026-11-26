@@ -51,6 +51,7 @@ mod linkto_ab;
 mod mapchange_ab;
 mod menuclock_ab;
 mod minefield_uo_ab;
+mod miscmodel_ab;
 mod missile_ab;
 mod missile_edge_ab;
 mod model_bounds_ab;

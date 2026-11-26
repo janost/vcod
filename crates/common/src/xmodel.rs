@@ -96,6 +96,14 @@ struct DescLod {
     materials: Vec<String>,
 }
 
+/// The loader's growth of each collision surface's stored bounds (1.1d
+/// `cod_lnxded` 0x80c1381..0x80c13ba, rodata 0x80db8b4; 1.5b 0x80ce342,
+/// 0x80e5f34; `coduo_lnxded` 0x80c36d6, 0x80ea854).
+const COLL_BOUNDS_GROWTH: f32 = 0.001;
+/// The contents bits the loader keeps (1.1d 0x80c13c7, 1.5b 0x80ce413, UO
+/// 0x80c37a7).
+const COLL_CONTENTS_MASK: u32 = 0xdfff_7ffb;
+
 /// A collision surface before the bone bake; triangles in bone space.
 #[derive(Debug)]
 struct RawCollSurf {
@@ -527,11 +535,12 @@ fn build_model(descriptor: Descriptor, parts: &[u8], surfs: &[&[u8]]) -> Result<
             .iter()
             .map(|t| t.map(|v| bone.rot * v + bone.pos))
             .collect();
+        let grow = Vec3::splat(COLL_BOUNDS_GROWTH);
         collision.push(CollSurf {
-            contents: s.contents,
+            contents: s.contents & COLL_CONTENTS_MASK,
             flags: s.flags,
             tris,
-            bounds: s.bounds,
+            bounds: (s.bounds.0 - grow, s.bounds.1 + grow),
             bone: bone_index,
         });
     }

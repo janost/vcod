@@ -1866,10 +1866,11 @@ maps: brush content bit 0x10 is glass (`glass@brokenwindow`,
 stop at a window pane and a `misc_model` lamp's glass surface (contents
 0x10) stops a player's bullet, not a player.
 
-vcod: `props::collision_tris` hands every collision surface with non-zero
-`contents` to the world as `ModelTri`s; `CollisionWorld::shot_trace` and
-`missile_trace` clip them by the bare segment with those epsilons and
-masks, `box_trace` never does. Glass brushes, whose words carry no SOLID
+vcod: `props::static_models` hands every placement with collision to the
+world, its surfaces walked one at a time (`cod11-combat.md` 2.7.2);
+`CollisionWorld::shot_trace` and `missile_trace` clip them by the bare
+segment with those epsilons and masks after the world, `box_trace` never
+does. Glass brushes, whose words carry no SOLID
 bit, enter the clip beside the SOLID and PLAYERCLIP ones, and a world-model
 render soup lying on a pane's faces does not: mp_depot draws a pane's outer
 face with a lump-0 entry whose contents are 0x1, where the brush's own word

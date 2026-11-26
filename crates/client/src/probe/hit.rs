@@ -1091,8 +1091,8 @@ impl HitProbe {
         };
         match vcod_common::bsp::parse(&data) {
             Ok(bsp) => {
-                let tris = vcod_common::props::collision_tris(fs, &bsp.entities);
-                let world = vcod_common::collision::CollisionWorld::build(&bsp, &tris);
+                let statics = vcod_common::props::static_models(fs, &bsp.entities);
+                let world = vcod_common::collision::CollisionWorld::with_statics(&bsp, &statics);
                 println!(
                     "HIT: {path} loaded, {} brushes and {} tris for the line-of-sight trace",
                     world.brushes.len(),

@@ -273,6 +273,117 @@ fn model_triangles_clip_a_shot() {
     assert_eq!(canopy.shot_trace(start, end).fraction, 1.0);
 }
 
+/// A wall at x 10 facing -x and a floor at z 0 under it, each a quad, as
+/// the surfaces of one placed model in the order `wall_first` picks; each
+/// surface's bounds hug its quad a hundredth thick.
+fn wall_and_floor(wall_first: bool, origin: Vec3, axis: glam::Mat3) -> StaticModels {
+    let quad = |a: Vec3, b: Vec3, c: Vec3, d: Vec3| {
+        [[a, b, c], [a, c, d]].map(|tri| ModelTri {
+            tri,
+            contents: CONTENTS_SOLID,
+            surface_flags: 0,
+        })
+    };
+    let (y, z) = (5.0, 5.0);
+    let wall = quad(
+        Vec3::new(10.0, -y, -z),
+        Vec3::new(10.0, -y, z),
+        Vec3::new(10.0, y, z),
+        Vec3::new(10.0, y, -z),
+    );
+    let floor = quad(
+        Vec3::new(5.0, -y, 0.0),
+        Vec3::new(15.0, -y, 0.0),
+        Vec3::new(15.0, y, 0.0),
+        Vec3::new(5.0, y, 0.0),
+    );
+    let surf = |i: usize, tris: &[ModelTri; 2]| {
+        let (lo, hi) = tris.iter().flat_map(|t| t.tri).fold(
+            (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),
+            |(lo, hi), v| (lo.min(v), hi.max(v)),
+        );
+        ModelSurf {
+            tris: 2 * i..2 * i + 2,
+            rot: glam::Quat::IDENTITY,
+            pos: Vec3::ZERO,
+            mins: lo - Vec3::splat(0.01),
+            maxs: hi + Vec3::splat(0.01),
+        }
+    };
+    let order = if wall_first {
+        [wall, floor]
+    } else {
+        [floor, wall]
+    };
+    StaticModels {
+        tris: order.iter().flatten().copied().collect(),
+        surfs: vec![surf(0, &order[0]), surf(1, &order[1])],
+        placed: vec![StaticModel {
+            origin,
+            axis,
+            surfs: 0..2,
+        }],
+    }
+}
+
+/// The static walk tries a placement's surfaces in file order and skips
+/// one whose bounds the segment enters past the best hit so far (combat
+/// doc 2.7.2). The segment crosses the wall and the floor at the same
+/// point, the floor at a slant so its backed-off fraction is the smaller:
+/// walked first it wins, walked second its bounds start past the wall's
+/// hit and it is never tried. A clip of every triangle takes the floor
+/// either way.
+#[test]
+fn the_static_walk_skips_a_later_surface_entered_past_the_hit() {
+    // Clear of the tiny world's brush and patch.
+    let at = Vec3::new(5000.0, 0.0, 50.0);
+    let (start, end) = (
+        at + Vec3::new(0.0, 0.0, 1.0),
+        at + Vec3::new(20.0, 0.0, -1.0),
+    );
+    let wall = (10.0 - SURFACE_CLIP_EPSILON) / 20.0;
+    let floor = (1.0 - SURFACE_CLIP_EPSILON) / 2.0;
+    for (wall_first, fraction, normal) in [(true, wall, -Vec3::X), (false, floor, Vec3::Z)] {
+        let statics = wall_and_floor(wall_first, at, glam::Mat3::IDENTITY);
+        let t = CollisionWorld::with_statics(&tiny_world(), &statics).shot_trace(start, end);
+        assert!((t.fraction - fraction).abs() < 1e-6, "{wall_first}: {t:?}");
+        assert!(t.normal.abs_diff_eq(normal, 1e-6), "{wall_first}: {t:?}");
+        let tris: Vec<ModelTri> = statics
+            .tris
+            .iter()
+            .map(|t| ModelTri {
+                tri: t.tri.map(|v| v + at),
+                ..*t
+            })
+            .collect();
+        let at_once = CollisionWorld::build(&tiny_world(), &tris).shot_trace(start, end);
+        assert!((at_once.fraction - floor).abs() < 1e-6, "{at_once:?}");
+    }
+}
+
+/// A placement clips in its own frame: the segment and the back-off are
+/// taken through the inverse of the scaled axis, so at `modelscale` 2 a
+/// shot stops 0.25 world units off the wall, and the normal comes back
+/// turned (`cod_lnxded` 0x8051984).
+#[test]
+fn a_static_model_clips_in_its_scaled_frame() {
+    let axis = crate::props::rotation(Vec3::new(0.0, 90.0, 0.0))
+        * glam::Mat3::from_diagonal(Vec3::splat(2.0));
+    let origin = Vec3::new(5000.0, 0.0, 50.0);
+    let statics = wall_and_floor(true, origin, axis);
+    let world = CollisionWorld::with_statics(&tiny_world(), &statics);
+    // The wall, model x 10, stands at world y 20 facing -y.
+    let t = world.shot_trace(
+        origin + Vec3::new(0.0, 0.0, 6.0),
+        origin + Vec3::new(0.0, 40.0, 6.0),
+    );
+    assert!(
+        (t.fraction - (20.0 - 2.0 * SURFACE_CLIP_EPSILON) / 40.0).abs() < 1e-6,
+        "{t:?}"
+    );
+    assert!(t.normal.abs_diff_eq(-Vec3::Y, 1e-5), "{t:?}");
+}
+
 /// A movement trace never meets a prop, whatever its shape: retail's
 /// `trap_Trace` and `trap_TraceCapsule` leave the static models to the
 /// locational trace, so a player walks through a chair a clip brush
@@ -637,18 +748,10 @@ fn brute_trace(world: &CollisionWorld, start: Vec3, end: Vec3, mins: Vec3, maxs:
                         *prim,
                     );
                 }
-                Prim::Model(i) => {
-                    clip_segment_model(
-                        &mut trace,
-                        start,
-                        end,
-                        &world.model_tris[i as usize],
-                        *prim,
-                        false,
-                    );
-                }
+                // A movement trace never clips the static models.
+                Prim::Static(_) => {}
                 // Never stored in world.prims.
-                Prim::Body(_) | Prim::Clip(_) => unreachable!(),
+                Prim::Model(_) | Prim::Body(_) | Prim::Clip(_) => unreachable!(),
             }
         }
     }
@@ -726,7 +829,8 @@ fn the_leaf_replay_matches_a_second_walk_on_mp_pavlov() {
     };
     let bsp = crate::bsp::parse(&fs.read("maps/mp/mp_pavlov.bsp").unwrap()).unwrap();
     // With the props, so a shot walks the static models' subtree.
-    let world = CollisionWorld::build(&bsp, &crate::props::collision_tris(&fs, &bsp.entities));
+    let world =
+        CollisionWorld::with_statics(&bsp, &crate::props::static_models(&fs, &bsp.entities));
     assert_ne!(world.models_root, u32::MAX);
     let (lo, hi) = crate::mesh::map_bounds(&bsp);
     let mut s = 0x9E3779B97F4A7C15u64;
@@ -853,7 +957,6 @@ fn leaf_order_trace(
         maxs,
         capsule,
         mask: MASK_PLAYERSOLID,
-        statics: false,
         skip: None,
         world_only: false,
         boxed,
@@ -1966,7 +2069,8 @@ fn patch_seams_clip_as_each_retail_build() {
     let data = crate::testing::stock_file(&fs, "maps/mp/mp_carentan.bsp");
     let bsp = crate::bsp::parse(&data).unwrap();
     // The probe ran as a dm gametype, and a round meets the props too.
-    let world = CollisionWorld::build(&bsp, &crate::props::collision_tris(&fs, &bsp.entities));
+    let world =
+        CollisionWorld::with_statics(&bsp, &crate::props::static_models(&fs, &bsp.entities));
     world.unlink_script_brushes(&bsp.entities, "dm");
     let text = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -2075,7 +2179,8 @@ fn a_patch_stops_traces_from_its_front_only() {
     ))
     .unwrap();
     let bsp = crate::bsp::parse(&fs.read("maps/mp/mp_streets.bsp").unwrap()).unwrap();
-    let world = CollisionWorld::build(&bsp, &crate::props::collision_tris(&fs, &bsp.entities));
+    let world =
+        CollisionWorld::with_statics(&bsp, &crate::props::static_models(&fs, &bsp.entities));
     world.set_arith(Arith::Stored);
     let mut checked = 0;
     for line in text.lines().filter(|l| !l.starts_with('#')) {
@@ -2200,7 +2305,7 @@ fn check_leaf_fixture(fs: &crate::pk3::Pk3Fs, gametype: Option<&str>, file: &str
         let world = worlds.entry(w[0]).or_insert_with(|| {
             let bsp = crate::bsp::parse(&data).unwrap();
             let world =
-                CollisionWorld::build(&bsp, &crate::props::collision_tris(fs, &bsp.entities));
+                CollisionWorld::with_statics(&bsp, &crate::props::static_models(fs, &bsp.entities));
             if let Some(g) = gametype {
                 world.unlink_script_brushes(&bsp.entities, g);
             }

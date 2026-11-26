@@ -2413,10 +2413,9 @@ for `bulletTrace`, rounds, swings, missiles and `CanDamage` alike.
 `scriptmodel_ab::a_script_model_clips_surface_by_surface{,_on_15,_on_uo}`
 replay the part, each fraction within 5e-4 and each hit's normal and
 position within 0.015; ours read 0.115893 on the Kübelwagen's segment 2
-before. Not ported: 1.1d's static models (`misc_model`) take the same
-`0x80c203c` (`cod11-mantle.md`, "Static models are clipped as a
-segment"; 2.7.2), and vcod's static walk still tries each triangle of a
-placement on its own.
+before. The surface bounds are the stored ones as the loader grows them
+(`xmodel-v14-format.md` 2.1). The static models (`misc_model`) take the
+same `0x80c203c`, and vcod walks them the same way (2.7.2).
 
 ### 2.7.2 A static model's surfaces
 
@@ -2433,16 +2432,61 @@ the walk 2.7.1 reads for a script model. 1.5b's (`0x8053ed2`: `shl` at
 `0x80c4658`, `0x8069154`, the walk `0x80c4892` at `0x8053eb3`) have the
 same shape. So a `misc_model` is clipped a surface at a time under its
 surfaces' stored bounds, in their order, as a script model is. INFERRED:
-the models come in the order of the static tree walk (`0x805a58c`), and a
-model's `modelscale` reaches the bounds test through the scaled axis the
-loader builds (`0x80c241c`; `props::Placed::area_bounds`).
+the models come in the order of the static tree walk (`0x805a58c`).
+VERIFIED (the instructions), 1.1d: `0x8051984` has two callers,
+`0x8059996` and `0x805a4ef`, and `0x805a58c` (which calls `0x80596d8` at
+`0x805a5fb`) has one, `SV_Trace` at `0x8091790`, behind the locational
+syscall's flag (`cod11-mantle.md`, "Static models are clipped as a
+segment"). INFERRED: both callers belong to the tree walk, so no player
+move meets a static model and the port leaves movement as it was.
 
-Not ported: vcod's static models are world triangles in the trace BVH,
-each tried on its own in the BVH's order (`walk.rs`, `Prim::Model`). The
-port needs a BVH leaf per placement whose surfaces clip in file order
-through `clip_model_surfs`' gate, which `CollisionWorld::build` and the
-`props::collision_tris` callers do not carry today. No capture measures a
-static model's surface order yet.
+**The placement's frame.** VERIFIED (the instructions), 1.1d: the loader
+(`0x8051420`) turns the angles into an axis (`0x806709c` at `0x80514f1`),
+multiplies each of its three rows by that row's `modelscale` component
+(`0x80514f6..0x8051557`) and stores the matrix's inverse (`0x8063f38` at
+`0x805155c`) at `+0x10`. The clip moves `start - origin` and `end - origin`
+through that inverse as row vectors (`0x8066380`), so the walk and its
+0.125 back-off run in the model's own units; on a hit it turns the normal
+back through the inverse's rows (`0x80663e4` at `0x8051ac2`), normalizes it
+(`0x8065a38`), writes `start + fraction * (end - start)` as the end point
+(`0x8051a5b..0x8051ab9`) and 0x3fe as the entity (`0x8051a61`). INFERRED:
+on a placement scaled by 2 a round stops 0.25 world units short of the
+face.
+
+**Measured.** VERIFIED, live (retail 1.1d, 1.5b and UO 1.51b, 2026-11-26,
+mp_depot and mp_chateau, `client-probes/probe_miscmodel`, fixtures
+`crates/server/tests/fixtures/miscmodel/`, recipes in each header): the
+three builds log the same rows. Each of mp_depot's ten segments runs into
+one placement where the surface walk and a clip of every triangle at once
+disagree, and retail takes the walk's answer on all ten. On a
+`train_boxcar1_open` the walk reads 0.962064 where every triangle at once
+reads 0.271749: that triangle is met just past its edge, inside the clip's
+barycentric slack, on a surface whose stored bounds the segment never
+enters. Four segments stop on a `light_cagelight_white_on`'s plate, a
+surface flat in x (stored `mins.x == maxs.x`), at 0.91564, 0.752248,
+0.876229 and 0.864834: the slab test enters it only through the loader's
+0.001 growth, and without it the walk reads 1 or another surface. On
+mp_chateau a sliver of a `static_vehicle_german_truck`'s cab, under a
+thousandth of a square unit, stops the round at 0.432496 where a clip that
+drops such triangles reads 0.659788. The controls, drops onto a boxcar, a
+flatcar, the truck and a staff car, agree either way.
+
+vcod: `props::Placed::static_models` keeps each model's surfaces once, in
+its frame at the bind of their bones (`bind_collision_surfs`), and each
+placement is one BVH prim (`Prim::Static`) in a subtree the world's walk
+never enters. `CollisionWorld::clip_statics` runs after the world's walk
+and before the entities: each placement the segment reaches, nearest
+first, takes it through the inverse of its scaled axis and walks its
+surfaces through `clip_model_surfs`' gate, and a hit's normal goes back
+through the inverse's transpose. `miscmodel_ab` replays the probe on 1.1d,
+1.5b and UO, each fraction within 2e-5. Two orders differ from retail's,
+neither measured: the placements come in the BVH's order, not the static
+tree's, which only a hit within one placement's back-off of another's
+could tell; and the pass starts from the fraction the world's walk leaves,
+which is a spawn-placed submodel's where one is nearer than the world,
+where retail's starts from the world's. CoD2 keeps a clip of each placed
+triangle on its own (`StaticModels::loose`): its static walk is not
+read.
 
 ---
 
@@ -7110,7 +7154,7 @@ outside the 0x2802091 move mask (11.1). VERIFIED: the move trace is `trap_Locati
 (`cod11-mantle.md`, "Static models are clipped as a segment"), so the frag
 rests on the crate's own collision mesh, and the bounce parm it carries
 (21 on both throws that land there) is that surface's `surf_flags`.
-`World::from_bsp` takes the paks for that, and `props::collision_tris`
+`World::from_bsp` takes the paks for that, and `props::static_models`
 keeps each surface's word, so vcod's bounce reads 21 too. VERIFIED: the
 explode's 16-unit downward trace is a `trap_Trace`, which walks no static
 model, so a frag resting on a crate explodes with parm 0 (a zero normal)
