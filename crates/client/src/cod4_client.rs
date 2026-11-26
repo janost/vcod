@@ -116,7 +116,7 @@ pub(crate) struct Cod4Client {
     /// them: where the others' shots flash and leave from.
     weapon_tags: HashMap<u32, WeaponTags>,
     /// msvcrt `rand()`'s state for the gunner's view jitter.
-    jitter_rand: u32,
+    jitter_rand: vcod_common::rng::MsvcRand,
     /// The zones' script menus went to the session.
     menus_loaded: bool,
     /// The fog and vision set its configstrings name.
@@ -302,7 +302,7 @@ impl Cod4Client {
             view_tags: None,
             turret_tags: HashMap::new(),
             weapon_tags: HashMap::new(),
-            jitter_rand: 1,
+            jitter_rand: Default::default(),
             menus_loaded: false,
             look,
             shock: Default::default(),
@@ -1662,8 +1662,7 @@ impl Cod4Client {
             return [0.0; 2];
         };
         let mut crandom = || {
-            self.jitter_rand = self.jitter_rand.wrapping_mul(214013).wrapping_add(2531011);
-            let r = ((self.jitter_rand >> 16) & 0x7fff) as f32 / 32768.0;
+            let r = self.jitter_rand.unit();
             2.0 * (r - 0.5)
         };
         let p = j[0] * crandom();
