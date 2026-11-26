@@ -347,7 +347,8 @@ keeps `cg_fov`.
 `moves_ab`'s `the_predictor_replays_uo_seats` rebuilds every snapshot of
 section 8's two seat captures through `predict::from_wire` with its
 vehicle's angles and predicts it to the next under UO's rules. Every
-field matches retail but these (VERIFIED, replay):
+field matches retail but these, which the predictor alone misses
+(VERIFIED, replay):
 
 - `delta_angles` at each `nextvehslot`: the new seat's
   `SetClientViewAngle`, the server's.
@@ -411,6 +412,22 @@ Two rows the gate once carried are closed:
   2026-11-18 misses neither (VERIFIED, replay). Which change closed them is
   not traced. The gate now lists each gap by the commandTimes it misses on
   and fails on a listed row that matches.
+
+Since 2026-11-26 the gate lists no gaps: the replay runs the two server
+writes itself after the cmds (`moves_ab`'s `server_writes`). A seat
+change takes the snapshot's `delta_angles` in place of
+`SetClientViewAngle`'s, the new seat's tag view being the hull's; a new
+`damageEvent` adds the snapshot's `damageCount` to the predicted
+`aimSpreadScale` (capped at 255) and raises the snapshot's `EV_PAIN`, as
+`P_DamageFeedback` does. With them the tank's main-gun snapshot matches on
+`aimSpreadScale` and `eventSequence` (VERIFIED, replay). The server's own
+`delta_angles` write is `vehicle_ab`'s: its absolute value rides each
+side's own cmd angles, so the gate compares each snapshot's step in
+`delta_angles[0]` and `[1]` from the one before. On both seat captures
+ours steps as retail's at every snapshot, the four seat changes included
+(the tank's (-305, -18) at 33536 and (-3812, 385) at 41042, the jeep's
+(-6591, -27029) at 32241 and (-10188, -27097) at 39741 as shorts)
+(VERIFIED, the gate).
 
 With the seat stripped from the playerstate the replay misses
 `delta_angles` on 44 and 230 snapshots, `fWeaponPosFrac` and the driver's
@@ -1251,7 +1268,22 @@ that move, alias and snapped origin (`compare_impacts`).
     against ours' (-1032.24, 7763.31). Retail's second drop onto the same
     spot, already prone, lands on ours' point (VERIFIED, captures). So
     the slide belongs to the prone press's transition on landing, which
-    ours lacks (INFERRED). `FIRST_DROP_GAPS` names `bail-prone`.
+    ours lacks (INFERRED). `FIRST_DROP_GAPS` named `bail-prone`.
+
+  Closed 2026-11-26: retail never lies that victim down in the air. His
+  placement's lie-down test passes the stale ground, and its chest sample
+  lands 27.4 under the origin plus 6, past UO's bound of 24
+  (`BG_CheckProneValid` 0x22841..0x22866, `fabs` against the double at
+  0x9a9e0, then the shared miss at 0x22f9b, which refuses an on-ground
+  caller; coduo-movement.md 17) (VERIFIED (the instructions)). Every later
+  cmd of the fall is airborne and drops the press, so he lands standing,
+  his clipped velocity kept with no prone timer running, slides on down
+  the grade and lies down on the cmd after the landing (INFERRED, off the
+  replay). Ours, with the bound ported, lands and slides on retail's
+  numbers to the hundredth, (-1032.09, 7763.64, -103.04) then (-1032.00,
+  7763.87, -103.10), and `FIRST_DROP_GAPS` is empty (VERIFIED, the gate).
+  The 150-ahead prone runs fall about 14 units, inside the bound, and lie
+  down on the placement as before.
 
 **A strike that kills.** `VEH_PlayerCollision` runs inside the drive
 step's probe loop (0x827ab), on each of the six `vehCheckSolidOffsets`
@@ -1380,6 +1412,27 @@ ours slides with it to the bit (VERIFIED, replay). The placement lands a
 hair inside the terrain, so `PM_GroundTrace`'s start in solid lets the
 body off the ground (cod11-mantle.md, "A start in solid on the ground
 trace").
+
+### 11.7.1 The corpse's strikes on the predictor
+
+`predict_ab`'s UO slope replay misses the jeep-die capture's two snapshots
+after the death (ct 18743 and 18793; `REPLAY_GAPS`). Both are game writes
+ahead of a cmd's `Pmove`. The snapshots read `pm_flags` 0x200 with
+`pm_time` 166 and 157 (VERIFIED, capture). Counted back over the cmds'
+msecs, that is 200 set ahead of cmd 18718 (9 + 8 + 8 + 9 = 34 ms run
+since) and again ahead of cmd 18759 (9 + 8 + 8 + 8 + 10 = 43) (INFERRED,
+`PM_DropTimers` taking each cmd's msec). The velocities carry z (274, then
+267), which the resting arm's `200 dir` never does, so both are the moving
+hull's `VEH_PlayerCollision` (11.6 step 4) (INFERRED). That strike reads
+the hull's record velocity (`rec+0xe8`) and its `r.currentOrigin`. The
+capture logs the hull's entity only while the probe is seated (`veh=`),
+and a vehicle's `pos.trType` 1 sends no velocity at all, so no predictor
+replay of this capture can run it. Closing the gap needs a recapture that
+logs the hull's state per think beside the slope lines
+(`tools/re/gdb_vehicle.py`'s `think` lines), and a replay-side port of the
+overlap test with the hull's collmap posed there. `vehicle_ab` replays the
+same capture on vcod-server, and the corpse's velocity matches retail's to
+the bit on both snapshots (VERIFIED, the gate).
 
 ## 12. The drive step
 
@@ -3237,11 +3290,37 @@ drives under the fields (`playerstate/mp_peaks-tdm-slope-8ms-jeep-closespeed-uo.
   (`Entities::reissue`) with a fresh script object, carries UO's own
   entity fields (`vehicletype`, `capturing`, `vehicle_owner`, script
   fields in vcod) across, and sends it as `eType` 13 standing still
-  (`Vehicles::corpses`). Riders are not measured: retail leaves them on a
-  freed record. vcod's seats go with the record, and each rider gets a
-  forced exit where he sits (`SeatOp::Exit` with no spot) so his sim is
-  not left on a freed number; a `delete()` of an occupied vehicle does the
-  same.
+  (`Vehicles::corpses`). Riders: 17.4.1.
+
+#### 17.4.1 Freeing a vehicle with riders
+
+Captured 2026-11-26 on retail UO, mp_cassino's Panzer IV with a driver and
+a gunner seated (`probe_vehdie` with `probe_kill free` and `free_quiet`,
+fixtures `vehicles/mp_cassino-tank-free{,-quiet}-uo.txt`, gate
+`vehicle_die_ab`).
+
+- Nothing touches the riders: on the calling thread's next line both read
+  `isInVehicle` 1, health 100, the same origins (VERIFIED, capture).
+- Stock MP scripts: a rider's `tank_death_player_damage`
+  (`_tankdrive_gmi.gsc`; the jeep's `death_player_damage` has the same
+  body), started 0.2 s after his seat, wakes on the `death` and reads
+  `tank.last_attacker` off the freed handle: `dead entity is not an object`
+  at line 461, which at `developer 1` ends the server (VERIFIED, capture).
+  The gunner's had not started yet, 50 ms after his seat.
+- With those threads ended first (`notify("deactivated_player")` on each
+  rider), the level thread's `death` waiter runs and the server segfaults
+  before the next frame's script (VERIFIED, capture). Under
+  `tools/re/gdb_fault.py` the fault is `ClientThink_real` 0x40fea: with
+  the client's `eFlags & 0x100000` (0x40fbf) it reads
+  `g_entities[ent->r.ownerNum (+0x154)]`'s record pointer (+0x164), which
+  `G_FreeVehicle` zeroed (0x8afcf), and loads its +0xd0 through it
+  (VERIFIED, gdb and the instructions). INFERRED: every occupied
+  `freeVehicle` ends a retail server this way, at any `developer`.
+- vcod does not fault: the seats go with the record and each rider gets a
+  forced exit where he sits (`SeatOp::Exit` with no spot), `isInVehicle`
+  reading the stale bit until his end frame, so the same-frame lines match
+  retail's; a frame on ours reads 0 where retail has crashed. A `delete()`
+  of an occupied vehicle does the same.
 
 ### 17.5 The closespeed drives' two parts
 

@@ -97,6 +97,27 @@ pub fn clip_entity_box(
     }
 }
 
+/// Where the point segment `start..end` meets the brush `planes` as
+/// retail's sight trace does (`trap_SightTraceToEntity`, cod11-combat.md
+/// 14.8.1): with no `SURFACE_CLIP_EPSILON`, an end on or ahead of a face
+/// misses. The enter fraction, 0 for a start inside; `None` for a miss.
+pub fn sight_meets_brush(start: Vec3, end: Vec3, planes: &[(Vec3, f32)]) -> Option<f32> {
+    let (mut enter, mut leave, mut startout) = (0.0f32, 1.0f32, false);
+    for &(n, d) in planes {
+        let (d1, d2) = (n.dot(start) - d, n.dot(end) - d);
+        if d1 > 0.0 {
+            if d2 >= 0.0 {
+                return None;
+            }
+            startout = true;
+            enter = enter.max(d1 / (d1 - d2));
+        } else if d2 > 0.0 {
+            leave = leave.min(d1 / (d1 - d2));
+        }
+    }
+    (!planes.is_empty() && (!startout || enter < leave)).then_some(enter)
+}
+
 /// Q3 `cm_trace.c` `CM_TraceThroughBrush`, on planes already expanded by the
 /// shape, which is retail's own brush arm (`cod_lnxded` 0x8054e90, the
 /// `sphere.use` branch: `dist + radius` per side, the sphere nearest the

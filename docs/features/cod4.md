@@ -348,7 +348,8 @@ has a handler (3.1).
   `getTagOrigin` reads a player's posed bone (3.3). Bones compose as 1.7's
   skeleton composes them (3.2, "The skeleton").
 - The use key and touch pass reach game object triggers, `trigger_use`
-  and dropped weapons (swap the gun in hand). A planter raises the
+  and dropped weapons (swap the gun in hand, which stays where the taken
+  one lay, matching the retail mp_crash capture). A planter raises the
   briefcase (9).
 - The six stock mounted SAWs (`misc_turret`, `ET_MG42`) show their hint,
   mount on use, hold the view in their arcs, fire off the turret's weapon

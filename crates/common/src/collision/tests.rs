@@ -858,6 +858,7 @@ fn leaf_order_trace(
         world_only: false,
         boxed,
         sphere: capsule.offset,
+        sight: false,
     };
     let mut trace = Trace::clear(end);
     world.clip_leaf_walk(world.leaf_walk.as_ref().unwrap(), &sweep, &mut trace);
@@ -2286,4 +2287,28 @@ fn a_later_surface_past_the_best_fraction_is_not_clipped() {
     let posed = clip_model_surfs(start, end, &tris, &surfs, 1, 1.0).unwrap();
     assert_eq!(posed.1.z, 1.0, "a surface at a time: the deck");
     assert!((posed.0 - (1.0 - 0.125) / 6.0).abs() < 1e-6, "{}", posed.0);
+}
+
+/// The sight test takes no clip epsilon: a segment ending a sixteenth short
+/// of a box's face or on it misses, one ending a sixteenth inside or
+/// starting inside meets it (cod11-combat.md 14.8.1).
+#[test]
+fn a_sight_test_needs_the_end_past_the_face() {
+    let cube: Vec<(Vec3, f32)> = [
+        Vec3::X,
+        Vec3::NEG_X,
+        Vec3::Y,
+        Vec3::NEG_Y,
+        Vec3::Z,
+        Vec3::NEG_Z,
+    ]
+    .into_iter()
+    .map(|n| (n, 16.0))
+    .collect();
+    let from = Vec3::new(-100.0, 3.0, 2.0);
+    let to = |x: f32| Vec3::new(x, 3.0, 2.0);
+    assert_eq!(super::sight_meets_brush(from, to(-16.0625), &cube), None);
+    assert_eq!(super::sight_meets_brush(from, to(-16.0), &cube), None);
+    assert!(super::sight_meets_brush(from, to(-15.9375), &cube).is_some());
+    assert_eq!(super::sight_meets_brush(Vec3::ZERO, from, &cube), Some(0.0));
 }

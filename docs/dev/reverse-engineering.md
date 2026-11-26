@@ -57,6 +57,9 @@ CoD1 (1.1d, 1.5b, UO):
   every vehicle record's physics state, sway and jolt at each think's track
   clock, and its velocity and committed copy at the think's entry, every
   float as its bits (coduo-vehicles.md 17.5).
+- `gdb_fault.py`: a gdb script for the CoD1 servers that writes the pc,
+  registers and backtrace of a fatal signal, each frame also as a module
+  offset (coduo-vehicles.md 17.4.1).
 - `annotate_func.py`: one function of a PIC ELF (or an unstripped
   executable, by its full symbol table) with its relocations resolved. Run it first: a plain `objdump` of `game.mp.i386.so` hides every
   call and cvar behind PIC relocations.

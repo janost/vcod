@@ -198,6 +198,13 @@ pub fn check_prone(world: &MoveWorld, q: ProneQuery) -> Option<ProneBody> {
         return None;
     }
     let chest = t.endpos;
+    // UO's chest sample more than 24 off the origin plus 6 misses (game.mp.uo
+    // 0x22841..0x22866; coduo-movement.md 17).
+    if q.rules == MoveRules::Uo
+        && ((f64::from(chest.z) - f64::from(o.z)) - f64::from(PRONE_BODY_HALF_BOX)).abs() > 24.0
+    {
+        return missed();
+    }
     let bend = angle_subtract(vectopitch(feet - hips), vectopitch(hips - chest));
     // Legs bent up past the hips: 1.1 and 1.5 allow 50 degrees (rodata 0x701a8,
     // 1.5 0x74fb8), UO 45 (0x9a9e8; coduo-movement.md 17).

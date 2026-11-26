@@ -824,13 +824,15 @@ pub fn free(host: &mut GameHost, id: EntId) {
 }
 
 /// `G_FreeVehicle`'s record half: the pool slot and the sound blends go.
-/// Each rider is put out where he sits, so his sim does not keep a seat on
-/// a freed number (coduo-vehicles.md 17.4).
+/// Retail leaves the riders on the freed record and faults in their next
+/// think; vcod puts each out where he sits instead, `isInVehicle` still 1
+/// until his end frame as retail's untouched `eFlags` read
+/// (coduo-vehicles.md 17.4.1).
 fn free_record(host: &mut GameHost, id: EntId) -> Option<Vehicle> {
     let v = host.vehicles.live.remove(&id)?;
     host.vehicles.slots[v.slot] = None;
     for slot in v.seats.into_iter().flatten() {
-        host.vehicles.stale_seated.remove(&slot);
+        host.vehicles.stale_seated.insert(slot);
         host.vehicles.riders.remove(&slot);
         host.vehicles.seat_ops.push(seat::SeatOp::Exit {
             slot,
@@ -1529,7 +1531,8 @@ mod tests {
     }
 
     /// Freeing an occupied vehicle puts each rider out where he sits: his
-    /// sim gets a forced exit and no seat clock or stale seat bit stays.
+    /// sim gets a forced exit, no seat clock stays, and `isInVehicle` reads
+    /// the stale bit until his end frame.
     #[test]
     fn freeing_a_vehicle_puts_its_riders_out() {
         let mut host = GameHost::new(&crate::game::profile::COD1_UO, vec![String::new(); 2048]);
@@ -1539,7 +1542,6 @@ mod tests {
         host.vehicles.slots[0] = Some(TANK);
         host.vehicles.live.insert(TANK, v);
         host.vehicles.riders.insert(3, seat::RiderClock::default());
-        host.vehicles.stale_seated.insert(5);
         free(&mut host, TANK);
         let exit = |slot| seat::SeatOp::Exit {
             slot,
@@ -1548,7 +1550,7 @@ mod tests {
         };
         assert_eq!(host.vehicles.seat_ops, vec![exit(3), exit(5)]);
         assert!(host.vehicles.riders.is_empty());
-        assert!(host.vehicles.stale_seated.is_empty());
+        assert_eq!(host.vehicles.stale_seated, [3, 5].into());
         assert_eq!(host.vehicles.seat_of(3), None);
     }
 

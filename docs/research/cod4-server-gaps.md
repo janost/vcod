@@ -15,14 +15,13 @@ ones are kept at the end for the causes they name.
 
 By how much a player notices.
 
-- The use key's weapon swap against its capture
-  (`cod4_use_key_swap_ab`, `#[ignore]`d): 1.7 rings `EV_ITEM_PICKUP` with
-  the new weapon, reads `weapon` 0 on the pickup frame and leaves the old
-  gun at rest where the taken one lay; ours launches it from the taker
-  and rings nothing (cod4-gsc.md 9.1.1). Unread: 1.7's `Touch_Item` arm.
+- `cod4_use_key_swap_ab`'s `GAPS`: from 46600 the target's killcam
+  carries the shooter's `delta_angles` and yaw coded once where ours
+  codes the archive twice, a short nearer zero (cod4-gsc.md 9.1.1). Unread:
+  what makes 1.7's archive read once there.
 - `cod4_mounted_saw_ab`'s `GAPS`: the barrel's angles and the gunner's
-  origin a few ulps off, the let go's yaw -0 against +0, and the
-  watcher's spawn off a spectator view of 94 (cod4-gsc.md 9.2.1).
+  origin a few ulps off, and the watcher's spawn off a spectator view of
+  94 (cod4-gsc.md 9.2.1).
 
 ## 2. Not gaps
 
@@ -130,6 +129,11 @@ and `bravo` (a spectator); the console commands went over rcon, then
 
 ## 6. Closed
 
+- The use key's weapon swap is 1.7's `Touch_Item` arm: the gun in hand
+  set at rest where the taken one lay with its angles and ground,
+  `EV_ITEM_PICKUP` with the new weapon, `weapon` 0 on the pickup frame
+  and the item freed at once (cod4-gsc.md 9.1.2). Before it ours launched
+  the old gun from the taker and rang nothing.
 - Fall damage: `Cod4Level::client_events` takes `EV_LANDING_PAIN_*` to
   1.7's landing arm (`cod4_lnxded` 0x80a5841), `G_Damage` with
   `MOD_FALLING` and no parties, 1.1 of max health past 99, else the

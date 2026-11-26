@@ -274,7 +274,7 @@ pub fn damaged(
 /// `G_GrenadeTouchTriggerDamage` (1.1d 0x655a0), which keeps only the
 /// triggers `enableGrenadeTouchDamage` opened: every `trigger_damage` the
 /// area tree lists under 0x400000 in the segment's box and the segment
-/// crosses (`trap_SightTraceToEntity`) is notified `"damage"` with the
+/// meets (`trap_SightTraceToEntity`) is notified `"damage"` with the
 /// damage and the attacker on the spot, activated, and put back to full
 /// when nothing accumulates. Nothing comes off `health`.
 pub fn sweep(
@@ -311,23 +311,17 @@ pub fn sweep(
             .model
             .filter(|m| *m != 0)
             .and_then(|m| host.model_brushes.get(m as usize));
+        // `trap_SightTraceToEntity(start, 0, 0, end, ent, -1)`: no clip
+        // epsilon on a brush (cod11-combat.md 14.8.1).
         let crossed = match (t.shape.model, hulls) {
-            // A world copy: the segment against the whole world's clip
-            // moved to the trigger, under `trap_SightTraceToEntity`'s -1.
-            (Some(0), _) => host.world.as_ref().is_some_and(|w| {
-                let tr = w.collision.pusher_box_trace(
-                    vcod_common::collision::Pusher::Copy(id.0),
-                    start,
-                    end,
-                    Vec3::ZERO,
-                    Vec3::ZERO,
-                    u32::MAX,
-                );
-                tr.fraction < 1.0 || tr.startsolid
+            // A world copy: the whole world's clip moved to the trigger.
+            (Some(0), _) => host
+                .world
+                .as_ref()
+                .is_some_and(|w| w.collision.copy_sight_trace(id.0, start, end, u32::MAX)),
+            (_, Some(hulls)) if !hulls.is_empty() => hulls.iter().any(|h| {
+                vcod_common::collision::sight_meets_brush(start - at, end - at, &h.planes).is_some()
             }),
-            (_, Some(hulls)) if !hulls.is_empty() => {
-                crate::game::trigger::segment_enters_hulls(start, end, at, hulls).is_some()
-            }
             _ => {
                 let (lo, hi) = crate::game::trigger::abs_bounds(at.into(), &t);
                 crate::game::combat::ray_box(start, end, lo.into(), hi.into()).is_some()

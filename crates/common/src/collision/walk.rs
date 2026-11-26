@@ -6,7 +6,7 @@
 use super::clip::NEAR_TIE;
 use super::clip::{
     Capsule, TIE_WINDOW, capsule_sweep, clip_brush_box, clip_brush_capsule, clip_patch,
-    clip_segment_model, patch_meets,
+    clip_segment_model, patch_meets, sight_meets_brush,
 };
 use super::{CollisionWorld, Prim, Trace};
 use crate::leafwalk::{Item, LeafWalk, Listing};
@@ -316,6 +316,7 @@ impl CollisionWorld {
             world_only,
             boxed,
             sphere,
+            sight,
         } = *sw;
         match prim {
             Prim::Brush(b) => {
@@ -330,7 +331,14 @@ impl CollisionWorld {
                 }
                 let same_model = matches!(trace.hit,
                     Some(Prim::Brush(o)) if self.brushes[o as usize].model == brush.model);
-                if boxed {
+                if sight {
+                    if let Some(f) = sight_meets_brush(start, end, &brush.planes)
+                        && f < trace.fraction
+                    {
+                        trace.fraction = f;
+                        trace.hit = Some(prim);
+                    }
+                } else if boxed {
                     clip_brush_box(
                         trace,
                         start,
@@ -586,6 +594,9 @@ pub(super) struct TraceInput {
     /// into a turned world copy's frame. Terrain and patches keep the
     /// upright offset, as retail's do.
     pub(super) sphere: Vec3,
+    /// A point sight trace: brushes take [`sight_meets_brush`] in place of
+    /// the box clip.
+    pub(super) sight: bool,
 }
 
 impl TraceInput {
