@@ -806,26 +806,29 @@ Mac 0x1c4272. VERIFIED:
 
 ## 4. `finishPlayerDamage`
 
-Mac 0x1c2e32 (lnxded 0x80fb170). VERIFIED:
+Mac 0x1c2e32 (lnxded 0x80fb170). Each bullet carries its own label:
 
 - Ten arguments. A damage under 1 does nothing. The inflictor argument,
-  when an entity, is read as the attacker (`Scr_GetEntity(1)`), as in 1.1.
+  when an entity, is read as the attacker (`Scr_GetEntity(1)`), as in 1.1. INFERRED, the decompile's flow, no address range.
 - Knockback, unless the entity's flag 8 or `dflags` 4: 0.02 of the damage
   prone, 0.15 crouched, 0.3 standing, truncated, at most 60, times
   `g_knockback` (1000) over 250 along the direction. A `pm_time` of twice
   it clamped to 50..200 with `pm_flags` 0x400 when none runs. Rodata
-  0x326568, 0x32631c, 0x3262ac, 0x32656c.
+  0x326568, 0x32631c, 0x3262ac, 0x32656c. VERIFIED, the constants; the
+  conditions on them are INFERRED, no address range.
 - A bullet weapon raises 182/183 at the point for every client but the
   victim (`r.clientMask` with the victim's bit) and 185/186 for the victim
   alone (`clientNum` the victim, every other bit set), both `surfType` 7,
-  `otherEntityNum` the attacker.
+  `otherEntityNum` the attacker. INFERRED, the decompile's flow, no address
+  range.
 - `damageTimer` (ps+0x90) grows `damage * player_dmgtimer_timePerPoint`
   (100), at most `player_dmgtimer_maxTime` (750). `damageDuration`
   (+0x94) takes it. `flinchYaw` (+0x98) is the direction's yaw less the
-  view's (9.2 has lnxded's arithmetic).
+  view's (9.2 has lnxded's arithmetic). INFERRED, no address range.
 - The health drops and `damage` is notified with the damage and the
   attacker. At 0 or below (clamped at -999) the die handler runs with
-  `psOffsetTime`. `stats[0]` takes the health.
+  `psOffsetTime`. `stats[0]` takes the health. INFERRED, the decompile's flow, no address
+  range.
 
 ## 5. `player_die`
 
