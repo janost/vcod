@@ -152,7 +152,7 @@ Common ones:
 | `rconPassword` | Turns rcon on (refused until set). CoD2 and CoD4 call it `rcon_password`; either name works. |
 | `g_password` | Private server, checked at connect, `map_restart` and map change. |
 | `sv_privateClients`, `sv_privatePassword` | Reserve the first N slots for clients that send that password. |
-| `sv_mapRotation` | The map cycle `map_rotate` walks. |
+| `sv_mapRotation` | The map cycle `map_rotate` walks: `gametype <g>` and `map <m>` words, plus UO's three (below). |
 | `fs_game` | Run a mod: its paks go over `main/` and clients are told to load it. CoD4: `mods/<name>` (below). |
 | `dedicated` | 1 by default (retail's is 2), so dev runs stay off the master list; the server says so at startup. 2 sends heartbeats (below). |
 | `protocol` | CoD1: `1`, `6` or `22` overrides the install's protocol. |
@@ -266,6 +266,24 @@ file prints `couldn't exec mp_cassino_tdm.cfg` and nothing else
 happens. `map <map> noautoexec` skips it; `map_restart` never runs it.
 A loose file added while the server runs is not seen until the next
 start, and `--vanilla` reads none.
+
+### Rotation words (UO)
+
+UO's `sv_mapRotation` takes three words besides `gametype` and `map`,
+each followed by one value:
+
+- `exec <file>` runs the config at once, as the console's `exec`; its
+  lines run after the next map has loaded, and that map skips its own
+  `<map>_<gametype>.cfg`, even when the file is missing.
+- `allow_jeeps <v>` and `allow_tanks <v>` set `scr_allow_jeeps` and
+  `scr_allow_tanks` at once, past their latch.
+
+`allow_tanks 0 exec tankless map mp_arnhem gametype tdm map mp_foy`
+loads mp_arnhem without tanks, then `tankless.cfg`'s lines, and mp_foy
+with its `mp_foy_tdm.cfg`; tanks stay off until a word or a `set` turns
+them back on. A word with no value after it prints `No value specified
+after '<word>' keyword in sv_mapRotation` and restarts the map. 1.1 and
+1.5 skip all three as unknown, as their retail servers do.
 
 ### Bots
 

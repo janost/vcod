@@ -119,7 +119,12 @@ impl Server {
                 }
                 let before = self.game.cfg.gametype.clone();
                 let mut gametype = before.clone();
-                let next = self.game.rotation.rotate(&full, &mut gametype);
+                let keywords = if self.game.proto.is_uo() {
+                    crate::engine::rotation::Keywords::Uo
+                } else {
+                    crate::engine::rotation::Keywords::Base
+                };
+                let next = self.game.rotation.rotate(&full, &mut gametype, keywords);
                 if let Some(rt) = self.game.module.script.as_mut() {
                     rt.host
                         .cvars
@@ -146,8 +151,12 @@ impl Server {
                         rt.host.save_persist = false;
                     }
                 }
+                self.run_uo_rotation_words(now);
                 match next {
-                    console::Rotate::Map(m) => self.core.console.push_front(format!("map {m}")),
+                    console::Rotate::Map { map, noautoexec } => {
+                        let flag = if noautoexec { " noautoexec" } else { "" };
+                        self.core.console.push_front(format!("map {map}{flag}"))
+                    }
                     console::Rotate::Restart => self.core.console.push_front("map_restart".into()),
                 }
             }
@@ -334,6 +343,31 @@ impl Server {
                     .push_front(String::from_utf8_lossy(&bytes).into_owned());
             }
             None => self.print(&format!("couldn't exec {arg}\n")),
+        }
+    }
+
+    /// UO's rotation words (coduo-diff.md 26.2.1), in walk order: `exec`
+    /// runs its line at once, so the file's text waits ahead of the queued
+    /// map; `allow_jeeps` and `allow_tanks` are forced `Cvar_Set`s, and a
+    /// changed value drops `savePersist` as `gametype`'s does.
+    fn run_uo_rotation_words(&mut self, now: Instant) {
+        use crate::engine::rotation::UoWord;
+        for w in std::mem::take(&mut self.game.rotation.uo) {
+            match w {
+                UoWord::Exec(file) => {
+                    log::info!("Execing: {file}.");
+                    self.exec_console_line(&format!("exec {file}"), now);
+                }
+                UoWord::Set(cvar, v) => {
+                    log::info!("Setting {cvar}: {v}.");
+                    if let Some(rt) = self.game.module.script.as_mut()
+                        && !v.eq_ignore_ascii_case(rt.host.cvars.get(cvar))
+                    {
+                        rt.host.save_persist = false;
+                    }
+                    self.set_cvar(cvar, &v);
+                }
+            }
         }
     }
 
@@ -946,6 +980,147 @@ mod tests {
             "print\ncouldn't exec nothere\nexecing mp_carentan_dm\nexec <filename> : execute a script file\n"
         );
         assert_eq!(sv.level_cvar("vc_cfg").as_deref(), Some("dm"));
+    }
+
+    /// A UO server running mp_carentan tdm with `files` over the paks;
+    /// `None` without a UO install.
+    fn uo_carentan(files: &[(&str, &str)], now: Instant) -> Option<Server> {
+        let Some(mut fs) = vcod_common::testing::uo_fs() else {
+            eprintln!("COD_DIR is not a UO install: skipping");
+            return None;
+        };
+        for (name, text) in files {
+            fs.overlay(name, text.as_bytes().to_vec());
+        }
+        let fs = Rc::new(fs);
+        let mut sv = Server::new(
+            ServerConfig {
+                gametype: "tdm".into(),
+                ..cfg()
+            },
+            now,
+        );
+        sv.set_protocol(&PROTOCOL_V22);
+        let path = fs.resolve_map("mp_carentan").expect("map in the paks");
+        let bsp = vcod_common::bsp::parse(&fs.read(&path).unwrap()).unwrap();
+        sv.load_world(World::from_bsp(&bsp, Some(&*fs)));
+        sv.load_scripts(fs).expect("load the scripts");
+        sv.tick(now);
+        Some(sv)
+    }
+
+    /// `map_rotate` over `rotation`: the rcon reply and the console queue
+    /// it left, before the queue runs.
+    fn rotate_once(sv: &mut Server, rotation: &str, now: Instant) -> (String, Vec<String>) {
+        sv.set_cvar("sv_mapRotation", rotation);
+        if let Some(rt) = sv.game.module.script.as_mut() {
+            rt.host.cvars.set("sv_mapRotation", rotation);
+            rt.host.cvars.set("sv_mapRotationCurrent", "");
+        }
+        sv.game.rotation.current.clear();
+        sv.game.redirect = Some(crate::rcon::Redirect::default());
+        sv.exec_console_line("map_rotate", now);
+        let out = sv.game.redirect.take().unwrap().finish().concat();
+        (out, sv.core.console.drain(..).collect())
+    }
+
+    /// coduo-diff.md 26.2.1, the live run: `exec` runs the file at once,
+    /// its text waits behind the map, and the map skips its own cfg.
+    #[test]
+    fn uo_rotation_exec_runs_the_file_after_a_noautoexec_map() {
+        let mut now = Instant::now();
+        let files = [
+            ("rot_a.cfg", "set vc_cfg rot_a\n"),
+            ("mp_carentan_tdm.cfg", "set vc_cfg tdm\n"),
+        ];
+        let Some(mut sv) = uo_carentan(&files, now) else {
+            return;
+        };
+        let (out, queue) = rotate_once(&mut sv, "exec rot_a map mp_carentan", now);
+        assert_eq!(out, "print\nexecing rot_a\n");
+        assert_eq!(queue, ["map mp_carentan noautoexec", "set vc_cfg rot_a\n"]);
+        let (out, queue) = rotate_once(&mut sv, "exec nothere map mp_carentan", now);
+        assert_eq!(out, "print\ncouldn't exec nothere\n");
+        assert_eq!(queue, ["map mp_carentan noautoexec"]);
+        let (_, queue) = rotate_once(&mut sv, "map mp_carentan", now);
+        assert_eq!(queue, ["map mp_carentan"]);
+        // Run the first walk's queue through: rot_a's line lands, tdm's not.
+        sv.push_console("set vc_cfg -");
+        sv.push_console("set sv_mapRotationCurrent \"\"");
+        sv.push_console("set sv_mapRotation \"exec rot_a map mp_carentan\"");
+        sv.push_console("map_rotate");
+        now += Duration::from_secs(1);
+        sv.tick(now);
+        assert_eq!(sv.level_cvar("vc_cfg").as_deref(), Some("rot_a"));
+    }
+
+    /// `allow_jeeps <v>`: a forced `Cvar_Set` the running level reads at
+    /// once; a changed value drops `savePersist`, a repeated one keeps it.
+    #[test]
+    fn uo_rotation_allow_jeeps_sets_scr_allow_jeeps() {
+        let now = Instant::now();
+        let Some(mut sv) = uo_carentan(&[], now) else {
+            return;
+        };
+        assert_eq!(sv.level_cvar("scr_allow_jeeps").as_deref(), Some("1"));
+        let persist = |sv: &mut Server, on: Option<bool>| {
+            let host = &mut sv.game.module.script.as_mut().unwrap().host;
+            if let Some(on) = on {
+                host.save_persist = on;
+            }
+            host.save_persist
+        };
+        persist(&mut sv, Some(true));
+        let (_, queue) = rotate_once(&mut sv, "allow_jeeps 0 map mp_carentan", now);
+        assert_eq!(queue, ["map mp_carentan"]);
+        assert_eq!(sv.level_cvar("scr_allow_jeeps").as_deref(), Some("0"));
+        assert!(!persist(&mut sv, None));
+        persist(&mut sv, Some(true));
+        rotate_once(&mut sv, "allow_jeeps 0 map mp_carentan", now);
+        assert!(persist(&mut sv, None));
+        let (_, queue) = rotate_once(&mut sv, "allow_jeeps", now);
+        assert_eq!(queue, ["map_restart"]);
+    }
+
+    /// `allow_tanks <v>`, as `allow_jeeps`.
+    #[test]
+    fn uo_rotation_allow_tanks_sets_scr_allow_tanks() {
+        let now = Instant::now();
+        let Some(mut sv) = uo_carentan(&[], now) else {
+            return;
+        };
+        let (_, queue) = rotate_once(&mut sv, "allow_tanks 0 map mp_carentan", now);
+        assert_eq!(queue, ["map mp_carentan"]);
+        assert_eq!(sv.level_cvar("scr_allow_tanks").as_deref(), Some("0"));
+        assert_eq!(sv.level_cvar("scr_allow_jeeps").as_deref(), Some("1"));
+        let (_, queue) = rotate_once(&mut sv, "allow_tanks", now);
+        assert_eq!(queue, ["map_restart"]);
+    }
+
+    /// 1.1d and 1.5b skip UO's words as unknown (1.5b live, coduo-diff.md
+    /// 26.2.1): no exec, no `noautoexec`, no cvar.
+    #[test]
+    fn rotation_words_are_uo_s_alone() {
+        let now = Instant::now();
+        let rot = "exec rot_a allow_jeeps 0 map mp_x";
+        for proto in [&PROTOCOL_V1, &PROTOCOL_V6] {
+            let mut sv = Server::new(cfg(), now);
+            sv.set_protocol(proto);
+            let (out, queue) = rotate_once(&mut sv, rot, now);
+            assert_eq!(out, "print\n");
+            assert_eq!(queue, ["map mp_x"]);
+            assert!(
+                !sv.game
+                    .cvar_overrides
+                    .iter()
+                    .any(|(n, _)| n == "scr_allow_jeeps")
+            );
+        }
+        let mut sv = Server::new(cfg(), now);
+        sv.set_protocol(&PROTOCOL_V22);
+        let (out, queue) = rotate_once(&mut sv, rot, now);
+        assert_eq!(out, "print\ncouldn't exec rot_a\n");
+        assert_eq!(queue, ["map mp_x noautoexec"]);
     }
 
     /// `scriptUsage` on retail 1.1d, mp_brecourt `tdm` (handshake doc,

@@ -1,7 +1,8 @@
 //! `SV_MapRotate_f`'s walk over `sv_mapRotationCurrent` (cod_lnxded
 //! 0x80840c8, cod2_lnxded 0x808c132; cod11-map-cycle.md 5,
 //! cod2-map-cycle.md 1.3). Both engines run the same loop and print the
-//! same strings; the caller applies the gametype and the ending.
+//! same strings; the caller applies the gametype and the ending. UO's
+//! adds three words (coduo-diff.md 26.2.1).
 
 /// How the walk reads a word off `sv_mapRotationCurrent`: retail's
 /// `NextToken` (cod_lnxded 0x8084014, cod2_lnxded 0x808c0d0), one
@@ -16,6 +17,26 @@ pub enum Words {
     Cod1,
     /// CoD2 (cod2_lnxded 0x80b67f8): `\"` and `\\` both.
     Cod2,
+}
+
+/// Which words the walk knows besides `gametype` and `map`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Keywords {
+    /// 1.1d, 1.5b, CoD2 and CoD4: none.
+    Base,
+    /// UO 1.51b (coduo_lnxded 0x8088690..0x8088aea): `exec`,
+    /// `allow_jeeps` and `allow_tanks`, each taking one word.
+    Uo,
+}
+
+/// One of UO's three words, in walk order.
+#[derive(Debug, PartialEq, Eq)]
+pub enum UoWord {
+    /// `exec <file>`: `Cmd_ExecuteString("exec <file>")` at once, and the
+    /// walk's `map` then queues as `map <m> noautoexec`.
+    Exec(String),
+    /// `allow_jeeps` or `allow_tanks`: a forced `Cvar_Set` of this cvar.
+    Set(&'static str, String),
 }
 
 /// `Com_Parse`'s token buffer holds 1023 characters.
@@ -115,6 +136,9 @@ pub enum End {
     NoGametype,
     /// `map` with nothing after it.
     NoMapAfterMap,
+    /// UO: `exec`, `allow_jeeps` or `allow_tanks` with nothing after it;
+    /// the line it prints.
+    NoValue(&'static str),
 }
 
 impl End {
@@ -129,6 +153,7 @@ impl End {
             End::NoMapAfterMap => Some(
                 "No map specified after 'map' keyword in sv_mapRotation - forcing map_restart.",
             ),
+            End::NoValue(line) => Some(line),
         }
     }
 }
@@ -142,14 +167,25 @@ pub struct Walk {
     /// The words skipped as `Unknown keyword '%s' in sv_mapRotation.`, in
     /// order; they print before the ending's line.
     pub unknown: Vec<String>,
+    /// UO's words, in order; always empty under [`Keywords::Base`].
+    pub uo: Vec<UoWord>,
     pub end: End,
+}
+
+impl Walk {
+    /// UO: an `exec` anywhere in the walk queues its map as `map <m>
+    /// noautoexec` (0x8088a73).
+    pub fn noautoexec(&self) -> bool {
+        self.uo.iter().any(|w| matches!(w, UoWord::Exec(_)))
+    }
 }
 
 /// `SV_MapRotate_f`'s loop: `current` refilled from `rotation` when it is
 /// the empty string, and again when its first word comes back none; `gametype <g>`
 /// sets the gametype and reads on, `map <m>` ends the walk, any other word
-/// is skipped. `current` keeps what the walk left.
-pub fn rotate(rotation: &str, current: &mut String, words: Words) -> Walk {
+/// is skipped, unless `keywords` knows it. `current` keeps what the walk
+/// left.
+pub fn rotate(rotation: &str, current: &mut String, words: Words, keywords: Keywords) -> Walk {
     if current.is_empty() {
         *current = rotation.to_string();
     }
@@ -161,6 +197,7 @@ pub fn rotate(rotation: &str, current: &mut String, words: Words) -> Walk {
     let mut walk = Walk {
         gametype: None,
         unknown: Vec::new(),
+        uo: Vec::new(),
         end: End::NoMap,
     };
     while let Some(w) = word {
@@ -178,6 +215,18 @@ pub fn rotate(rotation: &str, current: &mut String, words: Words) -> Walk {
                 None => End::NoMapAfterMap,
             };
             return walk;
+        } else if let Some((_, cvar, missing)) = UO_WORDS
+            .into_iter()
+            .find(|(k, ..)| keywords == Keywords::Uo && w.eq_ignore_ascii_case(k))
+        {
+            let Some(v) = words.next(current) else {
+                walk.end = End::NoValue(missing);
+                return walk;
+            };
+            walk.uo.push(match cvar {
+                Some(cvar) => UoWord::Set(cvar, v),
+                None => UoWord::Exec(v),
+            });
         } else {
             walk.unknown.push(w);
         }
@@ -185,6 +234,26 @@ pub fn rotate(rotation: &str, current: &mut String, words: Words) -> Walk {
     }
     walk
 }
+
+/// UO's words (`strcasecmp`): the keyword, the cvar it sets (`None` for
+/// `exec`) and the line a missing value prints (0x80e36bb..0x80e3857).
+const UO_WORDS: [(&str, Option<&str>, &str); 3] = [
+    (
+        "exec",
+        None,
+        "No value specified after 'exec' keyword in sv_mapRotation - forcing map_restart.",
+    ),
+    (
+        "allow_jeeps",
+        Some("scr_allow_jeeps"),
+        "No value specified after 'allow_jeeps' keyword in sv_mapRotation - forcing map_restart.",
+    ),
+    (
+        "allow_tanks",
+        Some("scr_allow_tanks"),
+        "No value specified after 'allow_tanks' keyword in sv_mapRotation - forcing map_restart.",
+    ),
+];
 
 #[cfg(test)]
 mod tests {
@@ -245,32 +314,119 @@ mod tests {
         for w in [Words::Cod1, Words::Cod2] {
             let rot = "gametype dm map mp_harbor map mp_brecourt";
             let mut cur = String::new();
-            let walk = rotate(rot, &mut cur, w);
+            let walk = rotate(rot, &mut cur, w, Keywords::Base);
             assert_eq!(walk.end, End::Map("mp_harbor".into()));
             assert_eq!(walk.gametype.as_deref(), Some("dm"));
             assert_eq!(cur, " map mp_brecourt");
-            assert_eq!(rotate(rot, &mut cur, w).end, End::Map("mp_brecourt".into()));
+            assert_eq!(
+                rotate(rot, &mut cur, w, Keywords::Base).end,
+                End::Map("mp_brecourt".into())
+            );
             assert_eq!(cur, "");
             let mut cur = "   ".to_string();
-            assert_eq!(rotate(rot, &mut cur, w).end, End::Map("mp_harbor".into()));
+            assert_eq!(
+                rotate(rot, &mut cur, w, Keywords::Base).end,
+                End::Map("mp_harbor".into())
+            );
             let mut cur = String::new();
             assert_eq!(
-                rotate("map \"\" x", &mut cur, w).end,
+                rotate("map \"\" x", &mut cur, w, Keywords::Base).end,
                 End::Map(String::new())
             );
             assert_eq!(cur, " x");
             let mut cur = String::new();
-            let walk = rotate("\"\" map x", &mut cur, w);
+            let walk = rotate("\"\" map x", &mut cur, w, Keywords::Base);
             assert_eq!(walk.unknown, vec![String::new()]);
         }
     }
 
     #[test]
     fn the_three_endings() {
-        let end = |rot: &str| rotate(rot, &mut String::new(), Words::Cod2).end;
+        let end = |rot: &str| rotate(rot, &mut String::new(), Words::Cod2, Keywords::Base).end;
         assert_eq!(end(""), End::NoMap);
         assert_eq!(end("bogus"), End::NoMap);
         assert_eq!(end("gametype"), End::NoGametype);
         assert_eq!(end("gametype tdm map"), End::NoMapAfterMap);
+    }
+
+    fn uo(rot: &str, cur: &mut String) -> Walk {
+        rotate(rot, cur, Words::Cod1, Keywords::Uo)
+    }
+
+    /// coduo-diff.md 26.2.1, the live walk: `exec` takes one word, any
+    /// `exec` queues the map as `noautoexec`, a missing value is a restart.
+    #[test]
+    fn uo_exec_takes_a_word_and_marks_the_map() {
+        let mut cur = String::new();
+        let rot = "EXEC rot_a exec rot_b map mp_arnhem map mp_foy exec";
+        let walk = uo(rot, &mut cur);
+        assert_eq!(
+            walk.uo,
+            vec![UoWord::Exec("rot_a".into()), UoWord::Exec("rot_b".into())]
+        );
+        assert!(walk.noautoexec());
+        assert_eq!(walk.end, End::Map("mp_arnhem".into()));
+        let walk = uo(rot, &mut cur);
+        assert!(!walk.noautoexec());
+        assert_eq!(walk.end, End::Map("mp_foy".into()));
+        let walk = uo(rot, &mut cur);
+        assert_eq!(
+            walk.end.warning(),
+            Some(
+                "No value specified after 'exec' keyword in sv_mapRotation - forcing map_restart."
+            )
+        );
+    }
+
+    #[test]
+    fn uo_allow_jeeps_sets_scr_allow_jeeps() {
+        let walk = uo("allow_jeeps 0 Allow_Jeeps \"\" map x", &mut String::new());
+        assert_eq!(
+            walk.uo,
+            vec![
+                UoWord::Set("scr_allow_jeeps", "0".into()),
+                UoWord::Set("scr_allow_jeeps", String::new())
+            ]
+        );
+        assert!(!walk.noautoexec());
+        let end = uo("allow_jeeps", &mut String::new()).end;
+        assert_eq!(
+            end.warning(),
+            Some(
+                "No value specified after 'allow_jeeps' keyword in sv_mapRotation - forcing map_restart."
+            )
+        );
+    }
+
+    #[test]
+    fn uo_allow_tanks_sets_scr_allow_tanks() {
+        let walk = uo("allow_tanks 0 gametype sd map x", &mut String::new());
+        assert_eq!(walk.uo, vec![UoWord::Set("scr_allow_tanks", "0".into())]);
+        assert_eq!(walk.gametype.as_deref(), Some("sd"));
+        let end = uo("allow_tanks", &mut String::new()).end;
+        assert_eq!(
+            end.warning(),
+            Some(
+                "No value specified after 'allow_tanks' keyword in sv_mapRotation - forcing map_restart."
+            )
+        );
+    }
+
+    /// 1.1d and 1.5b have none of UO's words (1.5b live: each word and
+    /// value an `Unknown keyword`); neither have CoD2 and CoD4.
+    #[test]
+    fn base_keywords_skip_uo_s_words() {
+        let walk = rotate(
+            "exec rot_a allow_jeeps 0 allow_tanks 0 map mp_harbor",
+            &mut String::new(),
+            Words::Cod1,
+            Keywords::Base,
+        );
+        assert_eq!(
+            walk.unknown,
+            ["exec", "rot_a", "allow_jeeps", "0", "allow_tanks", "0"]
+        );
+        assert!(walk.uo.is_empty());
+        assert_eq!(walk.end, End::Map("mp_harbor".into()));
     }
 }

@@ -4,9 +4,12 @@
 //! The rigid body core iw3mp.exe 1.7 runs its ragdolls on: ODE 0.5 as IW
 //! modified it, read off the binary (cod4-player-anims.md 10.4). Bodies,
 //! masses, the ball, hinge, angular motor and contact joints, the island
-//! walk and IW's QuickStep. Not wired into `ragdoll` yet.
+//! walk and IW's QuickStep; and the ragdoll world's contacts, IW's capsule
+//! colliders and near callback (`collide`, 10.6). Not wired into
+//! `ragdoll` yet.
 
 pub mod body;
+pub mod collide;
 pub mod joint;
 pub mod mass;
 pub mod math;
