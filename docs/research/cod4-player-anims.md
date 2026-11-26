@@ -1327,8 +1327,9 @@ The ragdoll's world steps them (10.7).
 - **Precision.** Each port stores where the binary writes a DWORD and
   keeps the x87's 53 bits between (10.4); the three-term dots load in
   orders that differ only in their first two terms, so each is
-  `(p0 + p1) + p2`. VERIFIED (the instructions). The 0x5a2320 cut is
-  `physics::reduce`'s, in `f32` (cod4-gsc.md 3.6.1).
+  `(p0 + p1) + p2`. VERIFIED (the instructions). The 0x5a2320 cut
+  (`collide::reduce`) stores where the binary does too (cod4-gsc.md
+  3.6.4).
 - **Tests** (`ode::collide::tests`, `capsule_world`, ours): a level
   capsule half a unit into a box brush's top gives the segment's two ends
   0.5 deep along +z; across the box's edge, the outer one on the edge; on

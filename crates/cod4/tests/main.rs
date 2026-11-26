@@ -21,6 +21,7 @@ mod moves_ab;
 mod net_decode;
 mod net_hostile;
 mod part_edges;
+mod phys_brush_ab;
 mod phys_create;
 mod phys_cylinder_ab;
 mod phys_fixtures;

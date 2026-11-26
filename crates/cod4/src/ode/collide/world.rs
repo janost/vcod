@@ -143,7 +143,7 @@ fn tri_plane(t: &[V3; 3]) -> ([f32; 3], f32) {
 }
 
 /// 0x4076d0: divides by the stored length, 1 when it is not over 0.
-fn normalize(v: V3) -> V3 {
+pub(super) fn normalize(v: V3) -> V3 {
     let l2 = ((w(v[0]) * w(v[0]) + w(v[1]) * w(v[1])) + w(v[2]) * w(v[2])) as f32;
     let mut l = w(l2).sqrt() as f32;
     if -l >= 0.0 {

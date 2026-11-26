@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use vcod_cod4::collision::ClipMap;
 use vcod_cod4::map::Map;
-use vcod_cod4::ode::collide::cylinder::NARROW_MAX_LENGTH;
+use vcod_cod4::ode::collide::brushgeom::NARROW_MAX_LENGTH;
 use vcod_cod4::ode::collide::{ContactGeom, MAX_CONTACTS, cut, transform};
 use vcod_cod4::ode::geom::{Geom, Transform};
 use vcod_cod4::ode::math::{M3, V3};

@@ -57,6 +57,7 @@ in step):
   crates/cod4/src/ode/body.rs
   crates/cod4/src/ode/collide/capsule.rs
   crates/cod4/src/ode/collide/transform.rs
+  crates/cod4/src/ode/geom.rs
   crates/cod4/src/ode/joint/amotor.rs
   crates/cod4/src/ode/joint/ball.rs
   crates/cod4/src/ode/joint/contact.rs

@@ -11,6 +11,7 @@ pub use super::geom::{Geom, GeomClass, Unported};
 
 use super::Body;
 use super::body::DISABLED;
+use super::collide::brushgeom::{self, BrushGeom, NARROW_MAX_LENGTH};
 use super::collide::{self, Capsule, Obj, Pieces};
 use super::math::{M3, V3};
 use super::world::{BodyId, Params, PhysDvars, World};
@@ -266,6 +267,23 @@ impl PhysWorld {
                 continue;
             }
             let Some(o) = self.obj(id) else { continue };
+            if let Some(Geom::Brush { brush, offset }) = o.geom() {
+                let (brush, offset, mut obj) = (brush.clone(), *offset, o.obj);
+                let g = BrushGeom::new(&brush, offset, body.pos, &body.r, NARROW_MAX_LENGTH);
+                brushgeom::near_world(
+                    &mut self.world,
+                    id,
+                    &mut obj,
+                    &g,
+                    clip,
+                    contact,
+                    self.id.index(),
+                );
+                if let Some(o) = self.obj_mut(id) {
+                    o.obj = obj;
+                }
+                continue;
+            }
             // A body of a class with no collider yet refuses the frame.
             let contacts = match o.geom() {
                 Some(&Geom::Capsule { radius, half_len }) => {
@@ -284,7 +302,7 @@ impl PhysWorld {
                         body.pos,
                         &body.r,
                         body.pos,
-                        collide::cylinder::NARROW_MAX_LENGTH,
+                        NARROW_MAX_LENGTH,
                         CLIP_MASK,
                         collide::MAX_CONTACTS,
                     )?

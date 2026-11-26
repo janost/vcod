@@ -20,9 +20,6 @@ fn w(x: f32) -> f64 {
     x as f64
 }
 
-/// `phys_narrowObjMaxLength`'s default (registered at 0x5a4408).
-pub const NARROW_MAX_LENGTH: f32 = 4.0;
-
 /// `sqrt(2)` as the double at 0x70ba88.
 const SQRT2: f64 = 1.414_214_015_007_019;
 /// The floats at 0x70b234 and 0x70b880.

@@ -380,7 +380,8 @@ fn five_or_more_contacts_keep_each_clusters_extremes_and_deepest() {
 /// along +z.
 #[test]
 fn a_cylinder_on_a_floor_meets_it_with_its_cap_or_its_side() {
-    use super::cylinder::{Cylinder, NARROW_MAX_LENGTH, collide_world};
+    use super::brushgeom::NARROW_MAX_LENGTH;
+    use super::cylinder::{Cylinder, collide_world};
     let floor = Brushes(vec![cuboid([-256.0, -256.0, -32.0], [256.0, 256.0, 0.0])]);
     let on = |direction: usize, z: f32| {
         let cy = Cylinder::new(
