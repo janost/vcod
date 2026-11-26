@@ -441,7 +441,7 @@ at the Mac binary's file offsets of the names. VERIFIED (program text):
 
 ### vcod's, before and after
 
-`renderer::shader_ops` (`SHADER_OPS=1 cargo test -p vcod --bins
+`renderer::shader_ops` (`SHADER_OPS=1 cargo test -p vcod --lib
 cod2_shader_ops -- --nocapture`), the counter of `cod4-client-perf.md` 26,
 exp fog, the sun lighting. "Runs" is the material's path with every switch
 known; "compiled" is what its pipeline's fragment stage holds with the
@@ -590,7 +590,7 @@ VERIFIED (HLSL; code).
    the fixed-function state, outside the shader. Not changed.
 5. CoD2 walks its cells as retail does (`MapWorld::portals_only`, below).
 
-The counter (`SHADER_OPS=1 cargo test -p vcod --bins cod2_shader_ops --
+The counter (`SHADER_OPS=1 cargo test -p vcod --lib cod2_shader_ops --
 --nocapture`, section 8's), before and after, beside the Mac programs'
 `tools/re/cod2_macarb.py --count`. "Runs" is what a path executes,
 "compiled" the split pipeline's fragment stage with the frame's switches
@@ -849,7 +849,7 @@ than a CPU one feeding a dynamic buffer each frame.
 
 ### Counts
 
-`SHADER_OPS=2 cargo test -p vcod --bins cod2_shader_ops -- --nocapture`
+`SHADER_OPS=2 cargo test -p vcod --lib cod2_shader_ops -- --nocapture`
 against `tools/re/cod2_macarb.py --count`, fetch / ALU / slots. VERIFIED
 (counter, program text):
 

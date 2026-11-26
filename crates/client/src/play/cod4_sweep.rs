@@ -16,7 +16,7 @@
 //! table, then every distinct error and warning ranked by count) and
 //! `warnings.txt` under `VCOD_SWEEP_OUT` (default `tmp/cod4-map-sweep`).
 //!
-//! `COD4_DIR=... cargo test -p vcod --bins -- --ignored cod4_map_sweep
+//! `COD4_DIR=... cargo test -p vcod --lib -- --ignored cod4_map_sweep
 //! --nocapture`, run alone (it installs the process's logger). Under
 //! lavapipe set `VK_DRIVER_FILES`, `WGPU_BACKEND=vulkan`,
 //! `GALLIVM_PERF=nopt`; without an adapter the client steps its session
@@ -1205,7 +1205,7 @@ fn play(root: &Path, map: &str, addr: std::net::SocketAddr, shared: &Shared) -> 
         let dt = now.duration_since(last).as_secs_f32();
         last = now;
         let time = start.elapsed().as_secs_f64();
-        // A gamestate naming another map loads it, as `main.rs` does.
+        // A gamestate naming another map loads it, as `lib.rs` does.
         if let Some(new) = c.session.take_map_change() {
             log::warn!("sweep: the client changed map to {new}");
         }

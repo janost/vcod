@@ -886,7 +886,7 @@ learnt to note a sample change.)
   slots with the ps/vs 3.0 macros expanded (`nrm`, `pow` 3, `lrp` 2,
   `m4x4` 4, `sincos` 8). Both arms of each branch are in the bytecode, so
   it is the shader's size, not one pixel's path.
-- vcod: `renderer::shader_ops` (`SHADER_OPS=1 cargo test -p vcod --bins
+- vcod: `renderer::shader_ops` (`SHADER_OPS=1 cargo test -p vcod --lib
   shader_ops -- --nocapture`; `SHADER_OPS=2` adds each function's share).
   It writes a material's uniform switches into the WGSL as literals,
   parses it with naga and walks the IR from the entry point: calls

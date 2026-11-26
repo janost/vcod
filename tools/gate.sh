@@ -130,13 +130,13 @@ for area in "$@"; do
 		render)
 			lvp=()
 			[[ -n ${LVP_ICD:-} ]] && lvp=(VK_DRIVER_FILES="$LVP_ICD" WGPU_BACKEND=vulkan GALLIVM_PERF=nopt)
-			check "pipeline_check" "${base[@]}" "${lvp[@]}" -- test -p vcod --bins -- renderer::pipeline_check
+			check "pipeline_check" "${base[@]}" "${lvp[@]}" -- test -p vcod --lib -- renderer::pipeline_check
 			;;
 		cod2)
 			[[ -n ${COD2_DIR:-} ]] && check "cod2_gametype_census" "${base[@]}" -- \
 				test -p vcod-server --lib -- --ignored cod2_gametype_census
 			[[ -n ${COD2_DIR:-} ]] && check "cod2 live play" "${base[@]}" -- \
-				test -p vcod --bins -- --ignored play::cod2_soak::cod2_live_
+				test -p vcod --lib -- --ignored play::cod2_soak::cod2_live_
 			;;
 		cod4)
 			[[ -n ${COD4_DIR:-} ]] && check "cod4 hit boxes" "${base[@]}" -- \

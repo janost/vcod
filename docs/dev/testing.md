@@ -134,8 +134,8 @@ picks through `Server::pin_spawns`, as `gametypes_ab` does.
 - Each crate's integration tests are one binary named after the crate
   (`--test common`, `--test cod2`, `--test cod4`, `--test gsc`, `--test
   server`; `tests/main.rs`). A file's tests filter by its name (`--
-  vehicle_ab::`). The client's tests live in its binary: `cargo test -p
-  vcod --bins`.
+  vehicle_ab::`). The client's unit tests live in its lib: `cargo test -p
+  vcod --lib`.
 
 ## Trace tapes
 
@@ -241,12 +241,12 @@ ignored_tests_named` fails on one that is not.
 | CoD4 bots | `cargo test -p vcod-server --lib -- --ignored cod4::bots::` (`COD4_DIR`) | ~4 s |
 | CoD4 hit boxes per map | `--lib -- --ignored cod4_every_map_poses_both_teams` (`COD4_DIR`) | ~22 s |
 | CoD2 gametypes | `--lib -- --ignored cod2_gametype_census` (`COD2_DIR`) | ~18 s |
-| CoD2 play: level effects, model pipelines, view weapons, muzzle flash and brass | `cargo test -p vcod --bins -- --ignored play::cod2_soak::cod2_live_` (`COD2_DIR`, a Vulkan adapter) | each plays 16 ms frames for its seconds after the spawn, client and server on one `sim` clock (`tests::run_held`), with a 120 to 180 s deadline on it |
+| CoD2 play: level effects, model pipelines, view weapons, muzzle flash and brass | `cargo test -p vcod --lib -- --ignored play::cod2_soak::cod2_live_` (`COD2_DIR`, a Vulkan adapter) | each plays 16 ms frames for its seconds after the spawn, client and server on one `sim` clock (`tests::run_held`), with a 120 to 180 s deadline on it |
 | 1.5 stuck seed | `--lib -- --ignored the_15_overlap_spectator_seed_is_the_only_fit` | ~2 s |
-| shaders or render layouts | `cargo test -p vcod --bins -- renderer::pipeline_check` (not ignored: it skips without a Vulkan adapter; lavapipe env below) | |
+| shaders or render layouts | `cargo test -p vcod --lib -- renderer::pipeline_check` (not ignored: it skips without a Vulkan adapter; lavapipe env below) | |
 | CoD2 maps, CoD2 load path | `cod2_map_census`, `cod2_load_profile` | |
 | CoD4 maps, gametypes | `cod4_map_sweep` | 6-8 min and ~3 GB a map |
-| the CoD4x join (`net::conn`'s 21 dialect, `net::reliable::Link`) | `COD4X_DEDRUN=<the release's cod4x18_dedrun> cargo test -p vcod --bins -- --ignored --exact play::cod4::tests::cod4x::cod4x_live_join_spawns_and_leaves` (`COD4_DIR`; `COD4X_OUT=<dir>` keeps the capture) | ~12 s past the build |
+| the CoD4x join (`net::conn`'s 21 dialect, `net::reliable::Link`) | `COD4X_DEDRUN=<the release's cod4x18_dedrun> cargo test -p vcod --lib -- --ignored --exact play::cod4::tests::cod4x::cod4x_live_join_spawns_and_leaves` (`COD4_DIR`; `COD4X_OUT=<dir>` keeps the capture) | ~12 s past the build |
 | the CoD4x join's gamestate timeout (`conn::GAMESTATE_WAIT`) | the same with `--exact play::cod4::tests::cod4x::cod4x_live_withheld_gamestate_times_out` | ~22 s past the build |
 | CoD4x downloads (`net::download`'s `XDownloadMsg`, `XAsk`, `Downloads::on_side`) | the same with `--exact play::cod4::tests::cod4x::cod4x_live_download_fetches_the_mods_files` (a mod under `fs_game mods/vcodx`, www, side channel and op 7) | ~55 s past the build |
 | a CoD4x download refusal (`sv_allowDownload 0`) | the same with `--exact play::cod4::tests::cod4x::cod4x_live_download_refused_ends_the_join` | ~10 s past the build |
@@ -373,7 +373,7 @@ What the frame checks see:
 
 ## CoD2 map census
 
-`COD2_DIR=... cargo test -p vcod --bins -- --ignored cod2_map_census` runs
+`COD2_DIR=... cargo test -p vcod --lib -- --ignored cod2_map_census` runs
 every stock CoD2 map through vcod-server, a spectating client, a headless
 frame (lavapipe env and `nice` as for `pipeline_check`;
 `VCOD_CENSUS_FRAMES=0` skips it) and a walk from each spawn. It writes its
@@ -382,7 +382,7 @@ table, frames and per-map warnings to `tmp/cod2-map-census/`
 
 ## CoD4 map sweep
 
-`COD4_DIR=... cargo test -p vcod --bins -- --ignored cod4_map_sweep
+`COD4_DIR=... cargo test -p vcod --lib -- --ignored cod4_map_sweep
 --nocapture` runs every stock CoD4 map under war, dm, sd, sab, dom and koth.
 Per map: a vcod-server with six shooting bots rotating through the six
 gametypes (30 s limits) and one client playing it through `Cod4Client::pump`

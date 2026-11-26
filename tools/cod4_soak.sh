@@ -51,8 +51,8 @@ fi
 export LP_NUM_THREADS=${LP_NUM_THREADS:-4}
 read -r -a wrap <<<"${WRAP:-nice -n 10}"
 # One build, copied out, so the checkout can change under a long run.
-bin=$(cd "$here" && "${wrap[@]}" cargo test -p vcod --bins --no-run 2>&1 |
-  sed -n 's/.*Executable unittests src\/main.rs (\(.*\))/\1/p' | tail -1)
+bin=$(cd "$here" && "${wrap[@]}" cargo test -p vcod --lib --no-run 2>&1 |
+  sed -n 's/.*Executable unittests src\/lib.rs (\(.*\))/\1/p' | tail -1)
 [ -n "$bin" ] || { echo "soak: build failed" >&2; exit 1; }
 cp "$here/$bin" "$out/vcod-tests"
 # One map a process; PAIR=2 runs two (`VCOD_SWEEP_JOBS`, at most 2).

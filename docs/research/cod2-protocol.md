@@ -1263,7 +1263,7 @@ and callvote, and a weapon pick's `mr` with `u`, `K`. VERIFIED live.
 
 vcod's session (`play::cod2`) answers each script menu once with `--team` /
 `--weapon` (a restart or a gamestate rearms it). Every other `t`, every `u`,
-`K` and `v` go to the window's UI (`main.rs`, `App::cod2_script_menus`,
+`K` and `v` go to the window's UI (`lib.rs`, `App::cod2_script_menus`,
 through `frontend::cod2::menu_command` on CoD1's `play::join::Join`):
 
 - the gamestate's menus load into the UI;

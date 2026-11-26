@@ -347,7 +347,7 @@ units on the origin.
 - `AudioSystem::set_shellshock`: per-channel volumes in `VoiceTable`, the
   loop and the end cue on entity 1023.
 - `ShellShock::register` loads the gamestate's names at the cgame's start
-  (`cgame_init` in `main.rs`, a map load or `vid_restart`); a file that
+  (`cgame_init` in `lib.rs`, a map load or `vid_restart`); a file that
   fails drops the game with retail's text. A name a later configstring
   brings loads when a playerstate first names it and fails quietly.
 

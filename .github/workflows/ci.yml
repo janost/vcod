@@ -85,7 +85,7 @@ jobs:
           VCOD_REQUIRE_GPU: "1"
         run: |
           sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers
-          cargo test -p vcod --bins --locked
+          cargo test -p vcod --lib --locked
 
   # The nightly ships Windows and macOS binaries; this compiles them, tests
   # included, before a merge rather than after. Skipped when nightly.yml

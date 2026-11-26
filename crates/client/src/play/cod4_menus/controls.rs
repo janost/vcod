@@ -26,7 +26,7 @@ use crate::hud::cod2elem::ScreenPlacement;
 use crate::hud::hudelem::format_g;
 
 /// The CoD4 dvars an option control sets and the vcod cvar each is: the
-/// mouse's (`main.rs`'s `mouse_frame`), `r_gamma` (the gamma pass),
+/// mouse's (`lib.rs`'s `mouse_frame`), `r_gamma` (the gamma pass),
 /// `fx_marks` as `cg_marks` (the marks), `cg_drawCrosshair`
 /// (`cod4_crosshair`), `sm_enable` (the sun shadows), `cl_allowDownload`
 /// (the join's downloads), `name` (Multiplayer's name field copies

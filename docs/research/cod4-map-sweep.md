@@ -6,7 +6,7 @@ own label.
 
 ## 1. The tool
 
-`COD4_DIR=... cargo test -p vcod --bins -- --ignored cod4_map_sweep
+`COD4_DIR=... cargo test -p vcod --lib -- --ignored cod4_map_sweep
 --nocapture` (`crates/client/src/play/cod4_sweep.rs`, its header lists the
 knobs). Per map, vcod-server loads it with six shooting bots and
 `sv_mapRotation` naming the map once for each of war, dm, sd, sab, dom and

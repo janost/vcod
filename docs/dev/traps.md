@@ -757,7 +757,7 @@ otherwise.
 - Effect shaders live in `fxshaders/` in `pak5.pk3`. Some map paths have a
   leading slash.
 - A level's gamestate prewarms its models, effects and their images
-  (`prewarm_level` in `main.rs`). A new thing the client draws or plays off
+  (`prewarm_level` in `lib.rs`). A new thing the client draws or plays off
   an event goes in that list, or its first use stalls a frame.
 - The asphalt sound alias suffix is `asphault`, and vcod uses that spelling
   on purpose.

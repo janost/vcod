@@ -372,7 +372,7 @@ fn each_round_of_held_fire_plays_and_kicks_once() {
 
 /// Joins mp_carentan dm as axis with `weapon`, then presses each of `binds`
 /// a second apart through [`super::input::PlayInput`] and the cmds it
-/// builds, each gated on `cg_weaponCycleDelay` 0 as `main.rs` gates it, off
+/// builds, each gated on `cg_weaponCycleDelay` 0 as `lib.rs` gates it, off
 /// the weapon name's stamp on the snapshot clock. Returns the held weapon
 /// at the start, the selection after each press and the server's
 /// `ps.weapon` a second later. `give` is handed out once the join settles.

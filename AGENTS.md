@@ -132,8 +132,8 @@ area; its header lists them.
   early through `game_fs()` or uses `Pk3Fs::empty()`.
 - Each crate's integration tests are one binary named after the crate
   (`--test common`, `--test server`; `tests/main.rs`): a new file needs its
-  `mod` line. The client's tests live in its binary: `cargo test -p vcod
-  --bins`.
+  `mod` line. The client's unit tests live in its lib: `cargo test -p vcod
+  --lib`.
 - Some gates are `#[ignore]`d for their cost. Run the one for your area when
   you touch it (`tools/gate.sh nav`, `bots`, `render`, `cod2`, `cod4`).
 

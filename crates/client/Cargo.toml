@@ -10,6 +10,16 @@ publish = false
 build = "../version.rs"
 description = "Client and map viewer for Call of Duty 1.1 and 1.5, United Offensive, Call of Duty 2 and Call of Duty 4"
 
+# The client is a lib holding every module and a bin calling its `main`,
+# so tools under `examples/` reach the crate. Its unit tests run under
+# `--lib`; the bin has none.
+[lib]
+doctest = false
+
+[[bin]]
+name = "vcod"
+test = false
+
 [dependencies]
 vcod-common.workspace = true
 vcod-cod2 = { path = "../cod2" }
