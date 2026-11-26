@@ -220,7 +220,8 @@ ragdoll_baselerp_bone 1 j_head 1000
     }
 
     impl Clip for Floor {
-        fn sweep(&self, a: Vec3, b: Vec3, e: f32) -> Sweep {
+        fn sweep(&self, a: Vec3, b: Vec3, mins: Vec3, _: Vec3) -> Sweep {
+            let e = -mins.z;
             let clear = Sweep {
                 fraction: 1.0,
                 normal: Vec3::ZERO,
