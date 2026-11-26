@@ -168,18 +168,23 @@ pub(crate) fn step(
             }
             let o = ofs[k];
             let joint = joints[jid.0 as usize].as_mut().expect("island joint");
-            joint.info2(
-                bodies,
-                params,
-                &mut Info2 {
-                    fps: s1,
-                    erp: params.erp,
-                    rows: &mut rows[o..o + n],
-                    c: &mut c[o..o + n],
-                    cfm: &mut cfm[o..o + n],
-                    findex: &mut findex[o..o + n],
-                },
-            );
+            let mut info = Info2 {
+                fps: s1,
+                erp: params.erp,
+                rows: &mut rows[o..o + n],
+                c: &mut c[o..o + n],
+                cfm: &mut cfm[o..o + n],
+                findex: &mut findex[o..o + n],
+                torque: Vec::new(),
+            };
+            joint.info2(bodies, params, &mut info);
+            for (end, t) in info.torque {
+                let id = joint.body[end].expect("torqued end");
+                bodies[id.0 as usize]
+                    .as_mut()
+                    .expect("live body")
+                    .add_torque(t);
+            }
             for f in &mut findex[o..o + n] {
                 if *f >= 0 {
                     *f += o as i32;

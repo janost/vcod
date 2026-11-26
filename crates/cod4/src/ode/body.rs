@@ -107,6 +107,20 @@ impl Body {
         }
     }
 
+    /// `dBodySetMass` (0x5b6f70): `invI` by Cholesky, the identity when
+    /// the inertia is not positive definite.
+    pub fn set_mass(&mut self, m: Mass) {
+        self.mass = m;
+        self.inv_i = super::mass::invert_pd3(&m.i).unwrap_or(IDENTITY);
+        self.inv_mass = (1.0 / m.mass as f64) as f32;
+    }
+
+    /// `dBodySetRotation` (0x5b6ec0): through the quaternion, so `R` comes
+    /// back orthonormal.
+    pub fn set_rotation(&mut self, r: &M3) {
+        self.set_quaternion(super::rotation::r_to_q(r));
+    }
+
     /// `dBodySetQuaternion`: `q` normalized, `R` rebuilt.
     pub fn set_quaternion(&mut self, q: Quat) {
         self.q = q;

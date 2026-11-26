@@ -55,7 +55,11 @@ in step):
   crates/common/src/pmove/uo.rs
   crates/common/src/pmove/walk.rs
   crates/cod4/src/ode/body.rs
+  crates/cod4/src/ode/joint/amotor.rs
   crates/cod4/src/ode/joint/ball.rs
+  crates/cod4/src/ode/joint/contact.rs
+  crates/cod4/src/ode/joint/hinge.rs
+  crates/cod4/src/ode/joint/limot.rs
   crates/cod4/src/ode/joint/mod.rs
   crates/cod4/src/ode/mass.rs
   crates/cod4/src/ode/math.rs

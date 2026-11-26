@@ -55,11 +55,6 @@ pub fn cross(a: V3, b: V3) -> V3 {
     [c(1, 2), c(2, 0), c(0, 1)]
 }
 
-/// `a + b * s`, each component stored.
-pub fn add_scaled(a: V3, b: V3, s: f32) -> V3 {
-    std::array::from_fn(|i| (a[i] as f64 + b[i] as f64 * s as f64) as f32)
-}
-
 pub fn sub(a: V3, b: V3) -> V3 {
     std::array::from_fn(|i| (a[i] as f64 - b[i] as f64) as f32)
 }
@@ -68,11 +63,70 @@ pub fn add(a: V3, b: V3) -> V3 {
     std::array::from_fn(|i| (a[i] as f64 + b[i] as f64) as f32)
 }
 
-pub fn scale(a: V3, s: f32) -> V3 {
-    std::array::from_fn(|i| (a[i] as f64 * s as f64) as f32)
+/// `1` for `x >= 0` (either zero), else `-1`, NaN included (0x40e080,
+/// IW's `dCopySign`).
+fn sign(x: f32) -> f64 {
+    if x >= 0.0 { 1.0 } else { -1.0 }
 }
 
-/// The rows of `m` (its transpose).
-pub fn transpose(m: &M3) -> M3 {
-    std::array::from_fn(|i| std::array::from_fn(|j| m[j][i]))
+/// `dNormalize3` (0x5b7460): divides by the largest magnitude first;
+/// a zero vector reads `(1, 0, 0)`.
+pub fn normalize3(a: V3) -> V3 {
+    let aa = a.map(|x| x.abs());
+    let largest = if aa[1] > aa[0] {
+        if aa[2] > aa[1] { 2 } else { 1 }
+    } else if aa[2] > aa[0] {
+        2
+    } else {
+        if aa[0] <= 0.0 {
+            return [1.0, 0.0, 0.0];
+        }
+        0
+    };
+    let (i, j) = match largest {
+        0 => (1, 2),
+        1 => (0, 2),
+        _ => (0, 1),
+    };
+    let big = aa[largest] as f64;
+    let x = (a[i] as f64 / big) as f32;
+    let y = (a[j] as f64 / big) as f32;
+    let sum = ((x as f64 * x as f64 + y as f64 * y as f64) + 1.0) as f32;
+    let l = (1.0 / ((sum as f64).sqrt() as f32) as f64) as f32;
+    let mut out = [0.0; 3];
+    out[largest] = (l as f64 * sign(a[largest])) as f32;
+    out[i] = (l as f64 * x as f64) as f32;
+    out[j] = (l as f64 * y as f64) as f32;
+    out
+}
+
+/// Two unit vectors completing `n` to an orthonormal frame (`dPlaneSpace`,
+/// 0x5b7790).
+pub fn plane_space(n: V3) -> (V3, V3) {
+    let w = |x: f32| x as f64;
+    if n[2].abs() > std::f32::consts::FRAC_1_SQRT_2 {
+        let a = (w(n[1]) * w(n[1]) + w(n[2]) * w(n[2])) as f32;
+        let k = (1.0 / ((w(a)).sqrt() as f32) as f64) as f32;
+        let p = [0.0, (-w(n[2]) * w(k)) as f32, (w(n[1]) * w(k)) as f32];
+        let q = [
+            (w(a) * w(k)) as f32,
+            (-w(n[0]) * w(p[2])) as f32,
+            (w(n[0]) * w(p[1])) as f32,
+        ];
+        (p, q)
+    } else {
+        let a = (w(n[0]) * w(n[0]) + w(n[1]) * w(n[1])) as f32;
+        let k = (1.0 / ((w(a)).sqrt() as f32) as f64) as f32;
+        let p = [(-w(n[1]) * w(k)) as f32, (w(n[0]) * w(k)) as f32, 0.0];
+        let q = [
+            (-w(n[2]) * w(p[1])) as f32,
+            (w(n[2]) * w(p[0])) as f32,
+            (w(a) * w(k)) as f32,
+        ];
+        (p, q)
+    }
+}
+
+pub fn neg(a: V3) -> V3 {
+    a.map(|x| -x)
 }

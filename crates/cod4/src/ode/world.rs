@@ -59,6 +59,72 @@ impl Default for Params {
     }
 }
 
+/// The registered defaults of the dvars `Phys_RunFrame` (0x5a6440) writes
+/// into the ragdoll world before each step.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PhysDvars {
+    pub erp: f32,
+    pub cfm: f32,
+    pub mcv_ragdoll: f32,
+    pub csl: f32,
+    pub qsi: u32,
+    pub gravity: f32,
+    pub auto_disable_linear: f32,
+    pub auto_disable_angular: f32,
+    pub auto_disable_time: f32,
+}
+
+impl Default for PhysDvars {
+    fn default() -> PhysDvars {
+        PhysDvars {
+            erp: 0.8,
+            cfm: 1e-4,
+            mcv_ragdoll: 1000.0,
+            csl: 1.0,
+            qsi: 15,
+            gravity: -800.0,
+            auto_disable_linear: 20.0,
+            auto_disable_angular: 1.0,
+            auto_disable_time: 0.9,
+        }
+    }
+}
+
+impl Params {
+    /// What `Phys_RunFrame` stores into world 2 each step: ERP (+0x20), CFM
+    /// (+0x24), `phys_mcv_ragdoll` as the contacts' most correcting velocity
+    /// (+0x34), `phys_csl` as their surface layer (+0x38), `phys_qsi`
+    /// (+0x28), the sleep speeds squared and its time (+0x3c..+0x44), and
+    /// gravity down at `-phys_gravity`. `Phys_Init` (0x5a2d1f) leaves the
+    /// sleep on for new bodies and its steps at 0, so the sleep is time
+    /// alone.
+    pub fn apply_phys_frame(&mut self, d: &PhysDvars) {
+        self.cfm = d.cfm;
+        self.erp = d.erp;
+        self.contact_max_vel = d.mcv_ragdoll;
+        self.contact_min_depth = d.csl;
+        self.qs_iterations = d.qsi;
+        let sq = |x: f32| (x as f64 * x as f64) as f32;
+        self.adis.linear_threshold = sq(d.auto_disable_linear);
+        self.adis.angular_threshold = sq(d.auto_disable_angular);
+        self.adis.idle_time = d.auto_disable_time;
+        let t = -d.gravity;
+        self.gravity = [0.0, 0.0, -t];
+    }
+
+    /// World 2 after `Phys_Init` and one `Phys_RunFrame` at the dvars'
+    /// defaults.
+    pub fn ragdoll() -> Params {
+        let mut p = Params {
+            adis_flag: true,
+            ..Params::default()
+        };
+        p.adis.idle_steps = 0;
+        p.apply_phys_frame(&PhysDvars::default());
+        p
+    }
+}
+
 /// The reorder's seed at every `Phys_Init` (0x5b7396).
 pub const SEED: u32 = 0x89ab_cdef;
 
@@ -72,6 +138,8 @@ pub struct World {
     body_list: Vec<BodyId>,
     joints: Vec<Option<Joint>>,
     joint_list: Vec<JointId>,
+    /// The contact group, in the order made.
+    contacts: Vec<JointId>,
 }
 
 impl Default for World {
@@ -89,6 +157,7 @@ impl World {
             body_list: Vec::new(),
             joints: Vec::new(),
             joint_list: Vec::new(),
+            contacts: Vec::new(),
         }
     }
 
@@ -162,6 +231,18 @@ impl World {
         self.joints[id.0 as usize].as_mut().expect("live joint")
     }
 
+    /// The joint and its ends' bodies, for the setters that read both
+    /// (`dJointSetHingeAnchor` and kin).
+    pub fn with_joint<R>(
+        &mut self,
+        id: JointId,
+        f: impl FnOnce(&mut Joint, [Option<&Body>; 2]) -> R,
+    ) -> R {
+        let j = self.joints[id.0 as usize].as_mut().expect("live joint");
+        let b = j.ends(&self.bodies);
+        f(j, b)
+    }
+
     fn detach(&mut self, id: JointId) {
         let j = self.joints[id.0 as usize].as_mut().expect("live joint");
         let ends = std::mem::take(&mut j.body);
@@ -203,12 +284,48 @@ impl World {
         }
     }
 
+    /// `dJointCreateContact` and `dJointAttach` in one: a contact for this
+    /// step, emptied by [`World::empty_contacts`].
+    pub fn create_contact(
+        &mut self,
+        c: super::joint::contact::Contact,
+        b1: Option<BodyId>,
+        b2: Option<BodyId>,
+    ) -> JointId {
+        let id = self.create_joint(Joint::new(super::joint::Kind::Contact(c)));
+        self.attach(id, b1, b2);
+        self.contacts.push(id);
+        id
+    }
+
+    /// `dJointGroupEmpty` (0x5b7270): the contacts go, last made first.
+    pub fn empty_contacts(&mut self) {
+        while let Some(id) = self.contacts.pop() {
+            self.destroy_joint(id);
+        }
+    }
+
+    /// `Phys_PostStep`'s first pass (0x5a6640): every awake body's force
+    /// and torque cleared. IW's stepper leaves them.
+    pub fn zero_forces(&mut self) {
+        for &id in &self.body_list {
+            let b = self.bodies[id.0 as usize].as_mut().expect("live body");
+            if b.flags & DISABLED == 0 {
+                b.facc = [0.0; 3];
+                b.tacc = [0.0; 3];
+            }
+        }
+    }
+
     /// The world's bodies, first visited first.
     pub fn bodies(&self) -> &[BodyId] {
         &self.body_list
     }
 
-    /// `dWorldQuickStep`: one step of `h` seconds over every awake island.
+    /// One step of `h` seconds over every awake island: the sleep test,
+    /// then `dxProcessIslands` with IW's stepper (0x5b9d40; IW has no
+    /// `dWorldQuickStep` wrapper). The bodies' forces stay accumulated:
+    /// [`World::zero_forces`] is `Phys_PostStep`'s.
     pub fn quick_step(&mut self, h: f32) {
         if self.body_list.is_empty() {
             return;

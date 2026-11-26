@@ -16,19 +16,25 @@ pub struct Ball {
 }
 
 impl Ball {
-    /// `dJointSetBallAnchor`: the world point `p` in both ends' frames.
+    /// The ball's anchor at world point `p` (`setAnchors`, 0x5b2e30, which
+    /// the swivel's creator calls).
     pub fn set_anchor(&mut self, b: [Option<&Body>; 2], p: V3) {
-        let b1 = b[0].expect("ball joint attached");
-        self.anchor1 = mul1_331(&b1.r, sub(p, b1.pos));
-        self.anchor2 = match b[1] {
-            Some(b2) => mul1_331(&b2.r, sub(p, b2.pos)),
-            None => p,
-        };
+        set_anchors(b, p, &mut self.anchor1, &mut self.anchor2);
     }
 
     pub(crate) fn info2(&self, b: [Option<&Body>; 2], info: &mut Info2) {
         set_ball(b, info, self.anchor1, self.anchor2);
     }
+}
+
+/// `setAnchors` (0x5b2e30): `p` in each end's frame; a world end keeps it.
+pub(crate) fn set_anchors(b: [Option<&Body>; 2], p: V3, anchor1: &mut V3, anchor2: &mut V3) {
+    let Some(b1) = b[0] else { return };
+    *anchor1 = mul1_331(&b1.r, sub(p, b1.pos));
+    *anchor2 = match b[1] {
+        Some(b2) => mul1_331(&b2.r, sub(p, b2.pos)),
+        None => p,
+    };
 }
 
 /// The three rows holding `anchor1` on body 1 to `anchor2` on body 2
@@ -40,7 +46,7 @@ pub(crate) fn set_ball(b: [Option<&Body>; 2], info: &mut Info2, anchor1: V3, anc
         row.j1l[k] = 1.0;
     }
     cross_mat(info, a1, true);
-    let k = info.fps as f64 * info.erp as f64;
+    let k = (info.fps as f64 * info.erp as f64) as f32 as f64;
     match b[1] {
         Some(b2) => {
             let a2 = mul0_331(&b2.r, anchor2);
@@ -49,14 +55,13 @@ pub(crate) fn set_ball(b: [Option<&Body>; 2], info: &mut Info2, anchor1: V3, anc
             }
             cross_mat(info, a2, false);
             for j in 0..3 {
-                info.c[j] = (k
-                    * (a2[j] as f64 + b2.pos[j] as f64 - a1[j] as f64 - b1.pos[j] as f64))
-                    as f32;
+                info.c[j] = ((a2[j] as f64 + b2.pos[j] as f64 - a1[j] as f64 - b1.pos[j] as f64)
+                    * k) as f32;
             }
         }
         None => {
             for j in 0..3 {
-                info.c[j] = (k * (anchor2[j] as f64 - a1[j] as f64 - b1.pos[j] as f64)) as f32;
+                info.c[j] = ((anchor2[j] as f64 - a1[j] as f64 - b1.pos[j] as f64) * k) as f32;
             }
         }
     }

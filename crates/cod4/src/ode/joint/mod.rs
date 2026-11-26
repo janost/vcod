@@ -5,7 +5,11 @@
 //! dispatched by `getInfo1` (0x5b5b30) and `getInfo2` (0x5b5bd0);
 //! cod4-player-anims.md 10.3.
 
+pub mod amotor;
 pub mod ball;
+pub mod contact;
+pub mod hinge;
+pub mod limot;
 
 use super::body::Body;
 use super::quickstep::Row;
@@ -28,11 +32,17 @@ pub struct Info2<'a> {
     pub c: &'a mut [f32],
     pub cfm: &'a mut [f32],
     pub findex: &'a mut [i32],
+    /// Torques a limit motor pressing on a stop adds (`dBodyAddTorque`), by
+    /// end, in order.
+    pub torque: Vec<(usize, super::math::V3)>,
 }
 
 #[derive(Clone, Debug)]
 pub enum Kind {
     Ball(ball::Ball),
+    Hinge(hinge::Hinge),
+    Contact(contact::Contact),
+    AMotor(amotor::AMotor),
 }
 
 impl Kind {
@@ -40,6 +50,9 @@ impl Kind {
     pub fn type_id(&self) -> i32 {
         match self {
             Kind::Ball(_) => 1,
+            Kind::Hinge(_) => 2,
+            Kind::Contact(_) => 4,
+            Kind::AMotor(_) => 8,
         }
     }
 }
@@ -69,17 +82,22 @@ impl Joint {
     }
 
     pub(crate) fn info1(&mut self, bodies: &[Option<Body>]) -> Info1 {
-        let _ = bodies;
+        let b = self.ends(bodies);
         match &mut self.kind {
             Kind::Ball(_) => Info1 { m: 3, nub: 3 },
+            Kind::Hinge(j) => j.info1(b),
+            Kind::Contact(j) => j.info1(),
+            Kind::AMotor(j) => j.info1(b),
         }
     }
 
-    pub(crate) fn info2(&mut self, bodies: &[Option<Body>], params: &Params, info: &mut Info2) {
-        let _ = params;
+    pub(crate) fn info2(&self, bodies: &[Option<Body>], params: &Params, info: &mut Info2) {
         let b = self.ends(bodies);
-        match &mut self.kind {
+        match &self.kind {
             Kind::Ball(j) => j.info2(b, info),
+            Kind::Hinge(j) => j.info2(b, info),
+            Kind::Contact(j) => j.info2(b, self.reverse, params, info),
+            Kind::AMotor(j) => j.info2(b, info),
         }
     }
 
