@@ -249,6 +249,7 @@ const RUN_IN_SERVER_CRATE: &[&str] = &[
     "probe_late_statusicon",
     "probe_late_viewmodel",
     "probe_loadfx_wait",
+    "probe_math",
     "probe_not_string",
     "probe_persist_exit",
     "probe_persist_exit_save",

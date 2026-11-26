@@ -2,14 +2,19 @@
 //! the configstrings; the random draws step `GameHost::holdrand`, the rest
 //! read only their arguments.
 
+use std::f64::consts::PI;
+
 use super::args::{float, int, vector};
 use crate::game::host::GameHost;
+use glam::Vec3;
+use vcod_common::x87::{self, F80};
 use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
 use super::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("distance", distance),
+    ("distancesquared", distance_squared),
     ("length", length),
     ("lengthsquared", length_squared),
     ("closer", closer),
@@ -31,23 +36,93 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("atan", atan),
 ];
 
+/// How a build's `distance`, `distanceSquared`, `length`,
+/// `vectorNormalize`, `anglesTo*` and trig builtins round
+/// (cod11-gsc-object-model.md 9.3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MathRounding {
+    /// 1.1d: differences, squares, sums and roots on the x87 stack until
+    /// one store; `fsin` and `fcos`.
+    Kept,
+    /// 1.5b and UO: each difference stored as a float, the squares' sum
+    /// handed to libm's `sqrt` as a double; libm's `sin` and `cos`.
+    Stored,
+    /// CoD2 and CoD4: every step a float, unverified against their binaries.
+    Float,
+}
+
 fn vec_len(v: [f32; 3]) -> f32 {
     (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
 }
 
-/// `distance(a, b)`: the straight-line distance between two points, in
-/// f32. Unverified against retail: no handler address or probe.
+fn two_vectors(args: &[Value], usage: &'static str) -> Result<([f32; 3], [f32; 3]), ErrorKind> {
+    match (args.first(), args.get(1)) {
+        (Some(Value::Vector(a)), Some(Value::Vector(b))) => Ok((*a, *b)),
+        _ => Err(ErrorKind::BadType(usage)),
+    }
+}
+
+/// `a - b` as the build's `VectorDistance` and `VectorDistanceSquared`
+/// take it: on the stack (1.1d) or each stored as a float (1.5b, UO).
+fn differences(r: MathRounding, a: [f32; 3], b: [f32; 3]) -> [F80; 3] {
+    std::array::from_fn(|i| match r {
+        MathRounding::Kept => F80::from_f32(a[i]) - F80::from_f32(b[i]),
+        _ => F80::from_f32(a[i] - b[i]),
+    })
+}
+
+/// The squares summed left to right on the stack.
+fn sum_squares(d: [F80; 3]) -> F80 {
+    d[0] * d[0] + d[1] * d[1] + d[2] * d[2]
+}
+
+/// The root of [`sum_squares`] as a float: `fsqrt` on the stack (1.1d), or
+/// libm's `sqrt` of the sum stored as a double (1.5b, UO).
+fn root(r: MathRounding, sum: F80) -> f32 {
+    match r {
+        MathRounding::Kept => sum.sqrt().to_f32(),
+        _ => sum.to_f64().sqrt() as f32,
+    }
+}
+
+/// `distance(a, b)` (1.1d 0x5e848, 1.5b 0x5faf6, UO 0x6b7e5):
+/// `VectorDistance` (1.1d 0x3d7ec, 1.5b 0x32d79, UO 0x39fc9) as
+/// [`differences`], [`sum_squares`] and [`root`] round it, one store into
+/// `Scr_AddFloat`. VERIFIED (the instructions), and `probe_math` on 1.1d,
+/// 1.5b and UO.
 pub fn distance(
-    _host: &mut GameHost,
+    host: &mut GameHost,
     _cx: &mut Cx,
     _recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let (Some(Value::Vector(a)), Some(Value::Vector(b))) = (args.first(), args.get(1)) else {
-        return Err(ErrorKind::BadType("distance takes two vectors"));
-    };
-    let d = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-    Ok(Value::Float(vec_len(d)))
+    let (a, b) = two_vectors(args, "distance takes two vectors")?;
+    let r = host.profile.math;
+    if r == MathRounding::Float {
+        let d = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+        return Ok(Value::Float(vec_len(d)));
+    }
+    Ok(Value::Float(root(r, sum_squares(differences(r, a, b)))))
+}
+
+/// `distanceSquared(a, b)` (1.1d 0x5e890, 1.5b 0x5fb4e, UO 0x6b83d):
+/// `VectorDistanceSquared` (1.1d 0x3d830, 1.5b 0x32dee, UO 0x3a03e) leaves
+/// [`sum_squares`] of the [`differences`] on the stack and the handler
+/// stores it once. VERIFIED (the instructions), and `probe_math` on 1.1d,
+/// 1.5b and UO.
+pub fn distance_squared(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let (a, b) = two_vectors(args, "distanceSquared takes two vectors")?;
+    let r = host.profile.math;
+    if r == MathRounding::Float {
+        let d: f32 = (0..3).map(|i| (a[i] - b[i]) * (a[i] - b[i])).sum();
+        return Ok(Value::Float(d));
+    }
+    Ok(Value::Float(sum_squares(differences(r, a, b)).to_f32()))
 }
 
 /// `vectorDot(a, b)`: the three products summed on the x87 stack and
@@ -132,10 +207,11 @@ pub fn closer(
     Ok(Value::Int(i32::from(far > near)))
 }
 
-/// `length(v)`: the vector's own magnitude, in f32. Unverified against
-/// retail: no handler address or probe.
+/// `length(v)` (1.1d 0x5e8d8, 1.5b 0x5fba6, UO 0x6b895): the squares
+/// summed on the stack inside the handler, then [`root`]. VERIFIED (the
+/// instructions), and `probe_math` on 1.1d, 1.5b and UO.
 pub fn length(
-    _host: &mut GameHost,
+    host: &mut GameHost,
     _cx: &mut Cx,
     _recv: Option<Target>,
     args: &[Value],
@@ -143,14 +219,20 @@ pub fn length(
     let Some(Value::Vector(v)) = args.first() else {
         return Err(ErrorKind::BadType("length takes a vector"));
     };
-    Ok(Value::Float(vec_len(*v)))
+    let r = host.profile.math;
+    if r == MathRounding::Float {
+        return Ok(Value::Float(vec_len(*v)));
+    }
+    Ok(Value::Float(root(r, sum_squares(v.map(F80::from_f32)))))
 }
 
-/// `vectorNormalize(v)`: a unit vector in the same direction, `(0,0,0)` for
-/// a zero-length input. vcod's choice, unverified against retail: no
-/// handler address or probe.
+/// `vectorNormalize(v)` (1.1d 0x5ea28, 1.5b 0x5fd38, UO 0x6ba27): a copy
+/// through the build's in-place `VectorNormalize`, its length dropped:
+/// [`x87::normalize_in_place`] on 1.1d (0x3d8d8), [`x87::normalize_stored`]
+/// on 1.5b (0x32f73) and UO (0x3a1c3). A zero vector comes back as it went
+/// in. VERIFIED (the instructions), and `probe_math` on 1.1d, 1.5b and UO.
 pub fn vector_normalize(
-    _host: &mut GameHost,
+    host: &mut GameHost,
     _cx: &mut Cx,
     _recv: Option<Target>,
     args: &[Value],
@@ -158,11 +240,18 @@ pub fn vector_normalize(
     let Some(Value::Vector(v)) = args.first() else {
         return Err(ErrorKind::BadType("vectorNormalize takes a vector"));
     };
-    let len = vec_len(*v);
-    if len == 0.0 {
-        return Ok(Value::Vector([0.0, 0.0, 0.0]));
-    }
-    Ok(Value::Vector([v[0] / len, v[1] / len, v[2] / len]))
+    let n = match host.profile.math {
+        MathRounding::Kept => x87::normalize_in_place(Vec3::from_array(*v)),
+        MathRounding::Stored => x87::normalize_stored(Vec3::from_array(*v)),
+        MathRounding::Float => {
+            let len = vec_len(*v);
+            if len == 0.0 {
+                return Ok(Value::Vector([0.0, 0.0, 0.0]));
+            }
+            return Ok(Value::Vector([v[0] / len, v[1] / len, v[2] / len]));
+        }
+    };
+    Ok(Value::Vector(n.to_array()))
 }
 
 /// `vectorToAngles(v)`: `vectoangles` (1.1d 0x3de94). Unlike Q3's, the
@@ -263,29 +352,18 @@ pub(crate) fn vectoyaw(v: [f32; 3]) -> f64 {
     }
 }
 
-/// `anglesToForward(angles)`: an `AngleVectors` forward in plain f32, the
-/// inverse of `vectorToAngles` on a unit vector. Unverified against retail:
-/// no handler address, and not the x87 port `vcod_common::x87::angle_vectors`.
-pub fn angles_to_forward(
-    _host: &mut GameHost,
-    _cx: &mut Cx,
-    _recv: Option<Target>,
-    args: &[Value],
-) -> Result<Value, ErrorKind> {
-    let Some(Value::Vector(a)) = args.first() else {
-        return Err(ErrorKind::BadType("anglesToForward takes an angles vector"));
-    };
-    let (sp, cp) = a[0].to_radians().sin_cos();
-    let (sy, cy) = a[1].to_radians().sin_cos();
-    Ok(Value::Vector([cp * cy, cp * sy, -sp]))
-}
-
-/// `anglesToRight(angles)` and `anglesToUp(angles)`: an `AngleVectors` right
-/// and up in plain f32, unverified as [`angles_to_forward`] is.
-fn angle_vectors(args: &[Value]) -> Result<[[f32; 3]; 3], ErrorKind> {
+/// `anglesToForward`, `anglesToRight` and `anglesToUp` (1.1d 0x5eb20,
+/// 0x5eae4, 0x5eaa8; 1.5b 0x5fe85, 0x5fe2d, 0x5fdd5; UO 0x6bb74, 0x6bb1c,
+/// 0x6bac4): one `AngleVectors` vector each, [`x87::angle_vectors`] on every
+/// CoD1 build. VERIFIED (the calls), and `probe_math` on 1.1d, 1.5b and UO.
+/// CoD2 and CoD4 keep a plain-float `AngleVectors`, unverified.
+fn angle_vectors(host: &GameHost, args: &[Value]) -> Result<[[f32; 3]; 3], ErrorKind> {
     let Some(Value::Vector(a)) = args.first() else {
         return Err(ErrorKind::BadType("anglesTo* takes an angles vector"));
     };
+    if host.profile.math != MathRounding::Float {
+        return Ok(x87::angle_vectors(Vec3::from_array(*a)).map(|v| v.to_array()));
+    }
     let (sp, cp) = a[0].to_radians().sin_cos();
     let (sy, cy) = a[1].to_radians().sin_cos();
     let (sr, cr) = a[2].to_radians().sin_cos();
@@ -296,22 +374,31 @@ fn angle_vectors(args: &[Value]) -> Result<[[f32; 3]; 3], ErrorKind> {
     ])
 }
 
-pub fn angles_to_right(
-    _host: &mut GameHost,
+pub fn angles_to_forward(
+    host: &mut GameHost,
     _cx: &mut Cx,
     _recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    Ok(Value::Vector(angle_vectors(args)?[1]))
+    Ok(Value::Vector(angle_vectors(host, args)?[0]))
+}
+
+pub fn angles_to_right(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    Ok(Value::Vector(angle_vectors(host, args)?[1]))
 }
 
 pub fn angles_to_up(
-    _host: &mut GameHost,
+    host: &mut GameHost,
     _cx: &mut Cx,
     _recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    Ok(Value::Vector(angle_vectors(args)?[2]))
+    Ok(Value::Vector(angle_vectors(host, args)?[2]))
 }
 
 /// The four draws step [`GameHost::script_irand`]'s generator: CoD2's
@@ -386,16 +473,28 @@ pub fn random_float_range(
     Ok(Value::Float(host.script_flrand(lo, hi)))
 }
 
-/// Degrees to radians the way the builtins do it, `x * M_PI / 180` in
-/// doubles (1.1 0x5e5ef; UO 0x6b551 is the same table row).
-fn radians(deg: f32) -> f64 {
-    deg as f64 * std::f64::consts::PI / 180.0
+/// Degrees to radians as every CoD1 handler does it, `x * M_PI / 180` on
+/// the stack (1.1d 0x5e5ef, `.rodata` 0x78a90 and 0x78a98; 1.5b and UO the
+/// same two doubles off the GOT).
+fn radians(deg: f32) -> F80 {
+    F80::from_f32(deg) * F80::from_f64(PI) / F80::from_f64(180.0)
 }
 
-/// An `asin`/`acos`/`atan` result back to degrees: the f32 radians times
-/// 180 (a float) over `M_PI` (a double), stored as a float (1.1 0x5e73f).
-fn degrees(rad: f64) -> Value {
-    Value::Float(((rad as f32 * 180.0) as f64 / std::f64::consts::PI) as f32)
+/// An `asin`/`acos`/`atan` result back to degrees: the float radians times
+/// 180 (a float) over `M_PI` (a double) on the stack, stored once (1.1d
+/// 0x5e745..0x5e756).
+fn degrees(rad: f32) -> Value {
+    Value::Float((F80::from_f32(rad) * F80::from_f32(180.0) / F80::from_f64(PI)).to_f32())
+}
+
+/// CoD2's and CoD4's: the radians in doubles, unverified.
+fn float_radians(deg: f32) -> f64 {
+    deg as f64 * PI / 180.0
+}
+
+/// CoD2's and CoD4's: the product rounded to a float first, unverified.
+fn float_degrees(rad: f64) -> Value {
+    Value::Float(((rad as f32 * 180.0) as f64 / PI) as f32)
 }
 
 /// `asin`/`acos` refuse anything outside [-1, 1] with `"%g out of range"`
@@ -411,75 +510,116 @@ fn unit_arg(args: &[Value], usage: &'static str) -> Result<f32, ErrorKind> {
     Ok(x)
 }
 
-/// `sin(degrees)` (1.1 0x5e5dc, UO 0x6b551).
+/// `sin(degrees)` (1.1d 0x5e5dc, 1.5b 0x5f862, UO 0x6b551): [`radians`]
+/// into `fsin` on 1.1d ([`F80::fsin`]), into libm's `sin` as a double on
+/// 1.5b and UO, the result stored once. VERIFIED (the instructions), and
+/// `probe_math` on 1.1d, 1.5b and UO.
 pub fn sin(
-    _: &mut GameHost,
+    host: &mut GameHost,
     _: &mut Cx,
     _: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let x = float(args.first(), "sin takes a number")?;
-    Ok(Value::Float(radians(x).sin() as f32))
+    Ok(Value::Float(match host.profile.math {
+        MathRounding::Kept => radians(x).fsin().to_f32(),
+        MathRounding::Stored => radians(x).to_f64().sin() as f32,
+        MathRounding::Float => float_radians(x).sin() as f32,
+    }))
 }
 
-/// `cos(degrees)` (1.1 0x5e618, UO 0x6b59b).
+/// `cos(degrees)` (1.1d 0x5e618, 1.5b 0x5f8ac, UO 0x6b59b): [`sin`]'s
+/// shape with `fcos` and libm's `cos`. VERIFIED (the instructions), and
+/// `probe_math` on 1.1d, 1.5b and UO.
 pub fn cos(
-    _: &mut GameHost,
+    host: &mut GameHost,
     _: &mut Cx,
     _: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let x = float(args.first(), "cos takes a number")?;
-    Ok(Value::Float(radians(x).cos() as f32))
+    Ok(Value::Float(match host.profile.math {
+        MathRounding::Kept => radians(x).fcos().to_f32(),
+        MathRounding::Stored => radians(x).to_f64().cos() as f32,
+        MathRounding::Float => float_radians(x).cos() as f32,
+    }))
 }
 
-/// `tan(degrees)` (1.1 0x5e654, UO 0x6b5e5): sine over cosine of the f32
-/// radians, `"divide by 0"` (0x774f4) when the cosine is 0.
+/// `tan(degrees)` (1.1d 0x5e654, 1.5b 0x5f8f6, UO 0x6b5e5): [`radians`]
+/// stored as a float, its `fsincos` stored as two floats (UO's through
+/// 0x6f0f7), sine over cosine; `"divide by 0"` (0x774f4) when the cosine is
+/// 0. VERIFIED (the instructions), and `probe_math` on 1.1d, 1.5b and UO.
 pub fn tan(
-    _: &mut GameHost,
+    host: &mut GameHost,
     _: &mut Cx,
     _: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let r = radians(float(args.first(), "tan takes a number")?) as f32;
-    let (s, c) = (r.sin(), r.cos());
+    let x = float(args.first(), "tan takes a number")?;
+    let (s, c) = if host.profile.math == MathRounding::Float {
+        let r = float_radians(x) as f32;
+        (r.sin(), r.cos())
+    } else {
+        let r = f64::from(radians(x).to_f32());
+        (r.sin() as f32, r.cos() as f32)
+    };
     if c == 0.0 {
         return Err(ErrorKind::Custom("divide by 0".into()));
     }
     Ok(Value::Float(s / c))
 }
 
-/// `asin(x)` in degrees (1.1 0x5e6d0, UO 0x6b667): `atan2(x, sqrt(1 - x*x))`.
+/// `asin(x)` in degrees (1.1d 0x5e6d0, 1.5b 0x5f978, UO 0x6b667): 1.1d's
+/// `fpatan` of `x` over `sqrt(1 - x*x)` stored as a double, 1.5b's and UO's
+/// libm `asin`, then the float radians through [`degrees`]. VERIFIED (the
+/// instructions), and `probe_math` on 1.1d, 1.5b and UO.
 pub fn asin(
-    _: &mut GameHost,
+    host: &mut GameHost,
     _: &mut Cx,
     _: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let x = unit_arg(args, "asin takes a number")? as f64;
-    Ok(degrees(x.atan2((1.0 - x * x).sqrt())))
+    Ok(match host.profile.math {
+        MathRounding::Kept => degrees(x.atan2((1.0 - x * x).sqrt()) as f32),
+        MathRounding::Stored => degrees(x.asin() as f32),
+        MathRounding::Float => float_degrees(x.atan2((1.0 - x * x).sqrt())),
+    })
 }
 
-/// `acos(x)` in degrees (1.1 0x5e768, UO 0x6b6fe): `atan2(sqrt(1 - x*x), x)`.
+/// `acos(x)` in degrees (1.1d 0x5e768, 1.5b 0x5fa0f, UO 0x6b6fe): [`asin`]'s
+/// shape, `fpatan` of `sqrt(1 - x*x)` over `x` on 1.1d, libm's `acos` on
+/// 1.5b and UO. VERIFIED (the instructions), and `probe_math` on 1.1d, 1.5b
+/// and UO.
 pub fn acos(
-    _: &mut GameHost,
+    host: &mut GameHost,
     _: &mut Cx,
     _: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let x = unit_arg(args, "acos takes a number")? as f64;
-    Ok(degrees((1.0 - x * x).sqrt().atan2(x)))
+    Ok(match host.profile.math {
+        MathRounding::Kept => degrees((1.0 - x * x).sqrt().atan2(x) as f32),
+        MathRounding::Stored => degrees(x.acos() as f32),
+        MathRounding::Float => float_degrees((1.0 - x * x).sqrt().atan2(x)),
+    })
 }
 
-/// `atan(x)` in degrees (1.1 0x5e804, UO 0x6b795).
+/// `atan(x)` in degrees (1.1d 0x5e804, 1.5b 0x5faa6, UO 0x6b795): `fpatan`
+/// over 1 (1.1d) or libm's `atan` (1.5b, UO) stored as a float, then
+/// [`degrees`]. VERIFIED (the instructions), and `probe_math` on 1.1d, 1.5b
+/// and UO.
 pub fn atan(
-    _: &mut GameHost,
+    host: &mut GameHost,
     _: &mut Cx,
     _: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let x = float(args.first(), "atan takes a number")?;
-    Ok(degrees((x as f64).atan()))
+    let x = float(args.first(), "atan takes a number")? as f64;
+    Ok(match host.profile.math {
+        MathRounding::Float => float_degrees(x.atan()),
+        _ => degrees(x.atan() as f32),
+    })
 }
 
 #[cfg(test)]

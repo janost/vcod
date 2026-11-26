@@ -104,7 +104,8 @@ Vehicles:
   score and round limits, intermission and the restart `exitLevel` falls
   back to; a defender's touch returning the flag; the round clock and time
   limit in `ctf`, `dom`, `bas`, `hq` and `tdm`; `tdm`'s killcam; a
-  rotation a script sets (coduo-diff.md 22).
+  rotation a script sets (coduo-diff.md 22), and the rotation's `exec`,
+  `allow_jeeps` and `allow_tanks` words (coduo-diff.md 26.2.1).
 - Battle rank matches retail from rank 1 to 5: promotions and demotions,
   status and head icons, the HUD rank icon, each rank's ammo, grenades,
   satchel and binoculars, rank 5's artillery round, and the reset at a map
@@ -174,8 +175,6 @@ no listen server, no PunkBuster, no levelshots, the UI DLL ignored, no
 authorize server, rcon's subset.
 
 - Audio has had little checking by ear, tank engines included.
-- `sv_mapRotation` reads `gametype` and `map` only: UO's `exec <cfg>`,
-  `allow_jeeps` and `allow_tanks` rotation words are skipped as unknown.
 
 ## Beyond retail
 

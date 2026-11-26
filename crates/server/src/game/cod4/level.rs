@@ -1205,7 +1205,6 @@ impl Cod4Level {
             .bodies
             .run_thinks(now_ms, &super::COD4_HOST_PROTO);
         self.run_items();
-        self.touch_items();
         self.brushes = self.brush_entities();
         self.run_missiles();
         self.run_vehicles();
