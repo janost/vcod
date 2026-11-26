@@ -2,7 +2,7 @@
 //! retail's `ClientEndFrame` keys its dead arm on the session, so the body
 //! stays `pm_type` 0 at health 0 until the script writes `dead`
 //! (`client-probes/probe_suicide` on retail mp_harbor, 2026-10-17;
-//! docs/research/cod11-combat.md 5.1, "A suicide that stays playing").
+//! docs/research/cod11-combat.md 5.1.2).
 //!
 //! Needs `COD_DIR`; without the paks it returns early.
 
@@ -98,7 +98,7 @@ fn a_suicide_that_stays_playing_keeps_pm_type_0() {
 /// slot 1, whose `player_die` relinked him as a corpse; 3 s on, still
 /// `playing`, his end frame has linked him back as a body and the trace
 /// stops on him, and still does right after the script writes `dead`
-/// (cod11-combat.md 5.1, "A suicide that stays playing").
+/// (cod11-combat.md 5.1.2).
 fn probe_suicide_near(
     fs: vcod_common::pk3::Pk3Fs,
     map: &str,

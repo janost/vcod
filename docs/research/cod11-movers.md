@@ -123,7 +123,7 @@ wire, yet `getorigin()` read the start at 1100, the first moved value (125) at
 `T - 50` (one frame at `sv_fps` 20), and the notify comes on the first frame
 whose lagged clock has passed the end. UNVERIFIED: one frame or a fixed 50 ms
 (one frame rate captured). INFERRED, off the entity pass running after the
-threads (combat doc 14.7, "The pass runs after the threads"): `G_RunMover`
+threads (combat doc 14.7.2): `G_RunMover`
 evaluates at `level.time` in the pass, script reads that next frame, and the
 notify wakes its waiter on the next frame's threads. vcod runs the mover on
 its turn in the pass (`mover::run_one`) and queues the notify for the next
@@ -143,7 +143,7 @@ per-frame origins. A two-second move is two snapshot updates, one at each end.
 | `movegravity` | `pos` | `trType` 5 (`TR_GRAVITY`), `trDuration` = ms, `trDelta` = initial velocity | stationary where it fell to (section 5) |
 | `rotateto`/`rotatepitch`/`rotateyaw`/`rotateroll`/`rotatevelocity` | `apos` | `trType` 3, `trDelta` = deg/s | `trType` 0, `trBase` = angle reached, unnormalized: a full turn read `(0, 360, 0)` |
 
-Measured: `movez(96, 2, 0.5, 0.5)` from `z = 592` sent
+VERIFIED (capture), measured: `movez(96, 2, 0.5, 0.5)` from `z = 592` sent
 
 | trType | trDuration | base z | delta z |
 |---|---|---|---|
@@ -152,9 +152,9 @@ Measured: `movez(96, 2, 0.5, 0.5)` from `z = 592` sent
 | 10 | 500 | 672 | 64 |
 | 0 | | 688 | |
 
-The segments cover 16, 64 and 16 units; 64 = `96 / (2 - 0.25 - 0.25)`.
+INFERRED (arithmetic on the rows above): the segments cover 16, 64 and 16 units; 64 = `96 / (2 - 0.25 - 0.25)`.
 
-A mover is `eType` 8 (`ET_SCRIPTMOVER`) throughout; starting or stopping
+INFERRED: a mover is `eType` 8 (`ET_SCRIPTMOVER`) throughout; starting or stopping
 changes nothing about the entity kind.
 
 ## 10. What is not measured here
@@ -432,7 +432,7 @@ after the one being pushed is out of the tree and blocks nothing, as retail.
 Gates: `crates/server/tests/ride_ab.rs` (players), `push_ab.rs` (items),
 `push_order_ab.rs` (tree order).
 
-### The residual yaw
+### 12.1 The residual yaw
 
 VERIFIED, `Reached_ScriptMover` (game.mp `0x5f98c`), angular half
 (`0x5fa57`..`0x5fb13`): the settle (`0x5f7b0`) writes the stored target
@@ -496,7 +496,7 @@ VERIFIED, 1.5b's `BG_EvaluateTrajectory` stores a linear trajectory's `dt` to
 a float (`0x1b8f5`) before the mul-add; vcod follows on a 1.5 or UO server
 (`Movers::stored`). The 1.5b and UO engines snap as 1.1d's (next subsection).
 
-### The snap on every link
+### 12.2 The snap on every link
 
 VERIFIED, the snap in each engine's `SV_LinkEntity`:
 
@@ -529,7 +529,7 @@ entity it links or unlinks; `ride_ab.rs`'s
 `every_link_snaps_angles_like_retail` matches every line of the probe. A
 client's link does not snap.
 
-### A blocked mover
+### 12.3 A blocked mover
 
 VERIFIED, both earlier ride captures (2026-10-05 and -06, since replaced;
 section 11): the slab lowered onto the standing player moved 2 units more on
@@ -598,7 +598,7 @@ measurement 2026-10-20: all 240 frames match. In the 2026-10-20 ride capture
 stalled samples, as on ours; `ride_ab.rs`'s wire gate matches the slab's
 trajectory with no tolerance on `trTime`.
 
-### The box test
+### 12.4 The box test
 
 VERIFIED, `0x550f0`..`0x5530a`: a second box beside the list box, the
 pusher's box where the move takes it, both taken before the pusher moves:
@@ -624,7 +624,7 @@ ground test and the trace, players and items alike.
 `push::tests::the_box_test_drops_a_box_that_only_touches` pins the
 comparisons; forcing the test to drop everything fails `push_order_ab`.
 
-### The candidate trace
+### 12.5 The candidate trace
 
 VERIFIED, game.mp: the trace at `0x554ee` passes the listed entity's number
 and box at its `r.currentOrigin` as start and end, and keeps the entity only
@@ -704,7 +704,7 @@ inside (INFERRED, Q3's `CM_TestBoxInBrush`). It reads `ps.origin`, which
 retired a segment; `mover::stall` restores them and takes back the notifies
 they owed.
 
-INFERRED, off the listing (section 12, "A blocked mover") and the capture: the
+INFERRED, off the listing (section 12.3) and the capture: the
 sinking is the blocked push's unlink. The player it could not place stays out
 of the tree until his next `ClientThink`, so a partner's cmd read first falls
 free of him for one `Pmove`, and the next cmd of either is stuck inside the
@@ -780,7 +780,7 @@ the seed recovered off the `RIDE` lines (`Server::pin_stuck_rand`, player-clip
 doc 13.4). Every row matches. Before `StuckInClient` took 1.5's scan the pairs
 stayed stacked on ours and 48 rows failed.
 
-### `TR_SINE` and the crush arm
+### 12.6 `TR_SINE` and the crush arm
 
 VERIFIED, an `objdump` scan of game.mp's `.text` for immediate stores
 `mov DWORD PTR [reg+0xc],0x4` or `[reg+0x30],0x4`: two, `SP_func_pendulum`
@@ -916,7 +916,7 @@ measurement, same probe and client against ours: the slab left the snapshot
 the probe with one allied client and holds both offsets and every `PROBE f`
 origin to the capture's.
 
-### The client
+### 14.1 The client
 
 VERIFIED, `cgame_mp_x86.dll`: case 8 of the entity-type switch at
 `0x3001d5f0` is `0x3001b710`. It returns without drawing when `eFlags` carries
@@ -1145,7 +1145,7 @@ The probe keeps model `*5` (entity 177, origin and angles zero) as
 `b` (171) to it and moves it, runs two three-entity chains, deletes a moving
 parent, links four script_origins to the player, and ends on a link cycle.
 
-### Which receivers
+### 15.1 Which receivers
 
 VERIFIED: `InitScriptMover` (`0x60214`) writes `eType` 8 (`0x60378`) and sets
 the `ent+0x17d` bit 0x20 `linkTo` tests (`0x6038d`); object-model doc 23.2
@@ -1154,7 +1154,7 @@ lists the other writers (`G_SpawnItem`, `G_SpawnTurret`, `ClientSpawn`,
 same three classes: every `script_model`, `script_origin` and
 `script_brushmodel` takes a link, and so do items and turrets.
 
-### The record
+### 15.2 The record
 
 VERIFIED, the helper both link builtins call (`0x662e0`, unnamed, between
 `G_EntAttach` and `G_CalcTagAxis`):
@@ -1210,7 +1210,7 @@ parent with a DObj and a good tag reaches the cycle's. VERIFIED, off the
 capture: `y linkto(x)` with `x` already linked to `y`, both script_origins, is
 the fatal `failed to link entity since parent has no model`.
 
-### The per-frame re-anchor
+### 15.3 The per-frame re-anchor
 
 VERIFIED, the per-entity runner `0x502bc` (section 11): compares `eType` with 3
 (`0x50380`), tests the link record (`0x50385`), calls `G_GeneralLink`
@@ -1250,7 +1250,7 @@ what script read that frame, while `b` rides on. VERIFIED, `G_EntUnlink`
 (object-model doc 23.2): `G_SetOrigin` and `G_SetAngle` at the entity's own
 current pose.
 
-### Order: a parent runs first, a grandparent does not
+### 15.4 Order: a parent runs first, a grandparent does not
 
 VERIFIED, `G_RunFrame` (`0x50912`..`0x50975`, section 11): the loop counts
 entity numbers up, runs the first dword of the link record (`0x50949`) then
@@ -1265,7 +1265,7 @@ VERIFIED, off the capture: the forward chain `c0` 172 (moved), `c1` 173, `c2`
 9.00 and 49.50). INFERRED: at 175 the loop runs 176 first, which reads 179
 before 179 has run; 175 then reads 176 current.
 
-### A deleted parent
+### 15.5 A deleted parent
 
 VERIFIED, `G_FreeEntity` (`0x66948`): `0x66954`..`0x669ee` is `G_EntUnlink`'s
 body inlined on the entity, and `0x669f1`..`0x66a9e` the same body looped over
@@ -1279,7 +1279,7 @@ child then holds 125.20. INFERRED: `delete()` frees a tenth of a second later
 off the think (object-model doc 14), and the mover runs its trajectory until
 then.
 
-### A player parent
+### 15.6 A player parent
 
 VERIFIED, `ClientThink_real` (`0x405bb`..`0x405f6`, just past its
 `G_TouchTriggers` call): copies `ps.origin` into `r.currentOrigin` and writes 0
@@ -1370,7 +1370,7 @@ when restart is set. INFERRED: an anim's time is 0 at the end frame that set
 it and grows by each later frame's `frametime` at that frame's start, ours'
 `now - start_ms`.
 
-### A moving body's clip
+### 15.7 A moving body's clip
 
 **The rate.** VERIFIED, `game.mp.i386.so`, the per-channel updater 0x2aba0
 (`BG_PlayerAnimation` calls it for the legs lerp frame `ci+0x37c` with
@@ -1415,16 +1415,20 @@ truncating control word. VERIFIED, `BG_ParseCommands` sets bit
 `pb_combatrun_forward_loop` reads 232, `pb_combatrun_back_loop` 128, the
 ladder clips 72 and vertical.
 
-**The phase.** VERIFIED, the setter 0x2a600: for a new looping anim with a
+#### 15.7.1 The phase
+
+VERIFIED, the setter 0x2a600: for a new looping anim with a
 `moveSpeed` (`trap_XAnimIsLooped`, 0x2a858..0x2a881), the start time is the
 old anim's `trap_XAnimGetTime` when the old one had a `moveSpeed` and loops
 (0x2a890..0x2a8bc), else `((bg.time / 100 + clientNum * 360) % 1000) * 0.001`
 (0x2a8c4..0x2a919, `clientNum` at `ci+0x8`). `trap_XAnimSetTime` (0x2aa5a)
 applies it after the goal weight call whenever the new anim has a
-`moveSpeed`. 1.5b's and UO's setters set it only on a node whose weight reads
-0 (cod11-combat.md 3.1, "The setter on a weighted node").
+`moveSpeed`. VERIFIED (cod11-combat.md 3.1.5): 1.5b's and UO's setters set it
+only on a node whose weight reads 0.
 
-**The phase on 1.5 and UO.** VERIFIED, disassembly of 1.5b's `game.mp` setter
+#### 15.7.2 The phase on 1.5 and UO
+
+VERIFIED, disassembly of 1.5b's `game.mp` setter
 (file address 0x18ced; Ghidra's `FUN_00028ced`, image 0x10000 higher) and
 UO's (0x1ce5f), the same instructions:
 
@@ -1479,7 +1483,9 @@ crouch walk back that returns at 42000 while its node still blends out keeps
 its time ("The setter on a weighted node", cod11-combat.md 3.1), to 0.03
 units.
 
-**The cmd at the placement.** VERIFIED (`crates/client/src/probe.rs`'s loop):
+#### 15.7.3 The cmd at the placement
+
+VERIFIED (`crates/client/src/probe.rs`'s loop):
 the net probe builds, sends and logs a frame's cmd before reading the snapshot
 that shows the placement, so cmds sent past that snapshot's commandTime
 predate the placement its log is timed from. Retail runs them through the
@@ -1528,7 +1534,9 @@ sum, so a clip with no translation keys for a bone pulls that bone's offset to
 0 by its weight; vcod's `PoseBuffer::blend` does that (xanim-v14-format.md,
 "Rotation keys as the engine rebuilds them").
 
-**The weight ramp.** VERIFIED, `cod_lnxded`: the game's
+#### 15.7.4 The weight ramp
+
+VERIFIED, `cod_lnxded`: the game's
 `trap_XAnimClearGoalWeight` is syscall 0x53 (`game.mp.i386.so` 0x63e5b) and
 `trap_XAnimSetCompleteGoalWeight` 0x5f (0x64038); the dispatcher sends them to
 0x080bf53c and 0x080bdf64. A node half is 0x1c bytes from node `+0xc`, the
@@ -1556,7 +1564,7 @@ over the whole distance's time. vcod: `animclock::Ramp::raised`. VERIFIED,
 vcod measurement, 2026-10-21: the MG42 mount and the first frame of each aim
 and fire group moved from 0.008-0.039 off retail's gunner grid to within
 0.005, and the knockback kills of `cod11-turrets.md` 13.6 onto or within 2e-4
-of retail's points (turrets doc 13.9, "The weights across frames").
+of retail's points (turrets doc 13.9.4).
 
 VERIFIED, retail capture 2026-10-12:
 `crates/server/tests/fixtures/movers/mp_carentan-dm-legs.txt` (server half,
@@ -1581,7 +1589,9 @@ Nothing stays open; the spawn idle's phase is the join time ("Where the
 250 ms came from"). A crouched stop picks `idlecr` at 84 u/s with no move key
 held, the 120 u/s rule of player-model-anim-system.md, "The stop".
 
-**Torso over legs.** VERIFIED, `game.mp.i386.so`: `BG_FindAnims` (0x2c0e0)
+#### 15.7.5 Torso over legs
+
+VERIFIED, `game.mp.i386.so`: `BG_FindAnims` (0x2c0e0)
 finds `root`, `torso`, `legs` and `turning` in the `multiplayer` tree
 (`animtrees/multiplayer.atr`: `main { torso { pt_* } legs { pb_* ... } }` and
 `turning`, under an implicit `root`); `BG_FindAnimTrees` (0x2c14c) copies the
@@ -1639,7 +1649,9 @@ against run" and "The weapon event's movetype") that took two things:
 - The idle's phase: the capture's placement is message 352; ours' idle set at
   7600 fits it (below).
 
-**The spawn idle's phase.** INFERRED, off the setter: the idle
+#### 15.7.6 The spawn idle's phase
+
+INFERRED, off the setter: the idle
 (`pb_stand_alert`, 6.267 s, no `moveSpeed`) takes no phase, restarts at 0 on
 the end frame that sets it, and nothing resets it while the wire value holds
 (634 from the capture's first snapshot to the run), so its phase at the
@@ -1656,7 +1668,9 @@ VERIFIED, the torso capture: placement message 352 and the same rule (idle 4
 messages after the join, 50 ms a message) give 7600, which fits its settle to
 0.08 degrees where 7500 and 7700 read 11 off.
 
-**The spawn idle on 1.5 and UO.** VERIFIED, live (retail UO 1.51b,
+#### 15.7.7 The spawn idle on 1.5 and UO
+
+VERIFIED, live (retail UO 1.51b,
 2026-10-21, `probe_legs` with a `--save-legs` client that also logs the join's
 snapshots and cmds as `!psnap` and `!pcmd`; recipe in each header):
 
@@ -1725,7 +1739,7 @@ vcod: `vcod_common::animclock::ChannelClock` per channel, stepped in
 `ClientSim::commit_pose` with the level time and slot; the server's hit rig and
 tag pose read its layers.
 
-### The drawn body's clip
+### 15.8 The drawn body's clip
 
 Addresses are `cgame_mp_x86.dll` 1.1.
 
@@ -1885,7 +1899,7 @@ different player in the slot finds the lerp frames zeroed. vcod:
 pair's older snapshot moves on; a jump over several snapshots checks only
 the two it lands between.
 
-### A bone asked for before the anim update
+### 15.9 A bone asked for before the anim update
 
 VERIFIED, `game.mp.i386.so`: `G_DObjCalcBone` (0x6737c) calls
 `trap_DObjCreateSkelForBone` (syscall 0x6a) and returns at once when the bone
@@ -1984,7 +1998,7 @@ from `crates/gsc/tests/fixtures/semantics/client-probes/probe_linkto2.gsc`) and
 `mp_carentan-dm-linkto2-wire.txt` (client half). The player stands at
 `(-512, 2688, -15.91)` throughout. Addresses are `game.mp.i386.so`.
 
-### `enableLinkTo` and `Think_GeneralLink`
+### 16.1 `enableLinkTo` and `Think_GeneralLink`
 
 VERIFIED, `enableLinkTo` (0x5d5d0): object-model doc 23.2 has its tests and
 stores; the think it installs is `Think_GeneralLink` (relocation at 0x5d69c).
@@ -2022,7 +2036,7 @@ VERIFIED, off the capture:
 - `enableLinkTo` on a script_origin is the fatal
   `entity already has linkTo enabled`.
 
-### A linked turret
+### 16.2 A linked turret
 
 VERIFIED: `turret_think` (0x5328c) writes `ent+0x1fc = level.time + 50`
 (0x5329e), tests the record (0x532a4) and calls `G_GeneralLink` (0x532b2)
@@ -2089,7 +2103,7 @@ one-rounding form on 1.1d too (`link::Frame::relative_to_stored`,
 struck body reads retail's. Open: each hit point still reads 4 to 7 ulps
 off in z (and the third one 2 ulps in y), on the same direction.
 
-### A tag parent's model change
+### 16.3 A tag parent's model change
 
 VERIFIED: `G_DObjUpdate` (0x66054) returns at once on a client (`ent+0x158`,
 0x66060); otherwise it frees the DObj and, with model byte `ent+0x175` 0,
@@ -2118,7 +2132,7 @@ zero offsets sits `(-2.18, 0, 62.68)` from the model's origin with angles
 that frame, while k0 (no tag) rides on; setting the body back does not relink
 it. Linked again and followed by `setModel("")`, k1 does not move.
 
-### A tag on an attached model
+### 16.4 A tag on an attached model
 
 Evidence: one capture against retail 1.1d, mp_carentan,
 `client-probes/probe_linkattach.gsc`, no client, 2026-10-16:
@@ -2152,7 +2166,7 @@ run `link::model_changed`. `linkto_ab.rs`'s
 `a_tag_on_an_attached_model_takes_a_link_like_retail`: every row matches
 retail's print (next section).
 
-### The tag on 1.5 and UO
+### 16.5 The tag on 1.5 and UO
 
 Evidence: `probe_linkattach` with `probe_exact 1` (every vector printed as
 integer parts and exact remainders) on retail 1.5b and UO 1.51b, 2026-11-13:
@@ -2198,8 +2212,7 @@ VERIFIED, vcod measurement (`linkto_ab`'s `_on_15` and `_on_uo`): with
 the parent's tag matrix built from the bind records a DObj with no anim
 tree holds (`skeleton::Record::bind`, each bone's bind rotation's shorts
 over 32767, unnormalized) through the skeleton build
-(`PoseBuffer::stored_worlds`, cod11-combat.md 3.1, "The pose on 1.5 and
-UO"), and the chain above, every float of all 114 rows is retail's bit on
+(`PoseBuffer::stored_worlds`, cod11-combat.md 3.1.2), and the chain above, every float of all 114 rows is retail's bit on
 both servers. Before, the tag came off the normalized bind pose in `f32`:
 k1 sat 0.011 units and 0.018 degrees off (`-478.94553` against
 `-478.9361`), and the pose-keeping k2 sat 1 to 2 float steps off.
@@ -2218,7 +2231,7 @@ takes the same chain (`link::client_bone_stored`). Not ported: vehicle
 seat and gun tags (`vehicle::seat::posed`) and a turret's tags
 (`turretpose`) still pose through `glam`. No exact capture covers them.
 
-### An item unlinked in mid-air
+### 16.6 An item unlinked in mid-air
 
 VERIFIED, `G_RunItem` (0x4eb18): with `groundEntityNum` (`ent+0x7c`) 0x3ff
 and `pos.trType` not 5 (0x4eb24, 0x4eb2d) it writes 5 and the level time
@@ -2505,7 +2518,7 @@ on retail 1.1d, mp_carentan, one `--probe-ride` client, 2026-10-12, retaken
 
 | File | Contents |
 |---|---|
-| `crates/server/tests/fixtures/movers/mp_carentan-dm-worldcopy.txt` | server `PROBE f` line per frame (player, health pack, copy) and the client's `CMDS` lines (section 21, "The slide down the slope") |
+| `crates/server/tests/fixtures/movers/mp_carentan-dm-worldcopy.txt` | server `PROBE f` line per frame (player, health pack, copy) and the client's `CMDS` lines (section 21.3) |
 | `-worldcopy-wire.txt` | client `RIDE` line per snapshot, `RIDE_NEW` per entity that entered, trajectory lines |
 
 The player stands at (-512, 2688) on the street's terrain (z -23.875) with a
@@ -2616,7 +2629,7 @@ replays all three:
 | `-worldcopy3.txt` | `client-probes/probe_worldcopy3.gsc` | same copy and verbs to the end of the unpitch, a `PROBE g` line per frame with the player's offset from the copy's spawn origin to the ten-thousandth |
 | `-sinecrush.txt` | `client-probes/probe_sinecrush.gsc` | a `func_bobbing` spawned on the first frame; the player stood at (752, -40), under a sloped ceiling 89 to 96 over its floor, at 2400 |
 
-### Clip
+### 21.1 Clip
 
 VERIFIED, the grid: every trace at yaw 0, 45, 90 and pitch 5 names the copy
 (171) or the world where vcod's copy, turned through `AnglesToAxis`, does, at
@@ -2642,7 +2655,7 @@ side the capsule sits where the mirrored offset puts it, not upright.
 vcod: `WorldCopy::sphere` turns the offset and `clip_brush_capsule` takes it;
 terrain and patches keep the upright one.
 
-### Push
+### 21.2 Push
 
 VERIFIED, vcod measurement against the 2026-10-20 captures, replayed on the
 client's own cmds (below): through the lift, both 45-degree turns, the turn
@@ -2652,16 +2665,16 @@ them and the slides down the copy's slope included), and the pack rests and is
 carried the same; every `PROBE g` row of `-worldcopy3` matches to the
 ten-thousandth.
 
-The 2026-10-12 captures logged no cmds. Replayed at an even three cmds a
+VERIFIED (vcod measurement): the 2026-10-12 captures logged no cmds. Replayed at an even three cmds a
 frame, with the player reset to retail's rest after each fall, four rows
 differed, each a player in the air: the first lift's slide down the slope
 (0.86 on retail, 0.54 on ours), the fall after a jitter off a blocked turn and
 one off the lowered copy, and the pitch's blocked frame and the jitter's fall
-after it. The pitch's frame was the resync, which put ours' player at
+after it. INFERRED: the pitch's frame was the resync, which put ours' player at
 retail's printed hundredths, up to 0.005 off the real spot, where the turned
 centre's margin at the blocked frame is 0.002.
 
-### The slide down the slope
+### 21.3 The slide down the slope
 
 VERIFIED, vcod measurement against `-worldcopy3`, replayed at the probe
 client's rate (a cmd every 16 or 17 ms, three a frame): the first lift's row
@@ -2704,7 +2717,7 @@ its first snapshot falls on retail's. Every fall and slide in `-worldcopy`,
 `-worldcopy2`, `-worldcopy3` and `mp_harbor-dm-turnedslab` then matches: frames
 to the hundredth, `PROBE g` rows to the ten-thousandth, no resync.
 
-### The carry's rounding
+### 21.4 The carry's rounding
 
 VERIFIED, `game.mp.i386.so` `G_TryPushingEntity` 0x54956-0x54aa1: the moved
 point (`r.currentOrigin + move`) is stored to a float (0x54961, 0x54970,
@@ -2765,7 +2778,7 @@ the pack drops, lands again at 16050 with 0.86 and leaves the slope on
 retail's frame. Every row of `-worldcopy3-uo.txt` matches with no gap, as do
 1.5b's and 1.1d's.
 
-### The turned centre
+### 21.5 The turned centre
 
 VERIFIED, `cod_lnxded` `CM_TransformedBoxTrace` (0x80568d8): before turning
 anything it takes the box's centre `(mins + maxs) * 0.5` (0.5 at `.rodata`
@@ -2804,7 +2817,7 @@ submodel (section 12). With a capsule ours listed the player under the sloped
 ceiling two frames late, where a box corner meets the slope 5 units lower than
 the capsule's dome.
 
-### `func_static`
+### 21.6 `func_static`
 
 VERIFIED, `SP_func_static` (game.mp 0x5820c), after `InitMover`: stores
 `Use_Static` as `use` (`+0x210`), copies `r.currentOrigin` into
@@ -2841,7 +2854,7 @@ vcod: `spawn_static` gives spawnflags 2 or 4 `health` 9999, and either or a
 `GameHost::damage_nonclient` takes the `use` arm: `"trigger"` and
 `mover::use_static`. `Static_Pain` is never reached.
 
-### The sine crush
+### 21.7 The sine crush
 
 VERIFIED, the crush capture (2026-10-12, since replaced): the player stood at
 2400 (the `setOrigin` reads z one up, -6.75) is crushed in that frame's entity
@@ -2936,7 +2949,7 @@ normal turned back. A pose that only moved keeps the brushes' planes moved into
 the world. `worldcopy_ab.rs`'s
 `a_turned_submodel_tests_its_neighbour_like_retail` replays the capture.
 
-### A capsule against a pitched or rolled submodel
+### 22.1 A capsule against a pitched or rolled submodel
 
 VERIFIED, `cod_lnxded` `CM_BoxTrace` (0x8056310): with a capsule (sphere flag
 at `local_28` non-zero) and a moving trace, each axis of the work struct's
@@ -2984,8 +2997,7 @@ adds a `PROBE r` line per pose: the slab's `.origin` less the `moveto` target
 in ten-thousandths and `.angles` less the `rotateto` target in millionths of a
 degree. `flat` and `edge` read all 0. `slope` reads pitch -3662.11 and `roll`
 roll +3662.11: `r.currentAngles` is 59.99634 and -59.99634, 60 truncated to
-65536ths (10922/65536) by `Reached_ScriptMover`'s normalize (section 12, "The
-residual yaw"). 90 is a whole number of 65536ths, so `flat` and `edge` keep it.
+65536ths (10922/65536) by `Reached_ScriptMover`'s normalize (section 12.1). 90 is a whole number of 65536ths, so `flat` and `edge` keep it.
 
 VERIFIED: the per-entity clip reads that value live; 0x8090f18 passes
 `gentity + 0x140` (`r.currentAngles`) to `CM_TransformedBoxTrace` on each trace
@@ -3013,7 +3025,7 @@ capture) and `a_capsule_lands_on_a_tilted_submodel_like_retail_again` (third,
 `PROBE r` lines included) replay each with its cmds: every row matches to the
 ten-thousandth, no separate tolerance for the tilted faces.
 
-### A rolled submodel's non-axial side
+### 22.2 A rolled submodel's non-axial side
 
 The slab above has only axial sides, which take `|sphere offset| + radius` and
 never read the offset's sign. A non-axial side does: the brush arm
@@ -3068,7 +3080,7 @@ vcod: `x87::rotation_matrix` builds the turn for a posed submodel
 capture with its cmds; every row matches to the ten-thousandth. With `+l.z` in
 the sphere offset the poses rest 3.2, 6.2 and 3.6 units higher than retail's.
 
-#### On 1.5b and United Offensive
+#### 22.2.1 On 1.5b and United Offensive
 
 The same recipe ran on retail 1.5b and UO 1.51b on 2026-10-21 (ports 34611
 and 34612, a `--probe-ride` client each): `mp_harbor-dm-tiltslab-1.5.txt` and
@@ -3150,7 +3162,9 @@ product to a float instead moves no row of `movers_ab`, `push_ab`,
 `linkto_ab`, `turret_ab`, `scriptmodel_ab` or the vehicle gates at the 1.1 and
 UO installs. pmove's own turns are below.
 
-**The stack's precision.** VERIFIED, gdb attached to the live retail
+##### 22.2.1.2 The stack's precision
+
+VERIFIED, gdb attached to the live retail
 servers (1.1d and 1.5b on mp_carentan, UO 1.51b on mp_cassino): the x87
 control word reads 0x137f on 1.1d and UO and 0x37f on 1.5b, precision
 control 3 on all three, so a kept value carries a 64-bit mantissa, not an
@@ -3173,7 +3187,9 @@ error bound, and only then take the 64-bit steps
 (`the_fast_path_agrees_with_the_f80_steps`), so the common case costs what
 it did. The sines stay `f64` ones.
 
-**pmove's turns.** VERIFIED, the relocations against `AngleVectors` in 1.1d
+##### 22.2.1.1 pmove's turns
+
+VERIFIED, the relocations against `AngleVectors` in 1.1d
 `game.mp.i386.so` and the PLT calls in 1.5b's and UO's (0x13b00, 0x175b4): the
 player move turns through the game module's `AngleVectors` in:
 
@@ -3322,8 +3338,7 @@ Evidence: one capture on retail 1.1d, mp_carentan, no client, 2026-10-20:
 **`movegravity` on a moving mover.** VERIFIED, the capture: called on a
 `movez(100, 1)` on the frame whose `.origin` read z 85, it starts from 85
 (`getorigin` reads 85 straight after and a frame on), not the 90 the running
-move had reached at `level.time` as `moveto` would (section 12, "A blocked
-mover"). VERIFIED, game.mp 0x60667..0x6067f: the verb loads `r.currentOrigin`
+move had reached at `level.time` as `moveto` would (section 12.3). VERIFIED, game.mp 0x60667..0x6067f: the verb loads `r.currentOrigin`
 into `trBase` without evaluating the old trajectory, then evaluates the new
 arc into `r.currentOrigin` (0x606a9) and links (0x606b2). A second
 `movegravity` on a running arc starts the same way.
@@ -3335,7 +3350,7 @@ game.mp: `G_MoverTeam` (0x65684) stores `move` as the trajectory at
 `level.time` less `r.currentOrigin`, a float per component, and `G_MoverPush`
 (0x650f0) adds it back (`r.currentOrigin += move`), so a frame's origin is
 `prev + (eval - prev)` with two float roundings, as `amove` and
-`r.currentAngles` (section 12, "The residual yaw"). On the frame a segment
+`r.currentAngles` (section 12.1). On the frame a segment
 ends, `Reached_ScriptMover` evaluates the new trajectory straight into
 `r.currentOrigin` (0x5fa0e) and `r.currentAngles` (0x5fab1). VERIFIED: the
 gravity arm of `BG_EvaluateTrajectory` (0x2c6c0) keeps

@@ -27,6 +27,9 @@ them on vcod.
   `RAND_TRACE=1` preloads `tools/re/cod2_rand_trace.c` (built with `gcc
   -m32`) and appends every `srand()` and `rand()` the server made to the
   capture: the seed and the draws a replay pins (`cod2-combat.md` 9.6).
+- `tools/run_probe_cod2_gsc.sh <probe.gsc> [map]` is `run_probe.sh` for
+  CoD2: it installs a gametype, boots `cod2_lnxded` inside `unshare -rn`
+  with no client and prints its `PROBE` lines (`cod2-gsc-diff.md` 7).
 - Run the retail CoD2 and CoD4 Linux servers only inside `unshare -rn`.
   A new namespace's loopback is down: run `ip link set lo up` inside it
   before a probe client joins `127.0.0.1`.

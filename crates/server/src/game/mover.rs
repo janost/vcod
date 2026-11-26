@@ -360,7 +360,7 @@ fn normalize_in_place(stored: bool, v: Vec3) -> Vec3 {
 /// `BG_EvaluateTrajectory` as the build runs it: 1.1d's on the x87 stack
 /// (`Trajectory::evaluate_kept`), 1.5b's and UO's stored
 /// (`Trajectory::evaluate_stored`). A linear turn lands a float step off an
-/// `f32` evaluation (movers doc 12, "The residual yaw").
+/// `f32` evaluation (movers doc 12.1).
 fn bg_evaluate(stored: bool, tr: &Trajectory, t: i32) -> Vec3 {
     if stored {
         tr.evaluate_stored(t)
@@ -389,7 +389,7 @@ struct Mover {
     /// `G_Error` unless a `useBy` moved its state ([`use_binary`]).
     sine: bool,
     /// A sine mover's `moverState` (`ent+0x174`), which only a `useBy`
-    /// moves off `InitMover`'s 0 (cod11-combat.md 5.9, "useBy on a gun, a sine mover").
+    /// moves off `InitMover`'s 0 (cod11-combat.md 5.9.3).
     binary: Binary,
     /// `ReturnToPos1`'s `nextthink`, armed when a 1-to-2 leg ends.
     return_at: Option<i32>,
@@ -532,8 +532,7 @@ impl Movers {
     /// `trBase` z 28 with a velocity of -30 from the 30 script read, ran out
     /// 2 units short and settled on `dest` (movers doc, section 14). Returns
     /// the start, which the verb writes into `r.currentOrigin` and links:
-    /// `getorigin()` reads it straight after the call (movers doc 12, "A
-    /// blocked mover").
+    /// `getorigin()` reads it straight after the call (movers doc 12.3).
     pub fn move_to(&mut self, id: EntId, now_ms: i32, from: Vec3, dest: Vec3, m: Ramp) -> Vec3 {
         let row = self.row(id);
         let start = row.pos.start_toward(now_ms, from, dest, m);
@@ -545,8 +544,7 @@ impl Movers {
     /// `r.currentAngles`, to `dest` (`rotateto`'s caller folds `dest` within
     /// 180 of `from`, movers doc 23), on the moves' setup. A stationary group
     /// starts from `from`, not from its settled `trBase`: the two differ by
-    /// the quantization `Reached_ScriptMover` leaves (movers doc 12, "The
-    /// residual yaw"). Returns the start, which the verb's own link snaps
+    /// the quantization `Reached_ScriptMover` leaves (movers doc 12.1). Returns the start, which the verb's own link snaps
     /// into `r.currentAngles` ([`snap_angles`]).
     pub fn rotate_to(&mut self, id: EntId, now_ms: i32, from: Vec3, dest: Vec3, m: Ramp) -> Vec3 {
         let row = self.row(id);
@@ -600,7 +598,7 @@ impl Movers {
 /// the start origin at 1100 and the first moved value at 1150, and
 /// `movedone` came at 2100 rather than 2050, raised on the 2050 pass and
 /// run by the next frame's threads (docs/research/cod11-movers.md, section
-/// 8; combat doc 14.7, "Entity numbers").
+/// 8; combat doc 14.7.3).
 ///
 /// The write-back is what the capture shows retail doing (`getorigin()` and
 /// `.angles` both read the interpolated value on every frame of a move), and
@@ -712,8 +710,7 @@ fn evaluate(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) -> (Vec<Done>
     let before_origin = host.vec_field_at(cx, id, origin_atom);
     // `G_MoverTeam`: `move` and `amove` are the trajectories less
     // `r.currentOrigin` and `r.currentAngles`, each stored as a float, which
-    // `G_MoverPush` adds back (0x650f0) and the link snaps (movers doc 12,
-    // "The residual yaw"; 23). A group whose segment ended this frame is
+    // `G_MoverPush` adds back (0x650f0) and the link snaps (movers doc 12.1; 23). A group whose segment ended this frame is
     // then evaluated into place by `Reached_ScriptMover` (0x5fa0e, 0x5fab1).
     let origin = bg_evaluate(m.pos.stored, &m.pos.current, level_ms);
     let origin = if moving && !pos_reached {
@@ -949,7 +946,7 @@ fn set_mover_state(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId, state:
 /// `pos2` `ReturnToPos1` is put `wait` on. A use during a leg runs
 /// `Blocked_Door`'s reversal, which vcod does not model: a script sees a
 /// leg only for 100 ms after a use. Returns false for anything not a sine
-/// mover (cod11-combat.md 5.9, "useBy on a gun, a sine mover").
+/// mover (cod11-combat.md 5.9.3).
 pub fn use_binary(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) -> bool {
     let Some(state) = host
         .movers
@@ -977,7 +974,7 @@ pub fn use_binary(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) -> bool
 /// `SV_LinkEntity`'s snap (cod_lnxded `0x080908b0`): each component of
 /// `r.currentAngles` within a thousandth of an integer becomes that
 /// integer, `(n - a)^2 < 1e-6` with `n` the truncation of `a + 0.5`
-/// (movers doc 12, "The residual yaw").
+/// (movers doc 12.1).
 pub fn snap_angles(a: Vec3) -> Vec3 {
     let snap = |c: f32| {
         let n = (f64::from(c) + 0.5).trunc();
@@ -1333,7 +1330,7 @@ pub fn use_static(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) -> bool
 
 /// `Use_Static` (1.1d 0x58070, 1.5b 0x697a3, UO 0x742e7), which
 /// `SP_func_static` installs as every `func_static`'s `use`, takedamage or
-/// not, so a script `useBy` reaches it too (cod11-combat.md 5.9, "useBy").
+/// not, so a script `useBy` reaches it too (cod11-combat.md 5.9.3).
 /// Returns false for anything not a `func_static`.
 pub fn toggle_static(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) -> bool {
     if !host

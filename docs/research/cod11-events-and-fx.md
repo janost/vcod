@@ -1,6 +1,6 @@
 # CoD 1.1 event table and effect mapping
 
-Read out of CoD 1.1 binaries and stock assets. A claim the binaries could not
+Read out of CoD 1.1 binaries and stock assets; each claim carries its own label. A claim the binaries could not
 settle is marked `UNVERIFIED` with the live check that would settle it.
 
 ## Read this first: the root `cgamex86.dll` is the wrong module
@@ -12,7 +12,7 @@ CoD 1.x ships two client-game modules:
 | `cgamex86.dll` | single-player cgame | 198 entries, `ET_EVENTS = 17` |
 | `main/cgame_mp_x86.dll` | multiplayer cgame | 202 entries, `ET_EVENTS = 12` |
 
-The two enums agree on ids 0 to 172 and diverge from 173 up: SP has
+VERIFIED (the two eventnames tables): the two enums agree on ids 0 to 172 and diverge from 173 up: SP has
 `EV_SOUND_ALIAS_NOTIFY` at 173 and `EV_GRENADE_SUICIDE` at 197; MP has neither
 and instead appends `EV_DROPWEAPON`, `EV_ITEM_RESPAWN`, `EV_ITEM_POP`,
 `EV_PLAYER_TELEPORT_IN/OUT`, `EV_OBITUARY` at 196 to 201. Every impact and
@@ -20,8 +20,8 @@ explosion event sits above 172, so the SP table puts every combat event off
 by one.
 
 vcod is a multiplayer client, so `main/cgame_mp_x86.dll` is the authority
-here. The 202-entry table is byte-for-byte identical in all four MP modules
-and the Linux dedicated server's game module, which puts the numbers on the
+here. VERIFIED (a byte compare, section 8): the 202-entry table is byte-for-byte identical in all four MP modules
+and the Linux dedicated server's game module. INFERRED: that puts the numbers on the
 wire.
 
 ### Evidence sources
@@ -42,7 +42,7 @@ Addresses are virtual, image base `0x30000000` for the cgame DLLs,
 the Linux `.so`. Decompilations come from `tools/re/ExportDecomp.java`
 (Ghidra headless), which dumps every function with a name and address marker.
 
-The two entry points everything hangs off:
+The two entry points everything hangs off (VERIFIED, the decompilation):
 
 - `CG_EntityEvent` @ `0x3001dc10` prints `"CG_EntityEvent:%s\n"` with
   `eventnames[event]`, then a range ladder plus a jump-table switch on the event id.
@@ -55,10 +55,10 @@ The two entry points everything hangs off:
 
 ## 1. The CoD 1.1 multiplayer `EV_*` enum
 
-`eventnames[]` is a 202-entry array of `char*` at VA `0x30077040`
+VERIFIED (the binary): `eventnames[]` is a 202-entry array of `char*` at VA `0x30077040`
 (`cgame_mp_x86.dll`), reached through a pointer at `0x30077368`. It is indexed
-by the event id: both `CG_EntityEvent` and `CG_EntityPreEvent` print
-`eventnames[event]`, and the switch case numbers line up with it exactly (spot
+by the event id (VERIFIED, the switches): both `CG_EntityEvent` and `CG_EntityPreEvent` print
+`eventnames[event]`, and the switch case numbers line up with it exactly (VERIFIED, spot
 checks: case `0x8f` is `EV_STEP_VIEW` and subtracts `0x80` from `eventParm` to
 get a view step; cases `0x92`/`0x94` are `EV_ITEM_PICKUP`/`EV_AMMO_PICKUP` and
 index the weapon table by `eventParm`; case `0xc9` is `EV_OBITUARY`). The same
@@ -66,7 +66,7 @@ index the weapon table by `eventParm`; case `0xc9` is `EV_OBITUARY`). The same
 the Linux dedicated server's `game.mp.i386.so` as the exported symbol
 `eventnames` at `0x0007b6a8`.
 
-id 0 is `EV_NONE`.
+VERIFIED (`eventnames[0]`): id 0 is `EV_NONE`.
 
 ids 1 to 138 are six groups of 23, one entry per surface type, in the surface
 order of section 4 (`default, bark, brick, carpet, cloth, concrete, dirt,
@@ -113,7 +113,7 @@ ids 139 to 201 in full:
 | 196 | `EV_DROPWEAPON` | 197 | `EV_ITEM_RESPAWN` | 198 | `EV_ITEM_POP` |
 | 199 | `EV_PLAYER_TELEPORT_IN` | 200 | `EV_PLAYER_TELEPORT_OUT` | 201 | `EV_OBITUARY` |
 
-The switch covers ids 139 to 201 (`lea eax,[edi-0x8b]; cmp eax,0x3e`). Six of
+VERIFIED (the instructions): the switch covers ids 139 to 201 (`lea eax,[edi-0x8b]; cmp eax,0x3e`). Six of
 them land on the `"Unknown event: '%s'"` warning at `0x3001e703`, so the retail
 MP client does nothing with them (the jump table at `0x3001e72c` through the
 index byte table at `0x3001e7dc`): `EV_BULLET_TRACER` (171),
@@ -124,7 +124,7 @@ at all): 150, 165, 167, 173, 174, 175, 176, 187, 188, 195.
 
 ### How an event id reaches the client
 
-Two paths, both in `cgame_mp_x86.dll`:
+Two paths, each VERIFIED (the decompilation) in `cgame_mp_x86.dll`:
 
 - Event entities. `CG_CheckEvents` @ `0x3001ea10`:
   `if (es.eType > 12) { event = es.eType - 12; }`. So `ET_EVENTS = 12` and the
@@ -179,10 +179,9 @@ sites in `CoDMP.exe`.
 
 ## 2. Which state fields each combat-relevant event populates
 
-`entityState_t` offsets are the netfield offsets. The client-side table in
+`entityState_t` offsets are the netfield offsets. VERIFIED (the table): the client-side table in
 `CoDMP.exe` @ `0x005419d0` (59 entries) is identical in order, offset and bit
-width to the one `crates/common/src/net/cod1/fields_v1.rs` was generated from, so
-vcod's decoded field names apply directly. The ones that matter here:
+width to the one `crates/common/src/net/cod1/fields_v1.rs` was generated from. INFERRED: vcod's decoded field names therefore apply directly. The ones that matter here:
 
 | Offset | Field | Bits |
 |---|---|---|
@@ -199,8 +198,8 @@ vcod's decoded field names apply directly. The ones that matter here:
 | 84 | `time` | 32 |
 | 104/108 | `angles2[0]`, `angles2[1]` | float |
 
-Offset 216 is named `_union.scale` in the `cod_lnxded` table and `scale` in
-`CoDMP.exe`. For impact and explosion events it carries a second direction
+VERIFIED (the two tables): offset 216 is named `_union.scale` in the `cod_lnxded` table and `scale` in
+`CoDMP.exe`. VERIFIED (section 3): for impact and explosion events it carries a second direction
 byte, not a scale. vcod's parser decodes it under the name `scale`.
 
 Per event, source (`game.mp.i386.so`) and consumer (`cgame_mp_x86.dll`):
@@ -716,37 +715,37 @@ the cgame prints
 
 ## 3. Direction / normal encoding on impact events
 
-Directions are a byte index into a 162-entry unit-vector table, the classic
+VERIFIED (the tables below): directions are a byte index into a 162-entry unit-vector table, the classic
 Quake `bytedirs`.
 
-- Server: `DirToByte` @ `game.mp.i386.so 0x3d5ec` loops `dl` over `0..0xa1`
+- VERIFIED (the instructions): server `DirToByte` @ `game.mp.i386.so 0x3d5ec` loops `dl` over `0..0xa1`
   (0 to 161) taking the best dot product; `ByteToDir` @ `0x3d66c` looks up
   `bytedirs[b]` (12-byte stride) and falls back to entry 0 when `b > 161`.
   Table `bytedirs` at `0x7d540`.
-- Client: `ByteToDir` @ `cgame_mp_x86.dll 0x300399b0`, table at `0x300740d0`.
+- VERIFIED (the instructions): client `ByteToDir` @ `cgame_mp_x86.dll 0x300399b0`, table at `0x300740d0`.
   Out of range (`b < 0 || b >= 162`) yields `(0,0,0)`, not entry 0.
 
-The client and server tables are bit-identical to each other, and identical to
+VERIFIED (a compare of the table bytes): the client and server tables are bit-identical to each other, and identical to
 ioq3's `bytedirs[NUMVERTEXNORMALS]` in `code/qcommon/q_math.c` (compared all 162
 triples, zero mismatches beyond 1e-6). Entry 0 is `(-0.525731, 0.0, 0.850651)`,
 entry 161 is `(-0.688191, -0.587785, -0.425325)`.
 
-So for `EV_BULLET_HIT_SMALL`/`LARGE`:
+So for `EV_BULLET_HIT_SMALL`/`LARGE` (VERIFIED, `CG_BulletHitWall` and the emitter's stores):
 
 - `es.eventParm` = byte dir of the surface normal -> drives the
   `*_normal` effect (decals face this).
 - `es.scale` (offset 216) = byte dir of the incoming direction reflected off
   the surface -> drives the `*_reflect` effect.
 
-`fx/iw_impacts.csv` states the same in prose: *"The 'normal' effect is played at
+VERIFIED (`fx/iw_impacts.csv`): the file states the same in prose: *"The 'normal' effect is played at
 the impact point facing the surface normal... The 'reflect' effect is played at
 the impact point facing the direction of impact reflected off the surface."*
 
-There is no raw-vector variant for impacts. Raw `origin2` vectors are used only
+INFERRED: there is no raw-vector variant for impacts. VERIFIED (the callers): raw `origin2` vectors are used only
 by `EV_RAILTRAIL` (end point) and `ET_FX` entities (direction).
 
 vcod has to embed the 162 vectors. They can be regenerated from the shipped
-binary rather than transcribed from ioq3: read 162 * 3 little-endian `f32` at
+binary rather than transcribed from ioq3: VERIFIED (the section layout), read 162 * 3 little-endian `f32` at
 file offset `0x740d0` of `main/cgame_mp_x86.dll` (VA `0x300740d0`, `.data`,
 which is mapped 1:1 with the file at `0x6e000`/`0x3006e000`).
 
@@ -754,7 +753,7 @@ which is mapped 1:1 with the file at `0x6e000`/`0x3006e000`).
 
 ## 4. Surface-type numbering
 
-`es.surfType` is a 0-based index into a 23-entry list, and it is the same
+VERIFIED (the four confirmations below): `es.surfType` is a 0-based index into a 23-entry list, and it is the same
 index the six footstep/jump/landing event groups are built on.
 
 | # | name | # | name | # | name |
@@ -768,7 +767,7 @@ index the six footstep/jump/landing event groups are built on.
 | 6 | `dirt` | 14 | `mud` | 22 | `asphalt` |
 | 7 | `flesh` | 15 | `paper` | | |
 
-Four independent confirmations:
+Four independent confirmations, each VERIFIED (the instructions or the file):
 
 1. Wire source. Both impact emitters compute
    `s.surfType = (trace.surfaceFlags >> 20) & 0x1f`, a 5-bit field in bits
@@ -789,14 +788,14 @@ Four independent confirmations:
    `0x301d62a4`, `0x301d6300`, `0x301d635c`, `0x301d63b8`, `0x301d6414`,
    `0x301d6470` (last one ends at `0x301d64cc`).
 
-The CSV comment matches point 2 on the meaning of index 0: *"'default'. Default
+VERIFIED (the CSV comment): it matches point 2 on the meaning of index 0: *"'default'. Default
 is only used if the code cannot figure out the correct surface type."*
 
 ---
 
 ## 5. `(event, weapon, surfType)` to `.efx`
 
-There are no hardcoded per-surface `.efx` paths in the client. The only
+VERIFIED (a string sweep): there are no hardcoded per-surface `.efx` paths in the client. The only
 literal `.efx` string in `cgame_mp_x86.dll` is
 `fx/impacts/flesh_hit_noblood.efx` (registered in `CG_RegisterGraphics`
 @ `0x30020da0`, handle stored at `0x301d64cc`). Everything else is data-driven
@@ -804,7 +803,7 @@ from three places.
 
 ### 5a. Impacts and explosions: `fx/*.csv`
 
-`CG_LoadImpactEffects` @ `0x3001a7e0` enumerates `fx/*.csv` (syscall `0x13`
+VERIFIED (the decompilation): `CG_LoadImpactEffects` @ `0x3001a7e0` enumerates `fx/*.csv` (syscall `0x13`
 with `"fx"`, `".csv"`), sorts the names, parses each with these nine column
 keys, and stores one effect handle per surface type into these tables:
 
@@ -904,12 +903,12 @@ directly.
 
 ### 5c. Script effects: configstrings
 
-`CG_ConfigStringModified` @ `0x3002c6b0` registers configstrings
+VERIFIED (the decompilation): `CG_ConfigStringModified` @ `0x3002c6b0` registers configstrings
 780..843 as effects (`syscall 0xde`, stored at `0x301d1ccc + cs*4`, which is
 `0x301d28fc + id*4` for `id = cs - 780`). `EV_PLAY_FX*` and `ET_FX` index that
 array with `1..63`, i.e. the `.efx` path is `configstring(780 + id)`.
-`crates/common/src/net/cod1/mod.rs` documents the same base. Models are
-268..523, shellshock 1100..1115, in the same function.
+`crates/common/src/net/cod1/mod.rs` documents the same base. VERIFIED (the same function): models are
+268..523, shellshock 1100..1115.
 
 ### 5d. Ejecting brass: `CG_EjectBrass` (`0x30038a30`)
 
@@ -1132,11 +1131,11 @@ not the tag (not modelled).
 
 ## 7. Detecting spectator-follow state in `playerState`
 
-VERIFIED: `ps.clientNum` differing from the client's own number means it is
+INFERRED, off the copy below: `ps.clientNum` differing from the client's own number means it is
 following someone. The server side of the follow (buttons, cycle, let-go, disconnect,
 live measurements) is `cod11-spectator-follow.md`.
 
-`SpectatorClientEndFrame` @ `game.mp.i386.so 0x40760` is the whole story. When
+VERIFIED (the instructions): `SpectatorClientEndFrame` @ `game.mp.i386.so 0x40760` is the whole story. When
 it has a client to follow (`cod11-spectator-follow.md` 5) the server copies the
 followed player's whole client block over the spectator's (`rep movsd` with `ecx = 0x834`, so
 8400 bytes starting at `ps`, the entire `playerState_t` and then some) and then
@@ -1144,14 +1143,14 @@ patches the flags back in byte `ps+0xe`: it clears bit `0x04` (pm_flags
 `0x040000`), sets bit `0x01` (`0x010000`), and sets bit `0x02` (`0x020000`)
 when `spectatorClient >= 0` or clears it otherwise.
 
-`ps.pm_flags` is at offset 12 (19 bits), so byte `ps+0xe` holds bits 16 to 23.
+VERIFIED (the netfield table): `ps.pm_flags` is at offset 12 (19 bits), so byte `ps+0xe` holds bits 16 to 23.
 Because the whole playerState is copied, `ps.clientNum` (offset 172, 8 bits)
 becomes the followed player's client number, and `ps.origin`, `viewangles`,
 `weapon`, `weaponstate`, `legsAnim`/`torsoAnim` and everything else describe the
 followed player too. In free-fly spectate there is no copy and `ps.clientNum`
 stays the client's own.
 
-Flag summary, all from setters/testers in the server:
+Flag summary, each row VERIFIED (the setters and testers in the server):
 
 | Bit | Meaning | Evidence |
 |---|---|---|
@@ -1159,8 +1158,8 @@ Flag summary, all from setters/testers in the server:
 | `0x020000` | a forced follow (script `spectatorclient >= 0`) as against free cycling | set/cleared on `spectatorClient >= 0`, `0x40903`/`0x408fd`. The preservation across the ps copy at `0x408c1` is an `eFlags` `0x20000`, not this bit |
 | `0x040000` | live in-game player | set in `ClientEndFrame` `0x40fb0`, cleared for spectators `0x407b7`; `GetFollowPlayerState` `0x415dc` refuses to copy a player who does not have it |
 
-The client's recurring test, `(ps.pm_flags & 0x50000) != 0 && es.number ==
-ps.clientNum`, reads as "the view rides a player body (its own, `0x40000`, or
+VERIFIED (the cgame branches): the client's recurring test is `(ps.pm_flags & 0x50000) != 0 && es.number ==
+ps.clientNum`. INFERRED: it reads as "the view rides a player body (its own, `0x40000`, or
 a followed one, `0x10000`) and this event came from that body": the
 first-person suppression case.
 
@@ -1170,14 +1169,14 @@ With the client's own number from the connect handshake:
 - The two flags read as the table says: `0x010000` a follow that found its
   client, `0x020000` a forced one.
 
-The netfield table in `crates/common/src/net/cod1/fields_v1.rs` gives `pm_flags`
+VERIFIED (the netfield table in `crates/common/src/net/cod1/fields_v1.rs`): `pm_flags` is
 19 bits, so all three flags survive the delta encoding.
 
 ---
 
 ## 8. 1.1 vs 1.5: the `EV_*` table did not shift
 
-No change. The 202-entry `eventnames` array is byte-for-byte identical
+VERIFIED (a byte compare of the tables): no change. The 202-entry `eventnames` array is byte-for-byte identical
 across every multiplayer module checked:
 
 | Module | version | table VA | entries | matches 1.1 MP? |
@@ -1188,17 +1187,17 @@ across every multiplayer module checked:
 | `main/game_mp_x86.dll` | 1.5 | `0x20070d70` | 202 | yes |
 | `game.mp.i386.so` | 1.1d Linux | `0x0007b6a8` | 202 | yes |
 
-Only the table's address moved. The surrounding machinery is unchanged: the
+VERIFIED (the binaries and the pak): only the table's address moved. The surrounding machinery is unchanged: the
 1.5 MP cgame carries the same nine CSV impact-type keys
 (`bullet_small_normal` ... `molotov_explode_reflect`), the same
 `viewFlashEffect`/`worldFlashEffect` weapon keys and the same `tag_flash` tag,
 and the 1.5 install ships the same `fx/iw_impacts.csv` in `main/pak5.pk3`.
 
-The single-player modules also agree between 1.1 and 1.5 (198 entries, identical
+VERIFIED (the tables): the single-player modules also agree between 1.1 and 1.5 (198 entries, identical
 order, table at `0x30067f20` in both `cgamex86.dll` files). The SP enum is a
 different enum (see the top).
 
-1.1 MP event constants hold unchanged for 1.5 MP. What differs per version
+INFERRED, off the identical tables: 1.1 MP event constants hold unchanged for 1.5 MP. What differs per version
 and is not surveyed here: the netfield tables (version-parameterised in
 `crates/common/src/net/protocol.rs`) and the syscall numbers, internal to the
 retail DLLs.

@@ -395,6 +395,38 @@ fn probe_math_matches_retail_uo() {
     assert_eq!(host.script_log, uo);
 }
 
+/// `fixtures/cod2/probe_math.gsc` on retail CoD2 1.3: float sums under the
+/// roots, libm's trig on radians times the double `M_PI / 180`, `int()`'s
+/// `fistp` (cod2-gsc-diff.md 7).
+#[test]
+fn probe_math_matches_retail_cod2() {
+    use vcod_server::game::profile::COD2;
+    let path = "maps/mp/gametypes/probe_math".to_string();
+    let text = std::fs::read_to_string("tests/fixtures/cod2/probe_math.gsc")
+        .expect("read cod2/probe_math.gsc");
+    let mut vm = Vm::new();
+    vm.apply_profile(&COD2.vm);
+    let mut loader = Loader::with_dialect(
+        Box::new(ProbeSource {
+            path: path.clone(),
+            text,
+        }),
+        COD2.vm.dialect,
+    );
+    loader
+        .load(&mut vm, &path)
+        .unwrap_or_else(|e| panic!("cod2/probe_math does not load: {e:?}"));
+    let main = vm.func_ref(&path, "main");
+    let mut host = GameHost::new(&COD2, vec![String::new(); 2048]);
+    vm.call_now(&mut host, main, None, Vec::new())
+        .unwrap_or_else(|e| panic!("cod2/probe_math main errored: {e:?}"));
+
+    let retail = std::fs::read_to_string("tests/fixtures/cod2/probe_math.txt")
+        .expect("read cod2/probe_math.txt");
+    let retail: Vec<&str> = retail.lines().filter(|l| l.starts_with("PROBE ")).collect();
+    assert_eq!(host.script_log, retail);
+}
+
 /// `probe_not_string` measures unary `!` on a `getCvar` read.
 /// `not_getcvar_allow_fg42` came back `1` on retail, which needs
 /// `scr_allow_fg42` to read `"0"` there, not unset. The retail capture has

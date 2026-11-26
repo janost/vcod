@@ -477,7 +477,7 @@ UO 1.51b, the `--probe-uo-weapon throw` thrower's cmd times logged): that
 mode's cmds also run 16 or 17 ms apart from each snapshot's time (12000,
 12016, 12032 before the 12050 frame), so `scriptmodel_ab`'s 1.5 and UO
 thrower takes `framed`, which lands him on retail's float after the
-script's `setOrigin` (cod11-combat.md 2.1, "The thrower's slide").
+script's `setOrigin` (cod11-combat.md 2.1.1.1).
 
 ## 5. Ground, step, ladder, landing
 

@@ -16,7 +16,7 @@
 //!
 //! `-linkattach.txt` is `client-probes/probe_linkattach.gsc` with no client:
 //! links to a tag on an `attach`ed model, through `detach`, a second
-//! attachment and `detachAll` (movers doc 16, "A tag on an attached model").
+//! attachment and `detachAll` (movers doc 16.4).
 //!
 //! `LINKTO_REPORT=1` prints every compared row.
 //!
@@ -670,7 +670,7 @@ const SERVER4: &str = "tests/fixtures/movers/mp_carentan-dm-linkattach.txt";
 /// A tag on an attached model takes a link, a second attachment keeps it, a
 /// detach drops it where the child stands, an attachment's own root bone
 /// resolves to the tag it hangs on, and with nothing attached the link dies
-/// with retail's message (movers doc 16, "A tag on an attached model").
+/// with retail's message (movers doc 16.4).
 #[test]
 fn a_tag_on_an_attached_model_takes_a_link_like_retail() {
     let Some(fs) = vcod_common::testing::game_fs_11() else {
@@ -693,8 +693,7 @@ fn a_tag_on_an_attached_model_takes_a_link_like_retail() {
                 println!("{phase} {k} retail {rv:?}\n{phase} {k} ours   {ov:?}");
             }
             // The children sit on the hand's chain at its bind records'
-            // pose, retail's to the print (movers doc 16, "The tag on 1.5
-            // and UO"): two prints differ by 0.01 or not at all.
+            // pose, retail's to the print (movers doc 16.5): two prints differ by 0.01 or not at all.
             let origins =
                 |v: &[[f32; 3]]| -> Vec<[f32; 3]> { v.iter().step_by(2).copied().collect() };
             let angles = |v: &[[f32; 3]]| -> Vec<[f32; 3]> {
@@ -780,7 +779,7 @@ fn exact_rows<'a>(lines: impl Iterator<Item = &'a str>) -> BTreeMap<String, Vec<
 /// [`a_tag_on_an_attached_model_takes_a_link_like_retail`] on 1.5b or UO,
 /// every float to retail's bit: the tag's matrix off the DObj's records
 /// through the engines' skeleton build and `G_CalcTagParentAxis`
-/// (cod11-movers.md 16, "The tag on 1.5 and UO").
+/// (cod11-movers.md 16.5).
 fn exact_linkattach(fs: vcod_common::pk3::Pk3Fs, fixture: &str) {
     let sv = run_linkattach(fs, true);
     let retail = exact_rows(fixture.lines());

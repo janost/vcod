@@ -436,8 +436,10 @@ fn set_stable_missile(
 }
 
 /// `int(x)` (`GScr_CastInt` 0x811400a): a float truncated (its `fistp`
-/// runs under `| 0xc00`), a string through `atoi`, an int as it is;
-/// anything else is `cannot cast %s to int`. VERIFIED.
+/// runs under `| 0xc00`), one out of range or NaN `i32::MIN`, the
+/// integer indefinite (CoD4's `cvttss2si`, 0x80c1fbb, gives the same); a
+/// string through `atoi`, an int as it is; anything else is `cannot cast
+/// %s to int`. VERIFIED, and `probe_math` on CoD2 (cod2-gsc-diff.md 7).
 pub(super) fn cast_int(
     _host: &mut GameHost,
     cx: &mut Cx,
@@ -446,7 +448,10 @@ pub(super) fn cast_int(
 ) -> Result<Value, ErrorKind> {
     match args.first() {
         Some(Value::Int(n)) => Ok(Value::Int(*n)),
-        Some(Value::Float(f)) => Ok(Value::Int(*f as i32)),
+        Some(Value::Float(f)) if (-2_147_483_648.0..2_147_483_648.0).contains(f) => {
+            Ok(Value::Int(*f as i32))
+        }
+        Some(Value::Float(_)) => Ok(Value::Int(i32::MIN)),
         Some(Value::String(s)) => Ok(Value::Int(super::cvar::atoi(cx.resolve(*s)))),
         Some(v) => Err(ErrorKind::Custom(format!(
             "cannot cast {} to int",

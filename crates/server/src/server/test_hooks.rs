@@ -124,8 +124,7 @@ impl Server {
 
     /// Sets a client's playerstate velocity and nothing else. Test-facing: a
     /// placement that shares the spawn's frame keeps the velocity the cmds
-    /// run at the spawn point left (cod11-combat.md 2.1, "The street
-    /// placement"), and a replay hands ours retail's from the capture.
+    /// run at the spawn point left (cod11-combat.md 2.1.1.2), and a replay hands ours retail's from the capture.
     #[cfg(any(test, feature = "testing"))]
     pub fn test_set_client_velocity(&mut self, slot: usize, velocity: [f32; 3]) {
         if let Some(sim) = self

@@ -26,7 +26,9 @@ in-place word left at 0. Read raw, builtin records seem to carry null function
 pointers and the movers seem to be a `.rodata` whitelist; neither is true
 (section 9). Both dumpers resolve `.rel.data` and print the symbol.
 
-## 2. Struct sizes, VERIFIED
+## 2. Struct sizes
+
+VERIFIED (the instructions), per row:
 
 | Struct | Size / offset | Evidence |
 |---|---|---|
@@ -34,8 +36,8 @@ pointers and the movers seem to be a `.rodata` whitelist; neither is true
 | `gentity_t.client` | +0x158 | both accessors test it for null before routing a client field |
 | HUD element | 124 bytes | `Scr_GetHudElemField` 0x4c003 computes `(n * 32 - n) * 4` |
 
-Field offsets below are byte offsets into those structs. Three cross-check
-against unrelated code:
+Field offsets below are byte offsets into those structs. Three cross-checks
+against unrelated code, each VERIFIED (the instructions):
 
 - `origin` at 308 = 0x134: `G_CallSpawn` passes `ent + 0x134` to
   `G_SetOrigin` (0x6168d).
@@ -43,9 +45,9 @@ against unrelated code:
 - `model` at 373 = 0x175: the type-8 branch of `G_ParseField` writes a byte to
   `0x175(%edi)` (0x6150a).
 
-## 3. The field tables, VERIFIED
+## 3. The field tables
 
-Four functions register script fields; three walk a static array.
+Four functions register script fields; three walk a static array (VERIFIED, the table below).
 
 | function | address | table | stride | records | 1.5b address, table, records | UO 1.51b address, table, records |
 |---|---|---|---|---|---|---|
@@ -63,27 +65,29 @@ names, types and order; entity offsets moved with the `gentity_t` layout
 (0xc002) and `maxspeed` (0xc005), renumbering every later client id. UO's
 additions and renumbered type enum are in `coduo-diff.md` section 13.
 
-Each walk ends at a record with a null name. Record layout:
+VERIFIED (the dump): each walk ends at a record with a null name. Record layout:
 
 ```c
 struct entity_field  { char *name; int offset; int type; void (*set)(); };            // 16
 struct object_field  { char *name; int offset; int type; void (*set)(); void (*get)(); }; // 20
 ```
 
-A non-null `set` or `get` replaces the generic conversion for that field.
-`Scr_GetEntityField` never consults a getter, so entity fields always read
-through the generic path; client and HUD tables use both hooks.
+INFERRED: a non-null `set` or `get` replaces the generic conversion for that
+field. VERIFIED (the instructions): `Scr_GetEntityField` never consults a
+getter, so entity fields always read through the generic path; client and HUD
+tables use both hooks.
 
-Each registering function skips records whose `type` it does not accept; a
-skipped record is no script field. Entity and HUD accept 0 to 5, 7 and 8;
-clients 0 to 5 and 7. Exactly one record is skipped: entity `light`, type 9,
-offset 0, a Radiant-only key. The index still advances across it, so entity
-field id 0x0e is never used.
+VERIFIED (the instructions): each registering function skips records whose
+`type` it does not accept; a skipped record is no script field. Entity and HUD
+accept 0 to 5, 7 and 8; clients 0 to 5 and 7. VERIFIED (the dump): exactly one
+record is skipped, entity `light`, type 9, offset 0, a Radiant-only key. The
+index still advances across it, so entity field id 0x0e is never used
+(INFERRED).
 
-## 4. The storage type enum, VERIFIED
+## 4. The storage type enum
 
-`Scr_GetGenericField` (0x6248c) switches on `type` through a jump table at
-0x7968c:
+VERIFIED (the instructions): `Scr_GetGenericField` (0x6248c) switches on
+`type` through a jump table at 0x7968c:
 
 | type | stored as | script sees |
 |---|---|---|
@@ -102,8 +106,9 @@ An unwritten type 0 field reads 0, not undefined. VERIFIED, retail
 `spawnflags` concatenates as `0`. vcod gives types 0, 1 and 4 the zero for an
 unwritten entity slot (`GameHost::get_field`).
 
-Type 6 is the yaw-only angle form. No record uses it and entity and HUD
-registration reject it: dead on the 1.1 MP server.
+Type 6 is the yaw-only angle form (INFERRED). VERIFIED (the dump): no record
+uses it, and entity and HUD registration reject it. INFERRED: it is dead on
+the 1.1 MP server.
 
 ## 5. Field ids and how one namespace covers two objects
 
@@ -479,10 +484,10 @@ single-player maps, brecourt's worldspawn lists `ambient` twice ("0.18", then
 twice with one value, and factory's and trainbridge's `light`s repeat
 `overbrightshift` folded.
 
-## 8. The `spawns` classname table, VERIFIED
+## 8. The `spawns` classname table
 
-0x7eb30, 8-byte records `{char *name; void (*spawn)(gentity_t *);}`, ending at
-a null name. 27 entries:
+VERIFIED (the dump): 0x7eb30, 8-byte records
+`{char *name; void (*spawn)(gentity_t *);}`, ending at a null name. 27 entries:
 
 ```
 info_null           SP_info_null            trigger_hurt         SP_trigger_hurt
@@ -501,17 +506,18 @@ trigger_damage      SP_trigger_damage       script_origin        SP_script_origi
 trigger_lookat      SP_trigger_lookat
 ```
 
-`func_group` maps to `SP_info_null` (grouping is compile-time; the entity is
-inert and freed outright, section 13). `mp_target_location` shares
-`SP_target_location`; `misc_mg42` and `misc_turret` share `SP_turret`.
-`worldspawn` is absent because `G_SpawnEntitiesFromString` handles entity 0
-before this loop. No MP gametype spawn classname (`mp_deathmatch_spawn`,
-`mp_teamdeathmatch_spawn`, the `mp_*_intermission` markers) is in the table:
+VERIFIED (the table): `func_group` maps to `SP_info_null`, `mp_target_location`
+shares `SP_target_location`, and `misc_mg42` and `misc_turret` share
+`SP_turret`. INFERRED: grouping is compile-time, so the `func_group` entity is
+inert and freed outright (section 13). INFERRED: `worldspawn` is absent
+because `G_SpawnEntitiesFromString` handles entity 0 before this loop.
+VERIFIED (the table): no MP gametype spawn classname (`mp_deathmatch_spawn`,
+`mp_teamdeathmatch_spawn`, the `mp_*_intermission` markers) is in it. INFERRED:
 they take case four above.
 
 ### 8.1 `trigger_hurt`: what its spawn function and its touch do
 
-The heading's label covers the table; every claim below carries its own.
+Every claim below carries its own label.
 `SP_trigger_hurt` is at 0x64ef8, its touch function `hurt_touch` at 0x64dc4.
 
 - **Damage from `dmg`.** VERIFIED: `SP_trigger_hurt` reads gentity+568 and at
@@ -570,7 +576,9 @@ function (`hurt_touch`'s `+0x171` byte included) is an inner gate.
 - Retail does not leave the dead to script: `sd.gsc`'s `isalive(other)` tests
   cover a player who dies mid-plant.
 
-## 9. Builtins are five tables, VERIFIED
+## 9. Builtins are five tables
+
+VERIFIED (the dump), per row:
 
 | table | address | stride | count | walked by | 1.5b address, count | UO 1.51b address, count |
 |---|---|---|---|---|---|---|
@@ -593,22 +601,24 @@ lookup's loop bound. Against 1.1 by name, 1.5 removes nothing and adds:
 VERIFIED, same dump: the `spawns` table (section 8) sits at 1.5b 0x84580 with
 1.1's 27 classnames, and at UO 0xae800 with 32.
 
-216 builtins in 1.1. Every walk is a linear `strcmp` over a hardcoded count,
-not a null terminator (bounds 0x69, 0x2d, 0x0b, 0x0d, 0x25, inclusive
-compares).
+VERIFIED (the dump): 216 builtins in 1.1. VERIFIED (the instructions): every
+walk is a linear `strcmp` over a hardcoded count, not a null terminator
+(bounds 0x69, 0x2d, 0x0b, 0x0d, 0x25, inclusive compares).
 
-`functions` records are `{char *name; void (*fn)(); int developer;}`, method
-records `{char *name; void (*fn)();}`. The stride difference is why a uniform
-8-byte scan of `[0x7e508, 0x7eb30)` garbles the first table and lands on 144
-(106 plus 38).
+VERIFIED (the dump): `functions` records are
+`{char *name; void (*fn)(); int developer;}`, method records
+`{char *name; void (*fn)();}`. The stride difference is why a uniform 8-byte
+scan of `[0x7e508, 0x7eb30)` garbles the first table and lands on 144 (106
+plus 38) (INFERRED).
 
-`developer` is 1 on exactly `print`, `println` and `assert`. CoDExtended's
+VERIFIED (the dump): `developer` is 1 on exactly `print`, `println` and
+`assert`. INFERRED, another engine's source shape: CoDExtended's
 `src/script.c` declares the same struct as
 `SCRIPTFUNCTION { name, function, developer }` and the same
 `Scr_GetFunction(const char **fname, int *fdev)` signature, an independent
-read on the field name and the out-parameter. `Scr_GetFunction` writes the
-table's spelling back through `*fname` (0x5c199): the engine canonicalises a
-builtin name on lookup.
+read on the field name and the out-parameter. VERIFIED (the instructions):
+`Scr_GetFunction` writes the table's spelling back through `*fname` (0x5c199),
+so the engine canonicalises a builtin name on lookup.
 
 VERIFIED, the call order in each `Scr_GetMethod`; first hit wins, so a name in
 an earlier table shadows a later one:
@@ -619,15 +629,17 @@ an earlier table shadows a later one:
 | 1.5 | 0x62665 | player, scriptent, entity (0x625ea), hudelem |
 | UO | 0x6e75f | player, scriptent, vehicle, hudelem, entity |
 
-`spawn`, `iprintln` and `iprintlnbold` appear both in `functions` and the
-player methods: the `self iprintln(...)` versus bare `iprintln(...)` split.
+VERIFIED (the dump): `spawn`, `iprintln` and `iprintlnbold` appear both in
+`functions` and the player methods. INFERRED: that is the `self iprintln(...)`
+versus bare `iprintln(...)` split.
 
-The movers are the scriptent table, ordinary code pointers in `.data`:
+VERIFIED (the dump): the movers are the scriptent table, ordinary code
+pointers in `.data`:
 `moveto`, `movex`, `movey`, `movez`, `movegravity`, `rotateto`,
 `rotatepitch`, `rotateyaw`, `rotateroll`, `rotatevelocity`, `solid`,
 `notsolid`. `ScriptEnt_GetMethod` sits directly above the entity field table
-in `.data`, likely why the region was once mistaken for a `.rodata` string
-list.
+in `.data` (VERIFIED, the addresses above). INFERRED: that is why the region
+was once mistaken for a `.rodata` string list.
 
 ### 9.1 `vectorDot`
 
@@ -788,7 +800,7 @@ Against 1.1d:
 | `sin_1e24` | `sin(1e24)` | 1.7453293e22 | -0.7216 |
 
 A float at every step, as vcod rounded them before and still does for
-CoD2 and CoD4, logs 4096 for `dist_one_round` and `len_one_round` and
+CoD4, logs 4096 for `dist_one_round` and `len_one_round` and
 2^24 for `dsq_one_round`: the 2.25 or 2 that a float sum at 2^24 drops. `vectorToAngles`, the three `anglesTo*`,
 `tan`, `asin`, `acos` and `atan` log the same bits on all three builds.
 
@@ -808,27 +820,27 @@ Retail's `==` on two numbers holds within a tolerance: `1e-16 == 0`,
 compares exactly.
 
 vcod: `builtins::math`, bound by name for CoD1 and CoD2. The profile's
-`MathRounding` picks 1.1d's (`Kept`), 1.5b's and UO's (`Stored`), or a
-float at every step for CoD2 and CoD4 (`Float`, unverified against their
-binaries). `x87::F80` carries 1.1d's stack, and `F80::fsin` and
+`MathRounding` picks 1.1d's (`Kept`), 1.5b's and UO's (`Stored`),
+CoD2's (`Cod2`, cod2-gsc-diff.md 7), or a float at every step for CoD4
+(`Float`, unverified against its binary). `x87::F80` carries 1.1d's stack, and `F80::fsin` and
 `F80::fcos` reduce by the 66-bit pi. `semantics_ents`'s
 `probe_math_matches_retail` and `probe_math_matches_retail_uo` replay the
 capture.
 
-## 10. `getEntArray` returns ascending entity number, VERIFIED
+## 10. `getEntArray` returns ascending entity number
 
-`Scr_GetEntArray` (0x61980) walks `esi` from 0 to `level.num_entities`
+VERIFIED (the instructions): `Scr_GetEntArray` (0x61980) walks `esi` from 0 to `level.num_entities`
 (`level`+0xc), skips a slot whose `inuse` byte (+0x160) is clear, and appends
 matches in that order. The keyed branch first checks the entity field table
 type at 0x78e70 is 3 (interned string), so the keys the corpus passes
 (`targetname`, `classname`, `target`, `teamname`, script-defined string keys)
 are type 3 or script-defined, never numeric.
 
-The capture confirms it. `probe_ents` on `mp_pavlov` returned the four map
+VERIFIED, live capture: `probe_ents` on `mp_pavlov` returned the four map
 `script_origin`s as auto5, auto4, auto3, auto6. `mp_pavlov.bsp`'s entity lump
 holds 345 blocks; its four `script_origin` blocks sit at indices 2, 3, 4 and
-344 with exactly those targetnames in that order. Lump order gives entity
-number, entity number gives `getEntArray` order.
+344 with exactly those targetnames in that order. INFERRED: lump order gives entity number, entity number gives `getEntArray`
+order.
 
 INFERRED, disassembly (no probe): `getEntArray()` with no arguments is a
 second form. `Scr_GetEntArray` opens with a parameter-count call at 0x61989;
@@ -838,30 +850,31 @@ compare, returning every entity in use in ascending order.
 every gametype's `Callback_StartGameType`, so a host with only the keyed form
 kills that thread on its first line.
 
-The corpus passes six keys: `targetname` (1183 call sites across both
+VERIFIED (a scan of the stock scripts): the corpus passes six keys: `targetname` (1183 call sites across both
 builtins), `classname` (131), `script_noteworthy` (31), `target` (5),
 `export` (2), `team` (1). Two are `radiant/keys.txt` entries and `team` is
-neither an engine field nor a radiant key, so the lookup goes through the same
-three-way field resolution as a plain `.name` read.
+neither an engine field nor a radiant key. INFERRED: the lookup goes through
+the same three-way field resolution as a plain `.name` read.
 
-## 11. Entity numbering, VERIFIED
+## 11. Entity numbering
 
-`G_InitGame` (0x4fb14) sets `level.num_entities = 72` at 0x4fdc6. `G_Spawn`
+VERIFIED (the instructions): `G_InitGame` (0x4fb14) sets `level.num_entities = 72` at 0x4fdc6. `G_Spawn`
 (0x667e0) checks the free list first (section 14) and only bumps
 `level.num_entities` when it is empty; a bump that would hand out 0x3fe
 (`ENTITYNUM_WORLD`, 1022) goes to `G_Error`. `Scr_GetEntArray` reads the same
 `level+0xc`. The free-list check is unconditional and comes first (0x667e9);
 0x3fe is the exhaustion error, not where `G_Spawn` starts reusing slots.
 
-So the map load's first entity is number 72, whatever `sv_maxclients` is.
-`MAX_CLIENTS` is 64 on CoD 1.1; `G_Spawn` never hands out 64 to 71, which hold
-the body queue (`cod11-combat.md` 5.2: `g_entities[64 + bodyQueIndex]`,
+INFERRED: the map load's first entity is number 72, whatever `sv_maxclients`
+is. `MAX_CLIENTS` is 64 on CoD 1.1; INFERRED: `G_Spawn` never hands out 64 to
+71, which hold the body queue (`cod11-combat.md` 5.2: `g_entities[64 + bodyQueIndex]`,
 index `& 7`).
 
-`G_SpawnEntitiesFromString` (0x622dc) parses the first block, `G_Error`s if
-its classname is not `worldspawn`, runs `SP_worldspawn` on it, then loops
-`G_ParseSpawnVars` plus `G_CallSpawn` over the rest. The world is not
-allocated through `G_Spawn` and takes no number in the 72-and-up range.
+VERIFIED (the instructions): `G_SpawnEntitiesFromString` (0x622dc) parses the
+first block, `G_Error`s if its classname is not `worldspawn`, runs
+`SP_worldspawn` on it, then loops `G_ParseSpawnVars` plus `G_CallSpawn` over
+the rest. INFERRED: the world is not allocated through `G_Spawn` and takes no
+number in the 72-and-up range.
 
 ## 12. Summary
 
@@ -871,10 +884,11 @@ and 14, and builtin dispatch is section 9's five tables in its lookup order. A
 Radiant key that is neither an engine field nor in `radiant/keys.txt` is
 dropped at load (section 7).
 
-## 13. Five classnames consume their block without an entity, VERIFIED
+## 13. Five classnames consume their block without an entity
 
-`G_CallSpawn`'s third case runs the record's `SP_` function after the entity
-is built, and four of those functions are nothing but `G_FreeEntity(self)`:
+VERIFIED (the instructions): `G_CallSpawn`'s third case runs the record's `SP_`
+function after the entity is built, and four of those functions are nothing
+but `G_FreeEntity(self)`:
 
 | function | address | classnames it serves |
 |---|---|---|
@@ -883,20 +897,22 @@ is built, and four of those functions are nothing but `G_FreeEntity(self)`:
 | `SP_misc_model` | 0x53224 | `misc_model` |
 | `SP_corona` | 0x53274 | `corona` |
 
-Each body: push the argument, one `R_386_PC32` call relocated against
-`G_FreeEntity` (0x531d9, 0x53211, 0x53231, 0x53281), return; no branch.
+VERIFIED (the instructions and relocations): each body pushes the argument,
+makes one `R_386_PC32` call relocated against `G_FreeEntity` (0x531d9,
+0x53211, 0x53231, 0x53281) and returns; no branch. VERIFIED (the scan):
 `python3 tools/re/dump_builtins.py <game.mp.i386.so> spawns` marks these five
 rows `frees` by scanning each function's `.rel.text` for `G_FreeEntity`, so it
-covers all 27 records whatever a map contains. `G_Spawn` hands the freed slot
-straight back out (section 14), so such a block takes no entity number.
+covers all 27 records whatever a map contains. INFERRED: `G_Spawn` hands the
+freed slot straight back out (section 14), so such a block takes no entity
+number.
 
 ### The live counts
 
-`probe_spawnfree`, a throwaway gametype, logged
+VERIFIED, live capture: `probe_spawnfree`, a throwaway gametype, logged
 `getEntArray(<classname>, "classname").size` for all 27 `spawns` classnames on
 retail 1.1d (2026-08-29, `sv_maxclients 8`); lump counts from the shipped
 BSPs. Every classname whose live count is below its lump count is one of the
-five; every other matches exactly.
+five; every other matches exactly (VERIFIED, the table below).
 
 | classname | mp_railyard lump / live | mp_chateau lump / live | mp_powcamp lump / live |
 |---|---|---|---|
@@ -914,18 +930,18 @@ five; every other matches exactly.
 | `script_model` | 9 / 9 | 4 / 4 | 89 / 89 |
 | `script_origin` | 4 / 4 | 2 / 2 | 19 / 19 |
 
-The other 14 `spawns` classnames read 0 live on all three maps and appear in
+VERIFIED, live capture: the other 14 `spawns` classnames read 0 live on all three maps and appear in
 no stock MP lump: `func_door`, `func_static`, `func_rotating`, `func_bobbing`,
 `func_pendulum`, `func_group`, `func_door_rotating`, `trigger_once`,
 `target_location`, `mp_target_location`, `misc_teleporter_dest`,
-`misc_turret`, `misc_spawner`, `trigger_damage`. The relocation scan covers
-them and puts only `func_group` in the freeing set. `misc_teleporter_dest`'s
-`SP_` function (0x5321c) is an empty body: a keep.
+`misc_turret`, `misc_spawner`, `trigger_damage`. VERIFIED (the scan): the relocation scan covers them and puts only
+`func_group` in the freeing set. VERIFIED (the instructions):
+`misc_teleporter_dest`'s `SP_` function (0x5321c) is an empty body, a keep.
 
 ### The arithmetic checks out on every stock map
 
-First entity spawned after the map load, retail against
-`72 + (blocks - 1 - freeing blocks)`:
+VERIFIED, live capture, per row: first entity spawned after the map load,
+retail against `72 + (blocks - 1 - freeing blocks)`:
 
 | map | lump blocks | freeing blocks | predicted | retail |
 |---|---|---|---|---|
@@ -934,11 +950,11 @@ First entity spawned after the map load, retail against
 | mp_powcamp | 1065 | 764 | 372 | 372 |
 | mp_railyard | 533 | 328 | 276 | 276 |
 
-mp_pavlov's figure is `# probe_ents` in
+VERIFIED (the capture file): mp_pavlov's figure is `# probe_ents` in
 `crates/gsc/tests/fixtures/semantics/retail-captures.txt`: its three
 script-spawned entities are 299, 300, 301, behind the map's four
 `script_origin`s at 73, 74, 75 and 298. The other three are
-`probe_spawnfree`'s `spawn1` line. No stock MP lump has a block without a
+`probe_spawnfree`'s `spawn1` line. VERIFIED (a scan of the stock BSPs): no stock MP lump has a block without a
 classname.
 
 ## 14. `G_Spawn` drains a free list before it bumps the counter
@@ -1005,16 +1021,16 @@ The live measurement only bounds the 100 ms: `probe_delete`'s frames step
 50 ms, so any defer in (0, 150] would have freed the entity before the
 following assertion, and `probe_delete_matches_retail` inherits that limit.
 
-## 15. The item registry (`bg_itemlist`), configstring 8, VERIFIED
+## 15. The item registry (`bg_itemlist`), configstring 8
 
-`bg_itemlist` (`.data` 0x7b9d8, stride 0x30, `bg_numItems` = 70 at `.rodata`
+VERIFIED (the dump): `bg_itemlist` (`.data` 0x7b9d8, stride 0x30, `bg_numItems` = 70 at `.rodata`
 0x70804, `python3 tools/re/dump_itemlist.py`) has a compiled-in classname for
 five of its 70 rows: `item_ammo_stielhandgranate_open` (65),
 `item_ammo_stielhandgranate_closed` (66), `item_health_small` (67),
 `item_health` (68), `item_health_large` (69). Index 0 is blank. Indices 1-64
 hold placeholders `emptyitem_"w01"` .. `emptyitem_"w64"`; no `mp40_mp`-shaped
-string exists in the binary, so a weapon classname reaches its slot only at
-runtime, from the mounted paks' weapon files, in an order the static dump
+string exists in the binary. INFERRED: a weapon classname reaches its slot only
+at runtime, from the mounted paks' weapon files, in an order the static dump
 cannot recover.
 
 **R1 (VERIFIED against two live captures):** a weapon's item index is its
@@ -1051,11 +1067,11 @@ nibble, and every fourth item emits one lowercase hex character (`+0x30` under
 10, `+0x57` at or above), flushing the trailing partial nibble the same way.
 70 items make 18 characters.
 
-**M1, is index 0 unconditional?** `ClearRegisteredItems` (`.text` 0x4eecc)
+**M1, is index 0 unconditional?** VERIFIED (the relocations): `ClearRegisteredItems` (`.text` 0x4eecc)
 resolves via its relocations to `__bzero(itemRegistered, 0x400)`, no special
-case for 0. Index 0's classname is blank, so no `precacheItem` can name it.
-`RegisterItem` (`.text` 0x4e504, mirrored as `Items::register`) is the only
-writer of `itemRegistered` (`.bss` 0x18e0e0); its four call sites pass a
+case for 0. INFERRED: index 0's classname is blank, so no `precacheItem` can
+name it. VERIFIED (the call sites): `RegisterItem` (`.text` 0x4e504, mirrored
+as `Items::register`) is the only writer of `itemRegistered` (`.bss` 0x18e0e0); its four call sites pass a
 computed argument, never a literal 0, but two are inside `BG_GivePlayerWeapon`
 (`.text` 0x36a38, sites +0x4f and +0xe1), which runs for every weapon a player
 is given, the "no weapon" slot 0 included. INFERRED FROM DECOMPILATION (not
@@ -1064,14 +1080,15 @@ with nothing per-map in common but the `dm` gametype. `Items::new` seeds index
 0 registered unconditionally.
 
 **M2, does registering a weapon also register its alt-fire mode?** Yes, as
-weapon-definition behaviour. `RegisterItem`, after setting the item's bit,
+weapon-definition behaviour (INFERRED). VERIFIED (the instructions):
+`RegisterItem`, after setting the item's bit,
 checks `bg_itemlist[index]`'s `giType` (offset 0x20) against 1 (`IT_WEAPON`);
 on a match it calls `BG_GetInfoForWeapon` (`.text` 0x3ac68, via `readelf -r`),
 reads a "next" index at offset 0x2fc of the definition, registers it directly
 (bypassing the "already registered" return), precaches two of its model fields
 (0x188, 0x31c) through `G_ModelIndex` (`.text` 0x66ed8), and repeats until the
-next index is 0 or loops back to the start. `BG_GivePlayerWeapon` (0x36a38,
-`.text` 0x36b0a) reads the same 0x2fc field and registers it too when a player
+next index is 0 or loops back to the start. VERIFIED (the instructions): `BG_GivePlayerWeapon`
+(0x36a38, `.text` 0x36b0a) reads the same 0x2fc field and registers it too when a player
 is given a weapon. INFERRED FROM DECOMPILATION (not single-stepped): 0x2fc
 carries the alt-fire link. VERIFIED: every `*_semi_mp`/`*_slow_mp` bit in both
 captures sits at the `WEAPON_LIST` index right after its base weapon's
@@ -1097,7 +1114,8 @@ past the first wait. vcod: `GameHost::register_item` returns the error, and
 the two builtins register what they give
 (`giving_an_unregistered_weapon_past_initialization_is_an_error`).
 
-**M3, the item's own models.** `RegisterItem` precaches two more model fields
+**M3, the item's own models.** VERIFIED (the instructions, the 0x4e5f0 arm
+below): `RegisterItem` precaches two more model fields
 for every item, at 0x8 and 0xc of its `bg_itemlist` record. VERIFIED, read
 with `dump_itemlist.py`'s `Elf` helper: the five compiled-in rows carry a
 non-empty +0x8 and a null +0xc (`xmodel/ammo_stielhandgranate1` (65),
@@ -1127,7 +1145,7 @@ loops from the item's own index: the bit set (0x4e5a0), `BG_GetInfoForWeapon`
 (0x4e5d2), then `def+0x2fc` as the next index until it is 0 or the start
 (0x4e5e0..0x4e5e6). Only the other arm (0x4e5f0) reads `bg_itemlist`'s
 +0x8/+0xc. VERIFIED, the weapon field table in `.data`: `worldModel` at
-0x7ce08 names offset 0x188, `projectileModel` at 0x7d168 names 0x31c. So a
+0x7ce08 names offset 0x188, `projectileModel` at 0x7d168 names 0x31c. INFERRED: a
 weapon and every mode on its chain precache their own weapon file's
 `worldModel` and `projectileModel`, which is what `item_models` reads.
 VERIFIED, the shipped files: all five alt-fire files (`bar_slow_mp`,

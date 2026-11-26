@@ -801,8 +801,7 @@ pub fn seat_inputs(
 /// line to its goal over 100 ms from where the frame found it (a new
 /// node's from none), and a leaf no longer set lands on 0 at the next
 /// frame's step
-/// (docs/research/coduo-vehicles.md 11.4, cod11-movers.md 15 "The weight
-/// ramp"). The cgame's copy sets its goals over one frame, so a drawn rider
+/// (docs/research/coduo-vehicles.md 11.4, cod11-movers.md 15.7.4). The cgame's copy sets its goals over one frame, so a drawn rider
 /// plays the goal weights. The node a legs change leaves keeps its leaves:
 /// nothing clears them, the old legs clip fades out on them
 /// (coduo-vehicles.md 13.7, "The glide back"), and they wait on their goals
@@ -1518,8 +1517,7 @@ pub struct PoseInputs<'a> {
     /// at its layer's seconds.
     pub leaf_times: Vec<(usize, f32)>,
     /// Sample each clip at its engine node time ([`crate::animclock::Layer::time`])
-    /// rather than its seconds: the servers' pose (cod11-combat.md 3.1,
-    /// "The clip's float time").
+    /// rather than its seconds: the servers' pose (cod11-combat.md 3.1.4).
     pub node_time: bool,
     /// Whose arithmetic the engine records follow ([`PoseBuffer::new_in`]):
     /// 1.1d's kept stack or 1.5b's and UO's stores.
@@ -1534,7 +1532,7 @@ pub struct PoseInputs<'a> {
 /// key the whole body and `pt_*` only the upper body, so a bone the torso
 /// clip does not key takes the legs' pose, and one it keys takes the torso's
 /// with the legs' at the legs node's 0.01 (player-model-anim-system.md,
-/// "Legs/torso split"; cod11-movers.md 15, "Torso over legs").
+/// "Legs/torso split"; cod11-movers.md 15.7.5).
 ///
 /// `clip` resolves a clip name to the loaded xanim. The server's hit and
 /// tag poses go through this, the client's drawn bodies through
@@ -1747,7 +1745,7 @@ fn layer_clips(
         let node = inputs.anims.index.node_id(l.index);
         if let Some((_, leaves)) = inputs.seat_leaves.iter().find(|(n, _)| Some(*n) == node) {
             // The walk normalizes a node's weighted children: only the
-            // leaves' shares count (cod11-movers.md 15, "Torso over legs").
+            // leaves' shares count (cod11-movers.md 15.7.5).
             let sum: f32 = leaves.iter().map(|l| l.1).sum();
             for &(leaf, w) in leaves {
                 let w = if sum > 0.0 { w / sum } else { w };

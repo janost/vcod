@@ -292,7 +292,7 @@ VERIFIED, `pak4.pk3` (CRLF text, values quoted):
 | `pain` | 0.1 / 0.15 | 0.15 / 0.005 | 0 | | | | off |
 | `stop` | 0 / 0 | 0 / 0 | 1 | 0 / 0 / 0 | 0 / 0 | generic 0 | off |
 
-`default`'s volumes: `auto` 0.1, `menu` 1, `weapon` 0.5, `voice` 0.2,
+VERIFIED (same files): `default`'s volumes: `auto` 0.1, `menu` 1, `weapon` 0.5, `voice` 0.2,
 `item` 0.1, `body` 0.1, `local` 0.1, `music` 0.1, `announcer` 1,
 `shellshock` 1 (before the crossing of section 4).
 
@@ -325,7 +325,7 @@ velocity match exactly on every retail snapshot, the placement's included.
 VERIFIED (capture, replay): the placement snapshot (t 15000) acknowledged
 commandTime 14968, and the client's first logged `!cmd` is 15018. Retail
 also ran an unlogged holding cmd at 15000, sent before the probe saw the
-placement (cod11-movers.md 15, "The cmd at the placement"). The gate runs
+placement (cod11-movers.md 15.7.3). The gate runs
 the placement frame to 14968 and that cmd at 15000 before the log's first.
 Without it the first forward cmd runs from 14950 and leaves a constant 1.66
 units on the origin.

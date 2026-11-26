@@ -3,8 +3,7 @@
 //! an axis target where vcod's PVS changes along the watcher's lean, and
 //! drives the watcher's lean through `PROBE_IN` lines (`--probe-uo-weapon
 //! direct`); the fixture keeps each change in whether his snapshots carry
-//! the target (docs/research/cod11-combat.md 3.6, "The leaning eye's
-//! PVS").
+//! the target (docs/research/cod11-combat.md 3.6.1).
 //!
 //! `LPVS_REPORT=1` prints ours' changes. Needs `COD_DIR` at a 1.1 install.
 
