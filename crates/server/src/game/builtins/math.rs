@@ -2,7 +2,7 @@
 //! the configstrings; the random draws step `GameHost::holdrand`, the rest
 //! read only their arguments.
 
-use super::args::{float, int};
+use super::args::{float, int, vector};
 use crate::game::host::GameHost;
 use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
@@ -11,6 +11,7 @@ use super::Builtin;
 pub const NAMES: &[(&str, Builtin)] = &[
     ("distance", distance),
     ("length", length),
+    ("vectordot", vector_dot),
     ("vectornormalize", vector_normalize),
     ("vectortoangles", vector_to_angles),
     ("anglestoforward", angles_to_forward),
@@ -45,6 +46,25 @@ pub fn distance(
     };
     let d = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
     Ok(Value::Float(vec_len(d)))
+}
+
+/// `vectorDot(a, b)`: the three products summed on the x87 stack and
+/// rounded to a float once (1.1d 0x5e9d4, 1.5b 0x5fcdc, UO 0x6b9cb, CoD2
+/// `Scr_VectorDot` 0x8114240; CoD4 binds it by name). VERIFIED, and
+/// `probe_vectordot` pins the single rounding on 1.1d, 1.5b and UO.
+pub fn vector_dot(
+    _host: &mut GameHost,
+    _cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    const USAGE: &str = "vectorDot takes two vectors";
+    let (a, b) = (
+        vector(args.first(), USAGE)?.to_array(),
+        vector(args.get(1), USAGE)?.to_array(),
+    );
+    let dot: f64 = (0..3).map(|i| f64::from(a[i]) * f64::from(b[i])).sum();
+    Ok(Value::Float(dot as f32))
 }
 
 /// `length(v)`: the vector's own magnitude, in f32. Unverified against

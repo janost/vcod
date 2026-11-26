@@ -1,6 +1,6 @@
 //! Fighting from cover (docs/research/bot-combat.md). In a fight the server
-//! looks for a graph node near the bot that hides its body from the threat's
-//! eye while a peek from it, standing up out of a crouch or leaning out with
+//! looks for a graph node near the bot that hides its crouched body from the
+//! threat's eye while standing up from it, or leaning out crouched with
 //! retail's lean keys, still has a line to the threat ([`find`]). The brain
 //! walks there, fights from the peek and drops back behind the cover while it
 //! reloads or rechambers ([`Bot::cover_keys`]).
@@ -16,11 +16,8 @@ use vcod_common::pmove::{self, aim};
 pub enum Peek {
     /// Crouched, the body is hidden; standing, the eye sees the threat.
     Stand,
-    /// Standing, the body is hidden; leaning this way (-1 left, 1 right),
-    /// the eye sees the threat.
-    Lean(i8),
-    /// Crouched, the body is hidden; leaning this way crouched, the eye
-    /// sees the threat. Only ever a [`Spot::alt`].
+    /// Crouched, the body is hidden; leaning this way crouched (-1 left, 1
+    /// right), the eye sees the threat. Only ever a [`Spot::alt`].
     LowLean(i8),
 }
 
@@ -58,8 +55,7 @@ const RINGS: usize = 5;
 /// cover there is a run under fire.
 pub const MIN_RANGE: f32 = 300.0;
 /// The body's half-width across the line its points are tested at: a little
-/// under the box's 15, since the eye sits mid-body and a lean only moves it
-/// 20 (15 standing on 1.5 and UO).
+/// under the box's 15, since the eye sits mid-body.
 const SHOULDER: f32 = 10.0;
 /// A spot this near across is reached.
 const ARRIVE: f32 = 12.0;
@@ -114,9 +110,6 @@ pub struct Sight<'a> {
     pub threat_eye: Vec3,
     /// Where the bot aims on the threat ([`EnemyView::origin`]).
     pub target: Vec3,
-    /// The standing lean's limit: 1 on 1.1, 0.5 on 1.5 and UO
-    /// (`pmove::lean_scale`).
-    pub lean: f32,
     /// A round's segment between two points meets nothing.
     pub clear: &'a dyn Fn(Vec3, Vec3) -> bool,
     /// The fraction of a lean's sweep from an eye to its full lean that the
@@ -148,27 +141,20 @@ impl Sight<'_> {
         lean > 0.0 && (self.clear)(eye + aim::lean_offset(yaw, s * lean), self.target)
     }
 
-    /// How a body at `at` fights from it, or `None` when it is no cover.
+    /// How a body at `at` fights from it, or `None` when it is no cover. A
+    /// body hidden standing, where only a lean would show it, is none: lean
+    /// spots lost their fights (bot-combat.md 4.7).
     pub fn peek(&self, at: Vec3) -> Option<Peek> {
         let eye = at + Vec3::Z * pmove::VIEW_STAND;
-        if self.hidden(at, pmove::VIEW_STAND) {
-            return [1i8, -1]
-                .into_iter()
-                .find(|&side| self.leans_clear(eye, side, self.lean))
-                .map(Peek::Lean);
-        }
-        (self.hidden(at, pmove::VIEW_CROUCH) && (self.clear)(eye, self.target))
-            .then_some(Peek::Stand)
+        (!self.hidden(at, pmove::VIEW_STAND)
+            && self.hidden(at, pmove::VIEW_CROUCH)
+            && (self.clear)(eye, self.target))
+        .then_some(Peek::Stand)
     }
 
-    /// A second way to show from `at` besides `peek`: the other lean side,
-    /// else a crouched lean from a body hidden crouched.
-    pub fn alt(&self, at: Vec3, peek: Peek) -> Option<Peek> {
-        if let Peek::Lean(side) = peek
-            && self.leans_clear(at + Vec3::Z * pmove::VIEW_STAND, -side, self.lean)
-        {
-            return Some(Peek::Lean(-side));
-        }
+    /// A second way to show from `at`: a crouched lean from a body hidden
+    /// crouched.
+    pub fn alt(&self, at: Vec3) -> Option<Peek> {
         let eye = at + Vec3::Z * pmove::VIEW_CROUCH;
         if !self.hidden(at, pmove::VIEW_CROUCH) {
             return None;
@@ -185,7 +171,7 @@ impl Sight<'_> {
         let peek = self.peek(spot.at.into())?;
         Some(Spot {
             peek,
-            alt: self.alt(spot.at.into(), peek),
+            alt: self.alt(spot.at.into()),
             ..spot
         })
     }
@@ -193,9 +179,7 @@ impl Sight<'_> {
 
 /// The nearest spot to `from`, where the body stands or a node within
 /// [`REACH`] along level edges (no jump, no risky edge, no step past
-/// `STEPSIZE`), that [`Sight::peek`] passes: a [`Peek::Stand`] anywhere
-/// in reach before a lean. In seeded `tdm` runs the crouch-and-stand
-/// spots won fights and the lean spots only broke even (bot-combat.md 4.5).
+/// `STEPSIZE`), that [`Sight::peek`] passes.
 pub fn find(g: &NavGraph, from: Vec3, sight: &Sight) -> Option<Spot> {
     let start = g.nearest(from.into())?;
     let level = |a: u32, b: u32| {
@@ -227,20 +211,15 @@ pub fn find(g: &NavGraph, from: Vec3, sight: &Sight) -> Option<Spot> {
         .chain([(0.0, from)])
         .collect();
     spots.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let peeks: Vec<(Vec3, Option<Peek>)> = spots.iter().map(|&(_, p)| (p, sight.peek(p))).collect();
-    let (at, peek) = peeks
-        .iter()
-        .find(|(_, k)| *k == Some(Peek::Stand))
-        .or_else(|| peeks.iter().find(|(_, k)| k.is_some()))
-        .map(|&(p, k)| (p, k.unwrap()))?;
+    let mut peeks = spots.iter().filter_map(|&(_, p)| Some((p, sight.peek(p)?)));
+    let (at, peek) = peeks.next()?;
     let next = peeks
-        .iter()
-        .find(|(p, k)| k.is_some() && (*p - at).truncate().length() >= SHIFT_MIN)
-        .map(|&(p, k)| (p.into(), k.unwrap()));
+        .find(|(p, _)| (*p - at).truncate().length() >= SHIFT_MIN)
+        .map(|(p, k)| (p.into(), k));
     Some(Spot {
         at: at.into(),
         peek,
-        alt: sight.alt(at, peek),
+        alt: sight.alt(at),
         next,
     })
 }
@@ -466,7 +445,6 @@ impl Bot {
         self.cover.showing = !hide;
         let (crouch, lean) = match h.pose {
             Peek::Stand => (hide, 0),
-            Peek::Lean(side) => (false, if hide { 0 } else { side }),
             Peek::LowLean(side) => (true, if hide { 0 } else { side }),
         };
         if crouch {
@@ -500,23 +478,18 @@ mod tests {
         test(&Sight {
             threat_eye: Vec3::new(500.0, 0.0, 60.0),
             target: Vec3::new(500.0, 0.0, 40.0),
-            lean: 1.0,
             clear: &clear,
             lean_room: &room,
         });
     }
 
+    /// A tall wall's edge a standing lean would see round is no spot
+    /// (bot-combat.md 4.7).
     #[test]
-    fn a_wall_edge_on_the_left_is_leaned_round_to_the_left() {
+    fn a_tall_walls_edge_is_no_cover() {
         // Facing +x, the wall stops 9 units left (+y) of the line.
         let wall = (Vec3::new(90.0, -100.0, 0.0), Vec3::new(100.0, 9.0, 100.0));
-        sight(&[wall], |s| {
-            assert_eq!(s.peek(Vec3::ZERO), Some(Peek::Lean(-1)))
-        });
-        let wall = (Vec3::new(90.0, -9.0, 0.0), Vec3::new(100.0, 100.0, 100.0));
-        sight(&[wall], |s| {
-            assert_eq!(s.peek(Vec3::ZERO), Some(Peek::Lean(1)))
-        });
+        sight(&[wall], |s| assert_eq!(s.peek(Vec3::ZERO), None));
     }
 
     #[test]
@@ -526,18 +499,18 @@ mod tests {
     }
 
     #[test]
-    fn a_wall_the_lean_sphere_meets_cuts_the_lean() {
-        let wall = (Vec3::new(90.0, -100.0, 0.0), Vec3::new(100.0, 9.0, 100.0));
+    fn a_wall_the_lean_sphere_meets_cuts_the_crouched_lean() {
+        let wall = (Vec3::new(90.0, -100.0, 0.0), Vec3::new(100.0, 9.0, 48.0));
         let clear = |a: Vec3, b: Vec3| ray_box(a, b, wall.0, wall.1).is_none();
         let room = |_: Vec3, _: Vec3| 0.1;
         let s = Sight {
             threat_eye: Vec3::new(500.0, 0.0, 60.0),
             target: Vec3::new(500.0, 0.0, 40.0),
-            lean: 1.0,
             clear: &clear,
             lean_room: &room,
         };
-        assert_eq!(s.peek(Vec3::ZERO), None);
+        assert_eq!(s.peek(Vec3::ZERO), Some(Peek::Stand));
+        assert_eq!(s.alt(Vec3::ZERO), None);
     }
 
     #[test]
@@ -549,7 +522,7 @@ mod tests {
     }
 
     #[test]
-    fn a_crouch_spot_is_taken_over_a_nearer_lean() {
+    fn a_low_wall_farther_out_is_taken_past_a_tall_walls_edge() {
         // A row of nodes along +y: a tall wall in front of the first two,
         // ending 5 units left of the second, and a low wall in front of
         // the fourth.
@@ -568,10 +541,7 @@ mod tests {
         let g = NavGraph::from_parts(nodes, edges);
         let tall = (Vec3::new(90.0, -100.0, 0.0), Vec3::new(100.0, 45.0, 100.0));
         let low = (Vec3::new(90.0, 60.0, 0.0), Vec3::new(100.0, 160.0, 48.0));
-        sight(&[tall], |s| {
-            let spot = find(&g, Vec3::ZERO, s).unwrap();
-            assert_eq!((spot.at, spot.peek), ([0.0, 40.0, 0.0], Peek::Lean(-1)));
-        });
+        sight(&[tall], |s| assert_eq!(find(&g, Vec3::ZERO, s), None));
         sight(&[tall, low], |s| {
             let spot = find(&g, Vec3::ZERO, s).unwrap();
             assert_eq!((spot.at, spot.peek), ([0.0, 120.0, 0.0], Peek::Stand));
@@ -596,15 +566,16 @@ mod tests {
     }
 
     #[test]
-    fn a_lean_spot_leans_out_while_ready_and_back_while_busy() {
-        let (mut bot, mut v) = at_cover(Peek::Lean(-1));
+    fn a_crouched_lean_leans_out_while_ready_and_back_while_busy() {
+        let (mut bot, mut v) = at_cover(Peek::LowLean(-1));
         let cmd = bot.think(&v);
         assert_eq!(leans(&cmd), msg::WBUTTON_LEAN_LEFT);
+        assert_ne!(cmd.wbuttons & msg::WBUTTON_CROUCH, 0);
         assert_eq!((cmd.forward, cmd.right), (0, 0));
         v.busy_ms = 1500;
         let cmd = bot.think(&v);
         assert_eq!(leans(&cmd), 0);
-        assert_eq!(cmd.wbuttons & msg::WBUTTON_CROUCH, 0);
+        assert_ne!(cmd.wbuttons & msg::WBUTTON_CROUCH, 0);
     }
 
     #[test]
@@ -638,7 +609,7 @@ mod tests {
 
     #[test]
     fn a_hidden_threat_is_peeked_for_then_let_go() {
-        let (mut bot, mut v) = at_cover(Peek::Lean(1));
+        let (mut bot, mut v) = at_cover(Peek::LowLean(1));
         bot.wary = false;
         bot.think(&v);
         v.enemy = None;
@@ -658,15 +629,16 @@ mod tests {
     /// it lets the spot go inside its drawn hold.
     #[test]
     fn a_wary_bot_peeks_each_way_by_turns() {
-        let (mut bot, mut v) = at_cover(Peek::Lean(1));
-        v.cover.as_mut().unwrap().alt = Some(Peek::Lean(-1));
+        let (mut bot, mut v) = at_cover(Peek::Stand);
+        v.cover.as_mut().unwrap().alt = Some(Peek::LowLean(-1));
         let mut peeks = Vec::new();
         for i in 0..6 {
             v.busy_ms = if i % 2 == 0 { 0 } else { 1500 };
             for _ in 0..3 {
-                let l = leans(&bot.think(&v));
-                if l != 0 && peeks.last() != Some(&l) {
-                    peeks.push(l);
+                let cmd = bot.think(&v);
+                let pose = (cmd.wbuttons & msg::WBUTTON_CROUCH, leans(&cmd));
+                if v.busy_ms == 0 && peeks.last() != Some(&pose) {
+                    peeks.push(pose);
                 }
             }
         }
@@ -689,7 +661,7 @@ mod tests {
     fn a_wary_bot_ducking_back_may_shift_to_the_next_spot() {
         let (mut bot, mut v) = at_cover(Peek::Stand);
         let next = [0.0, 60.0, 64.0];
-        v.cover.as_mut().unwrap().next = Some((next, Peek::Lean(1)));
+        v.cover.as_mut().unwrap().next = Some((next, Peek::Stand));
         let mut shifted = 0;
         for _ in 0..40 {
             v.busy_ms = 0;
@@ -709,13 +681,13 @@ mod tests {
         let wall = (Vec3::new(90.0, -100.0, 0.0), Vec3::new(100.0, 9.0, 48.0));
         sight(&[wall], |s| {
             assert_eq!(s.peek(Vec3::ZERO), Some(Peek::Stand));
-            assert_eq!(s.alt(Vec3::ZERO, Peek::Stand), Some(Peek::LowLean(-1)));
+            assert_eq!(s.alt(Vec3::ZERO), Some(Peek::LowLean(-1)));
         });
     }
 
     #[test]
     fn a_near_enemy_is_fought_in_the_open() {
-        let (mut bot, mut v) = at_cover(Peek::Lean(1));
+        let (mut bot, mut v) = at_cover(Peek::LowLean(1));
         v.enemy.as_mut().unwrap().origin = [200.0, 0.0, 124.0];
         let cmd = bot.think(&v);
         assert_eq!(leans(&cmd), 0);
@@ -724,7 +696,7 @@ mod tests {
 
     #[test]
     fn a_bot_with_cover_off_never_holds_a_spot() {
-        let (mut bot, v) = at_cover(Peek::Lean(1));
+        let (mut bot, v) = at_cover(Peek::LowLean(1));
         bot.cover.enabled = false;
         assert_eq!(leans(&bot.think(&v)), 0);
         assert!(!bot.holds_cover());

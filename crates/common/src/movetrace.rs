@@ -2,7 +2,7 @@
 //! retail's `SV_Trace` world-then-entities walk
 //! (docs/research/cod11-player-clip.md).
 
-use crate::collision::{Capsule, CollisionWorld, Prim, Trace};
+use crate::collision::{CONTENTS_WATER, Capsule, CollisionWorld, Prim, Trace};
 use crate::net::protocol::ENTITYNUM_WORLD;
 use crate::patch::Arith;
 use glam::Vec3;
@@ -243,6 +243,10 @@ impl<'a> MoveWorld<'a> {
 
     fn live_trace(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: u32) -> Trace {
         let mut t = self.world.move_trace(start, end, mins, maxs, mask);
+        // Water stays out of the world's brushes; a mask that meets it adds it.
+        if mask & CONTENTS_WATER != 0 {
+            self.world.clip_water(start, end, mins, maxs, &mut t);
+        }
         if t.fraction == 0.0 {
             return t;
         }

@@ -777,7 +777,6 @@ impl Cod4Bots {
         Some(super::driver::CoverBody {
             origin: me.origin,
             threat_eye: eye(threat),
-            lean: 0.5,
             mask: vcod_cod4::pmove::MASK_PLAYERSOLID,
         })
     }

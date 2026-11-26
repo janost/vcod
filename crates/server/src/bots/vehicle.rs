@@ -79,6 +79,12 @@ pub(crate) const GUN_RANGE: f32 = 3000.0;
 /// A driver held by a teammate in its way this long backs off, when the
 /// way back is clear.
 const BLOCKED_TICKS: u32 = 40;
+/// A four-wheel's driver runs an enemy on foot this near over, within this
+/// many degrees of the hull's heading; the lead counts the hull at no less
+/// than this speed, units/s ([`run_over`]).
+const RUN_OVER_RANGE: f32 = 500.0;
+const RUN_OVER_ARC: f32 = 90.0;
+const RUN_OVER_LEAD_SPEED: f32 = 150.0;
 /// A rocket on foot goes at a vehicle once the view rests this near the
 /// lead, and from this far at least: past the launchers' 256-unit splash
 /// with a margin (`BREACH_CLEAR`).
@@ -710,8 +716,8 @@ impl Bot {
     /// (coduo-vehicles.md 2, 12).
     fn drive(&mut self, view: &BotView, seat: SeatView, cmd: &mut UserCmd) {
         let r = &mut self.rider;
-        let to = view
-            .waypoint
+        let to = run_over(view, seat)
+            .or(view.waypoint)
             .filter(|w| (w[0] - seat.origin[0]).hypot(w[1] - seat.origin[1]) > PASSED);
         // A fight holds a tank still for the gun; a four-wheel drives on.
         // Both wait for a teammate on his way in.
@@ -831,6 +837,27 @@ impl Bot {
             }
         }
     }
+}
+
+/// A four-wheel's driver with an enemy on foot in sight within
+/// [`RUN_OVER_RANGE`] and [`RUN_OVER_ARC`] of the bonnet steers at him,
+/// ahead by the time the hull takes to reach him, off the route: the
+/// point to drive at (bot-objectives.md 10.12).
+fn run_over(view: &BotView, seat: SeatView) -> Option<[f32; 3]> {
+    let e = view.enemy.filter(|_| !seat.tank)?;
+    let d = (e.origin[0] - seat.origin[0]).hypot(e.origin[1] - seat.origin[1]);
+    let bearing = (e.origin[1] - seat.origin[1])
+        .atan2(e.origin[0] - seat.origin[0])
+        .to_degrees();
+    if d >= RUN_OVER_RANGE || yaw_diff(bearing, seat.yaw).abs() >= RUN_OVER_ARC {
+        return None;
+    }
+    let t = d / seat.speed.abs().max(RUN_OVER_LEAD_SPEED);
+    Some([
+        e.origin[0] + e.velocity[0] * t,
+        e.origin[1] + e.velocity[1] * t,
+        e.origin[2],
+    ])
 }
 
 /// The other side's standing `bas` base nearest the bot that its tank's

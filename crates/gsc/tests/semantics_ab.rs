@@ -271,6 +271,7 @@ const RUN_IN_SERVER_CRATE: &[&str] = &[
     "probe_stale_self",
     "probe_stale_self_hud",
     "probe_testclient",
+    "probe_vectordot",
 ];
 
 #[test]
