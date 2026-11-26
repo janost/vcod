@@ -483,3 +483,60 @@ fn a_1_5_prone_turn_into_a_wall_pulls_the_view_back() {
     assert!(off[1].1, "{off:?}");
     assert!(off[1].0 < off[0].0 - 1.0, "{off:?}");
 }
+
+/// The floor and a pool of water `lo..hi` on it, its top 4 over the floor.
+fn pool_world(lo: [f32; 2], hi: [f32; 2]) -> crate::collision::CollisionWorld {
+    crate::collision::synthetic_world(
+        &[
+            ("textures/test/solid", crate::collision::CONTENTS_SOLID, 0),
+            ("textures/common/water", crate::collision::CONTENTS_WATER, 0),
+        ],
+        &[
+            (0, [-1024.0, -1024.0, -16.0], [1024.0, 1024.0, 0.0]),
+            (1, [lo[0], lo[1], -16.0], [hi[0], hi[1], 4.0]),
+        ],
+    )
+}
+
+/// UO's prone traces meet water (mask 0x810031), and a feet or chest
+/// sample that lands on it misses (game.mp.uo 0x22615..0x22631,
+/// 0x227a4..0x227c0): refused on the ground, a flat body off it. 1.5's
+/// mask has no water bit, so it lies down in the same pools.
+#[test]
+fn a_uo_chest_or_feet_sample_on_water_misses() {
+    for (pool_lo, pool_hi) in [
+        ([-10.0, -10.0], [10.0, 10.0]),
+        ([-60.0, -10.0], [-45.0, 10.0]),
+    ] {
+        let pool = pool_world(pool_lo, pool_hi);
+        let w = MoveWorld::bare(&pool);
+        assert!(prone_on(&w, Vec3::ZERO, true, MoveRules::V1_5).is_some());
+        assert!(prone_on(&w, Vec3::ZERO, true, MoveRules::Uo).is_none());
+        assert_eq!(
+            prone_on(&w, Vec3::ZERO, false, MoveRules::Uo),
+            Some(ProneBody::default())
+        );
+    }
+    let dry = pool_world([300.0, 300.0], [310.0, 310.0]);
+    assert!(prone_on(&MoveWorld::bare(&dry), Vec3::ZERO, true, MoveRules::Uo).is_some());
+}
+
+/// UO's lie-down refuses a prone box that starts in water (0x217f1..0x2180b,
+/// the entry trace's contents and `startsolid`); the same pool off the
+/// samples' path lets the move's own check through.
+#[test]
+fn a_uo_lie_down_refuses_a_body_starting_in_water() {
+    let pool = pool_world([8.0, -4.0], [14.0, 4.0]);
+    let w = MoveWorld::bare(&pool);
+    let query = |entry, rules| ProneQuery {
+        origin: Vec3::ZERO,
+        yaw_deg: 0.0,
+        entry,
+        ground: true,
+        length: PRONE_CHECK_LENGTH,
+        rules,
+    };
+    assert!(check_prone(&w, query(true, MoveRules::Uo)).is_none());
+    assert!(check_prone(&w, query(false, MoveRules::Uo)).is_some());
+    assert!(check_prone(&w, query(true, MoveRules::V1_5)).is_some());
+}

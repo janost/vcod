@@ -11,7 +11,7 @@ use super::angles::{
 use super::stance::push_event;
 use super::state::{MoveRules, PlayerState, PmEvent, PmInput, Stance};
 use super::{DIVE_HEIGHT_LOW, DIVE_HEIGHT_STAND, HALF_WIDTH, HEIGHT_PRONE, MIN_WALK_NORMAL};
-use crate::collision::MASK_PLAYERSOLID;
+use crate::collision::{CONTENTS_WATER, MASK_PLAYERSOLID, Prim, Trace};
 use crate::movetrace::{MASK_DEADSOLID, MoveWorld};
 use crate::net::event_ids::EV_STANCE_FORCE_CROUCH;
 use crate::x87;
@@ -78,9 +78,16 @@ pub const PRONE_CHECK_LENGTH: f32 = PRONE_BODY_LENGTH + PRONE_BODY_HALF_BOX;
 /// runs the ground samples anyway and falls back to the flat body when one
 /// misses. 1.5 also refuses a sample landing on a plane steeper than
 /// [`MIN_WALK_NORMAL`], ground or not, and retries a blocked leg sweep 18
-/// higher.
+/// higher. UO's traces meet water too (coduo-movement.md 17.1).
 pub fn check_prone(world: &MoveWorld, q: ProneQuery) -> Option<ProneBody> {
-    const MASK: u32 = MASK_DEADSOLID;
+    let uo = q.rules == MoveRules::Uo;
+    // UO 0x2171b: 0x810031 for every pmove caller, 1.5b's mask plus water.
+    let mask = if uo {
+        MASK_DEADSOLID | CONTENTS_WATER
+    } else {
+        MASK_DEADSOLID
+    };
+    let water = |t: &Trace| uo && t.hit == Some(Prim::Clip(CONTENTS_WATER));
     let v15 = q.rules.v15();
     let o = q.origin;
     let hw = HALF_WIDTH;
@@ -90,14 +97,15 @@ pub fn check_prone(world: &MoveWorld, q: ProneQuery) -> Option<ProneBody> {
             o + Vec3::Z * 10.0,
             Vec3::new(-hw, -hw, 0.0),
             Vec3::new(hw, hw, HEIGHT_PRONE),
-            MASK,
+            mask,
         );
-        if t.allsolid {
+        // UO refuses a body that starts in water (0x217f1..0x2180b).
+        if (water(&t) && t.startsolid) || t.allsolid {
             return None;
         }
     }
     let half = Vec3::splat(PRONE_BODY_HALF_BOX);
-    let trace = |a: Vec3, b: Vec3| world.box_trace(a, b, -half, half, MASK);
+    let trace = |a: Vec3, b: Vec3| world.box_trace(a, b, -half, half, mask);
     // `AngleVectors` of (0, yaw - 180, 0) (0x2d5e0, 1.5 0x1d1d4, UO
     // 0x21955; the Windows cgames' own, cod11-movers.md 22).
     let back = Vec3::new(0.0, q.yaw_deg - 180.0, 0.0);
@@ -183,7 +191,9 @@ pub fn check_prone(world: &MoveWorld, q: ProneQuery) -> Option<ProneBody> {
     }
     // The feet and the chest dropped onto the ground.
     let t = trace(feet, feet - Vec3::Z * ((feet.z - hips.z) * 2.0 + hw));
-    if t.fraction == 1.0 {
+    // A UO feet or chest sample on water misses (0x22615..0x22631,
+    // 0x227a4..0x227c0).
+    if t.fraction == 1.0 || water(&t) {
         return missed();
     }
     if steep(&t) {
@@ -191,7 +201,7 @@ pub fn check_prone(world: &MoveWorld, q: ProneQuery) -> Option<ProneBody> {
     }
     let feet = t.endpos;
     let t = trace(o + Vec3::Z * h, Vec3::new(o.x, o.y, o.z - hw * 1.5));
-    if t.fraction == 1.0 {
+    if t.fraction == 1.0 || water(&t) {
         return missed();
     }
     if steep(&t) {
@@ -200,9 +210,7 @@ pub fn check_prone(world: &MoveWorld, q: ProneQuery) -> Option<ProneBody> {
     let chest = t.endpos;
     // UO's chest sample more than 24 off the origin plus 6 misses (game.mp.uo
     // 0x22841..0x22866; coduo-movement.md 17).
-    if q.rules == MoveRules::Uo
-        && ((f64::from(chest.z) - f64::from(o.z)) - f64::from(PRONE_BODY_HALF_BOX)).abs() > 24.0
-    {
+    if uo && ((f64::from(chest.z) - f64::from(o.z)) - f64::from(PRONE_BODY_HALF_BOX)).abs() > 24.0 {
         return missed();
     }
     let bend = angle_subtract(vectopitch(feet - hips), vectopitch(hips - chest));
@@ -218,7 +226,7 @@ pub fn check_prone(world: &MoveWorld, q: ProneQuery) -> Option<ProneBody> {
     }
     // Nothing between the three samples, 5 units up.
     let up = Vec3::Z * 5.0;
-    let line = |a: Vec3, b: Vec3| world.box_trace(a + up, b + up, Vec3::ZERO, Vec3::ZERO, MASK);
+    let line = |a: Vec3, b: Vec3| world.box_trace(a + up, b + up, Vec3::ZERO, Vec3::ZERO, mask);
     if line(chest, hips).fraction < 1.0 || line(hips, feet).fraction < 1.0 {
         return missed();
     }
