@@ -835,6 +835,45 @@ kill lines):
   last noise, and preferring mounts (`bg_lmg_yawcap`'s arc on a sill),
   are untried. Open.
 
+### 6.1.1 A lane toward the last enemy, 2026-11-26 (not shipped)
+
+Tried, vcod's own: 6.1's camp with the lane picked toward the enemy. The
+bot keeps the last enemy it saw or heard (the enemy's origin, or the
+noise's spot). With an LMG, no enemy, objective, memory or noise and no
+seat, on the ground, it probes 16 yaws from its prone eye (`shot_trace`
+3000 out) and camps on the longest lane at least `MIN` long within
+`ARC` of the bearing to that contact: turns onto it, holds the sight
+button once facing it, watches it until 15 s pass with no enemy (60 s
+at most); a deploy not down 20 ticks after the press, a noise or memory
+to follow, an objective or the gun put away end it, then it walks 20 s
+before the next. No contact yet, no camp. VERIFIED (measured, ours,
+release, master 35f10513c plus the camp, UO `tdm`, mp_cassino and
+mp_kursk, 8 bots, 6000 ticks, kills by weapon off `VERBOSE`'s kill
+lines):
+
+| Seeds | Run | LMG kills (dp28, mg30cal, mg34) | All kills | Stalled |
+|---|---|---|---|---|
+| 1-16 | master | 53 (3, 17, 33) | 1357 | 12 |
+| 1-16 | MIN 600, ARC 45 | 52 (3, 32, 17) | 1342 | 5 |
+| 1-16 | MIN 600, ARC 45, 1 s before probing again when no lane does | 55 (2, 39, 14) | 1299 | 29 |
+| 1-16 | MIN 400, ARC 60 | 78 (3, 39, 36) | 1373 | 10 |
+| 17-48 | master | 163 (24, 53, 86) | 2617 | 281 |
+| 17-48 | MIN 400, ARC 60 | 150 (19, 31, 100) | 2464 | 385 |
+| 17-48 | MIN 300, ARC 75 | 138 (24, 30, 84) | 2452 | 290 |
+
+- VERIFIED (the table): over seeds 1 to 48, MIN 400 and ARC 60 takes
+  228 LMG kills against master's 216, and 3837 kills in all against
+  3974. The first 16 seeds' 78 against 53 did not hold on the next 32.
+- VERIFIED (measured, a temporary print, MIN 600 and ARC 45, seeds 1 to
+  4, 8 matches): 42 camps, 16 ended by the quiet 15 s, 19 by something
+  to follow or do, 5 by a refused deploy; 1051 thinks found no lane in
+  the arc.
+- Not kept: no more LMG kills than master and fewer kills in all.
+  INFERRED (the counts): the contact's bearing is a stale guess of where
+  the next enemy comes from, as the longest sightline was. Mounts
+  (`bg_lmg_yawcap`'s arc on a sill) are still untried: finding a sill a
+  standing bipod takes needs a probe of its own. Open.
+
 ## 7. United Offensive's `ctf`, `dom`, `hq` and `bas`
 
 Line numbers are `maps/mp/gametypes/<gt>.gsc` in `pakuo00.pk3`; the
