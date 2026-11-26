@@ -1268,7 +1268,22 @@ that move, alias and snapped origin (`compare_impacts`).
     against ours' (-1032.24, 7763.31). Retail's second drop onto the same
     spot, already prone, lands on ours' point (VERIFIED, captures). So
     the slide belongs to the prone press's transition on landing, which
-    ours lacks (INFERRED). `FIRST_DROP_GAPS` names `bail-prone`.
+    ours lacks (INFERRED). `FIRST_DROP_GAPS` named `bail-prone`.
+
+  Closed 2026-11-26: retail never lies that victim down in the air. His
+  placement's lie-down test passes the stale ground, and its chest sample
+  lands 27.4 under the origin plus 6, past UO's bound of 24
+  (`BG_CheckProneValid` 0x22841..0x22866, `fabs` against the double at
+  0x9a9e0, then the shared miss at 0x22f9b, which refuses an on-ground
+  caller; coduo-movement.md 17) (VERIFIED (the instructions)). Every later
+  cmd of the fall is airborne and drops the press, so he lands standing,
+  his clipped velocity kept with no prone timer running, slides on down
+  the grade and lies down on the cmd after the landing (INFERRED, off the
+  replay). Ours, with the bound ported, lands and slides on retail's
+  numbers to the hundredth, (-1032.09, 7763.64, -103.04) then (-1032.00,
+  7763.87, -103.10), and `FIRST_DROP_GAPS` is empty (VERIFIED, the gate).
+  The 150-ahead prone runs fall about 14 units, inside the bound, and lie
+  down on the placement as before.
 
 **A strike that kills.** `VEH_PlayerCollision` runs inside the drive
 step's probe loop (0x827ab), on each of the six `vehCheckSolidOffsets`

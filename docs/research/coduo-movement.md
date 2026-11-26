@@ -880,6 +880,16 @@ feet less hips, `AngleSubtract`ed from the torso's, hips less chest):
 A UO body refuses legs bent up more than 45 degrees past the hips; 1.1 and
 1.5 allow 50.
 
+VERIFIED (the instructions), 0x22826..0x22866: the chest sample's bound is
+`fabs((chest.z - origin.z) - 6.0)` against the double 24.0, taken after
+the steep test; past it the check jumps to the function's shared miss
+(0x22f9b), which refuses when the 10th argument (the ground flag) is set
+and else zeroes the three body outputs and accepts. vcod:
+`pmove::check_prone` under UO's rules
+(`pmove::tests::prone::a_uo_chest_sample_far_under_the_origin_misses`). A
+lie-down on a placement 27 units over a grade is refused by it
+(coduo-vehicles.md 11.6, "The first drop").
+
 VERIFIED, retail capture (`mp_carentan-dm-slope-8ms-patchwalk-pillar-uo.txt`,
 2026-10-17): crawling forward and left along the brick wall at x 971.9 on
 mp_carentan from (956.9, 588), UO refuses every cmd past y 599.77 from ct
