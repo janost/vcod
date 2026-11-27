@@ -14,6 +14,7 @@
 
 use std::sync::Mutex;
 use vcod_common::asset_source::AssetSource;
+use vcod_common::mantle::DEG_TO_RAD;
 
 use glam::Vec3;
 
@@ -21,89 +22,28 @@ use super::fpu::{self, d};
 use super::{PlayerState, Pml, Pmove, button, ef, pm_type, pmf};
 use crate::collision::{CONTENTS_MANTLE, SURF_MANTLE_ON, SURF_MANTLE_OVER};
 
-/// `mantleState.flags` (ps 0x5c8).
-pub mod flag {
-    /// The ledge's surface is `MANTLE_OVER`: the over anim follows the up.
-    pub const OVER: u32 = 0x1;
-    /// The standing box does not fit at the ledge: `EV_STANCE_FORCE_CROUCH`
-    /// every frame of the mantle.
-    pub const CROUCH: u32 = 0x2;
-    /// The standing box fits where the mantle ends: `EV_STANCE_FORCE_STAND`
-    /// and `eFlags` 0x4000 cleared at the end.
-    pub const STAND: u32 = 0x4;
-    /// A mantle is available this frame (`Mantle_ClearHint` 0x80de5ba
-    /// clears it every `PmoveSingle`).
-    pub const HINT: u32 = 0x8;
-}
+/// `mantleState.flags` (ps 0x5c8), `playerState_s.mantleState` (ps 0x5bc,
+/// STABS), `s_mantleAnimNames` (`.data` 0x8184d60) and `s_mantleTrans`
+/// (`.data` 0x8184d00).
+pub use vcod_common::mantle::{ANIM_NAMES, MantleState, TRANSITIONS, flag};
+use vcod_common::mantle::{
+    CROUCH_TOP, LEDGE_FLOOR, LEDGE_HEIGHTS, LEDGE_REACH, MIN_NORMAL_LEN, OVER_LOW, OVER_REACH,
+    RAD_TO_DEG, add, row, sub,
+};
+// The shared scalars' addresses: `LEDGE_FLOOR` rodata 0x81535a4,
+// `MIN_NORMAL_LEN` 0x8153814, `RAD_TO_DEG` 0x8153818, `DEG_TO_RAD` 0x814d140,
+// `OVER_REACH` immediate 0x41f80000.
 
-/// `playerState_s.mantleState` (ps 0x5bc, STABS).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct MantleState {
-    /// `vectoyaw` of the wall's inward normal; the anims turn by it.
-    pub yaw: f32,
-    /// ms into the mantle.
-    pub timer: i32,
-    /// The row of [`TRANSITIONS`].
-    pub trans_index: i32,
-    pub flags: u32,
-}
-
-/// `s_mantleAnimNames` (`.data` 0x8184d60): the `XAnimCreateAnims` slots.
-pub const ANIM_NAMES: [&str; 11] = [
-    "mp_mantle_root",
-    "mp_mantle_up_57",
-    "mp_mantle_up_51",
-    "mp_mantle_up_45",
-    "mp_mantle_up_39",
-    "mp_mantle_up_33",
-    "mp_mantle_up_27",
-    "mp_mantle_up_21",
-    "mp_mantle_over_high",
-    "mp_mantle_over_mid",
-    "player_mantle_over_low",
-];
-
-/// `s_mantleTrans` (`.data` 0x8184d00): {up anim, over anim, the ledge
-/// height the row is picked for}.
-pub const TRANSITIONS: [(usize, usize, f32); 7] = [
-    (1, 8, 57.0),
-    (2, 8, 51.0),
-    (3, 9, 45.0),
-    (4, 9, 39.0),
-    (5, 9, 33.0),
-    (6, 10, 27.0),
-    (7, 10, 21.0),
-];
-
-/// The over anim that leaves the weapon up (`Mantle_IsWeaponInactive`'s 10).
-const OVER_LOW: usize = 10;
-
-/// `Mantle_CheckLedge`'s ledge heights, tried in order (`Mantle_Check`'s
-/// immediates 0x42700000, 0x42200000, 0x41a00000).
-const LEDGE_HEIGHTS: [f32; 3] = [60.0, 40.0, 20.0];
-/// How far into the wall the ledge box is pushed (0x41800000).
-const LEDGE_REACH: f32 = 16.0;
-/// rodata 0x81535a4: the down trace's floor over the start.
-const LEDGE_FLOOR: f32 = 18.0;
 /// rodata 0x81535a8: the flattest ledge normal.
 const LEDGE_MIN_NORMAL_Z: f32 = f32::from_bits(0x3f33_3333);
-/// The crouched box's top (0x42480000).
-const CROUCH_TOP: f32 = 50.0;
-/// The over anim's reach and drop (immediate 0x41f80000, rodata 0x815348c).
-const OVER_REACH: f32 = 31.0;
+/// The over anim's drop (rodata 0x815348c).
 const OVER_DROP: f32 = 18.0;
-/// rodata 0x8153814: a wall normal flatter than this is vertical.
-const MIN_NORMAL_LEN: f32 = f32::from_bits(0x38d1_b717);
-/// rodata 0x8153818 (double): 180 / pi.
-const RAD_TO_DEG: f64 = f64::from_bits(0x404c_a5dc_1a63_c1f8);
-/// rodata 0x814d140 (double): pi / 180, `VectorAngleMultiply`'s.
-const DEG_TO_RAD: f64 = f64::from_bits(0x3f91_df46_a252_9d39);
 /// rodata 0x8153928: ms to seconds.
 const MSEC_TO_SEC: f32 = f32::from_bits(0x3a83_126f);
 
 /// One anim's root translation as the engine samples it.
 #[derive(Clone, Debug, PartialEq)]
-struct Clip {
+pub struct Clip {
     /// `XAnimGetLengthMsec`: frames over the frame rate, times 1000,
     /// truncated.
     length_ms: i32,
@@ -113,7 +53,15 @@ struct Clip {
     keys: Vec<Vec3>,
 }
 
-impl Clip {
+impl vcod_common::mantle::Clip for Clip {
+    fn length_ms(&self) -> i32 {
+        self.length_ms
+    }
+
+    fn turn(v: Vec3, yaw: f32) -> Vec3 {
+        angle_multiply(v, yaw)
+    }
+
     /// `XAnimGetAbsDelta`'s translation at time fraction `t`
     /// (0x80c177c, 0x80bdc5a): the last key at 1, else the two keys
     /// around frame `t * numframes` (stored, truncated) lerped.
@@ -155,88 +103,41 @@ impl Clip {
 }
 
 /// The `PLAYER_MANTLE` anims' root motion, by [`ANIM_NAMES`] slot.
-#[derive(Clone, Debug, PartialEq)]
-pub struct MantleAnims {
-    clips: Vec<Clip>,
-}
+pub type MantleAnims = vcod_common::mantle::MantleAnims<Clip>;
 
-impl MantleAnims {
-    /// Reads `xanim/<name>` for every slot past the root.
-    pub fn load(fs: &dyn AssetSource) -> anyhow::Result<MantleAnims> {
-        let mut clips = vec![Clip {
-            length_ms: 0,
-            numframes: 0,
-            frames: Vec::new(),
-            keys: Vec::new(),
-        }];
-        for name in &ANIM_NAMES[1..] {
-            let path = format!("xanim/{name}");
-            let data = fs
-                .read(&path)
-                .ok_or_else(|| anyhow::anyhow!("{path} not in the paks"))?;
-            let motion = vcod_common::xanim::root_motion(name, &data)?;
-            let anim = vcod_common::xanim::parse(name, &data)?;
-            let (frames, keys) = anim
-                .root
-                .map(|r| r.trans_keys.into_iter().unzip())
-                .unwrap_or_default();
-            clips.push(Clip {
-                length_ms: motion.length_ms,
-                numframes: (anim.frame_count - 1) as u16,
-                frames,
-                keys,
-            });
-        }
-        Ok(MantleAnims { clips })
+/// Reads `xanim/<name>` for every slot past the root.
+fn load(fs: &dyn AssetSource) -> anyhow::Result<MantleAnims> {
+    let mut clips = vec![Clip {
+        length_ms: 0,
+        numframes: 0,
+        frames: Vec::new(),
+        keys: Vec::new(),
+    }];
+    for name in &ANIM_NAMES[1..] {
+        let path = format!("xanim/{name}");
+        let data = fs
+            .read(&path)
+            .ok_or_else(|| anyhow::anyhow!("{path} not in the paks"))?;
+        let motion = vcod_common::xanim::root_motion(name, &data)?;
+        let anim = vcod_common::xanim::parse(name, &data)?;
+        let (frames, keys) = anim
+            .root
+            .map(|r| r.trans_keys.into_iter().unzip())
+            .unwrap_or_default();
+        clips.push(Clip {
+            length_ms: motion.length_ms,
+            numframes: (anim.frame_count - 1) as u16,
+            frames,
+            keys,
+        });
     }
-
-    /// `XAnimGetLengthMsec` of slot `anim`.
-    pub fn length_ms(&self, anim: usize) -> i32 {
-        self.clips[anim].length_ms
-    }
-
-    /// `XAnimGetAbsDelta`'s translation of slot `anim` at fraction `t`.
-    pub fn abs_delta(&self, anim: usize, t: f32) -> Vec3 {
-        self.clips[anim].abs_delta(t)
-    }
-
-    /// The up anim's length (`0x80dd120`) and the over anim's, 0 without
-    /// [`flag::OVER`] (`0x80dd15a`).
-    fn lengths(&self, st: &MantleState) -> (i32, i32) {
-        let (up, over, _) = row(st);
-        let over = if st.flags & flag::OVER != 0 {
-            self.length_ms(over)
-        } else {
-            0
-        };
-        (self.length_ms(up), over)
-    }
-
-    /// `Mantle_GetAnimDelta` (0x80dd216): the root's offset `t` ms into the
-    /// mantle, turned by the mantle's yaw.
-    fn delta(&self, st: &MantleState, t: i32) -> Vec3 {
-        let (up, over, _) = row(st);
-        let (up_len, over_len) = self.lengths(st);
-        let v = if up_len < t {
-            let a = self.abs_delta(up, 1.0);
-            let b = self.abs_delta(over, (t - up_len) as f32 / over_len as f32);
-            add(b, a)
-        } else {
-            self.abs_delta(up, t as f32 / up_len as f32)
-        };
-        angle_multiply(v, st.yaw)
-    }
+    Ok(MantleAnims { clips })
 }
 
 /// `pmove_t`'s `mantleEndPos` and `mantleDuration` for a mantle under way
 /// on `ps`: where the anims end it, and their whole length in ms.
-/// INFERRED: retail stores the start's end and the two anims' lengths.
 pub fn end_and_duration(anims: &MantleAnims, ps: &PlayerState) -> (Vec3, i32) {
-    let st = &ps.mantle;
-    let (up, over) = anims.lengths(st);
-    let total = up + over;
-    let left = sub(anims.delta(st, total), anims.delta(st, st.timer));
-    (add(ps.origin, left), total)
+    anims.end_and_duration(&ps.mantle, ps.origin)
 }
 
 /// Every distinct set of mantle anims a search path has given, one leak
@@ -247,7 +148,7 @@ static ANIMS: Mutex<Vec<&'static MantleAnims>> = Mutex::new(Vec::new());
 /// `s_mantleAnims` holds (`Mantle_CreateAnims`, 0x80ddaa4) for this search
 /// path. `None` (logged) where the paks lack them.
 pub fn anims(fs: &dyn AssetSource) -> Option<&'static MantleAnims> {
-    match MantleAnims::load(fs) {
+    match load(fs) {
         Ok(a) => {
             let mut kept = ANIMS.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(&k) = kept.iter().find(|k| ***k == a) {
@@ -262,26 +163,6 @@ pub fn anims(fs: &dyn AssetSource) -> Option<&'static MantleAnims> {
             None
         }
     }
-}
-
-fn row(st: &MantleState) -> (usize, usize, f32) {
-    TRANSITIONS[(st.trans_index.clamp(0, 6)) as usize]
-}
-
-fn add(a: Vec3, b: Vec3) -> Vec3 {
-    Vec3::new(
-        (d(a.x) + d(b.x)) as f32,
-        (d(a.y) + d(b.y)) as f32,
-        (d(a.z) + d(b.z)) as f32,
-    )
-}
-
-fn sub(a: Vec3, b: Vec3) -> Vec3 {
-    Vec3::new(
-        (d(a.x) - d(b.x)) as f32,
-        (d(a.y) - d(b.y)) as f32,
-        (d(a.z) - d(b.z)) as f32,
-    )
 }
 
 /// `VectorAngleMultiply` (0x80a7670): x and y turned by `yaw` degrees, the
@@ -571,6 +452,7 @@ pub(crate) fn cap_view(pm: &mut Pmove) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vcod_common::mantle::Clip as _;
 
     fn clip(numframes: u16, frames: &[u16], keys: &[[f32; 3]]) -> Clip {
         Clip {
@@ -696,7 +578,7 @@ mod tests {
         let Some(fs) = vcod_common::testing::cod2_fs() else {
             return;
         };
-        let a = MantleAnims::load(&fs).unwrap();
+        let a = load(&fs).unwrap();
         let near = |v: Vec3, want: Vec3| (v - want).abs().max_element() <= 1.0;
         for (up, over, h) in TRANSITIONS {
             let end = a.abs_delta(up, 1.0);

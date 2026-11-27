@@ -48,12 +48,23 @@ struct FxBody {
     life: i32,
 }
 
+/// An effect with looping physics model elements still looping: where and
+/// when it started, its seed, and the end of its last update, ms.
+struct FxLoop {
+    effect: Arc<PhysEffect>,
+    frame: EffectFrame,
+    seed: u16,
+    start: i32,
+    last: i32,
+}
+
 /// Every launched part a session has seen, by entity number, the FX
-/// system's physics model elements, and physics world 1, which steps
-/// their bodies.
+/// system's physics model elements and their looping effects, and physics
+/// world 1, which steps their bodies.
 pub struct Cod4Physics {
     parts: HashMap<u32, Part>,
     fx: Vec<FxBody>,
+    loops: Vec<FxLoop>,
     pub phys: PhysDvars,
     pub contact: collide::Dvars,
     pub pw: PhysWorld,
@@ -69,6 +80,7 @@ impl Default for Cod4Physics {
         Cod4Physics {
             parts: HashMap::new(),
             fx: Vec::new(),
+            loops: Vec::new(),
             phys: PhysDvars::default(),
             contact: collide::Dvars::default(),
             pw: PhysWorld::new(WorldId::Fx),
@@ -123,10 +135,10 @@ impl Cod4Physics {
 
     /// `effect` played at `frame` at `now` (`FX_SpawnEffect` into
     /// `FX_SpawnElem`, cod4-effects.md 9.1.1): its seed off the CRT's
-    /// `rand()`, or its start under flag 0x1000, and each one-shot physics
-    /// element's instances made as world 1 bodies with their visual's
-    /// model and preset (0x4a1ff0). One the pool has no room for, or whose
-    /// model has no preset, is dropped, as retail frees the element.
+    /// `rand()`, or its start under flag 0x1000; sequence 0 of each looping
+    /// physics element (0x4a33b0 at 0x4a144a), then each one-shot one's
+    /// instances (0x4a3220 at 0x4a1471). An effect with looping ones and a
+    /// `msecLoopingLife` keeps looping ([`Self::run_loops`]).
     pub fn play_fx(
         &mut self,
         world: &Cod4World,
@@ -142,31 +154,94 @@ impl Cod4Physics {
             fx_phys::effect_seed(rand.next() as i32)
         };
         for (elem, e) in effect.elems.iter().enumerate() {
-            // the sequence is a byte (0x4a263a)
-            for k in 0..fx_phys::one_shot_count(&e.def, seed).clamp(0, 256) {
-                let (begin, s) = fx_phys::elem_seed(&e.def, seed, now, k as u8);
-                let spawn = fx_phys::spawn(&e.def, e.models.len(), frame, s);
-                let Some(model) = e.models.get(spawn.visual) else {
-                    continue;
-                };
-                let Some(m) = world.parts.get(&model.to_ascii_lowercase()) else {
-                    continue;
-                };
-                let Some(body) = self.pw.fx_body(&spawn, &m.model, &m.preset.obj, &self.phys)
-                else {
-                    continue;
-                };
-                self.fx.push(FxBody {
-                    body,
-                    model: model.clone(),
-                    effect: effect.clone(),
-                    elem,
-                    seed: s,
-                    begin,
-                    life: spawn.life,
-                });
+            if e.looping {
+                self.spawn_elem(world, effect, elem, frame, seed, (0, now), now);
             }
         }
+        for (elem, e) in effect.elems.iter().enumerate() {
+            if !e.looping {
+                for k in 0..fx_phys::one_shot_count(&e.def, seed).max(0) {
+                    self.spawn_elem(world, effect, elem, frame, seed, (k as u32, now), now);
+                }
+            }
+        }
+        // 0x4a121d..0x4a1233: the looping bit only under a looping life
+        if effect.looping_life != 0 && effect.elems.iter().any(|e| e.looping) {
+            self.loops.push(FxLoop {
+                effect: effect.clone(),
+                frame: *frame,
+                seed,
+                start: now,
+                last: now,
+            });
+        }
+    }
+
+    /// The looping effects' updates to `time` (0x4a4e80): each looping
+    /// physics element's spawns over the update (0x4a32a0 into 0x4a30e0),
+    /// then the loop ends once `time` is past its start by more than
+    /// `msecLoopingLife` (0x4a4ece..0x4a4edf). Run once a frame.
+    pub fn run_loops(&mut self, world: &Cod4World, time: i32) {
+        let mut loops = std::mem::take(&mut self.loops);
+        loops.retain_mut(|l| {
+            if time.wrapping_sub(l.last) <= 0 {
+                return true;
+            }
+            for (elem, e) in l.effect.elems.iter().enumerate() {
+                if !e.looping {
+                    continue;
+                }
+                for at in fx_phys::looping_spawns(&e.def, l.start, l.last, time) {
+                    self.spawn_elem(world, &l.effect, elem, &l.frame, l.seed, at, time);
+                }
+            }
+            l.last = time;
+            time.wrapping_sub(l.start) <= l.effect.looping_life
+        });
+        self.loops = loops;
+    }
+
+    /// `FX_SpawnElem` (0x4a25b0) of physics element `elem` of `effect`,
+    /// the `sequence`th spawned at `msec`, with the FX system's clock at
+    /// `now`: refused when its life is past by then and it names no other
+    /// effect (0x4a26e3..0x4a2710), else made as a world 1 body with its
+    /// visual's model and preset (0x4a1ff0). One the pool has no room for,
+    /// or whose model has no preset, is dropped, as retail frees the
+    /// element.
+    fn spawn_elem(
+        &mut self,
+        world: &Cod4World,
+        effect: &Arc<PhysEffect>,
+        elem: usize,
+        frame: &EffectFrame,
+        seed: u16,
+        (sequence, msec): (u32, i32),
+        now: i32,
+    ) {
+        let e = &effect.elems[elem];
+        let (begin, s) = fx_phys::elem_seed(&e.def, seed, msec, sequence);
+        let spawn = fx_phys::spawn(&e.def, e.models.len(), frame, s);
+        if !e.chains && begin.wrapping_add(spawn.life) <= now {
+            return;
+        }
+        let Some(model) = e.models.get(spawn.visual) else {
+            return;
+        };
+        let Some(m) = world.parts.get(&model.to_ascii_lowercase()) else {
+            return;
+        };
+        let Some(body) = self.pw.fx_body(&spawn, &m.model, &m.preset.obj, &self.phys) else {
+            return;
+        };
+        self.fx.push(FxBody {
+            body,
+            model: model.clone(),
+            effect: effect.clone(),
+            elem,
+            seed: s,
+            begin,
+            life: spawn.life,
+        });
     }
 
     /// The physics model elements drawn at `time`: each at its body's
@@ -321,11 +396,8 @@ mod tests {
             .iter()
             .find(|d| d.destroy_fx.as_deref() == Some("props/watermelon"))
             .unwrap();
-        let m = glam::Mat3::from_quat(melon.rot);
-        let frame = EffectFrame {
-            origin: melon.origin.into(),
-            axes: [m.x_axis.into(), m.y_axis.into(), m.z_axis.into()],
-        };
+        let axis = vcod_cod4::ragdoll::iw::unit_axes(melon.rot.to_array());
+        let frame = EffectFrame::of_axis(melon.origin.into(), &axis);
         let mut rand = MsvcRand::default();
         let mut p = Cod4Physics::default();
         p.play_fx(&world, &effect, &frame, 1000, &mut rand);
@@ -349,5 +421,30 @@ mod tests {
         full.pw.others = vcod_cod4::ode::phys::MAX_BODIES - 2;
         full.play_fx(&world, &effect, &frame, 1000, &mut rand);
         assert_eq!(full.fx_models(1000).len(), 2);
+    }
+
+    /// A frag's `explosions/grenadeexp_wood` (common_mp): its looping
+    /// physics element, every 5 ms up to 30, spawns sequence 0 with the
+    /// effect, then each frame's due ones, and stops at its count past its
+    /// 145 ms looping life. Returns at once without an install.
+    #[test]
+    fn a_looping_physics_element_spawns_on_its_interval_until_its_count() {
+        let Some(install) = vcod_cod4::testing::cod4_install() else {
+            return;
+        };
+        let world = crate::cod4_fly::load_world(install.root(), "mp_bog").unwrap();
+        let effect = world.fx_phys[&crate::cod4_fx::key("explosions/grenadeexp_wood")].clone();
+        assert_eq!(effect.looping_life, 145);
+        let up = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        let frame = EffectFrame::of_axis([0.0, 0.0, 64.0], &up);
+        let mut p = Cod4Physics::default();
+        p.play_fx(&world, &effect, &frame, 1000, &mut MsvcRand::default());
+        assert_eq!(p.fx.len(), 1, "sequence 0 with the effect");
+        p.run_loops(&world, 1017);
+        assert_eq!(p.fx.len(), 4, "1005, 1010 and 1015");
+        p.run_loops(&world, 1100);
+        p.run_loops(&world, 1150);
+        assert_eq!(p.fx.len(), 30);
+        assert!(p.loops.is_empty(), "past its looping life");
     }
 }

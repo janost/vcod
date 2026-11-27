@@ -3206,6 +3206,8 @@ for a nav pass:
   parts. VERIFIED (measured). Not traced. Traced 2026-11-26: guards
   posted in the document room's door and a corridor beside it held
   teammates in; no post closes a way since (bot-objectives.md 4.2.1).
+  The parts are dealt in `re` again since 2026-11-27 (bot-objectives.md
+  9.1.1).
 - mp_carentan `re` seed 2's carrier held upstairs at (446, 1799, 160) was
   no nav fault: an escort stood on his next node (bot-objectives.md 4.2).
 

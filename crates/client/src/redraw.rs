@@ -203,6 +203,7 @@ impl App {
         let t0 = Instant::now();
         r.render(frame, vm);
         self.render_ms = t0.elapsed().as_secs_f32() * 1000.0;
+        crate::voice_meter::close_idle();
         if let Some(cap) = r.take_capture()
             && let Some(req) = self.shot.take()
         {
@@ -397,7 +398,7 @@ impl App {
             shell: &self.shell,
             audio: &mut self.audio,
             fx: &mut self.fx,
-            session: &self.session,
+            session: &mut self.session,
             r,
             time,
             dt,
@@ -476,7 +477,7 @@ impl App {
             shell: &self.shell,
             audio: &mut self.audio,
             fx: &mut self.fx,
-            session: &self.session,
+            session: &mut self.session,
             r,
             time,
             dt,

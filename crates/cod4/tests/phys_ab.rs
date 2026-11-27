@@ -1,5 +1,5 @@
 //! `phys_ab`: retail 1.7's worlds 0 and 1 against `vcod_cod4::ode::phys`
-//! on the four takes of `fixtures/phys/` (cod4-gsc.md 3.6.2): each take's
+//! on the takes of `fixtures/phys/` (cod4-gsc.md 3.6.2, 3.6.9): each take's
 //! bodies built from their models (3.6.3) and set to the capture's start
 //! words, the world's seed and clock the capture's, stepped frame by frame
 //! as retail stepped them over the map's clip map, and compared step by
@@ -66,6 +66,15 @@ struct New {
     user: Vec<u32>,
 }
 
+/// An `fxbody` line: 0x4a1ff0's element index and seed, and the effect's
+/// first 0x60 bytes as words.
+#[derive(Clone, Debug, Default)]
+struct FxLine {
+    elem: usize,
+    seed: u16,
+    effect: Vec<u32>,
+}
+
 #[derive(Debug, Default)]
 struct Take {
     world: u32,
@@ -73,6 +82,7 @@ struct Take {
     msec_step: i32,
     news: Vec<New>,
     steps: Vec<Step>,
+    fx: Vec<FxLine>,
 }
 
 fn floats<const N: usize>(part: &str) -> [f32; N] {
@@ -131,6 +141,14 @@ fn parse(text: &str) -> Take {
                     },
                 );
             }
+            Some("fxbody") => t.fx.push(FxLine {
+                elem: w[2].parse().unwrap(),
+                seed: w[4].parse().unwrap(),
+                effect: line.split('|').nth(1).unwrap()[" effect ".len()..]
+                    .split_whitespace()
+                    .map(hex)
+                    .collect(),
+            }),
             Some("sound") => sounds
                 .entry(w[1].parse().unwrap())
                 .or_default()
@@ -170,6 +188,18 @@ struct Case {
 fn cases() -> Vec<Case> {
     let sedan = |p: &str| format!("vehicle_80s_sedan1_silv_{p}");
     let chunk = |n: u32| format!("fx_watermelonchunk_0{n}");
+    let frag: Vec<String> = [
+        "me_plastic_crate1",
+        "com_bottle1",
+        "com_soup_can",
+        "com_barrel_shard4",
+        "com_barrel_shard3",
+        "me_plastic_crate2",
+        "com_junktire",
+        "com_junktire2",
+    ]
+    .map(String::from)
+    .to_vec();
     vec![
         Case {
             file: "round-mp_crash-1.7.txt",
@@ -179,18 +209,12 @@ fn cases() -> Vec<Case> {
         Case {
             file: "frag-mp_crash-1.7.txt",
             map: "mp_crash",
-            models: [
-                "me_plastic_crate1",
-                "com_bottle1",
-                "com_soup_can",
-                "com_barrel_shard4",
-                "com_barrel_shard3",
-                "me_plastic_crate2",
-                "com_junktire",
-                "com_junktire2",
-            ]
-            .map(String::from)
-            .to_vec(),
+            models: frag.clone(),
+        },
+        Case {
+            file: "shards-mp_crash-1.7.txt",
+            map: "mp_crash",
+            models: frag.clone(),
         },
         Case {
             file: "car-mp_backlot-1.7.txt",
@@ -206,6 +230,14 @@ fn cases() -> Vec<Case> {
             file: "watermelon-mp_bog-1.7.txt",
             map: "mp_bog",
             models: [4, 1, 4, 4, 1, 6].map(chunk).to_vec(),
+        },
+        Case {
+            file: "copypaper-mp_broadcast-1.7.txt",
+            map: "mp_broadcast",
+            models: vec![
+                "com_copypaper_box_lid".into(),
+                "com_copypaper_box_open".into(),
+            ],
         },
     ]
 }
@@ -402,9 +434,11 @@ fn worst(diffs: &[Diff]) -> Diff {
 /// step), every `msecStep` and every seed after a step retail's, and the
 /// impact sounds retail's in count on every step, under one alias per
 /// retail handle and one handle per alias, within 0.01 of retail's point.
-/// Measured: the round, frag and car takes equal to the bit on every step;
+/// Measured: the round, frag, car and copy paper takes equal to the bit on every step;
 /// the watermelon's to step 27, then within 2.5e-4 (its body 4's sweep on
-/// step 27, cod4-gsc.md 3.6.5 and 3.6.7).
+/// step 27, cod4-gsc.md 3.6.5 and 3.6.7); the shards' to step 32, then
+/// within 0.11 and 2.8 degrees, every sleep on retail's step, the seed
+/// parting after step 35 ([`SEED_AFTER_SWEEP`]).
 #[test]
 fn the_phys_takes_against_the_port() {
     let Some(install) = cod4_install() else {
@@ -464,6 +498,11 @@ fn the_phys_takes_against_the_port() {
     }
 }
 
+/// Takes whose seed may part after a step: there 0x5a6930's sweep puts a
+/// thin box a z ulp off retail's (cod4-gsc.md 3.6.9), so a later step
+/// draws on another contact count.
+const SEED_AFTER_SWEEP: &[(&str, usize)] = &[("shards-mp_crash-1.7.txt", 33)];
+
 /// The gate's rule over a run of take `f` (see the test above).
 fn check(f: &str, r: &Run) {
     let w = worst(&r.diffs);
@@ -479,7 +518,12 @@ fn check(f: &str, r: &Run) {
         "{f}: {:?}",
         r.asleep
     );
-    assert_eq!(r.seed_parts, None, "{f}: the seed");
+    let ulp = SEED_AFTER_SWEEP.iter().find(|(file, _)| *file == f);
+    match (r.seed_parts, ulp) {
+        (None, _) => {}
+        (Some(k), Some(&(_, step))) => assert!(k > step, "{f}: the seed parts after {k}"),
+        (Some(k), None) => panic!("{f}: the seed parts after step {k}"),
+    }
     assert!(r.msec_parts.is_empty(), "{f}: msecStep {:?}", r.msec_parts);
     assert!(r.sounds_part.is_empty(), "{f}: sounds {:?}", r.sounds_part);
     let names: Vec<_> = r.handles.values().collect();
@@ -500,24 +544,25 @@ fn start_words(b: &Body) -> Vec<u32> {
     v
 }
 
-/// Scenario 4 spawned through the FX path (cod4-effects.md 9.1.1): the
-/// watermelon's `props/watermelon` played at its dynamic entity's origin,
-/// its physics model element's six instances seeded off the one effect
-/// seed (searched over all 479: the take's seed and start time enter
-/// only as their sum), each spawned and built by `fx_phys` with its
-/// visual's own model and preset. Every body's position, quaternion and
-/// velocities equal the `new` line's to the bit, each picks the model
-/// the take's pins name, and the world they make then passes
+/// An effect's take spawned through the FX path (cod4-effects.md 9.1.1):
+/// `effect` played at the pose of the map's dynamic entity at `at`, as its
+/// `destroyFx` (0x48deb1..0x48decf), its one-shot physics elements'
+/// instances seeded off the one effect seed (searched over all 479: the
+/// take's seed and start time enter only as their sum), each spawned and
+/// built by `fx_phys` with its visual's own model and preset. A take with
+/// `fxbody` lines gives the effect's frame, seed and start instead, and
+/// each element's seed is checked against them. Every body's position,
+/// quaternion and velocities equal the `new` line's to the bit, each picks
+/// the model `pins` names, and the world they make then passes
 /// [`the_phys_takes_against_the_port`]'s rule to the take's end.
-#[test]
-fn the_watermelon_spawned_through_the_fx_path() {
+fn fx_take(map_name: &str, effect: &str, at: Vec3, file: &str, pins: &[String]) {
     let Some(install) = cod4_install() else {
         return;
     };
     let startup: Vec<Assets> = STARTUP.iter().map(|n| walked(&install, n)).collect();
-    let z = Zone::open_path(&install.zone("english", "mp_bog")).unwrap();
+    let z = Zone::open_path(&install.zone("english", map_name)).unwrap();
     let map = walk(z, WalkOptions { keep_bulk: true }).unwrap().assets;
-    let (_, mw) = vcod_cod4::map::Map::load(&install, "english", "mp_bog").unwrap();
+    let (_, mw) = vcod_cod4::map::Map::load(&install, "english", map_name).unwrap();
     let clip = ClipMap::from_assets(&mw.assets).unwrap();
     let zones: Vec<&Assets> = std::iter::once(&map).chain(startup.iter()).collect();
     let rows = impact_sound_rows(startup.iter().chain(std::iter::once(&map)).flat_map(|z| {
@@ -544,17 +589,11 @@ fn the_watermelon_spawned_through_the_fx_path() {
             Some((m, ObjPreset::from_raw(&p.raw, row.unwrap_or(-1))?))
         })
     };
-    let fx = map
-        .fx
-        .iter()
-        .find(|f| f.name == "props/watermelon")
-        .unwrap();
-    let effect = PhysEffect::of(&map, fx).expect("a physics element");
-    assert_eq!(effect.elems.len(), 1, "one physics element");
+    let fx = map.fx.iter().find(|f| f.name == effect).unwrap();
+    let find = |n: &str| map.fx.iter().find(|f| f.name.eq_ignore_ascii_case(n));
+    let effect = PhysEffect::of(&map, fx, &find).expect("a physics element");
     assert!(!effect.timed_seed, "a rand() seed");
-    let elem = &effect.elems[0];
-    // The watermelon the round broke (the README's), `destroyFx` at its
-    // pose (cod4-world.md 13.5).
+    assert!(effect.elems.iter().all(|e| !e.looping), "one-shot elements");
     let word = |d: &vcod_cod4::assets::world::DynEntityDef, o: usize| {
         f32::from_le_bytes(d.raw[o..o + 4].try_into().unwrap())
     };
@@ -564,18 +603,36 @@ fn the_watermelon_spawned_through_the_fx_path() {
         .find(|d| {
             d.destroy_fx
                 .is_some_and(|i| map.fx[i.index()].name == fx.name)
-                && Vec3::new(word(d, 20), word(d, 24), word(d, 28))
-                    .distance(Vec3::new(3672.6, -32.2, 43.5))
-                    < 0.1
+                && Vec3::new(word(d, 20), word(d, 24), word(d, 28)).distance(at) < 0.1
         })
         .unwrap();
     let word = |o: usize| word(dynent, o);
-    let frame = EffectFrame {
-        origin: [word(20), word(24), word(28)],
-        axes: vcod_cod4::ragdoll::iw::axes([word(4), word(8), word(12), word(16)]),
-    };
-    let text = std::fs::read_to_string(format!("{FIXTURES}/watermelon-mp_bog-1.7.txt")).unwrap();
+    let text = std::fs::read_to_string(format!("{FIXTURES}/{file}")).unwrap();
     let t = parse(&text);
+    let (frame, seeds, start) = match t.fx.first() {
+        // the effect's own +0x28 quaternion and +0x38 origin (0x4a13d9..0x4a13ef),
+        // read through 0x561100; its +0x12 seed and +0x20 start
+        Some(l) => {
+            let e = |k: usize| f32::from_bits(l.effect[k]);
+            let frame = EffectFrame {
+                origin: [e(14), e(15), e(16)],
+                axes: vcod_cod4::ragdoll::iw::unit_axes([e(10), e(11), e(12), e(13)]),
+            };
+            let seed = (l.effect[4] >> 16) as u16;
+            eprintln!(
+                "{file}: the effect at {:?}, the dynamic entity's def at {:?}",
+                frame.origin,
+                [word(20), word(24), word(28)]
+            );
+            (frame, vec![seed], l.effect[8] as i32)
+        }
+        None => {
+            // 0x48deb1..0x48decf: the pose's axes off 0x561100 into the effect
+            let axis = vcod_cod4::ragdoll::iw::unit_axes([word(4), word(8), word(12), word(16)]);
+            let frame = EffectFrame::of_axis([word(20), word(24), word(28)], &axis);
+            (frame, (0..479u16).collect(), 0)
+        }
+    };
     let captured: Vec<Vec<u32>> = t
         .news
         .iter()
@@ -586,17 +643,20 @@ fn the_watermelon_spawned_through_the_fx_path() {
                 .collect()
         })
         .collect();
-    let spawns = |seed: u16| -> Vec<fx_phys::Spawn> {
-        let n = fx_phys::one_shot_count(&elem.def, seed);
-        (0..n)
-            .map(|k| {
-                let (_, s) = fx_phys::elem_seed(&elem.def, seed, 0, k as u8);
-                fx_phys::spawn(&elem.def, elem.models.len(), &frame, s)
-            })
-            .collect()
+    // 0x4a3220 for each one-shot element in turn, the bodies in that order
+    let spawns = |seed: u16| -> Vec<(usize, u16, fx_phys::Spawn)> {
+        let mut out = Vec::new();
+        for (i, e) in effect.elems.iter().enumerate() {
+            for k in 0..fx_phys::one_shot_count(&e.def, seed) {
+                let (_, s) = fx_phys::elem_seed(&e.def, seed, start, k as u32);
+                out.push((i, s, fx_phys::spawn(&e.def, e.models.len(), &frame, s)));
+            }
+        }
+        out
     };
     // Each seed's farthest spawn from its body's start, the body sitting
-    // at its mass centre a hair off the spawn.
+    // at its mass centre a hair off the spawn; a take's own seed is taken
+    // as it stands (the copy paper's centres sit 3.9 units off).
     let off = |k: u16| -> f32 {
         let s = spawns(k);
         if s.len() != captured.len() {
@@ -604,7 +664,7 @@ fn the_watermelon_spawned_through_the_fx_path() {
         }
         s.iter()
             .zip(&captured)
-            .map(|(s, c)| {
+            .map(|((_, _, s), c)| {
                 Vec3::from(s.pos).distance(Vec3::new(
                     f32::from_bits(c[0]),
                     f32::from_bits(c[1]),
@@ -613,20 +673,32 @@ fn the_watermelon_spawned_through_the_fx_path() {
             })
             .fold(0.0, f32::max)
     };
-    let found: Vec<u16> = (0..479u16).filter(|&k| off(k) < 1e-3).collect();
-    let best = (0..479u16)
+    let found: Vec<u16> = match t.fx.is_empty() {
+        true => seeds.iter().copied().filter(|&k| off(k) < 1e-3).collect(),
+        false => seeds.clone(),
+    };
+    let best = seeds
+        .iter()
+        .copied()
         .min_by(|&a, &b| off(a).total_cmp(&off(b)))
         .unwrap();
-    eprintln!("best seed {best}: {}", off(best));
-    eprintln!("watermelon: effect seed plus start time {found:?}");
+    eprintln!("{file}: best seed {best}: {}", off(best));
+    eprintln!("{file}: effect seed plus start time {found:?}");
     assert_eq!(found.len(), 1, "one seed spawns the take's positions");
-    let pins = &cases()[3].models;
     let mut pw = PhysWorld::new(WorldId::Fx);
     let dv = PhysDvars::default();
     let mut ids = Vec::new();
     let mut mismatched = 0;
-    for (i, s) in spawns(found[0]).iter().enumerate() {
-        let name = &elem.models[s.visual];
+    for (i, (e, seed, s)) in spawns(found[0]).iter().enumerate() {
+        if let Some(l) = t.fx.get(i) {
+            assert_eq!(
+                (effect.elems[*e].index, *seed),
+                (l.elem, l.seed),
+                "body {}'s element and seed",
+                i + 1
+            );
+        }
+        let name = &effect.elems[*e].models[s.visual];
         assert_eq!(name, &pins[i], "body {}'s visual", i + 1);
         let (m, preset) = model(name).expect("a preset");
         let id = pw.fx_body(s, m, &preset, &dv).expect("room");
@@ -652,9 +724,182 @@ fn the_watermelon_spawned_through_the_fx_path() {
     let r = run(&t, &mut pw, &ids, &clip, &aliases);
     let first_inexact = r.diffs.iter().position(|d| !d.exact).map(|k| k + 1);
     eprintln!(
-        "watermelon through the FX path: {} steps, worst {:?}, first inexact step {first_inexact:?}",
+        "{file} through the FX path: {} steps, worst {:?}, first inexact step {first_inexact:?}",
         r.diffs.len(),
         worst(&r.diffs)
     );
-    check("watermelon (FX path)", &r);
+    check(&format!("{file} (FX path)"), &r);
+}
+
+/// Scenario 4 through the FX path: `props/watermelon`'s element 3, six
+/// instances under run bits 0xc0 off a sphere offset.
+#[test]
+fn the_watermelon_spawned_through_the_fx_path() {
+    let at = Vec3::new(3672.6, -32.2, 43.5);
+    let pins = &cases()
+        .into_iter()
+        .find(|c| c.file.starts_with("watermelon"))
+        .unwrap()
+        .models;
+    fx_take(
+        "mp_bog",
+        "props/watermelon",
+        at,
+        "watermelon-mp_bog-1.7.txt",
+        pins,
+    );
+}
+
+/// Scenario 5 through the FX path: `props/copypaper_box_exp`'s elements 4
+/// and 5, one instance each under run bits 0x40, their origins taken into
+/// and out of the frame of a box turned 32 degrees (0x4a2220, 0x4a2021).
+#[test]
+fn the_copy_paper_box_spawned_through_the_fx_path() {
+    let at = Vec3::new(-201.184, 300.911, 0.0);
+    let pins = &cases()
+        .into_iter()
+        .find(|c| c.file.starts_with("copypaper"))
+        .unwrap()
+        .models;
+    fx_take(
+        "mp_broadcast",
+        "props/copypaper_box_exp",
+        at,
+        "copypaper-mp_broadcast-1.7.txt",
+        pins,
+    );
+}
+
+/// Each body's model in a world 0 take: the dynamic entity whose origin is
+/// the body's position plus its offset (userdata +0) turned by its
+/// rotation, within 0.05.
+fn dynent_models(t: &Take, defs: &[vcod_cod4::dynent::DynDef]) -> Vec<String> {
+    t.news
+        .iter()
+        .map(|n| {
+            let fl = |label: &str| -> Vec<f32> {
+                n.parts[label].iter().map(|&x| f32::from_bits(x)).collect()
+            };
+            let (pos, r) = (fl("pos"), fl("R"));
+            let off: Vec<f32> = n.user[..3].iter().map(|&x| f32::from_bits(x)).collect();
+            let origin = Vec3::from(std::array::from_fn::<f32, 3, _>(|i| {
+                pos[i] + (0..3).map(|j| r[4 * i + j] * off[j]).sum::<f32>()
+            }));
+            let d = defs
+                .iter()
+                .filter(|d| d.body.is_some())
+                .min_by(|a, b| {
+                    a.origin
+                        .distance(origin)
+                        .total_cmp(&b.origin.distance(origin))
+                })
+                .unwrap();
+            assert!(
+                d.origin.distance(origin) < 0.05,
+                "body {}: {origin} {}",
+                n.id,
+                d.origin
+            );
+            d.model.clone()
+        })
+        .collect()
+}
+
+/// The mp_shipment frag (`fixtures/phys/`, cod4-gsc.md 3.6.9): eleven
+/// bottles and fruit flung off the floor by one blast, the last asleep on
+/// retail's step 1212 (20.6 s). Stepped past the take until the port's
+/// last body sleeps too: every body sleeps within 15 steps of retail's
+/// step and rests within 0.5 units and 15 degrees of retail's pose, every
+/// `msecStep` is retail's and the seed holds past step 250. Measured: 9
+/// of 11 on retail's step, the last on step 1218, at most 0.45 units and
+/// 12 degrees off; the seed parts after step 281.
+#[test]
+fn the_shipment_frag_against_the_port() {
+    let Some(install) = cod4_install() else {
+        return;
+    };
+    let startup: Vec<Assets> = STARTUP.iter().map(|n| walked(&install, n)).collect();
+    let z = Zone::open_path(&install.zone("english", "mp_shipment")).unwrap();
+    let map = walk(z, WalkOptions { keep_bulk: true }).unwrap().assets;
+    let (_, mw) = vcod_cod4::map::Map::load(&install, "english", "mp_shipment").unwrap();
+    let clip = ClipMap::from_assets(&mw.assets).unwrap();
+    let refs: Vec<&Assets> = startup.iter().collect();
+    let defs = vcod_cod4::dynent::defs(&map, &refs);
+    let text = std::fs::read_to_string(format!("{FIXTURES}/frag-mp_shipment-1.7.txt")).unwrap();
+    let t = parse(&text);
+    let names = dynent_models(&t, &defs);
+    eprintln!("shipment models {names:?}");
+    let zones: Vec<&Assets> = std::iter::once(&map).chain(startup.iter()).collect();
+    let models: Vec<_> = names
+        .iter()
+        .map(|n| {
+            zones
+                .iter()
+                .find_map(|z| z.xmodels.iter().find(|m| &m.name == n))
+                .expect("model")
+        })
+        .collect();
+    let (mut pw, ids) = build(&t, &models);
+    let r = run(&t, &mut pw, &ids, &clip, &[]);
+    let w = worst(&r.diffs);
+    let first_inexact = r.diffs.iter().position(|d| !d.exact).map(|k| k + 1);
+    eprintln!(
+        "shipment: {} steps, worst {w:?}, first inexact step {first_inexact:?}; seed parts after {:?}; \
+         asleep (ours, retail's) {:?}; msec parts {:?}",
+        r.diffs.len(),
+        r.seed_parts,
+        r.asleep,
+        r.msec_parts
+    );
+    // On past the take until the port's last body sleeps too, at 17 ms
+    // frames as the take's.
+    let mut to = t.steps.last().unwrap().to;
+    let mut extra = 0;
+    let awake = |pw: &PhysWorld| ids.iter().filter(|&&id| !pw.asleep(id)).count();
+    let dv = PhysDvars::default();
+    let contact = collide::Dvars::default();
+    let mut slept = r.asleep.clone();
+    while awake(&pw) > 0 && extra < 3600 {
+        to += 17;
+        extra += 1;
+        pw.run_to_time(to, &dv, &contact, &clip, &mut |_| {});
+        for (i, &id) in ids.iter().enumerate() {
+            if pw.asleep(id) {
+                slept
+                    .get_mut(&(i as u32 + 1))
+                    .unwrap()
+                    .0
+                    .get_or_insert(t.steps.len() + extra);
+            }
+        }
+    }
+    for (i, &id) in ids.iter().enumerate() {
+        let n = i as u32 + 1;
+        let (ours, theirs) = slept[&n];
+        let (ours, theirs) = (ours.expect("the port's body sleeps"), theirs.unwrap());
+        let rest = t.steps[theirs - 1].bodies[&n];
+        let b = pw.world.body(id);
+        let (off, turn) = (
+            Vec3::from(b.pos).distance(Vec3::from(rest.pos)),
+            turn_deg(b.q, rest.q),
+        );
+        eprintln!(
+            "  body {n} {}: asleep on step {ours}, retail's {theirs}; at rest {off} off, {turn} degrees",
+            names[i]
+        );
+        assert!(
+            ours.abs_diff(theirs) <= 15,
+            "body {n}: asleep on {ours}, retail's {theirs}"
+        );
+        assert!(
+            off <= 0.5 && turn <= 15.0,
+            "body {n}: at rest {off} off, {turn} degrees"
+        );
+    }
+    assert!(r.msec_parts.is_empty(), "msecStep {:?}", r.msec_parts);
+    assert!(
+        r.seed_parts.is_none_or(|k| k > 250),
+        "the seed parts after {:?}",
+        r.seed_parts
+    );
 }

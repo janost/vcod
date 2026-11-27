@@ -314,6 +314,17 @@ python3 -I tools/re/cod4_ragdoll_summary.py tmp/ragdoll.txt [another dump]
   out during the map load (`EXE_TIMEDOUT`, back at the menu); the rerun
   with `+set sv_timeout 600 +set cl_timeout 600 +set cl_connectTimeout
   600` before `+devmap` went through.
+- `RAGDOLL_SKEL=1` also logs the corpse's DObj (its models' bone names),
+  its entity at the build and its whole skeleton after each frame's
+  last pose, from the frame its ragdoll is made (`cod4-player-anims.md`
+  10.7.2). Add `+set scr_player_forcerespawn 0` before `+devmap`: with
+  the default 1 the player respawned 2 s after the kill, the view left
+  the corpse and the renderer stopped posing it, so the last pose of
+  each later frame was the ragdoll's own partial one (30 bones of 116).
+  The skeleton breakpoints arm once the corpse's DObj is known, as every
+  DObj's pose stops at them. The first run, with them armed from the
+  start, timed its loopback connection out during the map load; the
+  rerun armed them late and added `+set sv_connectTimeout 600`.
 - The format and the committed takes: `crates/cod4/tests/fixtures/README.md`.
 
 ### Worlds 0 and 1 from the first push to rest
@@ -347,7 +358,9 @@ python3 -I tools/re/cod4_phys_summary.py tmp/phys.txt [--trim OUT]
   the weapon does not fire.
 - `sv_connectTimeout` 600 as well: at its default 45 the loopback join
   timed out during the map load on a loaded machine. Two clients at once
-  on one machine timed out even with it; run one at a time.
+  on one machine timed out even with it; run one at a time. At a load
+  average past 70 one client timed out at 600 too; the four at 1800 held
+  (the copy paper take).
 - Pick a spot with `vcod_cod4::collision::ClipMap::trace` from the eye
   to the prop's centre before a run: a run costs 5 to 10 minutes here,
   and a blocked line costs a run.
@@ -357,7 +370,15 @@ python3 -I tools/re/cod4_phys_summary.py tmp/phys.txt [--trim OUT]
   counted from the first body or, with `PHYS_CONTACTS_FROM=launch` (any
   creator the `made` lines name), from that creator's first body.
   A world 0 body is destroyed the step after it sleeps, so its lines stop
-  there.
+  there. `PHYS_CONTACT_IDS` keeps only the named bodies' contact lines.
+- `PHYS_PLACE="ID=W,...;..."` puts a body at a pose of its own before its
+  first step: 19 hex words (position, quaternion with w first, the
+  rotation's three rows of four), its velocities and accumulators zeroed
+  and its geoms marked moved. The scenario only wakes it, so a prop drops
+  where retail never puts one (the shards take: two barrel shards over a
+  step edge). `part_edges`' drops give the words.
+- A long take's body lines thin out with `cod4_phys_summary.py --every
+  K`: every Kth step, and each body's first and first asleep step.
 - The format and the committed takes: `crates/cod4/tests/fixtures/phys/README.md`.
 
 ## Public servers and the master

@@ -19,6 +19,12 @@
 #                 on mp_crash's ground, 207 2291 296, yaw 0)
 #   RAGDOLL_STEPS steps to dump past the first ragdoll's start (default 400;
 #                 ragdoll_max_life 4500 ms is 265 at 17 ms)
+#   RAGDOLL_SKEL  1: also the corpse's entity at the build (`ent`), its DObj's
+#                 models (`models`) and its whole skeleton after each
+#                 frame's last pose (`skel`), from the frame its ragdoll is
+#                 made (cod4-player-anims.md 10.7.2); run it with
+#                 +set scr_player_forcerespawn 0, or the view leaves the
+#                 corpse at the respawn and the renderer stops posing it
 import os
 import struct
 
@@ -27,6 +33,7 @@ import gdb
 OUT = open(os.environ.get("RAGDOLL_OUT", "ragdoll-gdb.txt"), "w", buffering=1 << 16)
 POS = os.environ.get("RAGDOLL_POS", "207 2291 296 0")
 MAX_STEPS = int(os.environ.get("RAGDOLL_STEPS", "400"))
+SKEL = os.environ.get("RAGDOLL_SKEL") == "1"
 
 CL_INGAME = 0xC5F8F0  # dvar_t*, bool value at +0xc
 CBUF = 0x1410BD4  # local client 0: data, maxsize, cursize
@@ -34,9 +41,12 @@ POOL, SLOT_SIZE, SLOTS = 0xCC78A00, 0x9D4, 32  # ragdoll slots (Ragdoll_Update 0
 WORLDS = 0xCC54478  # dxWorld* by world
 MSEC_STEP = 0x71E798  # int by world, Phys_RunToTime 0x5a6e0e
 RAGDOLL_TIME = 0xD5EC534  # the ragdoll clock Ragdoll_Update adds each frame's msec to
+SKEL_ORIGIN = 0x797648  # vec3 a skeleton's translations are relative to (0x5bbc7d)
+MT_BUFFER = 0x14E8A04  # script strings: id's text at mt_buffer + 12 id + 4 (0x4aa207)
 
 inf = None
-st = {"frame": 0, "ingame": None, "steps": 0, "started": False, "seen": set(), "done": False}
+st = {"frame": 0, "ingame": None, "steps": 0, "started": False, "seen": set(), "done": False,
+      "dobj": None, "cpose": None, "slot": None, "skel": None, "ent": set()}
 
 # frame after cl_ingame -> console command
 SCRIPT = [
@@ -84,6 +94,7 @@ def cbuf_add(text):
 
 
 def on_frame():
+    flush_skel()
     ingame = mem(u32(CL_INGAME) + 0xC, 1)[0]
     if st["ingame"] is None:
         if not ingame:
@@ -169,8 +180,73 @@ def on_step():
     states = [state for _, _, state in live_slots()]
     if st["steps"] >= MAX_STEPS or not states or all(state == 5 for state in states):
         st["done"] = True
+        flush_skel()
         log("end")
         OUT.flush()
+
+
+def cstr(a):
+    return mem(a, 64).split(b"\0")[0].decode("latin-1")
+
+
+def on_ragdoll_write():
+    # 0x446de5, the controllers' call of the ragdoll's DObj write (0x5bb580):
+    # esi the cpose, ebx the DObj, cpose +0x10 the slot handle (index + 1)
+    if st["done"] or st["dobj"] is not None:
+        return
+    cpose, obj, h = reg("esi"), reg("ebx"), u32(reg("esi") + 0x10)
+    if not h:
+        return
+    st["dobj"], st["cpose"], st["slot"] = obj, cpose, h - 1
+    for b in SKEL_BPS:
+        b.enabled = True
+    # DObj +0x60 the models, +0x9 their count; XModel +0 name, +4 numBones,
+    # +8 the bones' names (script string ids), in DObj order model by model
+    # (0x57f2b0)
+    n = mem(obj + 9, 1)[0]
+    ms = [u32(u32(obj + 0x60) + 4 * k) for k in range(n)]
+    st["bones"] = sum(mem(m + 4, 1)[0] for m in ms)
+    buf = u32(MT_BUFFER)
+
+    def bone_names(m):
+        ids = struct.unpack("<%dH" % mem(m + 4, 1)[0], mem(u32(m + 8), 2 * mem(m + 4, 1)[0]))
+        return ",".join(cstr(buf + 12 * i + 4) for i in ids)
+
+    log("models %d %s" % (h - 1, " ".join("%s:%s" % (cstr(u32(m)), bone_names(m)) for m in ms)))
+
+
+def on_skel():
+    # after a computed pose's DObjCalcSkel (0x580190) returns, esi the DObj;
+    # DObj +0x48 the skeleton (0x20 a bone: quat x y z w, trans, weight),
+    # +0x34 the bits of the bones computed so far this frame. The frame's
+    # last such pose holds every bone it computed; on_frame writes it.
+    if st["done"] or reg("esi") != st["dobj"]:
+        return
+    mats = u32(st["dobj"] + 0x48)
+    if not mats:
+        return
+    s = POOL + st["slot"] * SLOT_SIZE
+    c = st["cpose"]
+    st["skel"] = "skel %d %d %d %d %x | %s | %s | %s | %s | %s" % (
+        st["frame"], i32(RAGDOLL_TIME), st["slot"], u32(s + 0x24), reg("pc"), words(c + 0x1C, 3),
+        words(c + 0x28, 3), words(SKEL_ORIGIN, 3), words(st["dobj"] + 0x34, 4), words(mats, 8 * st["bones"]))
+
+
+def flush_skel():
+    if st.get("skel"):
+        log(st["skel"])
+        st["skel"] = None
+
+
+def on_build_entity():
+    # 0x5bc930, a def bone's base pose under the entity (0x5bbd50): [esp] the
+    # entity's origin (cpose +0x1c, its angles at +0x28), [esp+4] its axes
+    slot = (reg("ebx") - (POOL + 0x38)) // SLOT_SIZE
+    if st["done"] or slot in st["ent"]:
+        return
+    st["ent"].add(slot)
+    o, ax = u32(reg("esp")), u32(reg("esp") + 4)
+    log("ent %d | %s | %s | %s" % (slot, words(o, 3), words(o + 0xC, 3), words(ax, 9)))
 
 
 class B(gdb.Breakpoint):
@@ -196,6 +272,14 @@ inf = gdb.selected_inferior()
 B(0x4FFCE0, on_frame)
 B(0x5A6D50, on_run_to_time)
 B(0x5A6E69, on_step)
+SKEL_BPS = []
+if SKEL:
+    B(0x446DE5, on_ragdoll_write)
+    B(0x5BC930, on_build_entity)
+    # every DObj's pose stops here: armed once the corpse's is known
+    for a in (0x43533D, 0x4592F4, 0x625730, 0x642A35):
+        SKEL_BPS.append(B(a, on_skel))
+        SKEL_BPS[-1].enabled = False
 gdb.execute("continue")
 # a stop returned True: the dump is complete. Detached, the client runs on
 # showing the body at rest for run.sh's SHOTS=1 grab.

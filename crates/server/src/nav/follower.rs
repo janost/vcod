@@ -73,7 +73,7 @@ pub(super) const RISK_COST: f32 = 4000.0;
 /// (bot-objectives.md section 9).
 pub const CROWD_COST: f32 = 1.0;
 
-/// [`CROWD_COST`] for an S&D flanker on the main group's paths: a way
+/// [`CROWD_COST`] for an S&D or `re` flanker on the main group's paths: a way
 /// round up to this much longer again is taken (bot-objectives.md 9.1).
 pub const FLANK_COST: f32 = 4.0;
 
@@ -293,7 +293,7 @@ pub struct Follower {
     /// the server each tick; read when a plan starts.
     pub crowd: Vec<(u32, u32)>,
     /// What [`Self::crowd`] costs: [`CROWD_COST`], or [`FLANK_COST`] for
-    /// an S&D flanker. Set with it.
+    /// a flanker. Set with it.
     pub crowd_cost: f32,
     /// The bot's route noise seed ([`Search::noisy`]), 0 for none. Set
     /// with [`Self::crowd`].

@@ -36,6 +36,11 @@
 #                  counts from the step its first body appears in
 #   PHYS_CLASS     the class the driver answers (default specops_mp,0:
 #                  the MP5, one round a frame)
+#   PHYS_PLACE     "ID=W,...;ID=W,..." : before its first step body ID is
+#                  put at the 19 hex words (pos 3, q 4 w first, R 12 by
+#                  rows), at rest with its accumulators cleared and its
+#                  geoms marked moved (a drop the scenario only wakes)
+#   PHYS_CONTACT_IDS  "ID ID ...": only these bodies' collide and cut lines
 import os
 import struct
 
@@ -53,6 +58,10 @@ QUIET = int(os.environ.get("PHYS_QUIET", "30"))
 C0, C1 = (int(x) for x in os.environ.get("PHYS_CONTACTS", "1-40").split("-"))
 CLASS = os.environ.get("PHYS_CLASS", "specops_mp,0")
 FROM = os.environ.get("PHYS_CONTACTS_FROM", "")
+PLACE = {int(k): [int(x, 16) for x in v.split(",")] for k, v in
+         (e.split("=") for e in os.environ.get("PHYS_PLACE", "").split(";") if e)}
+assert all(len(v) == 19 for v in PLACE.values()), "PHYS_PLACE: 19 words a body"
+CONTACT_IDS = {int(x) for x in os.environ.get("PHYS_CONTACT_IDS", "").split()}
 
 CL_INGAME = 0xC5F8F0  # dvar_t*, bool value at +0xc
 CBUF = 0x1410BD4  # local client 0: data, maxsize, cursize
@@ -225,6 +234,24 @@ def body_line(body):
         words(body + 0xF0, 4), words(body + 0x130, 3), words(body + 0x140, 3))
 
 
+def place(body):
+    # pos +0xe0, q +0xf0, R +0x100; lvel, avel, force and torque zeroed;
+    # each geom's gflags (+8) GEOM_DIRTY | GEOM_AABB_BAD, as dGeomMoved
+    v = PLACE.get(bid(body))
+    if v is None:
+        return
+    inf.write_memory(body + 0xE0, struct.pack("<3I", *v[:3]))
+    inf.write_memory(body + 0xF0, struct.pack("<4I", *v[3:7]))
+    inf.write_memory(body + 0x100, struct.pack("<12I", *v[7:]))
+    for off in (0x98, 0xA8, 0x130, 0x140):
+        inf.write_memory(body + off, b"\0" * 12)
+    g, n = u32(body + 0x1C), 0
+    while g and n < 32:
+        inf.write_memory(g + 8, struct.pack("<I", u32(g + 8) | 3))
+        g, n = u32(g + 0x14), n + 1
+    log("# place %d %s" % (bid(body), " ".join("%08x" % x for x in v)))
+
+
 def on_run_to_time():
     # Phys_RunToTime(lc, world, time) entry: the bodies made since the last
     if st["done"] or u32(reg("esp") + 8) != WORLD:
@@ -242,6 +269,7 @@ def on_run_to_time():
         st["quiet"] = 0
     for b in new:
         dumped.add(b)
+        place(b)
         for line in body_full(b):
             log(line)
 
@@ -291,6 +319,8 @@ def on_collide():
     if w != WORLD or not in_range():
         return
     n = reg("eax")
+    if CONTACT_IDS and bid(reg("edi")) not in CONTACT_IDS:
+        return
     g1, g2 = u32(esp + 0x3064), u32(esp + 0x3068)
     log("collide %d %d %d %d %d %d" % (st["steps"] + 1, bid(reg("edi")), bid(reg("ebx")), u32(g1 + 4), u32(g2 + 4), n))
     for line in contact_lines(esp + 0x4C, min(n, 0x80)):
@@ -304,6 +334,8 @@ def on_cut():
     if u32(esp + 0x14) != WORLD or not in_range():
         return
     buf = u32(esp + 4)
+    if CONTACT_IDS and bid(u32(esp + 8)) not in CONTACT_IDS:
+        return
     n = i32(buf + 0x1800)
     log("cut %d %d %d %d | %s" % (st["steps"] + 1, bid(u32(esp + 8)), bid(u32(esp + 0xC)), n, words(u32(esp + 0x10), 11)))
     for line in contact_lines(buf, min(max(n, 0), 0x80)):
@@ -327,6 +359,16 @@ def on_sound():
     if st["nc_world"] != WORLD or st["done"] or not st["started"]:
         return
     log("sound %d %08x %s" % (st["steps"] + 1, u32(reg("esp")), words(reg("esi"), 3)))
+
+
+def on_fxbody():
+    # 0x4a1ff0 entry, an FX model element's body: ecx the effect, then the
+    # element's def, its seed and the element; the effect's +0x12 seed,
+    # +0x20 start and the frames at +0x28 and +0x44 (quaternion, origin)
+    eff, sp = reg("ecx"), reg("esp")
+    edef, seed = u32(sp + 4), u32(sp + 8)
+    index = (edef - u32(u32(eff) + 0x1C)) // 0xFC
+    log("fxbody elem %d seed %d | effect %s" % (index, seed, words(eff, 0x60 // 4)))
 
 
 def on_round():
@@ -356,11 +398,15 @@ for sig in ("SIGSEGV", "SIGUSR1", "SIGUSR2", "SIGILL", "SIGBUS", "SIGFPE", "SIGP
     gdb.execute("handle %s nostop noprint pass" % sig)
 inf = gdb.selected_inferior()
 log("# cod4_phys_gdb world %d scenario %s pos %s fire %d contacts %d-%d class %s" % (WORLD, SCENARIO, POS, FIRE, C0, C1, CLASS))
+if PLACE or CONTACT_IDS:
+    log("# place %s contact ids %s" % (" ".join(str(k) for k in sorted(PLACE)), " ".join(str(k) for k in sorted(CONTACT_IDS))))
 OUT.flush()
 B(0x4FFCE0, on_frame)
 for a in CREATORS:
     B(a, on_made)
 B(0x48E0F0, on_round)
+if WORLD == 1:
+    B(0x4A1FF0, on_fxbody)
 B(0x5A6D50, on_run_to_time)
 B(0x5A6E69, on_step)
 B(0x5A5F9E, on_collide)

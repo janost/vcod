@@ -24,6 +24,7 @@
 //! "The flame report").
 
 use std::collections::HashMap;
+use vcod_common::clipmap::SURF_NOIMPACT;
 
 use glam::{Vec2, Vec3};
 use vcod_common::collision::{
@@ -418,8 +419,6 @@ const RESIDUE_FACE_DEPTH: f32 = 4.0;
 /// Surfaces that take no residue: ice, snow, water (0x1300000, 0x1400000
 /// and 0xc00000 of the struck `surfaceFlags`).
 const NO_RESIDUE_SURFACES: [i32; 3] = [12, 19, 20];
-/// A struck surface with this flag stops nothing (0x300a85d4 & 0x10).
-const SURF_NOIMPACT: u32 = 0x10;
 
 /// The report's check runs at most once per this many ms per client
 /// (100 of the chunk clock's half-ms ticks, uo cgame 0x30027d10).

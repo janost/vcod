@@ -266,9 +266,10 @@ CoD2 effect path:
   trails on `tag_fx`. Effect model elements (debris) draw the zones'
   xmodels at their visual scale, turning as 1.7 turns them. An element
   with its own physics body (a watermelon's chunks, a paper box's, a
-  cluster bomb's) flies as a body on the same physics as the launched
-  parts, spawned where 1.7 spawns it, and its body goes when its life
-  ends ([cod4-effects.md](../research/cod4-effects.md) 9.1.1).
+  cluster bomb's, the splinters of a frag on wood) flies as a body on
+  the same physics as the launched parts, spawned where 1.7 spawns it,
+  looping ones on their interval, and its body goes when its life ends
+  ([cod4-effects.md](../research/cod4-effects.md) 9.1.1).
 - Looping effects for their whole life: `spawnFx`, `playLoopedFx` and
   the map's createfx ambience (mp_crash's fires start settled). Each
   element spawns inside its `spawnRange` and fades over its distances.
@@ -513,8 +514,10 @@ Ranked by how much a player notices. The research-side lists are
 5. **Small menus.** Single Player's Yes does nothing (this is a
    multiplayer client). Of the `winvoice_*` voice settings the record
    level scales the captured voice (1.7 sets the Windows mixer) and the
-   scaler applies as 1.7's; the playback mute and `voice.wav` do nothing
-   ([cod4-voice.md](../research/cod4-voice.md) 4). The
+   scaler applies as 1.7's; the playback mute (the mixer's speaker monitor, which vcod
+   does not play) does nothing; `voice.wav` and the record level meter work
+   as 1.7's, the file in the base directory
+   ([cod4-voice.md](../research/cod4-voice.md) 4.1). The
    CD key menu keeps a verified key until vcod quits, where 1.7 writes
    the registry.
 6. **Server-side differences.** vcod-server never asks the authorize
