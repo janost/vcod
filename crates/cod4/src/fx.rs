@@ -63,6 +63,9 @@ pub mod flags {
     pub const HAS_VELOCITY_LOCAL: u32 = 0x100_0000;
     pub const HAS_VELOCITY_WORLD: u32 = 0x200_0000;
     pub const HAS_GRAVITY: u32 = 0x400_0000;
+    /// A model element (type 5) spawns as a body in physics world 1
+    /// (iw3mp.exe 0x4a2838, cod4-effects.md 9.1).
+    pub const PHYSICS: u32 = 0x800_0000;
     /// `size[1]` is its own; otherwise it reads `size[0]`.
     pub const NONUNIFORM_SCALE: u32 = 0x1000_0000;
 }
