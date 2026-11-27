@@ -357,7 +357,15 @@ python3 -I tools/re/cod4_phys_summary.py tmp/phys.txt [--trim OUT]
   counted from the first body or, with `PHYS_CONTACTS_FROM=launch` (any
   creator the `made` lines name), from that creator's first body.
   A world 0 body is destroyed the step after it sleeps, so its lines stop
-  there.
+  there. `PHYS_CONTACT_IDS` keeps only the named bodies' contact lines.
+- `PHYS_PLACE="ID=W,...;..."` puts a body at a pose of its own before its
+  first step: 19 hex words (position, quaternion with w first, the
+  rotation's three rows of four), its velocities and accumulators zeroed
+  and its geoms marked moved. The scenario only wakes it, so a prop drops
+  where retail never puts one (the shards take: two barrel shards over a
+  step edge). `part_edges`' drops give the words.
+- A long take's body lines thin out with `cod4_phys_summary.py --every
+  K`: every Kth step, and each body's first and first asleep step.
 - The format and the committed takes: `crates/cod4/tests/fixtures/phys/README.md`.
 
 ## Public servers and the master

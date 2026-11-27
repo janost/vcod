@@ -2,10 +2,10 @@
 //! against mp_crash's in worlds 1 and 0 on the ODE port (`vcod_cod4::ode`,
 //! cod4-gsc.md 3.6.7): each dropped edge-first across a step's edge
 //! sleeps within 60 s with its centre of mass out of the world and over
-//! a floor, on the step or down the stairs it rolled off. A resting geom sinks into what it meets by `phys_csl`'s unit
-//! and more over an edge, as retail's colliders let it, so the old
-//! solver's "no solid a quarter unit inside" no longer holds.
-//! `COD4_DIR` unset passes vacuously.
+//! a floor, on the step or down the stairs it rolled off, sunk into what
+//! it meets less than 1.5 units: `phys_csl`'s unit lets a resting geom
+//! sink about that far (cod4-gsc.md 3.6.9 has the table). `COD4_DIR`
+//! unset passes vacuously.
 
 use glam::{Mat3, Quat, Vec3};
 use vcod_cod4::assets::Assets;
@@ -146,8 +146,140 @@ fn in_world(clip: &ClipMap, p: Vec3) -> bool {
         .startsolid
 }
 
+/// A geom in the world: a point of the body's frame to the world, and
+/// the geom's inside in that frame (`None` outside, else how far in).
+struct Solid {
+    to_world: Box<dyn Fn(Vec3) -> Vec3>,
+    lo: Vec3,
+    hi: Vec3,
+    inside: Box<dyn Fn(Vec3) -> Option<f32>>,
+}
+
+/// Body `id`'s geoms as [`Solid`]s.
+fn solids(pw: &PhysWorld, id: BodyId) -> Vec<Solid> {
+    use vcod_cod4::ode::geom::Geom;
+    let b = pw.world.body(id);
+    let r = Mat3::from_cols(
+        Vec3::new(b.r[0][0], b.r[1][0], b.r[2][0]),
+        Vec3::new(b.r[0][1], b.r[1][1], b.r[2][1]),
+        Vec3::new(b.r[0][2], b.r[1][2], b.r[2][2]),
+    );
+    let pos = Vec3::from(b.pos);
+    let of = |g: &Geom, r: Mat3, pos: Vec3| -> Option<Solid> {
+        match g {
+            Geom::Box { sides } => {
+                let h = Vec3::from(*sides) * 0.5;
+                Some(Solid {
+                    to_world: Box::new(move |x| pos + r * x),
+                    lo: -h,
+                    hi: h,
+                    inside: Box::new(move |x| {
+                        let d = (h - x.abs()).min_element();
+                        (d >= 0.0).then_some(d)
+                    }),
+                })
+            }
+            Geom::Brush { brush, offset } => {
+                let (o, br) = (Vec3::from(*offset), brush.clone());
+                let (lo, hi) = (Vec3::from(br.mins) - o, Vec3::from(br.maxs) - o);
+                Some(Solid {
+                    to_world: Box::new(move |x| pos + r * x),
+                    lo,
+                    hi,
+                    inside: Box::new(move |x| {
+                        let m = x + o;
+                        let mut d = (Vec3::from(br.maxs) - m)
+                            .min(m - Vec3::from(br.mins))
+                            .min_element();
+                        for p in &br.side_planes {
+                            d = d.min(p[3] - Vec3::new(p[0], p[1], p[2]).dot(m));
+                        }
+                        (d >= 0.0).then_some(d)
+                    }),
+                })
+            }
+            &Geom::Cylinder {
+                direction,
+                radius,
+                half_height,
+            } => {
+                let k = direction - 1;
+                let mut h = Vec3::splat(radius);
+                h[k] = half_height;
+                Some(Solid {
+                    to_world: Box::new(move |x| pos + r * x),
+                    lo: -h,
+                    hi: h,
+                    inside: Box::new(move |x| {
+                        let mut q = x;
+                        q[k] = 0.0;
+                        let d = (radius - q.length()).min(half_height - x[k].abs());
+                        (d >= 0.0).then_some(d)
+                    }),
+                })
+            }
+            _ => None,
+        }
+    };
+    let Some(o) = pw.obj(id) else {
+        return Vec::new();
+    };
+    o.geoms
+        .iter()
+        .filter_map(|g| match g {
+            Geom::Transform(t) => {
+                let tr = Mat3::from_cols(
+                    Vec3::new(t.r[0][0], t.r[1][0], t.r[2][0]),
+                    Vec3::new(t.r[0][1], t.r[1][1], t.r[2][1]),
+                    Vec3::new(t.r[0][2], t.r[1][2], t.r[2][2]),
+                );
+                of(&t.inner, r * tr, pos + r * Vec3::from(t.pos))
+            }
+            g => of(g, r, pos),
+        })
+        .collect()
+}
+
+/// How far the world reaches into body `id`: over a grid through each
+/// geom's bounds (nine even planes an axis, and planes 0.1 to 4 in from
+/// each side), the deepest point inside the geom (its distance to the
+/// geom's surface) that is in the world, and the deepest any point
+/// inside lies, the most the first can read.
+fn sink(clip: &ClipMap, pw: &PhysWorld, id: BodyId) -> (f32, f32) {
+    let (mut deepest, mut most) = (0.0f32, 0.0f32);
+    for s in solids(pw, id) {
+        let axis = |k: usize| {
+            let (lo, hi) = (s.lo[k], s.hi[k]);
+            let mut v: Vec<f32> = (0..9).map(|i| lo + (hi - lo) * i as f32 / 8.0).collect();
+            for d in [0.1f32, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0] {
+                v.extend(
+                    [lo + d, hi - d]
+                        .into_iter()
+                        .filter(|x| (lo..=hi).contains(x)),
+                );
+            }
+            v
+        };
+        let (xs, ys, zs) = (axis(0), axis(1), axis(2));
+        for &x in &xs {
+            for &y in &ys {
+                for &z in &zs {
+                    let p = Vec3::new(x, y, z);
+                    let Some(d) = (s.inside)(p) else { continue };
+                    most = most.max(d);
+                    if d > deepest && in_world(clip, (s.to_world)(p)) {
+                        deepest = d;
+                    }
+                }
+            }
+        }
+    }
+    (deepest, most)
+}
+
 /// Body `id`'s end: a line, and whether it is a problem (awake, its
-/// centre in the world, or no floor within 64 under it: through the map).
+/// centre in the world, no floor within 64 under it: through the map, or
+/// the world 1.5 units or more inside it).
 fn judge(
     clip: &ClipMap,
     pw: &PhysWorld,
@@ -161,14 +293,15 @@ fn judge(
     let z = Vec3::ZERO;
     let over = clip.trace(p, p - Vec3::Z * 64.0, z, z, CLIP_MASK).fraction < 1.0;
     let asleep = pw.asleep(id);
+    let (deep, most) = sink(clip, pw, id);
     let line = format!(
-        "{name} over {at}: asleep {asleep} by {t} ms, centre {p} ({} off){}{}",
+        "{name} over {at}: asleep {asleep} by {t} ms, centre {p} ({} off), sunk {deep} of {most}{}{}",
         p.distance(at),
         if inside { ", in the world" } else { "" },
         if over { "" } else { ", over nothing" }
     );
     println!("{line}");
-    (!asleep || inside || !over).then_some(line)
+    (!asleep || inside || !over || deep >= 1.5).then_some(line)
 }
 
 /// `m` dropped alone in a world of `world` over the first six of `edges`
@@ -191,7 +324,8 @@ fn drop_on_steps(
                 "{name} at {at} turn {turn}: starts in the world"
             );
             let (t, _) = settle(&mut pw, clip);
-            problems.extend(judge(clip, &pw, id, name, at, t));
+            let named = format!("{name} turn {turn}");
+            problems.extend(judge(clip, &pw, id, &named, at, t));
         }
     }
     problems
