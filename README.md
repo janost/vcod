@@ -138,8 +138,8 @@ COD_DIR=/path/to/CallOfDuty cargo test
 That gives `target/release/vcod` and `target/release/vcod-server`. Without
 `COD_DIR` the tests that need game data return early and pass, so a green
 run without the game proves nothing about the parsers. CI runs that way,
-because it can't ship the game either. A build outside a git checkout reads
-its sha from `VCOD_GIT_SHA`, or calls itself `unknown`.
+because it can't ship the game either. A build reads its sha from
+`VCOD_GIT_SHA`, as the nightly does, or calls itself `unknown`.
 
 ## How I know it's right (when it is)
 

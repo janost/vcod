@@ -132,7 +132,7 @@ are its `KNOBS` table's.
 | `VCOD_HUD_SHOT`, `VCOD_MENU_SHOT`, `VCOD_MENU_SHOT_CLICKS`, `VCOD_MENU_SHOT_WAIT`, `VCOD_HUD_QUADS`, `VCOD_UI_SHOT` | `client_tools`' CoD2 shots (`renderer/hud_shot.rs`) | Write CoD2 HUD, menu and scoreboard frames to look at; each test's doc comment says what. |
 | `VCOD_FRONT_PPM=<path>` | `cod4_front` test | Saves the drawn Start New Server frame. |
 | `VCOD_BODY_TGA`, `VCOD_LIGHTGRID_TGA`, `VCOD_PROBE_STAGE_TGA` | `cod2_light.rs` tests | Save the lit body, the light grid and the probe stage images. |
-| `VCOD_VERSION`, `VCOD_GIT_SHA` | the build (`crates/version.rs`) | The version string; `VCOD_GIT_SHA` stands in for `git` where there is none. |
+| `VCOD_VERSION`, `VCOD_GIT_SHA` | the build (`crates/version.rs`) | The version string; its sha is `VCOD_GIT_SHA` (the nightly sets it), else `unknown`. |
 
 ## The F3 overlay
 

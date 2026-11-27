@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/common", "crates/client", "crates/server", "crates/gsc", "crates/cod2", "crates/cod4"]
+members = ["crates/common", "crates/client", "crates/server", "crates/gsc", "crates/cod2", "crates/cod4", "crates/workspace-hack"]
 
 [workspace.package]
 version = "0.1.0"
@@ -22,19 +22,24 @@ needless_range_loop = "allow"
 # `(a + b) * 0.5` to the bit, and the ported trace kernels need the latter.
 manual_midpoint = "allow"
 
+# A feature named here that only the client's stack needs (bytemuck's two,
+# glam's `mint`, libc's `extra_traits`, log's `std`) is what the workspace
+# build resolves anyway: naming it gives `-p vcod-common` and the other
+# selections the same units (crates/workspace-hack/Cargo.toml).
 [workspace.dependencies]
 anyhow = "1"
 jiff = "0.2"
-bytemuck = { version = "1", features = ["derive"] }
+bytemuck = { version = "1", features = ["derive", "aarch64_simd", "min_const_generics"] }
 clap = { version = "4", features = ["derive"] }
 ctrlc = { version = "3", features = ["termination"] }
 # No `regex`: RUST_LOG takes plain targets and levels here.
 env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
-glam = "0.33"
+glam = { version = "0.33", features = ["mint"] }
 image = { version = "0.25", default-features = false, features = ["tga", "jpeg"] }
 # kira 0.12.6 moved to glam 0.34, a second glam beside the workspace's 0.33.
 kira = { version = "=0.12.5", default-features = false, features = ["cpal", "mp3", "wav", "pcm"] }
-log = "0.4"
+libc = { version = "0.2", features = ["extra_traits"] }
+log = { version = "0.4", features = ["std"] }
 # CoD4 voice chat: the microphone (kira already builds cpal) and libspeex,
 # opened at run time (client cod4_voice.rs).
 cpal = { version = "0.18", default-features = false }
@@ -49,6 +54,7 @@ zip = { version = "9", default-features = false, features = ["deflate-flate2-zli
 tempfile = "3"
 vcod-common = { path = "crates/common" }
 vcod-gsc = { path = "crates/gsc" }
+vcod-workspace-hack = { path = "crates/workspace-hack" }
 
 # Release binaries ship to the nightly release; the symbol table is most of
 # their size and nothing reads it. Panic backtraces lose function names.
@@ -69,3 +75,6 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+# Third-party crates carry no debug info: a backtrace names their functions
+# without file:line. The vcod crates keep their line tables.
+debug = false

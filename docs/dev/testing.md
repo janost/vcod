@@ -179,8 +179,8 @@ matches retail.
 
 ## The gate runner
 
-`tools/gate.sh [area...]` runs fmt, both clippys and the suite at each install
-the environment names: `COD_DIR` (1.1) with `COD2_DIR` and `COD4_DIR`,
+`tools/gate.sh [area...]` runs fmt, `tools/feature_drift.sh`, both clippys
+and the suite at each install the environment names: `COD_DIR` (1.1) with `COD2_DIR` and `COD4_DIR`,
 then the server suite again at `COD_UO_DIR` (a stock-only UO tree) with
 `COD4_DIR` unset. It sets `VCOD_REQUIRE_INSTALL` to match, so no install
 test can skip. Each area adds the ignored gates of one row group below:
@@ -188,6 +188,14 @@ test can skip. Each area adds the ignored gates of one row group below:
 A step passes only on `test result: ok` lines that ran tests. `CARGO_WRAP`
 puts each cargo run under a wrapper (a memory-capped scope), `DRY=1`
 prints the commands.
+
+`tools/feature_drift.sh` fails when `cargo tree -p <member>` resolves a
+third-party crate with other features than `cargo tree --workspace`: each
+such crate, and every crate above it, would build once per selection. A
+member's own dependency takes the workspace's features on its
+`[workspace.dependencies]` line; a crate no member names is pinned in
+`crates/workspace-hack/Cargo.toml`, which `vcod-common` depends on. Run it
+after a dependency change.
 
 ## Other tools
 

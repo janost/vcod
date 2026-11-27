@@ -1,5 +1,8 @@
 //! Shared by the vcod client and server. No windowing, GPU or audio types in here.
 
+// Held for the features its manifest pins, not for code.
+use vcod_workspace_hack as _;
+
 pub mod animclock;
 pub mod animscript;
 pub mod animtree;

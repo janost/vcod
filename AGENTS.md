@@ -56,6 +56,10 @@ the retail 1.1d Linux server and its homepaths, old plans) and `tmp/`
 - `gsc` depends on neither `common` nor the client: `cargo tree -p vcod-gsc
   -e normal` lists only `log`. `vcod-common` is a gsc
   dev-dependency for the corpus tests.
+- Every `-p` selection resolves the features `--workspace` does, so they
+  share one build of each crate. `tools/feature_drift.sh` fails when they
+  differ; run it after a dependency change (`docs/dev/testing.md`, The gate
+  runner). `crates/workspace-hack` holds the features and no code.
 - Assets load by kind and name through `vcod_common::asset_source`
   (`load::<T>`). A reader that only reads takes `&dyn AssetSource`, not
   `&Pk3Fs`. Which kinds cache and who owns each: `docs/dev/assets.md`.
@@ -119,9 +123,9 @@ as a release build does: `--all-targets` turns it on, and
 `--features vcod/testing` the client's, which builds its tools. `--lib --bins
 --tests` leaves out the examples, about a GB of links that clippy's
 `--all-targets` already compiles. `tools/gate.sh [area...]` runs the
-first four, the suite once per install the environment names (`COD_DIR`,
-`COD_UO_DIR`, `COD2_DIR`, `COD4_DIR`) and then the ignored gates of each
-area; its header lists them.
+first four and `tools/feature_drift.sh`, the suite once per install the
+environment names (`COD_DIR`, `COD_UO_DIR`, `COD2_DIR`, `COD4_DIR`) and
+then the ignored gates of each area; its header lists them.
 
 - Set `COD_DIR` (absolute) for the suite, and `COD2_DIR` and `COD4_DIR` for
   their games. A test that needs an install passes vacuously when its

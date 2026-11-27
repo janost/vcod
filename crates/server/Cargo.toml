@@ -30,7 +30,7 @@ vcod-cod2 = { path = "../cod2" }
 vcod-cod4 = { path = "../cod4" }
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
+libc.workspace = true
 
 [dev-dependencies]
 vcod-server = { path = ".", features = ["testing"] }

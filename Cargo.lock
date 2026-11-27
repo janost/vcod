@@ -2612,6 +2612,7 @@ dependencies = [
  "log",
  "tempfile",
  "vcod-common",
+ "vcod-workspace-hack",
  "zip",
 ]
 
@@ -2641,6 +2642,20 @@ dependencies = [
  "vcod-common",
  "vcod-gsc",
  "vcod-server",
+]
+
+[[package]]
+name = "vcod-workspace-hack"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.13.2",
+ "hashbrown 0.17.1",
+ "jiff",
+ "linux-raw-sys 0.12.1",
+ "num-traits",
+ "once_cell",
+ "rustix 1.1.6",
+ "syn 3.0.10",
 ]
 
 [[package]]

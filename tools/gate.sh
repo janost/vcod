@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # gate.sh [area...]: what a branch passes before it merges, assembled from
-# docs/dev/testing.md. fmt and both clippys, then the workspace suite once per
-# install the environment names, then the ignored gates of each area.
+# docs/dev/testing.md. fmt, the feature check (tools/feature_drift.sh) and
+# both clippys, then the workspace suite once per install the environment
+# names, then the ignored gates of each area.
 #
 # Installs (each optional; absolute paths, docs/dev/testing.md):
 #   COD_DIR       CoD1 1.1: the workspace suite runs here, with COD2_DIR
@@ -104,6 +105,11 @@ require=$(IFS=,; echo "${req[*]}")
 base=(VCOD_REQUIRE_INSTALL="$require")
 
 run fmt -- fmt --all --check || fail fmt
+if [[ ${DRY:-} == 1 ]]; then
+	echo "feature-drift: tools/feature_drift.sh"
+else
+	tools/feature_drift.sh >> "$log" 2>&1 || fail feature-drift
+fi
 run clippy -- clippy --workspace --all-targets --features vcod/testing -- -D warnings || fail clippy
 # The crates with a `testing` feature, built without it as a release is.
 run clippy-release -- clippy -p vcod-common -p vcod-cod4 -p vcod-server -p vcod --lib --bins -- -D warnings ||
@@ -111,7 +117,7 @@ run clippy-release -- clippy -p vcod-common -p vcod-cod4 -p vcod-server -p vcod 
 [[ ${DRY:-} == 1 ]] || echo "fmt, clippy: ok"
 check suite "${base[@]}" -- test --workspace --lib --bins --tests --no-fail-fast
 uo=(COD_DIR="${COD_UO_DIR:-}" COD4_DIR= VCOD_REQUIRE_INSTALL=cod1,uo)
-[[ -n ${COD_UO_DIR:-} ]] && check "suite (UO)" "${uo[@]}" -- test -p vcod-server --no-fail-fast
+[[ -n ${COD_UO_DIR:-} ]] && check "suite (UO)" "${uo[@]}" -- test -p vcod-server --lib --bins --tests --no-fail-fast
 
 srv=(test -p vcod-server --test server --)
 for area in "$@"; do

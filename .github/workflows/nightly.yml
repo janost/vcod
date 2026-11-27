@@ -78,6 +78,11 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      # crates/version.rs reads the sha from here, not from git.
+      - name: Version sha
+        shell: bash
+        run: echo "VCOD_GIT_SHA=${GITHUB_SHA::8}" >> "$GITHUB_ENV"
+
       - name: Build
         run: cargo build --release --workspace --locked --target ${{ matrix.target }}
 

@@ -1,0 +1,34 @@
+[package]
+name = "vcod-workspace-hack"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Pins the features of vcod's third-party crates; holds no code"
+
+# The features `cargo build --workspace` resolves for crates no member names
+# itself. `vcod-common` depends on this, so `-p vcod-server` and every other
+# selection resolves them alike and reuses the workspace build's units
+# instead of compiling a second variant of each crate and of all that sits
+# on it. Linux only: the other targets build the whole workspace.
+# `tools/feature_drift.sh` fails when a selection drifts and names the crate.
+[target.'cfg(target_os = "linux")'.dependencies]
+bitflags = { version = "2", features = ["std"] }
+hashbrown = { version = "0.17", default-features = false, features = ["default-hasher", "inline-more"] }
+jiff.workspace = true
+linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "system", "xdp"] }
+num-traits = { version = "0.2", features = ["i128", "libm"] }
+once_cell = "1"
+rustix = { version = "1", features = ["event", "fs", "net", "pipe", "process", "shm", "system", "time"] }
+
+# Host side: the proc macros' syn.
+[target.'cfg(target_os = "linux")'.build-dependencies]
+syn = { version = "3", features = ["full"] }
+
+# No code for the workspace's lints to read, and cargo calls a dependency
+# nothing imports unused.
+[lints.cargo]
+unused_dependencies = "allow"

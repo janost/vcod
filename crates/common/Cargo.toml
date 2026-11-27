@@ -22,10 +22,11 @@ bytemuck.workspace = true
 glam.workspace = true
 image.workspace = true
 log.workspace = true
+vcod-workspace-hack.workspace = true
 zip.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
+libc.workspace = true
 
 [dev-dependencies]
 vcod-common = { path = ".", features = ["testing"] }
