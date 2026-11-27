@@ -379,6 +379,44 @@ ragdoll_baselerp_bone 1 j_head 1000
         assert_eq!(r.state(id2), Some(State::WaitDObj));
     }
 
+    /// A simulating figure's bones the slot does not set take the locals
+    /// fed that frame, under the slot's own pose (`DObjCalcSkel` each
+    /// frame, cod4-player-anims.md 10.7.2): an elbow the anim bends is drawn
+    /// bent at once, under its shoulder as the ragdoll holds it.
+    #[test]
+    fn an_unset_bone_takes_the_locals_fed_that_frame() {
+        let (skel, base) = figure();
+        let floor = Floor::new(false);
+        let mut r = pool(Dvars::default());
+        let id = r.create().unwrap();
+        for up in [20.0, 21.0] {
+            feed(&mut r, id, &skel, &base, &worlds(&base, up));
+            r.update(17, &floor);
+        }
+        assert_eq!(r.state(id), Some(State::Simulating));
+        let sh = skel.bone_index("j_shoulder_le").unwrap();
+        let el = skel.bone_index("j_elbow_le").unwrap();
+        let under = |p: &[(Vec3, Quat)]| {
+            let inv = p[sh].1.inverse();
+            (inv * (p[el].0 - p[sh].0), inv * p[el].1)
+        };
+        let held = under(r.pose(id).unwrap());
+        let mut bent = worlds(&base, 21.0);
+        let (pp, pq) = bent[sh];
+        let turn = pq * Quat::from_rotation_z(std::f32::consts::FRAC_PI_2) * pq.inverse();
+        bent[el] = (pp + turn * (bent[el].0 - pp), turn * bent[el].1);
+        let fed = under(&bent);
+        let v = r.version(id);
+        feed(&mut r, id, &skel, &base, &bent);
+        let drawn = under(r.pose(id).unwrap());
+        assert!(r.version(id) > v);
+        assert!(
+            drawn.0.distance(fed.0) < 1e-4 && drawn.1.dot(fed.1).abs() > 1.0 - 1e-6,
+            "{drawn:?} {fed:?}"
+        );
+        assert!(drawn.0.distance(held.0) > 1.0, "{} {}", drawn.0, held.0);
+    }
+
     /// A bone whose length crosses a wall fails the tunnel test at the
     /// build, and the slot goes free.
     #[test]

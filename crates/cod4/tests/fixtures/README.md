@@ -55,4 +55,22 @@ built to the step it goes idle. Every float is its IEEE bits in hex
   the time and frames in that state (+0x24, +0x28, +0x2c).
 - `body SLOT BONE ...`: as `start`, after the step. An idle slot has let
   its bodies go and lists none.
+- The max-life take only, from `RAGDOLL_SKEL=1` (cod4-player-anims.md
+  10.7.2):
+  - `models SLOT NAME:BONE,BONE,... ...`: the corpse's DObj's models in
+    order, each with its bones' names in its `boneNames` order; the DObj's
+    bones are these, model by model.
+  - `ent SLOT | ORIGIN | ANGLES | AXES`: the corpse's entity as the build
+    read it (0x5bc930): its origin (+0x1c), its angles (+0x28) and the
+    nine words of the axes made of them, forward, left, up.
+  - `skel F T SLOT STATE PC | ORIGIN | ANGLES | SHIFT | BITS | MATS`: the
+    corpse's skeleton after frame `F`'s last pose (`PC` the hook it was
+    read at: 642a35 the renderer's), `T` the ragdoll clock, the slot's
+    state, the entity's origin and angles then, the vector the
+    skeleton's positions are relative to (0x797648), the four words of
+    the DObj's bits of the bones computed (+0x34; bone `b` is `0x80000000
+    >> (b & 31)` of word `b >> 5`) and each bone's eight words: its
+    quaternion `x y z w`, its position less `SHIFT`, its weight. A bone
+    whose bit is clear holds nothing. The committed take keeps the lines
+    to 30 frames after the build.
 - `end`: the dump stopped (the slot idle, or `RAGDOLL_STEPS` passed).

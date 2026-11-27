@@ -1,8 +1,9 @@
 //! `ragdoll_ab`: retail 1.7's ragdoll against `vcod_cod4::ragdoll`'s ODE
-//! world, on the kill capture (`fixtures/ragdoll/kill-mp_crash-1.7.txt`,
-//! cod4-player-anims.md 10.5): the capture's start bodies and seed are
-//! built into the port's world over mp_crash's clip map, stepped as
-//! retail stepped them, and compared step by step.
+//! world, on the kill captures (`fixtures/ragdoll/`, cod4-player-anims.md
+//! 10.5, 10.7): each capture's start bodies and seed are built into the
+//! port's world over mp_crash's clip map, stepped as retail stepped them,
+//! and compared step by step; the max-life take's drawn bones are compared
+//! frame by frame (10.7.2).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -19,8 +20,11 @@ static FIXTURES: vcod_common::manifest::ManifestPath =
     vcod_common::manifest_const!("/tests/fixtures/ragdoll");
 /// Asleep on step 79 (cod4-player-anims.md 10.5).
 const SLEPT: &str = "kill-mp_crash-1.7.txt";
-/// Awake to `ragdoll_max_life`, with the bone lines (10.7).
+/// Awake to `ragdoll_max_life`, with the bone, entity and skeleton lines
+/// (10.7, 10.7.2).
 const MAX_LIFE: &str = "kill-mp_crash-1.7-maxlife.txt";
+/// The max-life take's corpse, an opfor rifleman's body and head.
+const MAX_LIFE_MODELS: [&str; 2] = ["body_mp_arab_regular_assault", "head_mp_arab_regular_suren"];
 
 /// One body as the dump has it.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -54,12 +58,34 @@ struct BoneLine {
     prev: Record,
 }
 
+/// The corpse's skeleton after a drawn frame's pose (a `skel` line): the
+/// slot's state, the bits of the bones computed, each bone's turn and
+/// position in the world, in the DObj's order.
+#[derive(Clone, Debug)]
+struct Skel {
+    frame: u32,
+    state: u32,
+    bits: [u32; 4],
+    world: Vec<(Vec3, Quat)>,
+}
+
+impl Skel {
+    fn computed(&self, b: usize) -> bool {
+        b < 128 && self.bits[b >> 5] & (0x8000_0000 >> (b & 31)) != 0
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Dump {
     seed: u32,
     start: BTreeMap<usize, Rec>,
     bones: BTreeMap<usize, BoneLine>,
     steps: Vec<Step>,
+    /// The corpse's entity at the build (`ent`): its origin and turn.
+    ent: Option<(Vec3, Quat)>,
+    /// The DObj's models and their bones' names (`models`).
+    models: Vec<(String, Vec<String>)>,
+    skels: Vec<Skel>,
 }
 
 fn hex(w: &str) -> u32 {
@@ -97,6 +123,9 @@ fn parse(text: &str) -> Dump {
         start: BTreeMap::new(),
         bones: BTreeMap::new(),
         steps: Vec::new(),
+        ent: None,
+        models: Vec::new(),
+        skels: Vec::new(),
     };
     for line in text.lines() {
         let w: Vec<&str> = line.split_whitespace().collect();
@@ -139,6 +168,52 @@ fn parse(text: &str) -> Dump {
                 let (b, r) = rec(line);
                 d.steps.last_mut().expect("a step").bodies.insert(b, r);
             }
+            Some("ent") => {
+                let parts: Vec<&str> = line.split('|').collect();
+                let a: [f32; 9] = floats(parts[3]);
+                let axis = |k: usize| Vec3::new(a[3 * k], a[3 * k + 1], a[3 * k + 2]);
+                let m = glam::Mat3::from_cols(axis(0), axis(1), axis(2));
+                d.ent = Some((Vec3::from(floats::<3>(parts[1])), Quat::from_mat3(&m)));
+            }
+            Some("models") => {
+                d.models = w[2..]
+                    .iter()
+                    .map(|m| {
+                        let (name, bones) = m.split_once(':').expect("model:bones");
+                        (name.into(), bones.split(',').map(String::from).collect())
+                    })
+                    .collect()
+            }
+            Some("skel") => {
+                let parts: Vec<&str> = line.split('|').collect();
+                let origin = Vec3::from(floats::<3>(parts[3]));
+                let mats: Vec<f32> = parts[5]
+                    .split_whitespace()
+                    .map(|w| f32::from_bits(hex(w)))
+                    .collect();
+                d.skels.push(Skel {
+                    frame: w[1].parse().expect("frame"),
+                    state: w[4].parse().expect("state"),
+                    bits: parts[4]
+                        .split_whitespace()
+                        .map(hex)
+                        .collect::<Vec<u32>>()
+                        .try_into()
+                        .expect("four words of bits"),
+                    world: mats
+                        .chunks(8)
+                        .map(|m| {
+                            let q = Quat::from_xyzw(m[0], m[1], m[2], m[3]);
+                            let q = if q.length_squared() > 0.0 {
+                                q.normalize()
+                            } else {
+                                q
+                            };
+                            (Vec3::new(m[4], m[5], m[6]) + origin, q)
+                        })
+                        .collect(),
+                });
+            }
             _ => {}
         }
     }
@@ -169,30 +244,47 @@ fn the_kill_capture_reads_as_its_summary() {
     assert!(d.steps[79].bodies.is_empty());
 }
 
-/// Every MP body model shares the def bones' lengths; the capture's is a
-/// marine's (war, autoassign).
+/// Every MP body model shares the def bones' lengths; the first two
+/// captures' is a marine's (war, autoassign).
 const BODY: &str = "body_mp_usmc_assault";
 
 struct Level {
     clip: ClipMap,
     def: Arc<RagdollDef>,
     skel: Skeleton,
+    /// The body's base pose, then each later model's own bones' (unread).
     base: Vec<(Vec3, Quat)>,
 }
 
 fn level() -> Option<Level> {
+    level_of(&[BODY])
+}
+
+/// mp_crash, the stock def and the skeleton of `models` (the body first),
+/// a head's bones grafted on by name as the client's rig has them.
+fn level_of(models: &[&str]) -> Option<Level> {
     let install = cod4_install()?;
     let (_, walked) = Map::load(&install, "english", "mp_crash").unwrap();
     let clip = ClipMap::from_assets(&walked.assets).unwrap();
-    let x = walked
-        .assets
-        .xmodels
+    let models: Vec<_> = models
         .iter()
-        .find(|m| m.name == BODY)
-        .expect(BODY);
-    let model = vcod_cod4::anim::skeleton_model(&walked.assets, x).unwrap();
-    let skel = Skeleton::build(&[&model]);
-    let base = model.bones.iter().map(|b| (b.pos, b.rot)).collect();
+        .map(|name| {
+            let x = walked
+                .assets
+                .xmodels
+                .iter()
+                .find(|m| m.name == *name)
+                .expect(name);
+            vcod_cod4::anim::skeleton_model(&walked.assets, x).unwrap()
+        })
+        .collect();
+    let skel = Skeleton::build(&models.iter().collect::<Vec<_>>());
+    let mut base = vec![(Vec3::ZERO, Quat::IDENTITY); skel.bone_count()];
+    for (m, model) in models.iter().enumerate().rev() {
+        for (b, &k) in model.bones.iter().zip(skel.model_map(m)) {
+            base[k] = (b.pos, b.rot);
+        }
+    }
     let fs = vcod_common::pk3::Pk3Fs::open_iwd_layers(&install.root().join("main"), &[]).unwrap();
     let cfg = fs.read("ragdoll.cfg").expect("iw_00.iwd's ragdoll.cfg");
     let mut defs = ragdoll::parse_cfg(&String::from_utf8_lossy(&cfg));
@@ -230,8 +322,9 @@ fn start(l: &Level, d: &Dump) -> (Ragdolls, ragdoll::SlotId) {
             Record { pos: s.pos, q }
         })
         .collect();
+    let ent = d.ent.unwrap_or((Vec3::ZERO, Quat::IDENTITY));
     let id = r
-        .start_from(&l.skel, &l.base, [snap.clone(), snap], 0, &l.clip)
+        .start_from(&l.skel, &l.base, ent, [snap.clone(), snap], 0, &l.clip)
         .expect("a slot");
     assert_eq!(
         r.state(id),
@@ -354,8 +447,12 @@ fn spread(ps: &[[f32; 3]]) -> [f32; 3] {
 
 fn report(name: &str) -> Option<(Dump, Run)> {
     let l = level()?;
+    Some(report_in(&l, name))
+}
+
+fn report_in(l: &Level, name: &str) -> (Dump, Run) {
     let d = dump(name);
-    let run = run(&l, &d);
+    let run = run(l, &d);
     for (k, x) in run.diffs.iter().enumerate() {
         eprintln!(
             "{name} step {:3}: pos {:8.4} turn {:7.3} deg lvel {:8.3} avel {:7.3} flags {}",
@@ -379,7 +476,7 @@ fn report(name: &str) -> Option<(Dump, Run)> {
         spread(&run.rest),
         spread(&theirs),
     );
-    Some((d, run))
+    (d, run)
 }
 
 /// The worst of `diffs[range]`.
@@ -432,17 +529,25 @@ fn the_kill_capture_against_the_port() {
     assert!(close(spread(&run.rest), spread(&theirs), 0.1));
 }
 
-/// The take that ran to `ragdoll_max_life`: awake throughout as retail's,
-/// idle on its step 266, within 0.02 units of retail's bodies to step 165
-/// (measured 0.012) and 0.5 units and 10 degrees after (0.33, 7.9; its
-/// bodies jitter at rest over 1 rad/s), the seed retail's through step
-/// 189 (measured), its flags retail's every step,
-/// the rest pose's spread within 0.2.
+/// The take that ran to `ragdoll_max_life`, its joints built in the base
+/// pose under its corpse's entity (`ent`, 0x5bc930) as 1.7 builds them
+/// (10.7.2): the first step's bodies within 5e-5 units of retail's
+/// (measured 1.5e-5; 2e-4 built at the origin) and 0.003 through step 50
+/// (0.0015; 0.0041 at the origin), awake throughout as retail's, idle on
+/// its step 266, within 0.02 units to step 165 (0.015) and 0.5 units and
+/// 10 degrees after (0.31, 7.4; its bodies jitter at rest over 1 rad/s),
+/// the seed retail's through step 195 (measured), its flags retail's every
+/// step, the rest pose's spread within 0.2.
 #[test]
 fn the_max_life_capture_against_the_port() {
-    let Some((d, run)) = report(MAX_LIFE) else {
+    let Some(l) = level_of(&MAX_LIFE_MODELS) else {
         return;
     };
+    let (d, run) = report_in(&l, MAX_LIFE);
+    assert!(d.ent.is_some());
+    assert!(run.diffs[0].pos <= 5e-5, "{:?}", run.diffs[0]);
+    let first = worst(&run.diffs[..50]);
+    assert!(first.pos <= 0.003, "{first:?}");
     assert_eq!((run.asleep, run.idle), (None, Some(266)));
     let early = worst(&run.diffs[..165]);
     assert!(early.pos <= 0.02, "{early:?}");
@@ -450,7 +555,7 @@ fn the_max_life_capture_against_the_port() {
     assert!(w.pos <= 0.5 && w.turn_deg <= 10.0, "{w:?}");
     assert_eq!(w.flags, 0, "steps whose flags part");
     assert!(
-        run.seed_parts.is_none_or(|k| k >= 190),
+        run.seed_parts.is_none_or(|k| k >= 196),
         "{:?}",
         run.seed_parts
     );
@@ -462,19 +567,28 @@ fn the_max_life_capture_against_the_port() {
 /// The build off the max-life take's two snapshots (17 ms apart): each
 /// body against the capture's start within a few float steps (the dump's
 /// latest snapshot is the pose state 4 saved over it that frame,
-/// 0x5bc4f0, so it carries that rounding: measured at most 3 ulps on a
+/// 0x5bc4f0, so it carries that rounding: measured at most 1 ulp on a
 /// position, 11 on a quaternion, 9e-4 u/s and 5e-5 rad/s), its mass and
-/// inertia within 1e-5 of retail's (the base pose here is the model's,
-/// not under the corpse's entity).
+/// inertia retail's bit for bit, built under the corpse's entity as 1.7
+/// builds it (built at the origin, within 1e-5: 10.7.2).
 #[test]
 fn the_build_off_retails_snapshots() {
-    let Some(l) = level() else { return };
+    let Some(l) = level_of(&MAX_LIFE_MODELS) else {
+        return;
+    };
     let d = dump(MAX_LIFE);
     let cur: Vec<Record> = d.bones.values().map(|b| b.cur).collect();
     let prev: Vec<Record> = d.bones.values().map(|b| b.prev).collect();
     let mut r = Ragdolls::new(l.def.clone(), Dvars::default());
     let id = r
-        .start_from(&l.skel, &l.base, [cur, prev], d.bones[&0].dt, &l.clip)
+        .start_from(
+            &l.skel,
+            &l.base,
+            d.ent.expect("the entity at the build"),
+            [cur, prev],
+            d.bones[&0].dt,
+            &l.clip,
+        )
         .expect("a slot");
     let bodies = r.bodies(id);
     let caps = r.capsules(id);
@@ -515,8 +629,9 @@ fn the_build_off_retails_snapshots() {
             !far(&o.lvel, &s.lvel, 2e-3) && !far(&o.avel, &s.avel, 1e-4),
             "bone {b}"
         );
-        assert!(
-            !far(&mass, &theirs, 1e-5),
+        assert_eq!(
+            mass.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+            *m,
             "bone {b}: mass {mass:?} against {theirs:?}"
         );
         eprintln!(
@@ -528,4 +643,124 @@ fn the_build_off_retails_snapshots() {
             ulps(&mass, &theirs),
         );
     }
+}
+
+/// The max-life take drawn frame by frame (10.7.2). Retail's: the bones the
+/// slot does not set move under their parents for 20 frames after the
+/// build (the death anim playing on: `j_ball_ri` turns 26.8 degrees), then
+/// hold. The port's: the corpse built under its entity off the take's
+/// start and stepped as retail stepped it, fed each drawn frame's skeleton
+/// as its DObj, draws every such bone under its parent within 1e-3 units
+/// and 1e-3 degrees of retail's that frame (measured 1.2e-4, 2e-5), the
+/// bones it sets its own.
+#[test]
+fn the_unset_bones_take_the_frames_locals_under_the_ragdoll() {
+    let Some(l) = level_of(&MAX_LIFE_MODELS) else {
+        return;
+    };
+    let d = dump(MAX_LIFE);
+    let names: Vec<&str> = d
+        .models
+        .iter()
+        .flat_map(|(_, b)| b.iter().map(String::as_str))
+        .collect();
+    // each skeleton bone's DObj bone, the first of its name (a head's
+    // copies of the body's bones read the same)
+    let dobj: Vec<usize> = l
+        .skel
+        .bones()
+        .iter()
+        .map(|b| {
+            names
+                .iter()
+                .position(|n| *n == b.name)
+                .expect("a DObj bone")
+        })
+        .collect();
+    let set: Vec<usize> = l
+        .def
+        .bones
+        .iter()
+        .map(|b| b.p0.as_str())
+        .chain(l.def.base_lerp.iter().map(|b| b.bone.as_str()))
+        .map(|n| l.skel.bone_index(n).expect("a def bone"))
+        .collect();
+    let parents: Vec<i32> = l.skel.bones().iter().map(|b| b.parent).collect();
+    let under = |p: &[(Vec3, Quat)], b: usize| {
+        let (pp, pq) = p[parents[b] as usize];
+        let inv = pq.inverse();
+        (inv * (p[b].0 - pp), (inv * p[b].1).normalize())
+    };
+    // the turn between two unit quaternions, exact for small ones
+    let deg = |a: Quat, b: Quat| {
+        let d = a.inverse() * b;
+        (2.0 * d.xyz().length().atan2(d.w.abs())).to_degrees()
+    };
+    let (mut r, id) = start(&l, &d);
+    let frames: Vec<&Skel> = d.skels.iter().filter(|s| s.state >= 4).collect();
+    // retail's own: how far each unset bone's locals move from the build's
+    // frame, and the last frame they move on
+    let unset = |sk: &Skel, b: usize| {
+        let p = parents[b];
+        p >= 0 && !set.contains(&b) && sk.computed(dobj[b]) && sk.computed(dobj[p as usize])
+    };
+    let worlds = |sk: &Skel| -> Vec<(Vec3, Quat)> { dobj.iter().map(|&k| sk.world[k]).collect() };
+    let first = worlds(frames[0]);
+    let mut frozen = (0.0f32, String::new());
+    let mut last_move = 0;
+    for pair in frames.windows(2) {
+        let (a, b) = (worlds(pair[0]), worlds(pair[1]));
+        for k in 0..parents.len() {
+            if !unset(pair[1], k) {
+                continue;
+            }
+            let off = deg(under(&first, k).1, under(&b, k).1);
+            if off > frozen.0 {
+                frozen = (off, l.skel.bones()[k].name.clone());
+            }
+            if deg(under(&a, k).1, under(&b, k).1) > 0.01 {
+                last_move = pair[1].frame;
+            }
+        }
+    }
+    assert!(frozen.0 > 20.0 && frozen.1 == "j_ball_ri", "{frozen:?}");
+    assert_eq!(last_move, frames[0].frame + 20);
+    let mut worst = (0.0f32, 0.0f32, String::new(), 0);
+    for sk in &frames {
+        r.update(17, &l.clip);
+        if r.state(id) != Some(State::Simulating) {
+            break;
+        }
+        let world: Vec<(Vec3, Quat)> = dobj.iter().map(|&k| sk.world[k]).collect();
+        r.feed(
+            id,
+            &ragdoll::DObj {
+                skel: &l.skel,
+                base: &l.base,
+                origin: d.ent.unwrap().0,
+                turn: d.ent.unwrap().1,
+                world: &world,
+            },
+        );
+        let pose = r.pose(id).expect("drawn");
+        for b in 0..parents.len() {
+            let p = parents[b];
+            if p < 0 || set.contains(&b) || !sk.computed(dobj[b]) || !sk.computed(dobj[p as usize])
+            {
+                continue;
+            }
+            let (ours, theirs) = (under(pose, b), under(&world, b));
+            let dist = ours.0.distance(theirs.0);
+            let turn = deg(ours.1, theirs.1);
+            if dist > worst.0 || turn > worst.1 {
+                worst = (
+                    worst.0.max(dist),
+                    worst.1.max(turn),
+                    l.skel.bones()[b].name.clone(),
+                    sk.frame,
+                );
+            }
+        }
+    }
+    assert!(worst.0 <= 1e-3 && worst.1 <= 1e-3, "{worst:?}");
 }
