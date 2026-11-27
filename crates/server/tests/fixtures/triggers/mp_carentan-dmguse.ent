@@ -1,0 +1,23 @@
+{
+"classname" "trigger_damage"
+"targetname" "use_a"
+"accumulate" "100"
+"threshold" "101"
+"origin" "1792 2080 20"
+"model" "*3"
+}
+{
+"classname" "trigger_damage"
+"targetname" "use_b"
+"accumulate" "100"
+"threshold" "102"
+"origin" "-146 2490 16"
+"model" "*4"
+}
+{
+"classname" "trigger_damage"
+"targetname" "use_c"
+"accumulate" "100"
+"origin" "372 -1052 60"
+"model" "*7"
+}

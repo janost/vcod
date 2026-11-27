@@ -1,0 +1,37 @@
+# Retail CoD 1.1d, 1.5b and United Offensive 1.51b dedicated servers, 2026-11-27, no client: all three
+# logged these lines. mp_carentan with three submodels' blocks replaced by mp_carentan-dmguse.ent:
+#   tools/bsp_append_entities.py --replace mp_carentan.bsp out.bsp crates/server/tests/fixtures/triggers/mp_carentan-dmguse.ent
+#   (out.bsp as maps/MP/mp_carentan.bsp in a zzz_dmguse.pk3 in the homepath's main/, uo/ for UO, beside the game module)
+#   COD_DIR=<install> COD_LNXDED_HOME=<abs> PORT=29117 SECS=20 PROBE_UNTIL='PROBE done' tools/run_probe.sh client-probes/probe_dmguse mp_carentan
+# (COD_VERSION=1.5 or uo for the others.) dmgtrig_ab.rs replays it; cod11-combat.md 14.8.2 reads it.
+PROBE health 1050 use_a 32000
+PROBE health 1050 use_b 32000
+PROBE health 1050 use_c 32000
+PROBE phase 1550 use_use_a
+PROBE health 1550 use_a 32000
+PROBE trigger 1550 use_a user
+PROBE phase 2550 blast_use_a_100
+PROBE health 2550 use_a 31900
+PROBE damage 2550 use_a 100 worldspawn
+PROBE phase 3550 use_use_a
+PROBE health 3550 use_a 32000
+PROBE trigger 3550 use_a user
+PROBE phase 4550 blast_use_b_100
+PROBE health 4550 use_b 31900
+PROBE damage 4550 use_b 100 worldspawn
+PROBE phase 5550 use_use_b
+PROBE health 5550 use_b 31900
+PROBE trigger 5550 use_b user
+PROBE phase 6550 blast_use_c_50
+PROBE health 6550 use_c 31950
+PROBE damage 6550 use_c 50 worldspawn
+PROBE phase 7550 use_use_c
+PROBE health 7550 use_c 31950
+PROBE trigger 7550 use_c user
+PROBE phase 8550 use_use_c
+PROBE health 8550 use_c 31950
+PROBE trigger 8550 use_c user
+PROBE phase 9550 blast_use_c_50
+PROBE health 9550 use_c 32000
+PROBE damage 9550 use_c 50 worldspawn
+PROBE done
