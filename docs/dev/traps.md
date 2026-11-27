@@ -63,6 +63,9 @@ by doc and section. Grep `Trap:` in the subsystem doc you were sent to.
 - Unary `!` and a condition read a string as the number it spells (`!"0"` is
   1, `if ("1")` passes). `""` or `"a"` there is fatal.
 - A float prints `%g`-style (`1e-05`, `1.23457e+06`), not Rust's format.
+- A `case` is not `==`: it matches a key of its own type exactly, so
+  `switch ("1")` misses `case 1:`, and a float key is an error but on 1.5b
+  (`Op::SwitchKey`, cod11-gsc-object-model.md 9.3.1).
 - An array is a value on every engine: `b = a; b[k] = v` leaves `a` alone.
   The VM flags an array stored a second time and copies it at the next write
   (`Heap::share`, `Heap::own`). A write path that skips the

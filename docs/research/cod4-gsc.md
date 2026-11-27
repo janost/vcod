@@ -2826,6 +2826,10 @@ What the port matches:
   lines. VERIFIED (the log). The table: cod11-gsc-object-model.md 9.3.1.
 - vcod: `VmProfile::COD4.number_eq` is `NumberEq::Stored`. Gate:
   `semantics_ab::probe_eq_tol_matches_retail_stored`.
+- `!=` on a NaN is true, and a `switch` on a float is the fatal `cannot
+  switch on float` (VERIFIED live, `probe_nan` and `probe_switch` as a
+  scratch `war.gsc`, 2026-11-27). Addresses and vcod's rules:
+  cod11-gsc-object-model.md 9.3.1.
 
 ## 5. Configstrings
 

@@ -6,12 +6,29 @@ use crate::Dialect;
 
 /// How `==` and `!=` test two numbers: `|a - b| < 1e-6` as floats, the
 /// difference rounded one of two ways (cod11-gsc-object-model.md 9.3.1).
+/// A NaN difference is never equal; [`VmProfile::nan_ne`] says what `!=`
+/// reads then.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NumberEq {
     /// The difference stays on the x87 stack at 80 bits (1.1d).
     Kept,
     /// The difference is stored as a float first (1.5b, UO, CoD2, CoD4).
     Stored,
+}
+
+/// What a `switch` on a value other than an int or a string does
+/// (cod11-gsc-object-model.md 9.3.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SwitchOther {
+    /// `cannot switch on <type>`; below developer 1 the switch is skipped
+    /// whole (1.1d, UO).
+    ErrorSkips,
+    /// `cannot switch on <type>`; below developer 1 no case matches, so
+    /// `default` runs (CoD2, CoD4).
+    ErrorNoMatch,
+    /// No error: the switch takes the key of the thread step's last
+    /// switch, and before one matches no case (1.5b).
+    LastKey,
 }
 
 /// One game's VM rules.
@@ -38,6 +55,11 @@ pub struct VmProfile {
     pub struct_index_reads_undefined: bool,
     /// How `==` rounds the difference of two numbers ([`super::Vm::set_number_eq`]).
     pub number_eq: NumberEq,
+    /// `!=` holds when the difference of two numbers is NaN, as
+    /// `!(a == b)` does ([`super::Vm::set_nan_ne`]).
+    pub nan_ne: bool,
+    /// A `switch` on a float, a vector or undefined ([`super::Vm::set_switch_other`]).
+    pub switch_other: SwitchOther,
 }
 
 impl VmProfile {
@@ -52,12 +74,16 @@ impl VmProfile {
         endons_end_with_call: false,
         struct_index_reads_undefined: false,
         number_eq: NumberEq::Kept,
+        nan_ne: false,
+        switch_other: SwitchOther::ErrorSkips,
     };
 
-    /// CoD 1.5: 1.1's rules but for its bracket read on a struct and its `==`.
+    /// CoD 1.5: 1.1's rules but for its bracket read on a struct, its `==`
+    /// and its `switch` on another type.
     pub const COD1_15: VmProfile = VmProfile {
         struct_index_reads_undefined: true,
         number_eq: NumberEq::Stored,
+        switch_other: SwitchOther::LastKey,
         ..VmProfile::COD1
     };
 
@@ -78,6 +104,8 @@ impl VmProfile {
         endons_end_with_call: false,
         struct_index_reads_undefined: false,
         number_eq: NumberEq::Stored,
+        nan_ne: true,
+        switch_other: SwitchOther::ErrorNoMatch,
     };
 
     /// CoD4 1.7: CoD2's rules until a retail probe says otherwise
@@ -102,5 +130,7 @@ impl super::Vm {
         self.set_endons_end_with_call(p.endons_end_with_call);
         self.set_struct_index_reads_undefined(p.struct_index_reads_undefined);
         self.set_number_eq(p.number_eq);
+        self.set_nan_ne(p.nan_ne);
+        self.set_switch_other(p.switch_other);
     }
 }

@@ -478,6 +478,19 @@ PROBE loadfx_case 1
 PROBE at loadfx_new
 PROBE_FATAL effect "fx/smoke/chimneysmoke.efx" not precached
 
+# probe_nan
+PROBE inf_gt_big 1
+PROBE nan_eq_nan 0
+PROBE nan_ne_nan 0
+PROBE nan_eq_zero 0
+PROBE nan_ne_zero 0
+PROBE nan_ne_one 0
+PROBE nan_gt_zero 0
+PROBE nan_lt_zero 0
+PROBE inf_eq_inf 0
+PROBE inf_ne_inf 0
+PROBE done
+
 # probe_not_empty_string
 PROBE at not_string_empty
 PROBE_FATAL cannot cast "" to bool
@@ -734,6 +747,23 @@ PROBE at string_index
 PROBE string_index b 1 4
 PROBE at string_index_past
 PROBE_FATAL string index 9 out of range
+
+# probe_switch
+PROBE int_int one
+PROBE int_miss default
+PROBE numstr_int default
+PROBE int_str default
+PROBE str_str one
+PROBE str_upper default
+PROBE str_same abc
+PROBE at float
+PROBE_FATAL cannot switch on float
+
+# probe_switch_case_float
+PROBE_ERROR script compile error
+
+# probe_switch_case_neg
+PROBE_ERROR script compile error
 
 # probe_testclient
 PROBE early 0
