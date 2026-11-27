@@ -511,19 +511,27 @@ pub(crate) fn team_objective(v: &BotView) -> bool {
     v.sd.is_some() || v.re.is_some() || v.uo.is_some()
 }
 
-/// [`BotView::squad`] over each side's S&D attackers with team play and
-/// `Bot::squad` on, dead ones counted, so a death keeps the rest in their
-/// parts: [`super::team::squad`] by their [`super::team::round_rank`].
-fn deal_squads<W: BotWorld>(w: &W, views: &mut [(usize, BotView)], teams: &[i32], round: u32) {
+/// [`BotView::squad`] over each side's S&D and `re` attackers with team
+/// play and `Bot::squad` on, dead ones counted, so a death keeps the rest
+/// in their parts: [`super::team::squad`] by their
+/// [`super::team::round_rank`]. A `re` carrier stays in the main group
+/// (bot-objectives.md 9.1.1).
+fn deal_squads(
+    bots: &BTreeMap<usize, Bot>,
+    views: &mut [(usize, BotView)],
+    teams: &[i32],
+    round: u32,
+) {
     use crate::game::script::{TEAM_ALLIES, TEAM_AXIS};
     let attacks = |slot: usize, v: &BotView| {
-        w.driver()
-            .bots
-            .get(&slot)
-            .is_some_and(|b| b.team_play && b.squad)
-            && v.sd
-                .as_ref()
-                .is_some_and(|sd| sd.role == super::ObjRole::Attack)
+        bots.get(&slot).is_some_and(|b| b.team_play && b.squad)
+            && (v.sd.as_ref().map(|sd| sd.role))
+                .or(v.re.as_ref().map(|re| re.role))
+                .is_some_and(|r| r == super::ObjRole::Attack)
+    };
+    let carries = |v: &BotView| {
+        v.re.as_ref()
+            .is_some_and(|re| re.objectives.iter().any(|o| o.mine))
     };
     for team in [TEAM_AXIS, TEAM_ALLIES] {
         let side: Vec<usize> = views
@@ -533,7 +541,10 @@ fn deal_squads<W: BotWorld>(w: &W, views: &mut [(usize, BotView)], teams: &[i32]
             .collect();
         for (s, v) in views.iter_mut().filter(|(s, _)| side.contains(s)) {
             let rank = super::team::round_rank(*s, &side, team, round);
-            v.squad = super::team::squad(rank, side.len());
+            v.squad = match carries(v) {
+                true => super::team::Squad::Main,
+                false => super::team::squad(rank, side.len()),
+            };
         }
     }
 }
@@ -1191,7 +1202,7 @@ pub(crate) fn step<W: BotWorld>(w: &mut W) {
         .collect();
     let p = crate::tick_profile::phase("bots/deal");
     w.deal(frame, &teams, &solo, round, &mut views);
-    deal_squads(w, &mut views, &teams, round);
+    deal_squads(&w.driver().bots, &mut views, &teams, round);
     deal_hot(w, &mut views, &teams);
     // A `ctf` flag's guards on its carrier's way out (bot-objectives.md
     // 14.13), before the posts read their targets.
@@ -1260,7 +1271,7 @@ pub(crate) fn step<W: BotWorld>(w: &mut W) {
             Some((*slot, teams.get(*slot).copied()?, f.ahead().collect()))
         })
         .collect();
-    // Whose paths an S&D flanker plans round.
+    // Whose paths a flanker plans round.
     let main: Vec<usize> = views
         .iter()
         .filter(|(_, v)| v.squad == super::team::Squad::Main)
@@ -2642,6 +2653,46 @@ mod tests {
     use super::*;
     use crate::game::script::{TEAM_ALLIES, TEAM_AXIS};
     use crate::nav::Footing;
+
+    /// Six `re` attackers with `Bot::squad` on get S&D's parts, two
+    /// flankers and a rear guard, and the one carrying stays in the main
+    /// group; defenders get none (bot-objectives.md 9.1.1).
+    #[test]
+    fn re_attackers_get_the_attack_parts_but_the_carrier() {
+        use crate::bots::ObjRole;
+        use crate::bots::team::Squad;
+        use crate::bots::tests::re_view;
+        let bots: BTreeMap<usize, Bot> = (0..8).map(|s| (s, Bot::new("b", true, 1))).collect();
+        let mut teams = vec![TEAM_ALLIES; 6];
+        teams.extend([TEAM_AXIS; 2]);
+        let mut views: Vec<(usize, BotView)> = (0..8)
+            .map(|s| {
+                let role = if s < 6 {
+                    ObjRole::Attack
+                } else {
+                    ObjRole::Defend
+                };
+                (s, re_view(role))
+            })
+            .collect();
+        deal_squads(&bots, &mut views, &teams, 1);
+        let parts = |views: &[(usize, BotView)], p: Squad| {
+            views
+                .iter()
+                .filter(|(_, v)| v.squad == p)
+                .map(|(s, _)| *s)
+                .collect::<Vec<_>>()
+        };
+        let flank = parts(&views, Squad::Flank);
+        assert_eq!(flank.len(), 2, "{flank:?}");
+        assert_eq!(parts(&views, Squad::Rear).len(), 1);
+        assert!(flank.iter().all(|&s| s < 6));
+        let carrier = flank[0];
+        views[carrier].1.re.as_mut().unwrap().objectives[0].mine = true;
+        deal_squads(&bots, &mut views, &teams, 1);
+        assert_eq!(views[carrier].1.squad, Squad::Main);
+        assert_eq!(parts(&views, Squad::Flank), [flank[1]]);
+    }
 
     /// A bot gone takes every entry by its slot with it, its cover, hunt
     /// and post too (QUAL-019).

@@ -464,6 +464,8 @@ pub fn place(world: &MarkWorld, req: &MarkRequest, now_ms: i32) -> Vec<Mark> {
 #[derive(Default)]
 pub struct MarkPool {
     marks: VecDeque<Mark>,
+    /// Bumped whenever a mark is added or removed.
+    generation: u64,
 }
 
 impl MarkPool {
@@ -483,11 +485,21 @@ impl MarkPool {
             }
         }
         self.marks.push_back(mark);
+        self.generation += 1;
     }
 
     /// Frees the marks whose life ran out (`CG_AddMarks`' first test).
     pub fn expire(&mut self, now_ms: i32) {
+        let before = self.marks.len();
         self.marks.retain(|m| !m.expired(now_ms));
+        if self.marks.len() != before {
+            self.generation += 1;
+        }
+    }
+
+    /// Changes whenever the set of marks does (not their fade).
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// Live marks, newest first: `CG_AddMarks` walks the list backwards.
@@ -501,15 +513,16 @@ impl MarkPool {
 
     pub fn clear(&mut self) {
         self.marks.clear();
+        self.generation += 1;
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// A world of one floor quad at z = 0 spanning +-64, normal +z.
-    fn floor() -> MarkWorld {
+    pub(crate) fn floor() -> MarkWorld {
         let c = |x: f32, y: f32| ClipVert {
             pos: Vec3::new(x, y, 0.0),
             lm: [(x + 64.0) / 128.0, (y + 64.0) / 128.0],
@@ -660,6 +673,20 @@ mod tests {
         assert_eq!(pool.len(), MAX_MARKS);
         assert!(pool.newest_first().all(|m| m.time_ms != 0));
         assert_eq!(pool.newest_first().next().unwrap().time_ms, t);
+    }
+
+    #[test]
+    fn the_generation_moves_with_the_set_not_with_time() {
+        let world = floor();
+        let mut pool = MarkPool::default();
+        let g0 = pool.generation();
+        pool.impact(&world, &request(Vec3::ZERO, 4.0), 0);
+        let g1 = pool.generation();
+        assert_ne!(g0, g1);
+        pool.expire(100);
+        assert_eq!(pool.generation(), g1);
+        pool.expire(9000);
+        assert_ne!(pool.generation(), g1);
     }
 
     #[test]
