@@ -6,7 +6,7 @@
 //! through a [`BodySource`]. `cod4_client` draws what this returns; the
 //! replay gate counts it. docs/research/cod4-player-anims.md.
 
-use glam::{Quat, Vec3};
+use glam::{Mat4, Quat, Vec3};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -286,6 +286,17 @@ impl Cod4Players {
         self.ragdolls.as_ref().map_or(0, |(_, r)| r.body_count())
     }
 
+    /// `CG_MapRestart`'s `Phys_Init` for world 2: its bodies and slots go,
+    /// and every corpse asks for a ragdoll again.
+    pub fn restart_ragdolls(&mut self) {
+        if let Some((_, r)) = &mut self.ragdolls {
+            r.restart_world();
+        }
+        for b in self.bodies.values_mut() {
+            b.ragdoll = Rag::None;
+        }
+    }
+
     /// The bodies worlds 0 and 1 hold, which world 2's share of the one
     /// body pool counts.
     pub fn set_ragdoll_others(&mut self, n: usize) {
@@ -484,25 +495,6 @@ impl Cod4Players {
                 )
             });
             let turret = crate::cod2_players::place_gunner(&mut frame, placed.as_ref());
-            let rag = (v.corpse && v.ragdoll)
-                .then_some(self.ragdolls.as_mut().map(|(_, r)| r))
-                .flatten();
-            // A corpse whose ragdoll simulates or holds its pose draws the
-            // ragdoll's bones alone: the death anim's pose under it is
-            // never drawn (cod4-client-perf.md 31), and a corpse fires no
-            // tag.
-            if let (Some(r), Rag::On(id)) = (rag, &body.ragdoll)
-                && !r.wants_pose(*id)
-                && r.pose(*id).is_some()
-            {
-                let mut drawn = PosedPlayer {
-                    transform: frame.transform(),
-                    models: Vec::new(),
-                };
-                drawn.models = ragdoll_skins(body, r, *id, &rig, &drawn);
-                out.push((i, rig.clone(), drawn));
-                continue;
-            }
             let (pose, sampled) =
                 drawn_locals(&body.body, &rig, set, src, &frame, render_time, turret);
             // `iw3mp.exe`'s `DObjCalcSkel` (0x57fbd0): the control bones
@@ -516,17 +508,23 @@ impl Cod4Players {
                 controls.as_ref(),
                 Cod4Arith::Client,
             ));
-            let mut drawn = posed_worlds(&rig, &worlds, &frame);
             if v.corpse {
                 let body = self.bodies.get_mut(n).expect("inserted above");
                 let rag = v
                     .ragdoll
                     .then_some(self.ragdolls.as_mut().map(|(_, r)| r))
                     .flatten();
-                if let Some(r) = ragdolled(body, rag, &rig, &drawn, &worlds) {
-                    drawn.models = r;
+                // A corpse whose ragdoll draws skins the ragdoll's bones
+                // alone, the death anim's locals under them (10.7.2): the
+                // death anim's own skins are never drawn (cod4-client-perf.md
+                // 31), and a corpse fires no tag.
+                let transform = frame.transform();
+                if let Some(models) = ragdolled(body, rag, &rig, transform, &worlds) {
+                    out.push((i, rig.clone(), PosedPlayer { transform, models }));
+                    continue;
                 }
             }
+            let drawn = posed_worlds(&rig, &worlds, &frame);
             let (_, turn, at) = drawn.transform.to_scale_rotation_translation();
             let tag = |b: Option<usize>| {
                 let (p, q) = *worlds.get(b?)?;
@@ -617,14 +615,14 @@ fn posed_worlds(
 
 /// A corpse's ragdoll on this frame: its slot taken the first frame its
 /// entity reads a ragdoll type with `ragdoll_enable` on, fed the death
-/// anim's pose (`model_worlds`, the body's frame) until it simulates,
-/// let go once its entity takes another type. Its skins once it draws;
-/// `None` draws the death anim's pose.
+/// anim's pose (`model_worlds`, the body's frame) every frame, let go once
+/// its entity takes another type. Its skins once it draws; `None` draws
+/// the death anim's pose.
 fn ragdolled(
     body: &mut Body,
     rag: Option<&mut Ragdolls>,
     rig: &PlayerRig,
-    drawn: &PosedPlayer,
+    transform: Mat4,
     model_worlds: &[(Vec3, Quat)],
 ) -> Option<Skins> {
     let Some(r) = rag else {
@@ -643,31 +641,29 @@ fn ragdolled(
         body.ragdoll = Rag::Refused;
         return None;
     }
-    if r.wants_pose(id) {
-        let (_, turn, at) = drawn.transform.to_scale_rotation_translation();
-        let world: Vec<(Vec3, Quat)> = model_worlds
-            .iter()
-            .map(|&(p, q)| (turn * p + at, turn * q))
-            .collect();
-        let mut base = vec![(Vec3::ZERO, Quat::IDENTITY); rig.skeleton.bone_count()];
-        if let Some((_, m)) = rig.models.first() {
-            for (b, &k) in m.bones.iter().zip(rig.skeleton.model_map(0)) {
-                base[k] = (b.pos, b.rot);
-            }
+    let (_, turn, at) = transform.to_scale_rotation_translation();
+    let world: Vec<(Vec3, Quat)> = model_worlds
+        .iter()
+        .map(|&(p, q)| (turn * p + at, turn * q))
+        .collect();
+    let mut base = vec![(Vec3::ZERO, Quat::IDENTITY); rig.skeleton.bone_count()];
+    if let Some((_, m)) = rig.models.first() {
+        for (b, &k) in m.bones.iter().zip(rig.skeleton.model_map(0)) {
+            base[k] = (b.pos, b.rot);
         }
-        r.feed(
-            id,
-            &DObj {
-                skel: &rig.skeleton,
-                base: &base,
-                origin: at,
-                turn,
-                world: &world,
-            },
-        );
     }
+    r.feed(
+        id,
+        &DObj {
+            skel: &rig.skeleton,
+            base: &base,
+            origin: at,
+            turn,
+            world: &world,
+        },
+    );
     r.pose(id)?;
-    Some(ragdoll_skins(body, r, id, rig, drawn))
+    Some(ragdoll_skins(body, r, id, rig, transform))
 }
 
 /// The skins of a corpse at its ragdoll's pose, kept while the pose, the
@@ -677,19 +673,19 @@ fn ragdoll_skins(
     r: &Ragdolls,
     id: SlotId,
     rig: &PlayerRig,
-    drawn: &PosedPlayer,
+    transform: Mat4,
 ) -> Skins {
     let key = (
         r.version(id),
         std::ptr::from_ref(rig) as usize,
-        drawn.transform.to_cols_array().map(f32::to_bits),
+        transform.to_cols_array().map(f32::to_bits),
     );
     if let Some((k, skins)) = &body.rag_skins
         && *k == key
     {
         return skins.clone();
     }
-    let (_, turn, at) = drawn.transform.to_scale_rotation_translation();
+    let (_, turn, at) = transform.to_scale_rotation_translation();
     let inv = turn.inverse();
     let local: Vec<(Vec3, Quat)> = r
         .pose(id)

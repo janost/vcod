@@ -166,11 +166,11 @@ pub struct Ragdolls {
     pub dvars: Dvars,
     pub phys: PhysDvars,
     pub contact: collide::Dvars,
-    pw: PhysWorld,
+    pub(super) pw: PhysWorld,
     slots: Vec<Slot>,
     generations: Vec<u64>,
     /// The ragdoll clock (0xd5ec534).
-    time: i32,
+    pub(super) time: i32,
 }
 
 #[inline]
@@ -199,6 +199,21 @@ impl Ragdolls {
             slots: (0..SLOTS).map(|_| Slot::new()).collect(),
             generations: vec![0; SLOTS],
             time: 0,
+        }
+    }
+
+    /// `Phys_Shutdown` then `Phys_Init` (0x44b3dd, 0x44b3e2) as `CG_MapRestart`
+    /// runs them: world 2 anew (its bodies, its step clock and `msecStep`,
+    /// the reorder seed), every slot free. The ragdoll clock is not reset
+    /// (0xd5ec534: `Phys_Init`'s clear stops at 0xcc78148, and only
+    /// `Ragdoll_Update` writes it).
+    pub fn restart_world(&mut self) {
+        let others = self.pw.others;
+        self.pw = PhysWorld::new(WorldId::Ragdoll);
+        self.pw.others = others;
+        for (s, g) in self.slots.iter_mut().zip(&mut self.generations) {
+            *s = Slot::new();
+            *g += 1;
         }
     }
 
@@ -261,16 +276,22 @@ impl Ragdolls {
             .is_some_and(|s| matches!(s.state, State::WaitDObj | State::Snapshots | State::Build))
     }
 
-    /// The corpse's DObj this frame; [`Self::update`] reads it.
+    /// The corpse's DObj this frame, fed every frame: [`Self::update`] reads
+    /// it until the slot simulates, and from then on the bones the slot does
+    /// not set take its locals at once, as `DObjCalcSkel` puts the anim's
+    /// under the ragdoll's each frame (cod4-player-anims.md 10.7.2).
     pub fn feed(&mut self, id: SlotId, d: &DObj) {
         if self.slot(id).is_none() {
             return;
         }
         let def = self.def.clone();
         let s = &mut self.slots[id.index];
+        let drawing = matches!(s.state, State::Simulating | State::Idle);
         let n = d.skel.bone_count();
         if d.world.len() != n || d.base.len() != n {
-            s.fed = None;
+            if !drawing {
+                s.fed = None;
+            }
             return;
         }
         let parents: Vec<i32> = d.skel.bones().iter().map(|b| b.parent).collect();
@@ -298,7 +319,9 @@ impl Ragdolls {
         let lerp: Option<Vec<usize>> = def.base_lerp.iter().map(|l| find(&l.bone)).collect();
         // 0x5bc730: every name resolves, else the slot waits.
         let (Some(p0), Some(lerp)) = (p0, lerp) else {
-            s.fed = None;
+            if !drawing {
+                s.fed = None;
+            }
             return;
         };
         if def
@@ -307,7 +330,9 @@ impl Ragdolls {
             .zip(&p1)
             .any(|(b, p)| !b.p1.eq_ignore_ascii_case("none") && p.is_none())
         {
-            s.fed = None;
+            if !drawing {
+                s.fed = None;
+            }
             return;
         }
         s.fed = Some(Fed {
@@ -322,6 +347,13 @@ impl Ragdolls {
             local,
             fresh: true,
         });
+        if drawing && !s.drawn.is_empty() {
+            let drawn = compose(s);
+            if drawn != s.drawn {
+                s.drawn = drawn;
+                s.version += 1;
+            }
+        }
     }
 
     /// 0x5bec30: the exit of the old state, the new one written, its
@@ -1094,26 +1126,30 @@ impl Ragdolls {
 
     /// A slot built straight off two snapshots `dt` ms apart, the latest
     /// first (each def bone's, then the base lerp bones'), over `base` (the
-    /// skeleton's base pose, the entity at the origin unturned): what the
-    /// capture's gate starts from.
+    /// skeleton's base pose) under the entity at `origin` turned by `turn`:
+    /// what the capture's gate starts from.
     #[cfg(any(test, feature = "testing"))]
     pub fn start_from(
         &mut self,
         skel: &Skeleton,
         base: &[(Vec3, Quat)],
+        (origin, turn): (Vec3, Quat),
         snaps: [Vec<Record>; 2],
         dt: i32,
         clip: &dyn Clip,
     ) -> Option<SlotId> {
         let id = self.create()?;
-        let world: Vec<(Vec3, Quat)> = base.to_vec();
+        let world: Vec<(Vec3, Quat)> = base
+            .iter()
+            .map(|&(p, q)| (origin + turn * p, turn * q))
+            .collect();
         self.feed(
             id,
             &DObj {
                 skel,
                 base,
-                origin: Vec3::ZERO,
-                turn: Quat::IDENTITY,
+                origin,
+                turn,
                 world: &world,
             },
         );
@@ -1186,7 +1222,7 @@ fn snapshot(f: &Fed) -> Vec<Record> {
 
 /// Every skeleton bone in the world: the def bones' and base lerp bones'
 /// as the slot's latest pose has them (0x5bb580), the rest under their
-/// parents as the corpse's DObj last had them.
+/// parents with the locals of the corpse's DObj as last fed (10.7.2).
 fn compose(s: &Slot) -> Vec<(Vec3, Quat)> {
     let Some(f) = &s.fed else { return Vec::new() };
     let rec = &s.snaps[s.cur];

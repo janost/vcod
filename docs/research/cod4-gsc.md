@@ -1387,7 +1387,8 @@ vcod (`play::cod4_physics`, world 1 of `ode::phys`):
   again there. World 1 steps through `PhysWorld::run_to_time` at the
   drawn time each frame: the dynamics 3.6.7 matched against retail's
   takes. World 1 is made anew with world 0 where `Phys_Init` runs
-  (0x43fbe7, and `CG_MapRestart` at 0x44b3e2: `restart_dynents`).
+  (0x43fbe7, and `CG_MapRestart` at 0x44b3e2: `restart_dynents`; world 2
+  through `Ragdolls::restart_world`, cod4-world.md 13.7).
   VERIFIED (the code against the above).
 - `Cod4Physics::advance` lends world 1 the session's one CRT `rand`
   stream (`Cod4Session::crt_rand`, which the gunner's view jitter draws
@@ -1692,14 +1693,8 @@ What the tests measure on it:
   each: every body sleeps within 60 s (the slowest, a bottle off
   mp_crash's stairs, at 36.6 s), its centre of mass out of the world and
   over a floor. Props dropped on mp_crash's stairs at (158, 1789, 224)
-  roll down them. A resting geom sinks into what it meets: of the 1022
-  drops (point traces through each geom shrunk by 0.25 to 4) 393 had no
-  world solid a quarter unit in, 387 had some under a unit in, 56 under
-  two, 52 under four and 134 deeper or along a thin geom's middle (a
-  barrel shard, the hood, over a step's edge). Whether retail's sink as
-  far at an edge is not captured; the thin ones are likely the box's
-  narrow pass, whose contacts are not ported (3.6.8). VERIFIED (the run,
-  ours); the cause is INFERRED.
+  roll down them. A resting geom sinks into what it meets, at most 1.08
+  units: the table is 3.6.9's. VERIFIED (the run, ours).
 - `parts_dropped_together_step_at_world_ones_msec_step`: the 36 drops in
   one world 1 step 17 ms first, then 28 while all fly (`msec_step` of 36
   awake), back to 17 as they sleep, by 3.9 s. VERIFIED (the run, ours).
@@ -1716,7 +1711,7 @@ Captured from the Windows client under Wine and gdb on 2026-11-26
 (docs/dev/retail.md, "Worlds 0 and 1 from the first push to rest"), each
 the first physics event after its map load, at `fixedtime` 17. The four
 takes are `crates/cod4/tests/fixtures/phys/` (its README: the recipes, the
-line format and each take's summary). Addresses are `iw3mp.exe`'s (3.6).
+line format and each take's summary); two later ones are 3.6.9's. Addresses are `iw3mp.exe`'s (3.6).
 
 Where the dump reads, and the layout it rests on:
 
@@ -2321,7 +2316,8 @@ The gate, `cod4::phys_box_ab::box_contacts_match_retails_collides`:
 - What the takes reach: a box face reference with contacts 114 times,
   a brush face reference 97 times, the triangle face arm 692 contacts,
   the box face arm 12 and the edge arm 12; the narrow pass never added
-  one. VERIFIED (the run, counted with a probe not kept).
+  one. VERIFIED (the run, counted with a probe not kept). The shards take
+  reaches it: 108 contacts, each retail's (3.6.9).
   `a_narrow_box_over_a_brushs_edge_takes_its_top_too` pins the narrow
   pass; `a_clip_past_one_corner_puts_a_corner_in` and
   `a_clip_past_two_corners_moves_them_onto_the_plane` pin 0x597800's
@@ -2682,7 +2678,8 @@ sweep, as the `body` lines are):
 
 Running (`vcod_cod4::ode`, `fx_phys`, `play::cod4_physics`):
 
-- Three worlds on one layer: 0 the dynamic entities (`DynEnts::advance`,
+- Three worlds on one layer, all three remade by a map restart
+  (cod4-world.md 13.7): 0 the dynamic entities (`DynEnts::advance`,
   cod4-world.md 13.2), 1 the launched parts (3.6) and the effects'
   physics models (cod4-effects.md 9.1.1), 2 the ragdolls
   (`cod4-player-anims.md` 10.7).
@@ -2696,28 +2693,110 @@ Running (`vcod_cod4::ode`, `fx_phys`, `play::cod4_physics`):
   world 0's.
 - Matched on four retail takes (3.6.2): the round, the frag, the car and
   the watermelon, step for step, the watermelon also spawned through the
-  FX path.
+  FX path; and on two more (3.6.9), the shards step for step and the
+  shipment frag by each body's sleep and rest.
 
 Not ported, no take reaching them:
 
 - The triangle sphere cull 0x596c70 (3.6.4, 3.6.6); the car take matches
   without it.
 - The cylinder's edge and corner arms (3.6.6, on the instructions alone).
-- The box's narrow pass's contacts (3.6.5). Thin boxes sinking up to 4
-  units and more at step edges are likely this (3.6.1). INFERRED.
 - Class 11 (brush dynamic entities are left out) and body against body
   (`phys_collUseEntities`, `phys_interBodyCollision`, 0 by default).
 - Looping physics elements of an effect, chained effects' bodies (made
   one frame late), and a spawn's nonzero angles, cylinder frames and
   0x40 / 0x80 origins, which no take checks (cod4-effects.md 9.1.1).
-- `CG_MapRestart` resets worlds 0 and 1 and the dynamic entities, not the
-  ragdolls (cod4-world.md 13.7).
 
-Unchecked: the shipment frag's last body sleeps at 22.1 s on the port,
-which no retail capture has timed. VERIFIED (the run, ours).
+The box's narrow pass is matched on the shards take, and a mp_shipment
+frag's 20 s of rolling bottles and fruit on the shipment take (3.6.9).
+Open: the sweep that puts a thin box a z ulp off retail's (3.6.9).
 
 World 0 dropping a body once it sleeps is the dynamic entities' code
 (`DynEnts::advance`, cod4-world.md 13.2).
+
+#### 3.6.9 The narrow pass and a long frag, captured
+
+Two more takes, captured as 3.6.2's on 2026-11-27, are in
+`crates/cod4/tests/fixtures/phys/` (`shards-mp_crash-1.7.txt`,
+`frag-mp_shipment-1.7.txt`; the README has the recipes). Addresses are
+`iw3mp.exe`'s (3.6).
+
+The shards take:
+
+- The frag take's throw woke the same eight dynents. Before the first
+  step the driver put the two barrel shards (bodies 4 and 5, sides 9.3 by
+  13.3 by 1.25 and 12.1 by 7.2 by 2.1, both narrow) 24 units over the step
+  edge at (308, -1458, 101.9), at rest and turned as `part_edges`' 45
+  degree drop there (`PHYS_PLACE`, docs/dev/retail.md). They slept on
+  steps 81 and 87. VERIFIED (the capture).
+- `phys_box_ab` feeds the shards' 168 collides their captured pose: every
+  raw list is within 1e-4 of retail's, 166 to the bit, and so is the cut
+  of all 140 the pass got. The narrow pass added 108 of their contacts
+  (each collide's count less the same box's with the narrow flag off), so
+  3.6.5's narrow pass gives retail's contacts. VERIFIED (the run, ours).
+- The narrow loop (0x59aabe..0x59ac8a), read again: per axis the minus
+  face when its winding has corners and `mins` is over the centre (`test
+  ah,0x41` at 0x59aafe), else the plus face when `maxs` is under it
+  (0x59ab4a); a side when its `d` is under the centre's dot with its
+  normal, the dot stored (0x59ac0b..0x59ac1d). Each skips the reference
+  clip's face and needs 0x59a500 before 0x59a2b0. VERIFIED (the
+  instructions). `boxes::brush` does the same, but for an unordered
+  compare (a NaN centre), which takes the plus face on retail and the
+  minus face on the port.
+- `phys_ab` steps the take: equal to the bit to step 32, then within
+  0.11 units and 2.8 degrees to the cut at step 110, every flag and sleep
+  on retail's step and the 16 impact sounds retail's. The seed parts after
+  step 35. VERIFIED (the run, ours).
+- What parts it: the sweep after step 32's frame (0x5a6930) hit at
+  fraction 0.645 on shard 5 (a point trace: half its least side, 1.04, is
+  under twice `phys_csl`) and backed it off to 0.0313. Retail's pose then
+  sits a z ulp higher: every step 33 contact's z is an ulp over the port's
+  (85.21312 against 85.21311) and nothing else differs. VERIFIED (the run,
+  ours). The back-off reads as the port has it: the trace's fraction kept
+  as a double (0x5a6b4b), less half the size times 0x403a90's fast inverse
+  root of the move's squared length, stored, floored at 0 (0x4093c0), then
+  0x432700's `from + (to - from) f` with the difference unrounded (exact
+  for these moves). VERIFIED (the instructions). An ulp of z at 86 takes
+  the backed-off fraction 1.6e-5 apart, far past an ulp of the trace's,
+  so the trace (0x4f4d30) itself differs, another plane or the terrain
+  met. INFERRED. Not chased: the gate lets this take's seed part after
+  step 33 (`SEED_AFTER_SWEEP`).
+
+The shipment take:
+
+- A frag at the feet at (-576, -672, 196) woke 11 dynents (five bottles
+  and a can of mass 0.1, five fruit of 0.5, each a cylinder in a
+  transform). They slept between steps 103 and 1212 (1.75 s to 20.6 s),
+  `msecStep` 17 throughout, with no impact sound. VERIFIED (the capture).
+- `phys_ab::the_shipment_frag_against_the_port` builds each body off the
+  dynamic entity at its origin and steps the port past the take until the
+  last sleeps: 9 of 11 sleep on retail's step, a mango on 1116 against
+  1105, another on 896 against 897 and the last on 1218 against 1212.
+  Each rests within 0.45 units and 12 degrees of retail's pose. The
+  bodies equal retail's to the bit on the dumped steps to step 20 (the
+  take keeps every tenth) and part by step 30; the seed parts after step
+  281. VERIFIED (the run, ours). So the 22.1 s the port took over another
+  shipment throw is retail's rolling, and the old solver's 8.4 s was not.
+  INFERRED (one throw each). What parts the bodies is not captured (no
+  contacts dumped).
+
+`part_edges`, measured again: each drop's sink is the deepest point of a
+grid through each geom's bounds (nine planes an axis, plus planes 0.1 to
+4 in from each face) that lies in the world, as its distance to the
+geom's surface. Of the 882 drops (846 alone, 36 together):
+
+| Deepest in the world | Drops |
+|---|---|
+| under 0.25 | 774 |
+| 0.25 to 1 | 96 |
+| 1 to 1.08 (two tyres) | 2 |
+| past its middle, 0.5 to 0.71 in | 10 thin geoms (six pictures, two clocks, a shard, a pot lid), all at (308, -1458, 101.9) |
+
+VERIFIED (the run, ours). None sinks more than 0.08 past `phys_csl`'s
+unit, and the test fails a drop at 1.5. The earlier table's 134 "deeper
+or along a thin geom's middle" came off inset boxes clamped to a thin
+geom's middle plane, so any thin geom sunk past half its thickness read
+as the deepest bucket. INFERRED (that measure's shape; it is gone).
 
 ## 4. The load
 

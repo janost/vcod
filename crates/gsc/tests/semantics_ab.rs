@@ -419,9 +419,9 @@ fn probe_switch_and_nan_match_retail_per_game() {
 }
 
 /// `probe_switch_range_*` and the `probe_switch_dup_*` probes against the
-/// 1.1d capture, and per game against the live runs on 1.5b, UO 1.51b and
-/// `cod2_lnxded` 1.3 (2026-11-27) and, for CoD4, the range predicate at
-/// 0x8152158 (INFERRED: no committed runner). The int key range is
+/// 1.1d capture, and per game against the live runs on 1.5b, UO 1.51b,
+/// `cod2_lnxded` 1.3 and `cod4_lnxded` 1.7 (2026-11-27; CoD4's through
+/// tools/run_probe_cod4_gsc.sh). The int key range is
 /// `-0x7e0000..=0x7fffff` on 1.1d and UO, `-0x7e0002` on CoD2, `-0x7e8000`
 /// on CoD4, unchecked on 1.5b; a repeated label, `default` included, is a
 /// compile error on every game and `1` beside `"1"` is not
