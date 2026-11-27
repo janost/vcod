@@ -523,16 +523,7 @@ impl App {
             return;
         }
         if self.session.cod4_front_mut().is_none() {
-            let front = self
-                .cod4_parked
-                .take()
-                .unwrap_or_else(|| Box::new(Cod4Front::new(self.game_dir.clone())));
-            self.session = Session::Cod4Menu(front);
-            let fs_game = self.cod4_fs_game();
-            match cod4_fly::open_fs(&self.game_dir, fs_game.as_deref(), None) {
-                Ok(fs) => self.fs = fs,
-                Err(e) => log::error!("cod4: {e:#}"),
-            }
+            self.show_cod4_front(false);
         }
         self.mode = Mode::Idle;
         self.set_grab(false);
@@ -547,13 +538,20 @@ impl App {
             return;
         }
         self.session.shutdown();
-        let root = self.game_dir.clone();
-        let front = self
+        self.show_cod4_front(true);
+    }
+
+    /// The parked front end (or a new one) becomes the session, over the
+    /// stock search path reopened; `reinstall_sounds` has its sounds
+    /// installed again.
+    fn show_cod4_front(&mut self, reinstall_sounds: bool) {
+        let mut front = self
             .cod4_parked
             .take()
-            .unwrap_or_else(|| Box::new(Cod4Front::new(root)));
-        let mut front = front;
-        front.sounds_installed = false;
+            .unwrap_or_else(|| Box::new(Cod4Front::new(self.game_dir.clone())));
+        if reinstall_sounds {
+            front.sounds_installed = false;
+        }
         self.session = Session::Cod4Menu(front);
         let fs_game = self.cod4_fs_game();
         match cod4_fly::open_fs(&self.game_dir, fs_game.as_deref(), None) {

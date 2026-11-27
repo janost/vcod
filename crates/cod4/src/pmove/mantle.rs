@@ -26,88 +26,32 @@ pub use vcod_common::clipmap::{CONTENTS_MANTLE, SURF_MANTLE_ON, SURF_MANTLE_OVER
 /// `eFlags` 0x8000: mantling.
 pub const EF_MANTLE: u32 = 0x8000;
 
-/// `mantleState.flags` (ps 0x5ec).
+/// `mantleState.flags` (ps 0x5ec), `playerState_s.mantleState` (ps 0x5e0),
+/// `s_mantleAnimNames` (strings 0x820a4ef..) and `s_mantleTrans` (rodata
+/// 0x820aa20), as CoD2's.
+pub use vcod_common::mantle::{ANIM_NAMES, MantleState, TRANSITIONS};
+use vcod_common::mantle::{
+    CROUCH_TOP, DEG_TO_RAD, LEDGE_FLOOR, LEDGE_HEIGHTS, LEDGE_REACH, MIN_NORMAL_LEN, OVER_LOW,
+    OVER_REACH, RAD_TO_DEG, row, sub,
+};
+// The shared scalars' addresses: `LEDGE_FLOOR` rodata 0x820a314,
+// `MIN_NORMAL_LEN` 0x820aa04, `RAD_TO_DEG` 0x820aa08, `DEG_TO_RAD` 0x820a288,
+// `OVER_REACH` 0x820a9fc, `LEDGE_REACH` 0x820967c.
+
+/// `mantleState.flags`: CoD2's four bits and CoD4's `ENDED`.
 pub mod flag {
-    /// The wall is `MANTLE_OVER`: the over clip follows the up clip.
-    pub const OVER: u32 = 0x1;
-    /// The standing box does not fit on the ledge: `EV_STANCE_FORCE_CROUCH`
-    /// every frame of the mantle.
-    pub const CROUCH: u32 = 0x2;
-    /// The standing box fits where the mantle ends.
-    pub const STAND: u32 = 0x4;
-    /// A mantle is available this frame.
-    pub const HINT: u32 = 0x8;
+    pub use vcod_common::mantle::flag::*;
     /// The mantle ended this frame (`Mantle_Check` clears it).
     pub const ENDED: u32 = 0x10;
 }
 
-/// `playerState_s.mantleState` (ps 0x5e0).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct MantleState {
-    /// `vectoyaw` of the wall's inward normal; the clips turn by it.
-    pub yaw: f32,
-    /// ms into the mantle.
-    pub timer: i32,
-    /// The row of [`TRANSITIONS`].
-    pub trans_index: i32,
-    pub flags: u32,
-}
-
-/// `s_mantleAnimNames` (the `XAnimCreateAnims` slots, strings 0x820a4ef..).
-pub const ANIM_NAMES: [&str; 11] = [
-    "mp_mantle_root",
-    "mp_mantle_up_57",
-    "mp_mantle_up_51",
-    "mp_mantle_up_45",
-    "mp_mantle_up_39",
-    "mp_mantle_up_33",
-    "mp_mantle_up_27",
-    "mp_mantle_up_21",
-    "mp_mantle_over_high",
-    "mp_mantle_over_mid",
-    "player_mantle_over_low",
-];
-
-/// `s_mantleTrans` (rodata 0x820aa20): {up clip, over clip, the rise the
-/// row is picked for}.
-pub const TRANSITIONS: [(usize, usize, f32); 7] = [
-    (1, 8, 57.0),
-    (2, 8, 51.0),
-    (3, 9, 45.0),
-    (4, 9, 39.0),
-    (5, 9, 33.0),
-    (6, 10, 27.0),
-    (7, 10, 21.0),
-];
-
-/// The over clip that leaves the weapon up (`Mantle_IsWeaponInactive`'s 10).
-const OVER_LOW: usize = 10;
-/// `Mantle_CheckLedge`'s heights, tried in order (immediates 0x42700000,
-/// 0x42200000, 0x41a00000).
-const LEDGE_HEIGHTS: [f32; 3] = [60.0, 40.0, 20.0];
 /// The player's radius (rodata 0x820e030, `playerMaxs[0]`).
 const RADIUS: f32 = 15.0;
 /// The surface probe's height (rodata 0x820e038, `playerMaxs[2]`).
 const PROBE_TOP: f32 = 70.0;
-/// How far into the wall the ledge box goes (rodata 0x820967c).
-const LEDGE_REACH: f32 = 16.0;
-/// The down trace's floor over the start, and the over clip's drop
-/// (rodata 0x820a314).
-const LEDGE_FLOOR: f32 = 18.0;
-/// The crouched box's top (immediate 0x42480000).
-const CROUCH_TOP: f32 = 50.0;
-/// The over clip's reach (rodata 0x820a9fc).
-const OVER_REACH: f32 = 31.0;
-/// rodata 0x820aa04: a wall normal flatter than this is vertical.
-const MIN_NORMAL_LEN: f32 = f32::from_bits(0x38d1_b717);
-/// rodata 0x820aa08 (double): 180 / pi.
-const RAD_TO_DEG: f64 = f64::from_bits(0x404c_a5dc_1a63_c1f8);
-/// rodata 0x820a288 (double): `VectorAngleMultiply`'s degrees to radians.
-const DEG_TO_RAD: f64 = f64::from_bits(0x3f91_df46_a252_9d39);
-
 /// One clip's root translation track as the zone stores it.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct Clip {
+pub struct Clip {
     /// `XAnimGetLengthMsec` (0x81b726c): `numframes / framerate * 1000`
     /// kept, stored, truncated.
     length_ms: i32,
@@ -147,12 +91,22 @@ impl Clip {
             (d(self.size[i]) * q[i] + d(self.mins[i])) as f32
         }))
     }
+}
+
+impl vcod_common::mantle::Clip for Clip {
+    fn length_ms(&self) -> i32 {
+        self.length_ms
+    }
+
+    fn turn(v: Vec3, yaw: f32) -> Vec3 {
+        angle_multiply(v, yaw)
+    }
 
     /// `XAnim_CalcDeltaForTime`'s translation (0x81b0930) at fraction `t`:
     /// the last key at 1 (or without frames); else the keys around frame
     /// `(int)(float)(t * numframes)`, the quantized offsets lerped by the
     /// kept `(t * numframes - k0) / (k1 - k0)` and stored, then scaled.
-    pub(crate) fn abs_delta(&self, t: f32) -> Vec3 {
+    fn abs_delta(&self, t: f32) -> Vec3 {
         if self.quant.is_empty() {
             return self.frame0;
         }
@@ -177,103 +131,56 @@ impl Clip {
 }
 
 /// The `PLAYER_MANTLE` clips' root motion, by [`ANIM_NAMES`] slot.
-#[derive(Clone, Debug, PartialEq)]
-pub struct MantleAnims {
-    clips: Vec<Clip>,
+pub type MantleAnims = vcod_common::mantle::MantleAnims<Clip>;
+
+/// The clips off the zones, first zone first; the error names the missing
+/// clip.
+fn from_zones(zones: &[&Assets]) -> Result<MantleAnims, String> {
+    let mut clips = vec![Clip::default()];
+    for name in &ANIM_NAMES[1..] {
+        let x = zones
+            .iter()
+            .flat_map(|a| a.xanims.iter())
+            .find(|x| x.name == *name)
+            .ok_or_else(|| format!("xanim {name} in no zone"))?;
+        clips.push(Clip::of(x));
+    }
+    Ok(MantleAnims { clips })
 }
 
-impl MantleAnims {
-    /// The clips off the zones, first zone first; the error names the
-    /// missing clip.
-    pub fn from_zones(zones: &[&Assets]) -> Result<MantleAnims, String> {
-        let mut clips = vec![Clip::default()];
-        for name in &ANIM_NAMES[1..] {
-            let x = zones
-                .iter()
-                .flat_map(|a| a.xanims.iter())
-                .find(|x| x.name == *name)
-                .ok_or_else(|| format!("xanim {name} in no zone"))?;
-            clips.push(Clip::of(x));
-        }
-        Ok(MantleAnims { clips })
-    }
-
-    /// `XAnimGetLengthMsec` of slot `anim`.
-    pub fn length_ms(&self, anim: usize) -> i32 {
-        self.clips[anim].length_ms
-    }
-
-    /// `XAnimGetAbsDelta`'s translation of slot `anim` at fraction `t`.
-    pub fn abs_delta(&self, anim: usize, t: f32) -> Vec3 {
-        self.clips[anim].abs_delta(t)
-    }
-
-    /// `Mantle_GetUpLength` and `Mantle_GetOverLength` (0 without
-    /// [`flag::OVER`]).
-    fn lengths(&self, st: &MantleState) -> (i32, i32) {
-        let (up, over, _) = row(st);
-        let over = if st.flags & flag::OVER != 0 {
-            self.length_ms(over)
-        } else {
-            0
-        };
-        (self.length_ms(up), over)
-    }
-
-    /// `Mantle_GetAnimDelta` (0x80513a6): the root's offset `t` ms in, the
-    /// fraction `(float)(t / len)`; past the up clip its whole offset plus
-    /// the over clip's, the sum stored; turned by the mantle's yaw.
-    fn delta(&self, st: &MantleState, t: i32) -> Vec3 {
-        let (up, over, _) = row(st);
-        let (up_len, over_len) = self.lengths(st);
-        let v = if up_len < t {
-            let a = self.abs_delta(up, 1.0);
-            let f = (f64::from(t - up_len) / f64::from(over_len)) as f32;
-            let b = self.abs_delta(over, f);
-            add(b, a)
-        } else {
-            let f = (f64::from(t) / f64::from(up_len)) as f32;
-            self.abs_delta(up, f)
-        };
-        angle_multiply(v, st.yaw)
-    }
-}
-
+/// Stand-in clips for the pak-free tests: each a straight two-key line to
+/// the end the engine's load check wants (16 along and the row's rise up, or
+/// 31 along and 18 down), `up_ms` and `over_ms` long.
 #[cfg(any(test, feature = "testing"))]
-impl MantleAnims {
-    /// Stand-in clips for the pak-free tests: each a straight two-key line
-    /// to the end the engine's load check wants (16 along and the row's
-    /// rise up, or 31 along and 18 down), `up_ms` and `over_ms` long.
-    pub(crate) fn synthetic(up_ms: i32, over_ms: i32) -> MantleAnims {
-        let line = |length_ms: i32, end: Vec3| {
-            let mins = end.min(Vec3::ZERO).to_array();
-            let size = end.abs().to_array();
-            let q = |v: [f32; 3]| {
-                std::array::from_fn(|i| {
-                    if size[i] == 0.0 {
-                        0
-                    } else {
-                        ((v[i] - mins[i]) / size[i]) as u16
-                    }
-                })
-            };
-            Clip {
-                length_ms,
-                numframes: 10,
-                frames: vec![0, 10],
-                quant: vec![q([0.0; 3]), q(end.to_array())],
-                mins,
-                size,
-                frame0: Vec3::ZERO,
-            }
+pub(crate) fn synthetic(up_ms: i32, over_ms: i32) -> MantleAnims {
+    let line = |length_ms: i32, end: Vec3| {
+        let mins = end.min(Vec3::ZERO).to_array();
+        let size = end.abs().to_array();
+        let q = |v: [f32; 3]| {
+            std::array::from_fn(|i| {
+                if size[i] == 0.0 {
+                    0
+                } else {
+                    ((v[i] - mins[i]) / size[i]) as u16
+                }
+            })
         };
-        let mut clips = vec![Clip::default(); ANIM_NAMES.len()];
-        for (up, over, rise) in TRANSITIONS {
-            clips[up] = line(up_ms, Vec3::new(16.0, 0.0, rise));
-            clips[over] = line(over_ms, Vec3::new(31.0, 0.0, -18.0));
+        Clip {
+            length_ms,
+            numframes: 10,
+            frames: vec![0, 10],
+            quant: vec![q([0.0; 3]), q(end.to_array())],
+            mins,
+            size,
+            frame0: Vec3::ZERO,
         }
-        MantleAnims { clips }
+    };
+    let mut clips = vec![Clip::default(); ANIM_NAMES.len()];
+    for (up, over, rise) in TRANSITIONS {
+        clips[up] = line(up_ms, Vec3::new(16.0, 0.0, rise));
+        clips[over] = line(over_ms, Vec3::new(31.0, 0.0, -18.0));
     }
+    MantleAnims { clips }
 }
 
 /// Every clip set [`install`] has read, each kept once for the process,
@@ -293,7 +200,7 @@ pub fn install(zones: &[&Assets]) -> Option<&'static MantleAnims> {
 
 /// [`install`]'s read: the clips off `zones`, an equal set's kept copy.
 fn read(zones: &[&Assets]) -> Option<&'static MantleAnims> {
-    let read = match MantleAnims::from_zones(zones) {
+    let read = match from_zones(zones) {
         Ok(a) => a,
         Err(e) => {
             log::warn!("cod4: no mantle: {e}");
@@ -315,18 +222,6 @@ fn read(zones: &[&Assets]) -> Option<&'static MantleAnims> {
 /// [`Rules::default`](super::Rules) takes.
 pub fn installed() -> Option<&'static MantleAnims> {
     ANIMS.lock().unwrap_or_else(|p| p.into_inner()).1
-}
-
-fn row(st: &MantleState) -> (usize, usize, f32) {
-    TRANSITIONS[st.trans_index.clamp(0, 6) as usize]
-}
-
-fn add(a: Vec3, b: Vec3) -> Vec3 {
-    Vec3::from_array(std::array::from_fn(|i| (d(a[i]) + d(b[i])) as f32))
-}
-
-fn sub(a: Vec3, b: Vec3) -> Vec3 {
-    Vec3::from_array(std::array::from_fn(|i| (d(a[i]) - d(b[i])) as f32))
 }
 
 /// `VectorAngleMultiply` (0x819558e): the radians stored, `sinf` stored,
@@ -649,6 +544,7 @@ pub(crate) fn cap_view(pm: &mut Pmove) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vcod_common::mantle::Clip as _;
 
     fn clip(numframes: u16, frames: &[u16], quant: &[[u16; 3]]) -> Clip {
         Clip {
@@ -727,7 +623,7 @@ mod tests {
         };
         let z = crate::zone::Zone::open_path(&install.zone("english", "common_mp")).unwrap();
         let a = crate::walk::walk(z, Default::default()).unwrap().assets;
-        let m = MantleAnims::from_zones(&[&a]).unwrap();
+        let m = from_zones(&[&a]).unwrap();
         let near = |v: Vec3, want: Vec3| (v - want).abs().max_element() <= 1.0;
         for (up, over, h) in TRANSITIONS {
             let end = m.abs_delta(up, 1.0);

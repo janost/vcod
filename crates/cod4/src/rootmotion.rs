@@ -10,6 +10,7 @@ use glam::Vec3;
 
 use crate::assets::model::XAnim;
 use crate::pmove::mantle::Clip;
+use vcod_common::mantle::Clip as _;
 
 /// One clip's root tracks and its rate.
 #[derive(Clone, Debug, Default, PartialEq)]

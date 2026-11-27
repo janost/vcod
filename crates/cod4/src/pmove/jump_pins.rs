@@ -784,7 +784,7 @@ fn a_ladder_grabs_climbs_strafes_caps_the_yaw_and_lets_go() {
 fn mantling() -> Rules {
     static ANIMS: std::sync::OnceLock<MantleAnims> = std::sync::OnceLock::new();
     Rules {
-        mantle_anims: Some(ANIMS.get_or_init(|| MantleAnims::synthetic(500, 400))),
+        mantle_anims: Some(ANIMS.get_or_init(|| mantle::synthetic(500, 400))),
         ..Rules::default()
     }
 }
