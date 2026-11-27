@@ -594,6 +594,74 @@ same settings; wins by team):
   635 to 163; with the sides on as well the 48 matches came out byte for
   byte as without it. VERIFIED (measured).
 
+### 4.2.3 A plan round a guard that starts under him, 2026-11-27
+
+mp_rocket's seeds 1 to 48 on master fd4cae5a1 stall 40 bot-ticks, all
+seed 33's bot 5 at (9469 to 9612, 5835 to 5901, 174 to 208). VERIFIED
+(measured, ours, release, `bot_match GAMETYPE=re BOTS=10 TICKS=6000
+MAPS=mp_rocket STALLS=1`). The spot is a ramp corridor west of the
+documents' room, rising from (9650, 5859, 164) to (9455, 5856, 208),
+with two rows of graph nodes at y 5856 and 5901 joined by plain level
+edges. VERIFIED (a temporary `nav_build` dump of the nodes and edges).
+Traced with a temporary per-tick print of the follower's waypoint,
+path, avoided edges and shunned nodes:
+
+- Bot 5, a defender bound for its post on the upper floor at (9121,
+  6143, 338), runs up the corridor. Slot 7, a teammate, holds its post at
+  the top, (9454, 5856, 208), standing at (9458.2, 5863.2, 208.1) on node
+  5758. Bot 5 runs into him at tick 3050 (184 units/s to 43). VERIFIED
+  (the trace).
+- At tick 3053 `Follower::bodies_in_way` shuns node 5758 and drops the
+  plan. The new plan starts at `NavGraph::walkable_start` (the shun sets
+  `fell`), whose score, flat distance plus four times the height, puts
+  5758 first (31 against 63 for node 5162, 9 units down the ramp), and
+  whose walk there reads no bodies. The search never keeps off its
+  start, so the plan is 5758, 6360 and on, through the guard. VERIFIED
+  (the trace).
+- `stand_aside` gives way only to an oncoming body; the guard stands.
+  From tick 3074 bot 5 stands pressed on him until `pressed_yield` steps
+  it back at 3082; it runs back down, the follower gives an edge up
+  (tick 3110) and plans the same way again, four times to tick 3340.
+  VERIFIED (the trace).
+- Not 4.2.1's door: `posts::closes_way` reads false on every corridor
+  node but its west end, (9360, 5856, 208). A box's middle passes the
+  guard on the row at y 5901 (node 6359 at (9463, 5901, 208)). VERIFIED
+  (the dump with `closes_way` per node). No mover, clip or link is
+  involved. INFERRED (the trace: the only body near is the guard, and
+  the edges round him are plain).
+
+Tried, not kept: a plan round still bodies in the way starts at no node
+within a step of the bot's height that they stand over, nor at one whose
+leg from the bot comes nearer one than two half-widths and than the bot
+now stands (`NavGraph::walkable_start` taking only the nodes such a test
+passes, all of them when it passes none). A unit test on a corridor two
+nodes wide held it, and seed 33 stalled 0 (the match moves from tick 3001
+on). VERIFIED (measured, ours, release). It failed
+`bots::a_bot_backing_onto_a_climber_climbs_back_onto_the_crows_nest`
+from y 56: the bot on mp_ship's crow's nest plate at (4977, 36, 1219)
+shunned the climber just off the rungs at (4959, 60, 1219) and planned
+from (4993, 35, 1219) instead of the node under him; within four ticks
+the climber left the plate through the hatch and died of the fall.
+VERIFIED (the gate, a temporary print of each plan with a shun). Without
+the rule the gate passes. VERIFIED (the gate). INFERRED: a plan through
+the body is what sets `shun_through`, which `stand_aside` reads, so the
+rule takes the give way from a body met at a ladder's head. Left open; a
+rule kept off any ladder's ends would keep the head's give way.
+
+On the tried rule's runs (9.1.1's six maps, seeds 1 to 48):
+
+- mp_rocket seed 46: a defender's goal flips every 15 to 45 ticks
+  between sweeping where the documents lay, (9873, 5793, 192), and its
+  post at (8163, 143, 250), 36 stalled bot-ticks. VERIFIED (the trace).
+  INFERRED (the code): `Server::deal` hands `ReView::holds_goal` to the
+  defender nearest the goal each tick with no margin, and two about as
+  far off trade it. Left open.
+- mp_brecourt seed 10, 166: bot 0 paces (618 to 626, 190 to 229, 33 to
+  35) under the edge from (624, 192, 33) to (580, 240, 75), with no body
+  near and no shun, and its follower gives no edge up while its point
+  goal moves every tick. VERIFIED (the trace). INFERRED: a carrier it
+  chases. Left open.
+
 ## 5. Behind Enemy Lines (`bel`)
 
 ### 5.1 What stock `bel.gsc` asks of a player
@@ -1863,9 +1931,15 @@ group (a flanker still drew its hold from 0.5 to 2 s). VERIFIED
   carrier deaths 168 to 151, stalled 1603 to 517. The holder build's
   1518 are one match (4.2); the parts' 479 are mp_rocket seeds 5 and 6,
   bots of both sides near (9900, 5800, 160), off any fight, against 11
-  there without them. Not traced further; dropped by the stall rule
-  (bot-combat.md 1). UO's `ctf`, `dom` and
-  `bas` attackers got none.
+  there without them. Dropped by the stall rule (bot-combat.md 1). That
+  spot is the documents' room, traced in 4.2.1: guards posted in its door
+  held their own side in, and with no post closing a way mp_rocket's
+  seeds 1 to 144 stall 41 bot-ticks instead of 936. VERIFIED (measured,
+  4.2.1's table). On master fd4cae5a1 seeds 1 to 48 stall 40, all one
+  match (seed 33, 4.2.3), against 273 before 4.2.1's fix. VERIFIED
+  (measured, ours, release, `bot_match GAMETYPE=re BOTS=10 TICKS=6000
+  MAPS=mp_rocket STALLS=1`). Measured again and kept: 9.1.1. UO's `ctf`,
+  `dom` and `bas` attackers got none.
 - VERIFIED (the table): the defenders, already split over two sites,
   barely move (51% to 50% packed).
 
@@ -1883,6 +1957,56 @@ attackers are allies, axis on mp_dawnville and mp_railyard. VERIFIED
   rounds, 4 points down on about 430 rounds, is inside the noise of a
   difference (about 3 points a standard error); a longer run would
   settle it.
+
+### 9.1.1 The attack parts in `re` again, 2026-11-27
+
+9.1's parts were dropped from `re` for mp_rocket's stall alone, which
+4.2.1 fixed. Dealt again as tried then: `driver::deal_squads` reads the
+role off `ReView` as off `SdView`, behind the same `Bot::squad` switch
+(`bot_match` `SQUAD=`), and a bot carrying an objective stays in the main
+group (`bots::driver::tests::re_attackers_get_the_attack_parts_but_the_carrier`).
+Measured on 9.1's six maps, against a control as 9.3 measures: master
+with each bot's start hold drawn off another constant
+(`Bot::start_draw`), the same rules with every match moved. Wins are by
+side: the attackers are allies but on mp_dawnville. VERIFIED (measured,
+ours, release, 1.1, `bot_match GAMETYPE=re BOTS=10 TICKS=6000`,
+mp_brecourt, mp_carentan, mp_chateau, mp_dawnville, mp_pavlov and
+mp_rocket, seeds 1 to 48, 288 matches a row, master fd4cae5a1 and the
+branch):
+
+| Build | stalled | captures | pickups | carrier deaths | att W | def W | att share | kills |
+|---|---|---|---|---|---|---|---|---|
+| master | 485 | 639 | 2144 | 957 | 791 | 545 | 59.2% | 10289 |
+| master, holds redrawn | 738 | 639 | 2092 | 923 | 766 | 576 | 57.1% | 10216 |
+| parts | 691 | 636 | 2143 | 964 | 776 | 544 | 58.8% | 10231 |
+
+- VERIFIED (the table): no count moves past the control's spread
+  (pickups 52 apart, attackers' wins 25, stalls 253 between master's two
+  rows).
+- VERIFIED (the runs, `STALLS=1`): the parts' 691 are 18 matches; 447
+  of them are four mp_dawnville matches (seeds 8, 19, 39, 47) with a bot
+  held at (335 to 466, -16210 to -16032, 2 to 30), where master's seeds
+  23 (121) and 38 (142) stall too. Not traced. None is in
+  mp_rocket's documents' room: its 56 are seed 44's 37 at (10315 to
+  10470, 5668 to 5758, 160), east of the room, seed 31's 17 on
+  bot-navigation.md 3.16's upper floor and seed 15's 2 south of the
+  room's door (`MAPS=mp_rocket STALLS=1`).
+- VERIFIED (the runs), per map: on mp_rocket the attackers win 82 of
+  123 rounds against 104 of 132 and 98 of 135, with pickups 134 against
+  159 and 153; on mp_brecourt captures read 69 against 82 and 83. On
+  mp_carentan and mp_chateau the attackers win more (219 and 127 against
+  215 and 206, 121 and 116). INFERRED: a flanker's longer way costs the
+  push where one corridor leads in.
+- On 9.1's own set, seeds 1 to 8 (48 matches), master, holds redrawn and
+  parts: stalled 0, 156, 186; captures 101, 91, 113; pickups 376, 337,
+  356; att W 130, 114, 131; def W 94, 115, 89. VERIFIED (the same runs).
+- Kept by the rule above (bot-combat.md 1's stall rule no longer drops
+  them). The per-map moves on mp_rocket and mp_brecourt are left for a
+  longer run.
+- Tried with the parts, not kept: 4.2.3's start rule. VERIFIED
+  (measured, the same set): stalled 817, captures 604, pickups 2110,
+  with the holds redrawn 804, 604, 2131; with the parts as well 620,
+  637, 2147.
 
 ### 9.2 The retrieval carrier (2026-11-13)
 
