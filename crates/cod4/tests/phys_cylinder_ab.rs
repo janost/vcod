@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use vcod_cod4::collision::ClipMap;
 use vcod_cod4::map::Map;
 use vcod_cod4::ode::collide::brushgeom::NARROW_MAX_LENGTH;
-use vcod_cod4::ode::collide::{ContactGeom, MAX_CONTACTS, cut, transform};
+use vcod_cod4::ode::collide::{ContactGeom, MAX_CONTACTS, collide_geom, cut};
 use vcod_cod4::ode::geom::{Geom, Transform};
 use vcod_cod4::ode::math::{M3, V3};
 use vcod_cod4::ode::rotation::q_to_r;
@@ -241,7 +241,7 @@ fn run(clip: &ClipMap, name: &str) -> Tally {
             c.raw.iter().all(|x| x.words[9] == *inner),
             "{name}: contacts keep the inner geom"
         );
-        let ours = transform::collide_geom(
+        let ours = collide_geom(
             clip,
             &Geom::Transform(Box::new(tr.clone())),
             c.pose.0,
@@ -250,8 +250,7 @@ fn run(clip: &ClipMap, name: &str) -> Tally {
             NARROW_MAX_LENGTH,
             CLIP_MASK,
             MAX_CONTACTS,
-        )
-        .unwrap();
+        );
         t.cases += 1;
         t.contacts += c.raw.len();
         let (near, exact) = compare(&ours, &c.raw);

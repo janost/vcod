@@ -7,12 +7,12 @@ use std::ops::Range;
 
 use glam::Vec3;
 
+use super::ContactGeom;
+use super::poly::clip;
 use super::world::{Pieces, normalize};
-use super::{ContactGeom, Dvars, MAX_CONTACTS, Obj, contact_pass, cut, world_surface};
 use crate::assets::model::PhysBrush;
 use crate::collision::{BrushFaces, Piece};
 use crate::ode::math::{M3, V3, add, cross, dot, mul0_331, mul1_331, neg, sub};
-use crate::ode::world::{BodyId, World};
 
 #[inline]
 fn w(x: f32) -> f64 {
@@ -194,90 +194,6 @@ fn edge_plane(cur: V3, prev: V3, n: V3, flip: bool) -> Option<Plane> {
         return None;
     }
     Some((o, dot(prev, o)))
-}
-
-/// The plane's meet with the segment from `b` to `a`: `(a - b) t + b`,
-/// `t = (d - n . b) / n . (a - b)` stored; none when `n . (a - b)` stored
-/// is 0.
-fn meet(a: V3, b: V3, (n, d): Plane) -> Option<V3> {
-    let s = dot(sub(a, b), n);
-    if s == 0.0 {
-        return None;
-    }
-    let t = ((w(d) - w(dot(b, n))) / w(s)) as f32;
-    Some(std::array::from_fn(|k| {
-        ((w(a[k]) - w(b[k])) * w(t) + w(b[k])) as f32
-    }))
-}
-
-/// 0x597800: the polygon cut to `n . p <= d` in place (a point is out when
-/// `d < n . p`, NaN included), its count; 0, the points left, when none is
-/// in. The last vertex in before the cut and the first in after it
-/// (`exit`, `entry`) bound the run out: one vertex out becomes its two
-/// meets, its neighbours' first; a longer run its ends' meets with the
-/// vertices between dropped (0x597440). A meet whose edge lies along the
-/// plane leaves its vertex.
-fn clip(p: &mut Vec<V3>, plane: Plane) -> usize {
-    let len = p.len();
-    if len == 0 {
-        return 0;
-    }
-    let (n, d) = plane;
-    let inside = |v: V3| w(d) >= w(dot(v, n));
-    let last_in = inside(p[len - 1]);
-    let (mut prev, mut prev_in) = (len - 1, last_in);
-    let (mut any, mut exit, mut entry) = (false, None, None);
-    for i in 0..len {
-        let cur_in = if i == len - 1 { last_in } else { inside(p[i]) };
-        if prev_in {
-            any = true;
-            if !cur_in {
-                exit = Some((prev, i));
-            }
-        } else if cur_in {
-            entry = Some((prev, i));
-        }
-        (prev, prev_in) = (i, cur_in);
-    }
-    if !any {
-        return 0;
-    }
-    let Some((a, o)) = exit else { return len };
-    let Some((c, e)) = entry else { return len };
-    if o == c {
-        // 0x597af6: room for a second vertex after the one out
-        if o + 1 != len {
-            p.insert(o + 1, p[o + 1]);
-        } else {
-            p.push(p[o]);
-        }
-        let n2 = len + 1;
-        let s = (c + 1) % n2;
-        let after = (s + 1) % n2;
-        let a = if a > o { a + 1 } else { a };
-        let out = p[o];
-        p[s] = meet(out, p[after], plane).unwrap_or(out);
-        if let Some(v) = meet(out, p[a], plane) {
-            p[o] = v;
-        }
-        return n2;
-    }
-    if let Some(v) = meet(p[o], p[a], plane) {
-        p[o] = v;
-    }
-    if let Some(v) = meet(p[c], p[e], plane) {
-        p[c] = v;
-    }
-    // 0x597440: the vertices strictly between the run's ends go
-    if (o + 1) % len != c {
-        if o < c {
-            p.drain(o + 1..c);
-        } else {
-            p.truncate(o + 1);
-            p.drain(..c);
-        }
-    }
-    p.len()
 }
 
 /// 0x597e70: the incident polygon cut by each edge plane of the reference
@@ -624,29 +540,4 @@ pub fn collide_world(world: &dyn Pieces, g: &BrushGeom, mask: u32, max: usize) -
         c.normal = neg(c.normal);
     }
     out
-}
-
-/// 0x5a5f20 for a brush geom's body against the world, as
-/// [`super::near_world`] runs a capsule's.
-pub fn near_world(
-    world: &mut World,
-    body: BodyId,
-    obj: &mut Obj,
-    g: &BrushGeom,
-    clip: &dyn Pieces,
-    dv: &Dvars,
-    world_index: usize,
-) {
-    let contacts = collide_world(clip, g, crate::ragdoll::CLIP_MASK, MAX_CONTACTS);
-    if contacts.is_empty() {
-        obj.state = 2;
-        return;
-    }
-    let surface = world_surface(obj, dv, world_index);
-    let contacts = if contacts.len() >= 5 {
-        cut(&contacts)
-    } else {
-        contacts
-    };
-    contact_pass(world, contacts, [Some((body, obj)), None], surface);
 }

@@ -4,7 +4,8 @@ Each file is one world of the Windows client `iw3mp.exe` 1.7 under Wine and
 gdb, dumped by `tools/re/cod4_phys_gdb.py` from the first body of the world
 after a map load (so the reorder seed starts at 0x89abcdef) to the step
 the last body slept. Recipe: docs/dev/retail.md, "Worlds 0 and 1 from the
-first push to rest"; the facts read off them: `cod4-gsc.md` 3.6.2.
+first push to rest"; the facts read off them: `cod4-gsc.md` 3.6.2; the
+port run against them step by step: `phys_ab` (3.6.7).
 
 Every take ran under `tools/cod4_wine/run.sh` with
 

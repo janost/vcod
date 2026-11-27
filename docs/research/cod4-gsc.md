@@ -1841,7 +1841,9 @@ vcod (`ClipMap::world_solids`, `physics::box_contacts`,
   and on every step after first made first, the body's list walked last
   made first and each put at the head in turn; a body asleep is not
   moved and keeps that order. INFERRED (the code above; nothing found
-  cleaning the flags between a body's making and its first step).
+  cleaning the flags between a body's making and its first step). Under
+  the default dvars nothing cleans them at all, so the walk keeps the
+  made order on every step (3.6.7).
   `Body::contact_pass` walks them so; a walk by the steps taken. vcod's.
   `the_contact_pass_pinches_on_one_geoms_facing_contacts_only`: of a
   geom pinched between two walls and a geom on a floor the body rises
@@ -2219,9 +2221,7 @@ What the port matches:
   -50..50 box or a dynamic entity's cylinder; the unit tests in
   `ode::tests` pin the last two as read. Class 11 is not ported: vcod
   leaves brush dynamic entities out.
-- `run_frame` refuses a body whose first geom is not a capsule, a
-  brush (3.6.4), a cylinder or a transform round one (3.6.6), so no box
-  on worlds 0 or 1 steps until its collider (P3a) comes.
+- `run_frame` takes every class since P4 (3.6.7).
 
 The census (`phys_create::the_stock_zones_phys_geoms_are_brushes_boxes_and_cylinders`,
 every zone of the client's `zone/english/`, one copy of a model for
@@ -2586,7 +2586,7 @@ The transform:
   double sqrt(1/2) at 0x70ae70, stored, or the +0x54 when it is less.
   VERIFIED (0x5a9a20..0x5a9aef, 0x5a688b..0x5a68b5). `Geom::bounds` had
   it (3.6.3); a body whose first geom is a cylinder, or a transform round
-  one, now steps (`PhysWorld::run_frame`, `transform::collide_geom`).
+  one, now steps (`PhysWorld::run_frame`, `collide::collide_geom`).
 
 Against a brush (0x5a1330, from 0x5a79b0 while the contacts have room):
 
@@ -2722,6 +2722,192 @@ What the port matches:
   `a_tyre_dropped_on_a_floor_rests_on_its_cap`: a tyre in world 0 lands
   and sleeps 2.50 over the floor, a unit under its +0x54 (`phys_csl`).
   VERIFIED (the tests, ours).
+
+#### 3.6.7 Worlds 0 and 1's dynamics, as ported
+
+I ported the rest of a world 0 or 1 frame into `ode::phys` and
+`ode::collide`, P4 of the world 0/1 port: every geom class through the
+near callback, the jitter in the contact pass, the impact sound after it,
+the body and contact caps. Addresses are `iw3mp.exe`'s (3.6), read with
+`objdump`.
+
+The space:
+
+- 0x5aa100 walks the world's space from its head (+0x50) along each
+  geom's +0x20 and hands the near callback 0x5a5f20 each geom whose
+  body's disabled bit (+0x18 & 4) is clear and whose flag +8 & 8 is set,
+  with the world geom 0xcc5ff28. VERIFIED (0x5aa100..0x5aa13b). Each geom
+  is its own entry: a body with several (up to six, 3.6.3) gets one
+  collide, cut, pass and impact test per geom. That a body's geoms are
+  walked apart this way is INFERRED (no take holds a body with two).
+- No geom moves in the space under the default dvars. The add (0x5a9f00)
+  sets a geom's flags 1 and 2 (0x5a9f2e); 0x5a6640's move after each step
+  calls the space's `dirty` only on a geom whose bit 0 is clear
+  (0x5a66a0..0x5a66b7); and only `cleanGeoms` (0x5aa010, from the space's
+  collide 0x5aa070) clears it, which `Phys_RunFrame` calls when
+  `phys_collUseEntities` (0xcc78150) is set and not otherwise
+  (0x5a65b8..0x5a65d8). VERIFIED (the instructions). So every step walks
+  the geoms as made, newest first; every take's collide lines read bodies
+  N down to 1 on every step. VERIFIED (the captures). 3.6.1's walk order
+  after a body's first step (first made first) does not hold under the
+  default dvars. `PhysWorld` keeps one space entry per geom, newest first.
+
+The near callback (0x5a5f20) after its collide, cut and pass (3.6.1;
+`cod4-player-anims.md` 10.6):
+
+- It calls the impact test 0x5a5de0 (0x5a6113) with the sound row of the
+  object of the second body when there is one, else the first's (the
+  slot at `[esp+0x10]` written at 0x5a5fd7, then 0x5a6014), the list the
+  pass got (the raw buffer under 5 contacts, the cut's otherwise:
+  0x5a60c7, 0x5a6103) and in `eax` the first body, or the second when
+  there is no first (0x5a5fa9..0x5a5fb3, 0x5a60bf..0x5a60c5). VERIFIED
+  (the instructions).
+- The pass's 0x5a25d0 rewrites that list in place: the later of a facing
+  pair, or the last contact, copied over a slot and the count lowered
+  (0x5a26c9..0x5a2705). VERIFIED (the instructions). So the impact test
+  reads the list as the pass left it, the contacts the leaving test
+  skipped included. `contact_pass` returns it.
+- In the pass each contact the two leaving tests keep takes the jitter
+  (0x5a2918) before the caps: past the world's 0x1000 joints (+0xc,
+  0x5a2a34) or the group's 0x1000 contacts (0x5a2a43) it prints
+  `Maximum number of ODE physics contact points exceeded.` (0x5a2b39) and
+  stops. VERIFIED (the instructions). The point 0x5a25d0 keeps a facing
+  pair by is the body's position when the world block's byte +0x14
+  (0xcc54498 for world 0) is 0, else the object's +0x50 (0x5a2785..0x5a27e7).
+  VERIFIED (the instructions). `Phys_Init`'s memset (0x5a2cf6) zeroes it
+  and no instruction names it otherwise. VERIFIED (a grep of the whole
+  disassembly). The port takes the body's position.
+
+The impact test (0x5a5de0), `collide::impact`:
+
+- For each contact, `dBodyGetPointVel` (0x5b70d0) at its position, `(n1
+  v1 + n0 v0) + n2 v2` stored and added to the sum, stored; each position
+  word added to its sum, stored (0x5a5e20..0x5a5e93). Then the count as a
+  float, `1 / n` stored, each position sum times it stored, the dots' sum
+  over `n` stored, times the body's mass (its `dMass` copied,
+  0x5a5e01..0x5a5e0d); a sound when `-phys_minImpactMomentum`
+  (0xcc5442c, 250) is over that, a NaN none (0x5a5ee7..0x5a5eee).
+  VERIFIED (the instructions).
+- The handle is `[0x84db98 + 4 (29 row + ((flags >> 20) & 0x1f))]` off
+  the first contact's surface flags (+0x2c); a null handle plays nothing,
+  any other plays at the mean point through 0x5c8db0 (0x5a5ef0..0x5a5f0e).
+  VERIFIED (the instructions). Nothing bounds the type, so 29 to 31 read
+  the next row's slots. VERIFIED (the `and 0x1f` alone). That 0x5c8db0
+  plays an alias at a point is INFERRED. The port gives the slot
+  (`Impact::slot`); a row under 0, a preset never registered, plays
+  nothing (vcod's).
+
+The handles (0x43de60, from 0x43dfb0 for each new row):
+
+- A prefix whose first byte is 0 warns `WARNING: no alias prefix defined,
+  using default` (0x6cb7ac) and puts `collision_default` (0x6cb7e0) in all
+  29 slots. Else `%s_default` (0x6c4d30) is looked up through 0x565590,
+  and for each slot `k` of 29 `%s_%s` (0x6c2518) with the prefix and
+  `default` (0x69d934) for `k` 0 or the name at `0x71fbd0 + 0x14 (k - 1)`,
+  through 0x565560, a miss taking the `_default` handle
+  (0x43defe..0x43dfa2). VERIFIED (the instructions, the strings).
+- 0x565560 is `DB_FindXAssetHeader` (0x489570) of asset type 7 with
+  0x4898a0, none when that is the zone's default asset; 0x565590 is the
+  same with a warning (0x6f2474) on a miss (0x565560..0x5655c4). VERIFIED
+  (the instructions). That type 7 is the sound alias list and 0x4898a0
+  tests for the default asset is INFERRED. The byte at `[0x1435d78] +
+  0xc` picks them over 0x565490 and 0x5654f0, a hash table's lookups
+  (0x43de87, 0x43df17, 0x43df72). VERIFIED (the instructions). That the
+  byte is `useFastFile` is INFERRED.
+- The names, each entry's first word (its +8 holds `k << 20`): bark,
+  brick, carpet, cloth, concrete, dirt, flesh, foliage, glass, grass,
+  gravel, ice, metal, mud, paper, plaster, rock, sand, snow, water, wood,
+  asphalt, ceramic, plastic, rubber, cushion, fruit, paintedmetal; the
+  entry after them (`opaqueglass`, 9 << 20) is past the loop's end
+  0x71fe00. VERIFIED (the bytes). `obj::SURFACE_NAMES`,
+  `obj::impact_aliases`; `impact_sound_rows` now gives each row's prefix
+  too (`SoundRows`).
+
+The jitter (0x5a23e0, `collide::Jitter`):
+
+- Nothing for two bodies (0x5a23e3..0x5a23ed) or a normal z under the
+  float 0.7 at 0x70b0e8, a NaN going on (0x5a23f3..0x5a2405). The mass
+  `m'` is the body's (+0x20), or `phys_jitterMaxMass` (0xcc7815c) when
+  that less the mass, stored, is under 0; `q = m' / max` stored; the
+  weight `(1 - q (q q)) m'` stored; `1000 / msecStep` (the world's,
+  0x71e798) stored (0x5a2417..0x5a24a3). VERIFIED (the instructions).
+- Per region (the world block's count +0x10 and its 0x24-byte regions
+  from +0x18): `dx`, `dy` stored, `(dx dx + dy dy) + 0` stored, gone on
+  unless the outer radius squared is over it (a NaN goes on); the falloff
+  1, or `(outer - d) (1 / (outer - inner))`, the inverse stored, when the
+  inner radius is under `d = sqrt` stored (0x5a24b8..0x5a2532); `u =
+  rand() (1 / 32768)` stored (0x670622, the double at 0x70af90);
+  `(max - min) u + min` stored; times the falloff, the weight and `1000 /
+  msecStep`, stored, as z, and the double 0 times it, stored, as x and y,
+  into `Phys_ObjAddForce` at the contact (0x5a2536..0x5a25a1). VERIFIED
+  (the instructions). That 0x670622 is the C runtime's `rand()` is
+  INFERRED; `PhysWorld::rand` stands for its one stream (`MsvcRand`).
+- 0x5a7730 keeps world 0's regions alone (its count 0xcc54494 and
+  regions 0xcc5449c named outright) and wakes world 0's bodies whose
+  level distance squared, `+ 0`, stored, the outer radius squared is not
+  under (0x5a7790..0x5a7808). VERIFIED (the instructions). The step
+  zeroes the count after the joint group empties (0x5a66ff), as
+  cod4-world.md 13.8 has it. `PhysWorld::add_jitter`.
+
+The caps: `dBodyCreate` (0x5b6b10) gives none once the one pool of
+0x200 (0x5b6aa0) is spent, and `Phys_ObjCreate`'s helper then returns 0
+after its message (0x5a4e0e..0x5a4e24). VERIFIED (the instructions).
+`PhysWorld::create_body` and `obj_create` give none past `MAX_BODIES`
+counting `PhysWorld::others`, the bodies the other worlds hold; a
+ragdoll whose bodies do not fit is not built. vcod's.
+
+The sweep's stop (0x5a6930, 3.6.1): a point's backed-off fraction, from
+0x4093c0, is stored at `[esp+0x5c]` with two words pushed (0x5a6b83),
+over the trace's fraction, and the compare with 0.001 that zeroes the
+speeds reads that slot (0x5a6bbc..0x5a6bce). VERIFIED (the instructions).
+So the stop takes the fraction after the back-off, as 3.6.1 says;
+`PhysWorld::sweep` took the trace's. On the watermelon take that kept
+body 6 falling at 1189 u/s past step 108, where retail stopped it on the
+floor brush at z -768 and it came 20 units off on step 109. VERIFIED (the
+take, the port before and after).
+
+0x597800 now has one copy, `collide::poly::clip`, which the box, brush
+and cylinder colliders share. Its compare loads the dot, then `d`, and
+`fcompp` with `test ah,0x1` puts a corner out on C0, a NaN included
+(0x597849..0x59785f). VERIFIED (the instructions). The box's and the
+cylinder's copies read a NaN as in; no capture has one.
+`brushgeom::near_world` is gone into `collide::near_contacts`, and
+`collide::collide_geom` is 0x5a95a0 for every class.
+
+What the port matches, `cod4::phys_ab::the_phys_takes_against_the_port`
+on the four takes of 3.6.2 (each body built as 3.6.3 and set to its `new`
+line's words, the seed and clock the take's, run a frame a step to the
+take's end, each step read where `Phys_PostStep` returns, before the
+sweep, as the `body` lines are):
+
+- The round's 61 steps, the frag's 140 and the car's 132: every body's
+  position and quaternion equal to retail's to the bit on every step.
+  The watermelon's 170: to the bit through step 27, then within 2.5e-4
+  units and 3.3e-4 degrees, the ulp of body 4's sweep on step 27 (3.6.5).
+  VERIFIED (the run, ours).
+- In all four, every body's flags on every step, so each sleep step
+  (and the watermelon's body 5 awake to the cut), every next `msecStep`
+  and every seed after a step are retail's. VERIFIED (the run, ours).
+  That a step draws as many times as its reorder's rows, as world 2's
+  do (`cod4-player-anims.md` 10.4), answering 3.6.2, is INFERRED (the
+  seeds agree).
+- The impact sounds: 23, 37 and 6 on retail's steps, each retail handle
+  met under one alias and each alias under one handle
+  (`physics_metal_default`, `physics_tire_default`,
+  `physics_car_door_default`, `physics_fruit_default`), each mean point
+  within 5e-7 of retail's. VERIFIED (the run, ours).
+- `an_impact_sounds_past_the_least_momentum_into_the_contacts`,
+  `a_jitter_lifts_a_body_at_its_floor_contacts`,
+  `impact_rows_take_the_surfaces_alias_or_the_prefixs_default` and
+  `the_body_pool_is_shared_by_the_worlds` pin the impact rule, the
+  jitter's push, the handle fallbacks and the pool. No take holds a
+  jitter. VERIFIED (the tests, ours).
+
+Not ported, no take reaching them: the triangle cull 0x596c70 (3.6.4,
+3.6.6), the cylinder's edge and corner arms (3.6.6, on the instructions
+alone), the box's narrow pass's contacts (3.6.5), class 11, body against
+body (`phys_collUseEntities`), and world 0 dropping a body once it
+sleeps (13.2's, the dynamic entities' code).
 
 ## 4. The load
 

@@ -358,7 +358,10 @@ fn fixture_bodies_build_word_for_word() {
                 .find_map(|z| z.phys_presets.iter().find(|p| p.name == n))?;
             ObjPreset::from_raw(
                 &p.raw,
-                rows.get(&n.to_ascii_lowercase()).copied().unwrap_or(-1),
+                rows.by_preset
+                    .get(&n.to_ascii_lowercase())
+                    .copied()
+                    .unwrap_or(-1),
             )
         };
         let model_preset = |m: &XModel| {
@@ -449,7 +452,9 @@ fn fixture_bodies_build_word_for_word() {
             let mut matched = Vec::new();
             for (name, m, p) in candidates(c) {
                 let mut pw = PhysWorld::new(world);
-                let id = pw.obj_create(pos, &axes, [0.0; 3], &p, &PhysDvars::default());
+                let id = pw
+                    .obj_create(pos, &axes, [0.0; 3], &p, &PhysDvars::default())
+                    .unwrap();
                 if c.creator == "dynent" {
                     pw.dynent_collision(id, m, p.cylinder);
                 } else {

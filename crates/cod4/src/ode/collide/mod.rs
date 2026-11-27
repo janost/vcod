@@ -1,13 +1,17 @@
-//! Contacts for the ragdolls' world in iw3mp.exe 1.7: a capsule body
-//! against the clip map ([`world`], [`capsule`]), the near callback that
-//! turns the contacts into contact joints (0x5a5f20 and its pass
-//! 0x5a2760) and the self collision hook (0x5bd9c0, [`selfcol`]);
-//! cod4-player-anims.md 10.6.
+//! Contacts for iw3mp.exe 1.7's worlds: each geom class against the clip
+//! map (`dCollide`, [`collide_geom`]: the capsule, [`world`] and
+//! [`capsule`], cod4-player-anims.md 10.6; the box, brush, cylinder and
+//! transform, cod4-gsc.md 3.6.4..3.6.6), the near callback that turns the
+//! contacts into contact joints (0x5a5f20 and its pass 0x5a2760) with the
+//! jitter's pushes (0x5a23e0) and the impact sound after it (0x5a5de0,
+//! cod4-gsc.md 3.6.7), and the ragdolls' self collision hook (0x5bd9c0,
+//! [`selfcol`]).
 
 pub mod boxes;
 pub mod brushgeom;
 pub mod capsule;
 pub mod cylinder;
+pub mod poly;
 pub mod selfcol;
 pub mod transform;
 pub mod world;
@@ -16,9 +20,11 @@ pub mod world;
 pub(crate) mod tests;
 
 use glam::Vec3;
+use vcod_common::rng::MsvcRand;
 
+use super::geom::Geom;
 use super::joint::contact::{APPROX1_1, APPROX1_2, BOUNCE, Contact, SOFT_CFM, SOFT_ERP, Surface};
-use super::math::{V3, cross, dot, normalize3, sub};
+use super::math::{M3, V3, cross, dot, normalize3, sub};
 use super::world::{BodyId, World};
 
 pub use world::{Capsule, Pieces, collide_world};
@@ -123,12 +129,56 @@ pub fn world_surface(obj: &Obj, dv: &Dvars, world: usize) -> Surface {
     }
 }
 
+/// `dCollide` (0x5a95a0) of a body's geom against the world geom (class
+/// 15) at pose `pos`, `r`, the body at `body`, room for `max`: 0x5a8110's
+/// arm for the geom's class (cod4-gsc.md 3.6.1), every normal turned to
+/// point out of the world into the geom. `narrow_max` is
+/// `phys_narrowObjMaxLength`.
+#[allow(clippy::too_many_arguments)]
+pub fn collide_geom(
+    world: &dyn Pieces,
+    g: &Geom,
+    pos: V3,
+    r: &M3,
+    body: V3,
+    narrow_max: f32,
+    mask: u32,
+    max: usize,
+) -> Vec<ContactGeom> {
+    match g {
+        &Geom::Box { sides } => {
+            let b = boxes::BoxGeom::new(pos, r, sides, body, narrow_max);
+            boxes::collide_world(world, &b, mask, max)
+        }
+        Geom::Brush { brush, offset } => {
+            let b = brushgeom::BrushGeom::new(brush, *offset, pos, r, narrow_max);
+            brushgeom::collide_world(world, &b, mask, max)
+        }
+        &Geom::Cylinder {
+            direction,
+            radius,
+            half_height,
+        } => {
+            let cy =
+                cylinder::Cylinder::new(pos, r, direction, radius, half_height, body, narrow_max);
+            cylinder::collide_world(world, &cy, mask, max)
+        }
+        &Geom::Capsule { radius, half_len } => {
+            let cap = Capsule {
+                centre: pos,
+                axis: [r[0][0], r[1][0], r[2][0]],
+                radius,
+                half_len,
+            };
+            collide_world(world, &cap, mask, max)
+        }
+        Geom::Transform(t) => transform::collide(world, t, pos, r, body, narrow_max, mask, max),
+    }
+}
+
 /// 0x5a5f20 for a capsule body against the world: its contacts
-/// ([`collide_world`] under the ragdoll mask, room for 0x80); none sets
-/// the state 2; five or more go through 0x5a2320's cut ([`cut`], at most
-/// 15); then [`contact_pass`] with the body as
-/// `b1` and the world as `b2`. The impact callback after it (0x5a5de0)
-/// and the jitter regions (0x5a23e0) are left out.
+/// ([`collide_world`] under the ragdoll mask, room for 0x80), then
+/// [`near_contacts`] with no jitter.
 pub fn near_world(
     world: &mut World,
     body: BodyId,
@@ -137,12 +187,16 @@ pub fn near_world(
     clip: &dyn Pieces,
     dv: &Dvars,
     world_index: usize,
-) {
+) -> Vec<ContactGeom> {
     let contacts = collide_world(clip, cap, crate::ragdoll::CLIP_MASK, MAX_CONTACTS);
-    near_contacts(world, body, obj, contacts, dv, world_index);
+    near_contacts(world, body, obj, contacts, dv, world_index, None)
 }
 
-/// The rest of 0x5a5f20 on a geom's `contacts` from its collide.
+/// The rest of 0x5a5f20 on a geom's `contacts` from its collide, the body
+/// as `b1` and the world as `b2`: none sets the state 2; five or more go
+/// through 0x5a2320's cut ([`cut`], at most 15); then [`contact_pass`].
+/// Returns the list 0x5a5de0 then reads ([`impact`]): the pass's after its
+/// 0x5a25d0, empty when the collide had none.
 pub fn near_contacts(
     world: &mut World,
     body: BodyId,
@@ -150,10 +204,11 @@ pub fn near_contacts(
     contacts: Vec<ContactGeom>,
     dv: &Dvars,
     world_index: usize,
-) {
+    jitter: Option<&mut Jitter>,
+) -> Vec<ContactGeom> {
     if contacts.is_empty() {
         obj.state = 2;
-        return;
+        return contacts;
     }
     let surface = world_surface(obj, dv, world_index);
     let contacts = if contacts.len() >= 5 {
@@ -161,7 +216,150 @@ pub fn near_contacts(
     } else {
         contacts
     };
-    contact_pass(world, contacts, [Some((body, obj)), None], surface);
+    contact_pass(world, contacts, [Some((body, obj)), None], surface, jitter)
+}
+
+/// The slots in each impact sound row (0x74 bytes from 0x84db98): one per
+/// surface type, `default` and the 28 names at 0x71fbd0.
+pub const SURFACE_TYPES: usize = 29;
+
+/// An impact sound 0x5a5de0 plays (0x5c8db0 at 0x5a5f0e): its slot in the
+/// rows of [`SURFACE_TYPES`] handles (`row 29 + surface type`, the type
+/// off the first contact's flags, so a type past 28 reads the next row's)
+/// and the contacts' mean point.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Impact {
+    pub slot: usize,
+    pub pos: V3,
+}
+
+/// 0x5a5de0 on the near callback's list `c` for `body`, whose object's
+/// sound row is `row`: each contact's `n . v` (`v` its point's velocity,
+/// [`point_vel`]; [`dot_yx`] stored) summed one add stored at a time, as
+/// are the positions; both over the count (`1 / n` stored, times each
+/// sum, stored; the dots' sum divided, stored). A sound when that mean
+/// times the body's mass is under `-phys_minImpactMomentum`. A row under
+/// 0, a preset never registered, plays nothing (vcod's).
+pub fn impact(
+    body: &super::Body,
+    c: &[ContactGeom],
+    row: i32,
+    min_momentum: f32,
+) -> Option<Impact> {
+    let first = c.first()?;
+    let (mut s, mut p) = (0.0f32, [0.0f32; 3]);
+    for g in c {
+        let d = dot_yx(g.normal, point_vel(body, g.pos));
+        s = (w(d) + w(s)) as f32;
+        p = std::array::from_fn(|k| (w(p[k]) + w(g.pos[k])) as f32);
+    }
+    let n = c.len() as f32;
+    let inv = (1.0 / w(n)) as f32;
+    let p = p.map(|x| (w(inv) * w(x)) as f32);
+    let s = (w(s) / w(n)) as f32;
+    let row = usize::try_from(row).ok()?;
+    let ty = (first.surface as i32 >> 20) as usize & 0x1f;
+    (-w(min_momentum) > w(s) * w(body.mass.mass)).then_some(Impact {
+        slot: row * SURFACE_TYPES + ty,
+        pos: p,
+    })
+}
+
+/// A `physicsJitter` region as 0x5a7730 keeps it (0x24 bytes from
+/// 0xcc5449c): the origin, both radii squared (+0xc, +0x10) and plain
+/// (+0x14, +0x18), the least and most push (+0x1c, +0x20).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct JitterRegion {
+    pub origin: V3,
+    pub inner_sq: f32,
+    pub outer_sq: f32,
+    pub inner: f32,
+    pub outer: f32,
+    pub min: f32,
+    pub max: f32,
+}
+
+impl JitterRegion {
+    /// 0x5a7756..0x5a778d: the radii squared and stored.
+    pub fn new(origin: V3, inner: f32, outer: f32, min: f32, max: f32) -> JitterRegion {
+        JitterRegion {
+            origin,
+            inner_sq: (w(inner) * w(inner)) as f32,
+            outer_sq: (w(outer) * w(outer)) as f32,
+            inner,
+            outer,
+            min,
+            max,
+        }
+    }
+}
+
+/// What 0x5a23e0 reads beside a contact: the world's regions, its
+/// `g_phys_msecStep` (0x71e798), `phys_jitterMaxMass` (0xcc7815c) and the
+/// CRT's `rand()` state (0x670622, the process's one stream).
+pub struct Jitter<'a> {
+    pub regions: &'a [JitterRegion],
+    pub msec_step: i32,
+    pub max_mass: f32,
+    pub rand: &'a mut MsvcRand,
+}
+
+/// The least contact normal z the jitter lifts at (the float at 0x70b0e8).
+const JITTER_MIN_Z: f32 = 0.7;
+
+impl Jitter<'_> {
+    /// 0x5a23e0 on a contact kept for a body against the world (nothing
+    /// for two bodies or a normal z under 0.7; a NaN passes): `m'` the
+    /// body's mass, or `phys_jitterMaxMass` when that less the mass stored
+    /// is under 0, `q = m' / max` stored, the weight `(1 - q^3) m'` stored,
+    /// `1000 / msecStep` stored. For each region whose outer radius
+    /// squared is over the level distance squared `(dx^2 + dy^2) + 0`
+    /// (each difference stored, the sum stored): the falloff 1, or
+    /// `(outer - d) (1 / (outer - inner))` (the inverse stored) when the
+    /// inner radius is under `d = sqrt` stored; `u = rand() / 32768`
+    /// stored; `(max - min) u + min` stored, times the falloff, the weight
+    /// and `1000 / msecStep`, stored, as z with `0` times it as x and y
+    /// (0x5a2585), into [`super::phys::obj_add_force`] at the contact.
+    fn push(&mut self, world: &mut World, ids: [Option<BodyId>; 2], c: &ContactGeom) {
+        let id = match ids {
+            [Some(b), None] | [None, Some(b)] => b,
+            _ => return,
+        };
+        if JITTER_MIN_Z > c.normal[2] || self.regions.is_empty() {
+            return;
+        }
+        let body = world.body_mut(id);
+        let m = body.mass.mass;
+        let max = self.max_mass;
+        let m = if ((w(max) - w(m)) as f32) < 0.0 {
+            max
+        } else {
+            m
+        };
+        let q = (w(m) / w(max)) as f32;
+        let weight = ((1.0 - w(q) * (w(q) * w(q))) * w(m)) as f32;
+        let per = (1000.0 / self.msec_step as f64) as f32;
+        for r in self.regions {
+            let dx = (w(c.pos[0]) - w(r.origin[0])) as f32;
+            let dy = (w(c.pos[1]) - w(r.origin[1])) as f32;
+            let d2 = (w(dx) * w(dx) + w(dy) * w(dy) + 0.0) as f32;
+            if w(r.outer_sq) <= w(d2) {
+                continue;
+            }
+            let d = w(d2).sqrt() as f32;
+            let falloff = if w(r.inner) < w(d) {
+                let inv = (1.0 / (w(r.outer) - w(r.inner))) as f32;
+                ((w(r.outer) - w(d)) * w(inv)) as f32
+            } else {
+                1.0
+            };
+            let u = (self.rand.next() as f64 * (1.0 / 32768.0)) as f32;
+            let l = ((w(r.max) - w(r.min)) * w(u) + w(r.min)) as f32;
+            let z = (w(l) * w(falloff) * w(weight) * w(per)) as f32;
+            let xy = (0.0 * w(z)) as f32;
+            super::phys::obj_add_force(body, self.msec_step, c.pos, [xy, xy, z]);
+        }
+    }
 }
 
 /// 0x5a2320's cut: the contacts it copies out, in its order.
@@ -317,17 +515,19 @@ pub fn reduce(c: &[(Vec3, Vec3, f32)]) -> Vec<usize> {
 /// The contact pass (0x5a2760) on contacts for `b1` against `b2` (a body
 /// and its phys object, or the world): 0x5a2280 sets both bodies' state 1
 /// when two contacts face each other; with `b1`'s state 1, else `b2`'s,
-/// 0x5a25d0 keeps one of each facing pair by that body's position; then
-/// each contact a body in state 1 is leaving (its point's velocity,
-/// normalized, along the normal over 0.01) is skipped and the rest become
-/// contact joints, until the world's 0x1000 joints or the group's 0x1000
-/// contacts are reached.
+/// 0x5a25d0 keeps one of each facing pair by that body's position (in
+/// place: the list it returns); then each contact a body in state 1 is
+/// leaving (its point's velocity, normalized, along the normal over 0.01)
+/// is skipped, the rest take the jitter (0x5a2918) and become contact
+/// joints, until the world's 0x1000 joints or the group's 0x1000 contacts
+/// are reached (0x5a2a34, 0x5a2a43).
 pub fn contact_pass(
     world: &mut World,
     mut c: Vec<ContactGeom>,
     mut bodies: [Option<(BodyId, &mut Obj)>; 2],
     surface: Surface,
-) {
+    mut jitter: Option<&mut Jitter>,
+) -> Vec<ContactGeom> {
     if pinched(&c) {
         for (_, o) in bodies.iter_mut().flatten() {
             o.state = 1;
@@ -341,7 +541,7 @@ pub fn contact_pass(
         let p = world.body(ids[k].expect("flagged body")).pos;
         unwedge(&mut c, p);
     }
-    'contacts: for g in c {
+    'contacts: for g in &c {
         for k in 0..2 {
             if flags[k] {
                 let b = world.body(ids[k].expect("flagged body"));
@@ -351,8 +551,11 @@ pub fn contact_pass(
                 }
             }
         }
+        if let Some(j) = jitter.as_deref_mut() {
+            j.push(world, ids, g);
+        }
         if world.joint_count() >= MAX_JOINTS || world.contact_count() >= MAX_JOINTS {
-            return;
+            break;
         }
         world.create_contact(
             Contact::new(surface, g.pos, g.normal, g.depth),
@@ -360,6 +563,7 @@ pub fn contact_pass(
             ids[1],
         );
     }
+    c
 }
 
 /// `(a1 b1 + a0 b0) + a2 b2` stored, the order 0x5a2874 loads it in.

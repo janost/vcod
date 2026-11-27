@@ -671,7 +671,7 @@ fn a_flat_model_launches_as_a_cube_and_lies_as_its_bounds() {
     let at = [10.0, 20.0, 30.0];
     let build = |world, f: &dyn Fn(&mut PhysWorld, BodyId)| {
         let mut pw = PhysWorld::new(world);
-        let id = pw.obj_create(at, &IDENTITY, [0.0; 3], &p, &dv);
+        let id = pw.obj_create(at, &IDENTITY, [0.0; 3], &p, &dv).unwrap();
         f(&mut pw, id);
         let (b, o) = (pw.world.body(id).clone(), pw.obj(id).unwrap().clone());
         (b, o)
@@ -730,7 +730,9 @@ fn a_tyre_dropped_on_a_floor_rests_on_its_cap() {
         cylinder: false,
     };
     let mut pw = PhysWorld::new(WorldId::Dynent);
-    let id = pw.obj_create([0.0, 0.0, 10.0], &IDENTITY, [0.0; 3], &p, &dv);
+    let id = pw
+        .obj_create([0.0, 0.0, 10.0], &IDENTITY, [0.0; 3], &p, &dv)
+        .unwrap();
     let part = Part {
         kind: PartKind::Cylinder {
             direction: 1,
@@ -743,8 +745,7 @@ fn a_tyre_dropped_on_a_floor_rests_on_its_cap() {
     let contact = super::collide::Dvars::default();
     let mut asleep = None;
     for frame in 1..=300 {
-        pw.run_to_time(frame * 17, &dv, &contact, &floor, &mut |_| {})
-            .expect("the cylinder has its collider");
+        pw.run_to_time(frame * 17, &dv, &contact, &floor, &mut |_| {});
         if pw.world.body(id).flags & super::body::DISABLED != 0 {
             asleep = Some(frame);
             break;
@@ -769,8 +770,46 @@ fn a_brush_geoms_sweep_size_is_its_bounds_cut_to_its_height() {
         brush,
         offset: [0.0; 3],
     };
-    let (lo, hi) = g.bounds().unwrap();
+    let (lo, hi) = g.bounds();
     let close = |a: [f32; 3], b: [f32; 3]| (0..3).all(|k| (a[k] - b[k]).abs() < 1e-6);
     assert!(close(lo, [0.15, -0.04, -0.08]), "{lo:?}");
     assert!(close(hi, [0.23, 0.04, 0.0]), "{hi:?}");
+}
+
+/// 0x43de60's handles: a surface with its own alias takes it, the rest
+/// the prefix's `_default`, a row with no prefix `collision_default` in
+/// every slot, and an alias not loaded none.
+#[test]
+fn impact_rows_take_the_surfaces_alias_or_the_prefixs_default() {
+    use super::collide::SURFACE_TYPES;
+    use super::obj::impact_aliases;
+    let have = [
+        "physics_tire_default",
+        "physics_tire_metal",
+        "collision_default",
+    ];
+    let rows = [
+        "physics_tire".to_string(),
+        String::new(),
+        "nothing".to_string(),
+    ];
+    let a = impact_aliases(&rows, |n| have.contains(&n));
+    assert_eq!(a.len(), 3 * SURFACE_TYPES);
+    let name = |k: usize| a[k].as_deref();
+    assert_eq!(name(13), Some("physics_tire_metal"));
+    assert_eq!(name(0), Some("physics_tire_default"));
+    assert_eq!(name(21), Some("physics_tire_default"));
+    assert!((SURFACE_TYPES..2 * SURFACE_TYPES).all(|k| name(k) == Some("collision_default")));
+    assert!((2 * SURFACE_TYPES..3 * SURFACE_TYPES).all(|k| name(k).is_none()));
+}
+
+/// The body pool is one across the worlds: a world whose others hold all
+/// but one slot makes one body and then none.
+#[test]
+fn the_body_pool_is_shared_by_the_worlds() {
+    use super::phys::{MAX_BODIES, PhysWorld, WorldId};
+    let mut pw = PhysWorld::new(WorldId::Fx);
+    pw.others = MAX_BODIES - 1;
+    assert!(pw.create_body().is_some());
+    assert!(pw.create_body().is_none());
 }

@@ -71,18 +71,6 @@ pub struct Transform {
     pub pos: V3,
 }
 
-/// A geom class the glue has no collider or sweep size for yet.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Unported(pub GeomClass);
-
-impl std::fmt::Display for Unported {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "geom class {:?} is not ported", self.0)
-    }
-}
-
-impl std::error::Error for Unported {}
-
 impl Geom {
     pub fn class(&self) -> GeomClass {
         match self {
@@ -99,7 +87,7 @@ impl Geom {
     /// `min(r sqrt(1/2), +0x54)` (0x5a688b), a capsule's `r sqrt(1/2)`
     /// unless `2 r + h` is less (0x5a68b7), a transform its inner geom's
     /// (0x5aed10); a brush's [`brush_bounds`].
-    pub fn bounds(&self) -> Result<(V3, V3), Unported> {
+    pub fn bounds(&self) -> (V3, V3) {
         let m = match self {
             Geom::Box { sides } => {
                 let mut m = sides[0];
@@ -124,9 +112,9 @@ impl Geom {
                 if s < w(t) { s as f32 } else { t }
             }
             Geom::Transform(t) => return t.inner.bounds(),
-            Geom::Brush { brush, .. } => return Ok(brush_bounds(brush)),
+            Geom::Brush { brush, .. } => return brush_bounds(brush),
         };
-        Ok(([-m; 3], [m; 3]))
+        ([-m; 3], [m; 3])
     }
 }
 

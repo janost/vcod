@@ -7,9 +7,8 @@
 //! 3.6.6.
 
 use super::ContactGeom;
-use super::cylinder::{self, Cylinder};
 use super::world::Pieces;
-use crate::ode::geom::{Geom, Transform, Unported};
+use crate::ode::geom::Transform;
 use crate::ode::math::{M3, V3, add, mul0_331, mul0_333};
 
 /// 0x5aed50: the inner geom's final pose off its body's, `R F` and
@@ -21,37 +20,22 @@ pub fn final_pose(t: &Transform, body_pos: V3, body_r: &M3) -> (V3, M3) {
     (pos, r)
 }
 
-/// A cylinder geom or a transform round one (class 6 over class 13)
-/// against the world at pose `pos`, `r` on a body at `body`, room for
-/// `max`: a transform is 0x5aee10, its inner geom pointed at the final
-/// pose (+0xc4, +0x94) and given the transform's body, then collided by
-/// 0x5a95a0; `infomode` (+0x54) is 0 on every transform 0x5aeb50 makes,
-/// so the contacts keep the inner geom as theirs. No other class has its
-/// collider here.
+/// 0x5aee10 on a transform at its body's pose `pos`, `r`: its inner geom
+/// pointed at the final pose (+0xc4, +0x94), given the transform's body
+/// and collided by 0x5a95a0 ([`super::collide_geom`]); `infomode` (+0x54)
+/// is 0 on every transform 0x5aeb50 makes, so the contacts keep the inner
+/// geom as theirs.
 #[allow(clippy::too_many_arguments)]
-pub fn collide_geom(
+pub fn collide(
     world: &dyn Pieces,
-    g: &Geom,
+    t: &Transform,
     pos: V3,
     r: &M3,
     body: V3,
     narrow_max: f32,
     mask: u32,
     max: usize,
-) -> Result<Vec<ContactGeom>, Unported> {
-    match g {
-        &Geom::Cylinder {
-            direction,
-            radius,
-            half_height,
-        } => {
-            let cy = Cylinder::new(pos, r, direction, radius, half_height, body, narrow_max);
-            Ok(cylinder::collide_world(world, &cy, mask, max))
-        }
-        Geom::Transform(t) => {
-            let (pos, r) = final_pose(t, pos, r);
-            collide_geom(world, &t.inner, pos, &r, body, narrow_max, mask, max)
-        }
-        g => Err(Unported(g.class())),
-    }
+) -> Vec<ContactGeom> {
+    let (pos, r) = final_pose(t, pos, r);
+    super::collide_geom(world, &t.inner, pos, &r, body, narrow_max, mask, max)
 }
