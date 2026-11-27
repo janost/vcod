@@ -543,7 +543,7 @@ struct ViewTail<'a> {
     shell: &'a console::shell::Shell,
     audio: &'a mut audio::AudioSystem,
     fx: &'a mut fx::sim::FxSystem,
-    session: &'a session::Session,
+    session: &'a mut session::Session,
     r: &'a mut Renderer,
     time: f64,
     dt: f32,
@@ -591,6 +591,9 @@ impl ViewTail<'_> {
         if session.live() {
             // Delayed `playfx` and the hits the step raised.
             fx.spawn_chained(fs, time);
+            if let Some(c) = session.cod4_mut() {
+                c.play_chained_fx_bodies(fx);
+            }
         }
         prof.next(frame_prof::Stage::Sound);
         audio.step(&session.entity_positions(), &session.entity_angles(), None);

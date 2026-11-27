@@ -1434,7 +1434,7 @@ fn play_soak(
             shell: &shell,
             audio: &mut audio,
             fx: &mut fx,
-            session: &sess,
+            session: &mut sess,
             r: &mut r,
             time,
             dt,
