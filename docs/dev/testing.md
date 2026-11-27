@@ -226,6 +226,7 @@ example runs them by name: `cargo run -p vcod --features testing
 | `cod4_map_sweep` | `COD4_DIR` | every stock map under every gametype (CoD4 map sweep, below) | `tools/cod4_sweep.rs` |
 | `cod4_soak`, `cod2_soak` | `COD4_DIR`, `COD2_DIR` | the soaks; `tools/cod4_soak.sh` runs them a map a process (Soaks, below) | `tools/cod4_sweep.rs`, `tools/cod2_soak.rs` |
 | `cod2_map_census` | `COD2_DIR` | every stock CoD2 map (CoD2 map census, below) | `tools/cod2_census.rs` |
+| `cod2_cull_profile`, `cod2_cell_walks_draw_alike`, `cod2_load_profile` | `COD2_DIR`, `VCOD_PROFILE_MAPS`, a Vulkan adapter (lavapipe will do) | the CoD2 cell walk's cost and holes, and the map load's stages (Performance, below) | `renderer/cod2_profile.rs` |
 
 The rigs a tool shares with the live gates (`play/cod4_sweep.rs`,
 `play/cod2_soak.rs`, the clock reads in `harness.rs`) stay in the crate
@@ -295,7 +296,7 @@ its doc comment says what it reads and which env vars drive it.
 | `recover_game_seed`, `recover_spread_seed`, `recover_rocket_seed` | CoD4 and CoD2 seed searches | their doc comments |
 | `leaf_order_census` | CoD1 leaf walk order (`LEAF_MAPS`, `LEAF_SAMPLES`) | bsp-ibsp59-format.md |
 | `stock_sun_keep`, `regional_sun_keep` | CoD1 sun keep | cod11-light-grid-and-leaf-lights.md 12 |
-| `cod2_cull_profile`, `cod2_cell_walks_draw_alike` (lavapipe), `cell_walks_side_by_side` (`vcod-cod2`) | CoD2 cell walk (`VCOD_PROFILE_MAPS`) | cod2-client-perf.md 8, 9 |
+| `client_tools cod2_cull_profile`, `cod2_cell_walks_draw_alike` (lavapipe), `cell_walks_side_by_side` (`vcod-cod2`) | CoD2 cell walk (`VCOD_PROFILE_MAPS`) | cod2-client-perf.md 8, 9 |
 | `a_prone_view_flick_costs` | CoD2 prone view cost | cod2-movement.md 10 |
 | `lit_pipeline_register_census` | CoD4 shader registers on a driver | cod4-client-perf.md 29 |
 | `spawn_wave` | the gsc interpreter | "The gsc interpreter" below |
@@ -538,7 +539,7 @@ example and runs its `cod4_soak` (`tools/cod4_sweep.rs`).
   columns.
 - Per-game numbers: `cod4-client-perf.md` (the per-map table),
   `cod2-client-perf.md`, `cod11-client-perf.md`.
-- `cod2_load_profile` (ignored, in `renderer/pipeline_check.rs`, run on
+- `client_tools cod2_load_profile` (`renderer/cod2_profile.rs`, run on
   lavapipe as `pipeline_check` is, in release) loads three CoD2 maps twice
   through the renderer, the prediction's collision and the first draw, and
   prints a digest of every texture uploaded and the paks the load marked. A

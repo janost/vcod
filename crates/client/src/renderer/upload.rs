@@ -54,7 +54,7 @@ pub(crate) fn upload_levels(
     img: &Image,
     levels: &[Vec<u8>],
 ) -> wgpu::TextureView {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     upload_digest::feed_image(label, img, levels);
     match &img.data {
         ImageData::Rgba8(px) if !levels.is_empty() => {
@@ -174,7 +174,7 @@ pub(crate) fn upload_texel4(
     format: wgpu::TextureFormat,
     px: &[u8],
 ) -> wgpu::TextureView {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     upload_digest::feed(label, &[px]);
     let size = wgpu::Extent3d {
         width,
@@ -341,8 +341,8 @@ pub(super) fn is_fallback(img: &Image, fallback_px: &[u8]) -> bool {
 
 /// A running hash of every texture the load uploads, label and bytes in
 /// upload order, for the load profile to show a faster load uploads the
-/// same textures. Off unless a test turns it on.
-#[cfg(test)]
+/// same textures. Off unless a test or profile turns it on.
+#[cfg(any(test, feature = "testing"))]
 pub(crate) mod upload_digest {
     use std::hash::Hasher;
     use std::sync::Mutex;
@@ -351,11 +351,13 @@ pub(crate) mod upload_digest {
         Mutex::new(None);
 
     /// Starts a digest; [`take`] ends it.
+    #[cfg(not(test))]
     pub fn start() {
         *DIGEST.lock().unwrap() = Some(Default::default());
     }
 
     /// `(hash, textures)` since [`start`].
+    #[cfg(not(test))]
     pub fn take() -> Option<(u64, usize)> {
         DIGEST.lock().unwrap().take().map(|(h, n)| (h.finish(), n))
     }

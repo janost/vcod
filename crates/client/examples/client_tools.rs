@@ -10,6 +10,12 @@ const TOOLS: &[(&str, fn())] = &[
     ("cod4_soak", tools::cod4_sweep::cod4_soak),
     ("cod2_soak", tools::cod2_soak::cod2_soak),
     ("cod2_map_census", tools::cod2_census::cod2_map_census),
+    ("cod2_cull_profile", tools::cod2_cull_profile),
+    (
+        "cod2_cell_walks_draw_alike",
+        tools::cod2_cell_walks_draw_alike,
+    ),
+    ("cod2_load_profile", tools::cod2_load_profile),
     ("cod2_main_menu_shot", tools::cod2_main_menu_shot),
     ("cod2_dumped_hud_shot", tools::cod2_dumped_hud_shot),
     ("cod2_player_hud_shot", tools::cod2_player_hud_shot),
