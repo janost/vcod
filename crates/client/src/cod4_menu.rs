@@ -27,6 +27,7 @@ use crate::hud::cod2elem::ScreenPlacement;
 use crate::hud::font::{self, Font};
 use crate::play::cod4_menus::controls::{SCROLL, UI_MAPPREVIEW, list_rows};
 use crate::play::cod4_menus::{OpenMenu, ScriptMenus, label, placed};
+use crate::voice_meter::UI_RECORDLEVEL;
 
 /// The list's left edge, first line and line step on the 640x480 grid,
 /// and its text scale.
@@ -154,6 +155,19 @@ fn item(
         if let Some(tex) = menus.map_preview().and_then(|m| a.image(&m)) {
             let [x, y, w, h] = placed(sp, (rect, align));
             out.push(quad(x, y, w, h, colour, tex, false));
+        }
+        return None;
+    }
+    if it.kind == ITEM_TYPE_OWNERDRAW && it.owner_draw == UI_RECORDLEVEL {
+        let read = |n: &str, d: f32| menus.dvar(n).map_or(d, |v| menuexp::atof(&v) as f32);
+        let gain = crate::voice::mic_gain(
+            read("winvoice_mic_reclevel", 65535.0),
+            read("winvoice_mic_scaler", 1.0),
+        );
+        let level = crate::voice_meter::level(vcod_cod4::net::voice::SAMPLE_RATE, gain);
+        for r in crate::voice_meter::rects(level, rect) {
+            let [x, y, w, h] = placed(sp, (r, align));
+            out.push(quad(x, y, w, h, [1.0; 4], "white".into(), false));
         }
         return None;
     }

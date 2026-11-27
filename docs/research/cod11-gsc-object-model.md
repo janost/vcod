@@ -956,7 +956,8 @@ an 80-bit one does not, so 1.1d's difference is not a double.
   copy that: 1.5 has no range check (`switch_index_min: None`) and the
   key matches no case, so `default` runs.
 - A key of another type (a float, a vector, undefined), each cell VERIFIED
-  live (`probe_switch` and scratch probes at `developer 0`, 2026-11-27):
+  live (`probe_switch`, and `client-probes/probe_switch_dev0` and
+  `probe_switch_late` at `developer 0`, 2026-11-27):
 
   | Build | `developer 1` | `developer 0` |
   |---|---|---|
@@ -970,8 +971,9 @@ an 80-bit one does not, so 1.1d's difference is not a double.
 - 1.5b's last key belongs to the thread's step: after `switch (2)` a
   float, a vector and undefined each ran `case 2:`, while a thread
   spawned with `thread`, or resumed after a `wait`, ran `default` on a
-  float though its spawner's last key matched (VERIFIED, live, a scratch
-  probe). VERIFIED (the instructions, above): the key is a `VM_Execute`
+  float though its spawner's last key matched (VERIFIED, live,
+  `client-probes/probe_switch_scope`; 1.1d and UO skipped the switch in
+  every scope, CoD2 and CoD4 ran `default`). VERIFIED (the instructions, above): the key is a `VM_Execute`
   local, kept from the last switch when the type test fails, and the Linux
   1.5b's script error function only prints the two `WARNING` lines where
   the Windows handler's raises (the same gap as the bracket read in

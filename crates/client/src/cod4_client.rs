@@ -905,6 +905,7 @@ impl Cod4Client {
             quality,
             cx.shell,
             cx.audio,
+            cx.fs.dirs().first().map(std::path::PathBuf::as_path),
         );
     }
 

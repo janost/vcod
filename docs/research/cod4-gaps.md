@@ -24,8 +24,6 @@ Ranked by how much a player notices.
 - Small HUD fades: the compass's voice fade, drawn off `isTalking` but
   not checked against a retail capture with a talker (cod4-hud.md 15.9).
   S.
-- Smaller open items, each in its doc: `winvoice_mic_mute`, `winvoice_save_voice` and the record level meter
-  (cod4-voice.md 5).
 
 ## 2. Not gaps
 
