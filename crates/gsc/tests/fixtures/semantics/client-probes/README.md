@@ -2857,6 +2857,13 @@ off `$ebp+8` on) prints each walk's segment.
 `probe_dmgspawn` needs no client: it spawns a `trigger_damage` from
 script on any 1.1d map and blasts at it twice.
 
+`probe_dmguse` needs no client either, but a map with three
+`trigger_damage`s that set `accumulate` and `threshold`: mp_carentan with
+`crates/server/tests/fixtures/triggers/mp_carentan-dmguse.ent` in place of
+three submodels' blocks, built and run by the recipe in
+`crates/server/tests/fixtures/triggers/mp_carentan-dmguse.txt`'s header. It
+blasts under the threshold, then `useBy`s each (cod11-combat.md 14.8.2).
+
 Retail's lines are in `crates/server/tests/dmgtrig_ab.rs` (the
 belltower's, the touch walks') and `cod11-combat.md` 14.8 (the spawn).
 

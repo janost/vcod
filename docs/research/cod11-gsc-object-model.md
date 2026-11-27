@@ -865,8 +865,8 @@ lies just under `T`: a float difference rounds up to `T` itself, an
 `T`'s even mantissa.
 
 VERIFIED, live (`probe_eq_tol` on 1.1d, 1.5b, UO 1.51b and `cod2_lnxded`
-1.3, 2026-11-26; on `cod4_lnxded` 1.7 the same lines as a scratch `war.gsc`
-under `fs_game`). Among its 24 lines:
+1.3, 2026-11-26; on `cod4_lnxded` 1.7 the same lines as `war.gsc` under
+`fs_game`, `tools/run_probe_cod4_gsc.sh`). Among its 24 lines:
 
 | Line | Expression | 1.1d | 1.5b, UO, CoD2, CoD4 |
 |---|---|---|---|
@@ -920,15 +920,17 @@ an 80-bit one does not, so 1.1d's difference is not a double.
   -0x7e8000..0x7fffff on CoD4 (the test at 0x8152158, called from
   0x8163e6e, the string at 0x822cb18). VERIFIED (the instructions).
   VERIFIED, live (`probe_switch_range_hi`, `probe_switch_range_lo`,
-  2026-11-27, 1.1d, UO 1.51b and `cod2_lnxded` 1.3): the last key in range
+  2026-11-27, 1.1d, UO 1.51b, `cod2_lnxded` 1.3 and `cod4_lnxded` 1.7): the last key in range
   runs `default` and the next is fatal, `switch index 8388608 out of range`
   and `switch index -8257537 out of range` on 1.1d and UO (-0x7e0001),
-  `-8257539` on CoD2 (-0x7e0003). CoD4 was not run (no committed runner):
-  its bound is read from 0x8152158, its error path is INFERRED to be CoD2's.
+  `-8257539` on CoD2 (-0x7e0003), `-8290305` on CoD4 (-0x7e8001; -0x7e8000
+  ran `default`), all through `switch index %d out of range`. The CoD4 error
+  path is the same exit as CoD2's, no longer INFERRED.
   The range error takes the same exit as `cannot switch on float`: below
   `developer 1` 1.1d and UO skip the switch (no case, no `default`) and
-  CoD2 runs `default` (VERIFIED, live, the same probes at `developer 0`,
-  main past a `wait`). `Op::SwitchKey` checks it per
+  CoD2 and CoD4 run `default` (VERIFIED, live, the same probes at
+  `developer 0`, main past a `wait`; CoD4's with `+set developer 0` before
+  the map). `Op::SwitchKey` checks it per
   `VmProfile::switch_index_min`.
 - 1.5b has no range error either, and no error of any kind: its handler
   (`cod_lnxded` 1.5b 0x80ac974..0x80aca20, the type test 0x80ac994..0x80ac9a0)
@@ -987,12 +989,12 @@ an 80-bit one does not, so 1.1d's difference is not a double.
   `case "1":`, and `case "a":` beside `case "A":`, are two labels and
   compile (VERIFIED, live, `probe_switch_dup_int`, `probe_switch_dup_str`,
   `probe_switch_dup_default`, `probe_switch_dup_case`, `probe_switch_mixed`
-  on 1.1d, 1.5b, UO 1.51b and `cod2_lnxded` 1.3, 2026-11-27, the console
-  naming the second label). The string is in the compiler of `cod_lnxded`
+  on 1.1d, 1.5b, UO 1.51b, `cod2_lnxded` 1.3 and, through
+  `tools/run_probe_cod4_gsc.sh`, `cod4_lnxded` 1.7, 2026-11-27, the console
+  naming the second label; at `developer 0` too on CoD4). The string is in the compiler of `cod_lnxded`
   1.1d (0x80d6e0e, pushed at 0x809874b), 1.5b (0x80e130e, 0x809f9de), UO
   (0x80e724e, 0x80a09d6), `cod2_lnxded` (0x81440a0, 0x8074606) and
-  `cod4_lnxded` (0x822ae35, 0x814a05f). VERIFIED (the instructions); CoD4
-  was not run. No stock script has a repeated label: a scan of the 644
+  `cod4_lnxded` (0x822ae35, 0x814a05f). VERIFIED (the instructions). No stock script has a repeated label: a scan of the 644
   CoD2 scripts' 2214 labels, and the 1.1, UO and CoD4 compile tests,
   found none. vcod refuses it in `compile_switch`.
 - NaN: a NaN difference (a NaN operand, or two like infinities) is

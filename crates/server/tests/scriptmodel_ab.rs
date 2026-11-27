@@ -413,7 +413,7 @@ fn ours_pair_in(
     target_log: Option<&str>,
 ) -> Vec<String> {
     let fs = Rc::new(fs);
-    let run = |shift| {
+    let run = |shift: (i64, i64)| {
         ours_pair_run(
             fs.clone(),
             map,
@@ -426,18 +426,43 @@ fn ours_pair_in(
             shift,
         )
     };
-    let (lines, played) = run(0);
+    let (lines, played) = run((0, 0));
     // Ours' join takes as long as its gamestate's fragments: a map or a
     // protocol whose join runs a frame off rejoins that much earlier, so
     // the target plays on the capture's frame and his cmds land on it.
-    match (target_log.map(first_play), played) {
-        (Some((t, _)), Some(p)) if p != t => run(t - p).0,
+    let target = match (target_log.map(first_play), played) {
+        (Some((t, _)), Some(p)) => t - p,
+        _ => 0,
+    };
+    let lines = if target != 0 {
+        run((target, 0)).0
+    } else {
+        lines
+    };
+    // The same for the thrower, on his spawn line (`PROBE thrower`, or the
+    // grenade part's `PROBE rphase`).
+    match (
+        target_log.and_then(|l| thrower_line_time(l.lines())),
+        thrower_line_time(lines.iter().map(String::as_str)),
+    ) {
+        (Some(r), Some(o)) if r != o => run((target, r - o)).0,
         _ => lines,
     }
 }
 
-/// One run of [`ours_pair_in`], the clients joining `shift` ms later than
-/// [`TARGET_PLAYS_AFTER_JOIN_MS`] says, and the target's first playing
+/// The time of the first `PROBE thrower` or `PROBE rphase` line.
+fn thrower_line_time<'a>(mut lines: impl Iterator<Item = &'a str>) -> Option<i64> {
+    lines.find_map(|l| {
+        let rest = l
+            .strip_prefix("PROBE thrower ")
+            .or_else(|| l.strip_prefix("PROBE rphase "))?;
+        rest.split(' ').next()?.parse().ok()
+    })
+}
+
+/// One run of [`ours_pair_in`], the target joining `shift.0` ms later than
+/// [`TARGET_PLAYS_AFTER_JOIN_MS`] says and the thrower `shift.1` ms later
+/// again, and the target's first playing
 /// snapshot time. `part` is `probe_part`'s value, then any more of the
 /// probe's cvars as `name value` words.
 #[expect(clippy::too_many_arguments)]
@@ -450,7 +475,7 @@ fn ours_pair_run(
     prone_yaw: Option<f32>,
     thrower_at: Option<[f32; 3]>,
     target_log: Option<&str>,
-    shift: i64,
+    shift: (i64, i64),
 ) -> (Vec<String>, Option<i64>) {
     let prone = prone_yaw.is_some();
     let mut missiles = Vec::new();
@@ -495,8 +520,8 @@ fn ours_pair_run(
         (Some((t, _)), Some(log)) => {
             let thrower = thrower_spawn(log);
             (
-                t - TARGET_PLAYS_AFTER_JOIN_MS + shift,
-                thrower - t + TARGET_PLAYS_AFTER_JOIN_MS - THROWER_SPAWNS_AFTER_JOIN_MS,
+                t - TARGET_PLAYS_AFTER_JOIN_MS + shift.0,
+                thrower - t + TARGET_PLAYS_AFTER_JOIN_MS - THROWER_SPAWNS_AFTER_JOIN_MS + shift.1,
             )
         }
         _ => (TARGET_JOIN_MS, SHOOTER_LATE_MS),
@@ -534,12 +559,12 @@ fn ours_pair_run(
             framed,
             ..Default::default()
         };
-        if let Some(log) = target_log {
-            hb.times = common::cmds_times(log, "target");
-            hb.ran = common::cmds_ran(log, "target");
-            ha.times = common::cmds_times(log, "thrower");
-            ha.ran = common::cmds_ran(log, "thrower");
-        }
+    }
+    if let Some(log) = target_log {
+        hb.times = common::cmds_times(log, "target");
+        hb.ran = common::cmds_ran(log, "target");
+        ha.times = common::cmds_times(log, "thrower");
+        ha.ran = common::cmds_ran(log, "thrower");
     }
     let mut selected: Option<u8> = None;
     let mut spawned: Option<i64> = None;
@@ -695,17 +720,27 @@ fn first_play(log: &str) -> (i64, [f32; 3]) {
         .expect("a playing target FALL line")
 }
 
-/// The time of a fixture's first `PROBE thrower` line, his spawn.
+/// The time of a fixture's first `PROBE thrower` line, his spawn, or of
+/// its `thrower SPAWNED` line where the part logs no `PROBE thrower`.
 fn thrower_spawn(text: &str) -> i64 {
+    let probe = |l: &str| {
+        l.strip_prefix("PROBE thrower ")?
+            .split(' ')
+            .next()?
+            .parse()
+            .ok()
+    };
+    let spawned = |l: &str| {
+        l.strip_prefix("thrower SPAWNED t=")?
+            .split(' ')
+            .next()?
+            .parse()
+            .ok()
+    };
     text.lines()
-        .find_map(|l| {
-            l.strip_prefix("PROBE thrower ")?
-                .split(' ')
-                .next()?
-                .parse()
-                .ok()
-        })
-        .expect("a PROBE thrower line")
+        .find_map(probe)
+        .or_else(|| text.lines().find_map(spawned))
+        .expect("a PROBE thrower or thrower SPAWNED line")
 }
 
 /// The spawn point under `at`, where a spawn's think left a body, as the
@@ -855,6 +890,85 @@ fn a_frag_bounces_off_a_script_model_and_a_players_bones() {
         ours_pair("grenade", true, 16_000),
     );
 }
+
+/// [`a_frag_bounces_off_a_script_model_and_a_players_bones`] on a 1.1d
+/// retake that logged both clients' cmds, sent on their stamps: every
+/// missile snapshot of both frags on retail's to the bit but
+/// [`GRENADE_GAPS`]'s (docs/research/cod11-combat.md 12.4).
+#[test]
+fn a_frag_bounces_off_a_script_model_and_a_players_bones_like_retail() {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
+        return;
+    };
+    let fixture = include_str!("fixtures/scriptmodel/mp_carentan-scriptmodel-grenade-cmds.txt");
+    let ours = ours_pair_in(
+        fs,
+        "mp_carentan",
+        "grenade",
+        true,
+        16_000,
+        None,
+        None,
+        Some(fixture),
+    );
+    let retail: Vec<String> = fixture
+        .lines()
+        .filter(|l| !l.contains(" etype 0 "))
+        .map(str::to_string)
+        .collect();
+    report(&retail, &ours);
+    let (r, o) = (missile_grounds(&retail), missile_grounds(&ours));
+    assert_eq!((r.len(), o.len()), (2, 2), "{o:?}");
+    let mut off = Vec::new();
+    for g in 0..2 {
+        assert_eq!(r[g].len(), o[g].len(), "grenade {g}'s snapshots");
+        for (s, (a, b)) in r[g].iter().zip(&o[g]).enumerate() {
+            assert_eq!(
+                (a.0, a.2),
+                (b.0, b.2),
+                "grenade {g} snapshot {s}: {a:?} {b:?}"
+            );
+            let d = (0..3).map(|i| (a.1[i] - b.1[i]).abs()).fold(0.0, f32::max);
+            if d != 0.0 {
+                off.push((g, s, d));
+            }
+        }
+    }
+    if std::env::var_os("SM_REPORT").is_some() {
+        eprintln!("off {off:?}");
+    }
+    for &(g, s, d) in &off {
+        let gap = GRENADE_GAPS
+            .iter()
+            .find(|(gg, from, to, _, _)| *gg == g && (*from..=*to).contains(&s));
+        assert!(
+            gap.is_some_and(|(.., near, _)| d <= *near),
+            "grenade {g} snapshot {s}: {d} off retail's"
+        );
+    }
+}
+
+/// The missile snapshots of [`a_frag_bounces_off_a_script_model_and_a_players_bones_like_retail`]
+/// left off retail's base: (grenade, first snapshot, last snapshot, how far,
+/// why).
+const GRENADE_GAPS: &[(usize, usize, usize, f32, &str)] = &[
+    (
+        0,
+        1,
+        2,
+        1e-6,
+        "the barrel strike's z one float step under retail's, the next contact \
+         re-bases it: the script model clip's last bit on 1.1d (combat doc 12.4)",
+    ),
+    (
+        1,
+        5,
+        78,
+        0.016,
+        "every base from the strike on the target's posed bones on: his idle \
+         clip's pose (combat doc 12.4)",
+    ),
+];
 
 /// mp_carentan on UO: the grenade part's barrel with `setContents`
 /// 0x2000000, a body's contents: the frag leaves it at a quarter of the

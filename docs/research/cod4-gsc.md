@@ -1387,7 +1387,8 @@ vcod (`play::cod4_physics`, world 1 of `ode::phys`):
   again there. World 1 steps through `PhysWorld::run_to_time` at the
   drawn time each frame: the dynamics 3.6.7 matched against retail's
   takes. World 1 is made anew with world 0 where `Phys_Init` runs
-  (0x43fbe7, and `CG_MapRestart` at 0x44b3e2: `restart_dynents`).
+  (0x43fbe7, and `CG_MapRestart` at 0x44b3e2: `restart_dynents`; world 2
+  through `Ragdolls::restart_world`, cod4-world.md 13.7).
   VERIFIED (the code against the above).
 - `Cod4Physics::advance` lends world 1 the session's one CRT `rand`
   stream (`Cod4Session::crt_rand`, which the gunner's view jitter draws
@@ -2677,7 +2678,8 @@ sweep, as the `body` lines are):
 
 Running (`vcod_cod4::ode`, `fx_phys`, `play::cod4_physics`):
 
-- Three worlds on one layer: 0 the dynamic entities (`DynEnts::advance`,
+- Three worlds on one layer, all three remade by a map restart
+  (cod4-world.md 13.7): 0 the dynamic entities (`DynEnts::advance`,
   cod4-world.md 13.2), 1 the launched parts (3.6) and the effects'
   physics models (cod4-effects.md 9.1.1), 2 the ragdolls
   (`cod4-player-anims.md` 10.7).
@@ -2704,8 +2706,6 @@ Not ported, no take reaching them:
 - Looping physics elements of an effect, chained effects' bodies (made
   one frame late), and a spawn's nonzero angles, cylinder frames and
   0x40 / 0x80 origins, which no take checks (cod4-effects.md 9.1.1).
-- `CG_MapRestart` resets worlds 0 and 1 and the dynamic entities, not the
-  ragdolls (cod4-world.md 13.7).
 
 The box's narrow pass is matched on the shards take, and a mp_shipment
 frag's 20 s of rolling bottles and fruit on the shipment take (3.6.9).

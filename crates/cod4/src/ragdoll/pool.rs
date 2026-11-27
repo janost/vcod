@@ -166,11 +166,11 @@ pub struct Ragdolls {
     pub dvars: Dvars,
     pub phys: PhysDvars,
     pub contact: collide::Dvars,
-    pw: PhysWorld,
+    pub(super) pw: PhysWorld,
     slots: Vec<Slot>,
     generations: Vec<u64>,
     /// The ragdoll clock (0xd5ec534).
-    time: i32,
+    pub(super) time: i32,
 }
 
 #[inline]
@@ -199,6 +199,21 @@ impl Ragdolls {
             slots: (0..SLOTS).map(|_| Slot::new()).collect(),
             generations: vec![0; SLOTS],
             time: 0,
+        }
+    }
+
+    /// `Phys_Shutdown` then `Phys_Init` (0x44b3dd, 0x44b3e2) as `CG_MapRestart`
+    /// runs them: world 2 anew (its bodies, its step clock and `msecStep`,
+    /// the reorder seed), every slot free. The ragdoll clock is not reset
+    /// (0xd5ec534: `Phys_Init`'s clear stops at 0xcc78148, and only
+    /// `Ragdoll_Update` writes it).
+    pub fn restart_world(&mut self) {
+        let others = self.pw.others;
+        self.pw = PhysWorld::new(WorldId::Ragdoll);
+        self.pw.others = others;
+        for (s, g) in self.slots.iter_mut().zip(&mut self.generations) {
+            *s = Slot::new();
+            *g += 1;
         }
     }
 
