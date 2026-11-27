@@ -1061,6 +1061,16 @@ impl Ragdolls {
             .then_some(s.drawn.as_slice())
     }
 
+    /// Where retail's entity stands once the slot draws: the latest
+    /// snapshot's first bone, `j_mainroot`, copied into the entity's origin
+    /// (0x5ba060, cod4-player-anims.md 10.7.2).
+    pub fn root(&self, id: SlotId) -> Option<Vec3> {
+        let s = self.slot(id)?;
+        self.pose(id)?;
+        let p0 = *s.fed.as_ref()?.p0.first()?;
+        Some(s.drawn.get(p0)?.0)
+    }
+
     /// Changes whenever [`Self::pose`] may.
     pub fn version(&self, id: SlotId) -> u64 {
         self.slot(id).map_or(0, |s| s.version)
