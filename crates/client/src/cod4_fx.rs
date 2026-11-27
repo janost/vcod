@@ -466,6 +466,7 @@ fn emitter(
             falloff: trail_falloff(a, e),
         });
     }
+    em.cod4_phys = vcod_cod4::fx_phys::is_physics(d);
     if d.elem_type == Some(ElemType::Model) {
         use crate::fx::efx::Cod4ModelFrame;
         em.cod4_model = Some(match d.flags & flags::RUN_MASK {

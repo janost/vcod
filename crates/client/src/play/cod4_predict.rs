@@ -76,6 +76,9 @@ pub struct Cod4World {
     pub parts: HashMap<String, Arc<vcod_cod4::ode::obj::PhysModel>>,
     /// The impact sound rows' alias prefixes (`ode::obj::Presets`).
     pub impact_prefixes: Vec<String>,
+    /// The effects with physics model elements by [`crate::cod4_fx::key`]
+    /// (`vcod_cod4::fx_phys`), which world 1 spawns.
+    pub fx_phys: HashMap<String, Arc<vcod_cod4::fx_phys::PhysEffect>>,
     /// The map's dynamic entities' defs (`vcod_cod4::dynent`).
     pub dynents: Arc<Vec<vcod_cod4::dynent::DynDef>>,
     /// The mantle clips out of these zones, which prediction mantles along.
@@ -149,6 +152,10 @@ impl Cod4World {
             model_coll,
             parts: vcod_cod4::ode::obj::part_models(&all, &presets),
             impact_prefixes: presets.prefixes,
+            fx_phys: vcod_cod4::fx_phys::effects(&all)
+                .into_iter()
+                .map(|(n, e)| (crate::cod4_fx::key(&n), e))
+                .collect(),
             dynents: Arc::new(vcod_cod4::dynent::defs(map, zones)),
             mantle,
         })

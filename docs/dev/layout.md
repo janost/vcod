@@ -93,7 +93,9 @@ CoD4 1.7's formats and wire.
   message windows, compass, `weaponinfo`, rank tables). `scriptmenu.rs` and
   `menuexp.rs` the script menus and their expressions.
 - `sound.rs`: the alias rows, `channels.def` and loaded sounds as `.wav`.
-- `fx.rs`: an effect element's `FxElemDef` and samples.
+- `fx.rs`: an effect element's `FxElemDef` and samples; `fx_phys.rs` a
+  physics model element's spawn off `fx_randomTable` as a world 1 body
+  (cod4-effects.md 9.1.1).
 - `ragdoll.rs`: the client ragdoll (`ragdoll.cfg`'s defs, the 1.7 dvars, the
   solver `play::cod4_players` runs on a corpse).
 - `ode/`: ODE 0.5 as iw3mp.exe 1.7 built it (cod4-player-anims.md 10.4),
@@ -105,7 +107,8 @@ CoD4 1.7's formats and wire.
   worlds 0 and 1's geoms (`ode/geom.rs`) and body creation off a model
   and preset (`ode/obj.rs`, cod4-gsc.md 3.6.3). All three worlds run on
   it: world 0 the dynamic entities (`dynent.rs`), world 1 the launched
-  parts (`play::cod4_physics`), world 2 the ragdolls.
+  parts and the effects' physics models (`play::cod4_physics`), world 2
+  the ragdolls.
 - `collision/`: the clip map from a clipMap_t; `pieces.rs` the world
   collider's walk and a brush's faces and windings.
 - `net/`: the 1.7 wire.
@@ -380,7 +383,7 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
     `cod4_scoreboard.rs` its
     scoreboard, `cod4_viewmodel.rs` its first-person view weapon,
     `play/cod4_predict.rs` its prediction, `play/cod4_physics.rs` its
-    launched parts.
+    launched parts and physics effect models.
   - `Session::Cod4Menu`: 1.7's front end (`cod4_front.rs`), which a join
     hands over to `Session::Cod4` and leaving the game takes back.
 - `voice.rs`: CoD2's and CoD4's voice chat: the session's link, Speex,

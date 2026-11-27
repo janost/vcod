@@ -14,9 +14,6 @@ kept at the end. Sizes: S under an hour, M a few hours, L a day or more.
 
 Ranked by how much a player notices.
 
-- Physics FX models (cluster bombs, breakables, the watermelon's
-  chunks) draw as plain effect elements, not world 1 bodies
-  (cod4-effects.md 9.1). M.
 - Ragdolls run on the ODE port as 1.7 runs them, gated on two retail
   captures to within a fraction of a unit (cod4-player-anims.md 10.7);
   the base pose they are built in is the model's, not under the corpse's
@@ -50,6 +47,12 @@ Ranked by how much a player notices.
 
 ## 3. Closed
 
+- Physics FX models (cluster bombs, breakables, the watermelon's
+  chunks) drew as plain effect elements. They now spawn as world 1
+  bodies off `fx_randomTable`, as 1.7's 0x4a1ff0 spawns them, draw at
+  their bodies' poses and free them when their lives end; the watermelon
+  take's six chunks spawn to the bit and pass the trajectory gate
+  (cod4-effects.md 9.1.1).
 - Launched parts and dynamic entities ran on vcod's own impulse solver,
   with no impact sounds. Worlds 0 and 1 now run on the ODE port, 1.7's
   geoms, colliders, contact pass and step, matched step for step on four

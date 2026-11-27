@@ -235,6 +235,10 @@ pub struct Emitter {
     /// (`FX_DrawElem_Model`'s axes, cod4-effects.md 9.1); `None` for CoD1
     /// and CoD2.
     pub cod4_model: Option<Cod4ModelFrame>,
+    /// A CoD4 physics model element (flag 0x8000000): the fx system plays
+    /// it as a world 1 body through [`crate::fx::sim::FxSystem::take_phys_plays`]
+    /// and spawns no particle for it (cod4-effects.md 9.1.1).
+    pub cod4_phys: bool,
 }
 
 /// The frame a CoD4 model element's angles turn in: 0x4a5d30's by the
@@ -337,6 +341,7 @@ impl Default for Emitter {
             cod4_emit: None,
             cod4_trail: None,
             cod4_model: None,
+            cod4_phys: false,
         }
     }
 }

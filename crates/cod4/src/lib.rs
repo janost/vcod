@@ -10,6 +10,7 @@ pub mod collision;
 pub mod drawsurf;
 pub mod dynent;
 pub mod fx;
+pub mod fx_phys;
 pub mod hud;
 pub mod image;
 pub mod install;

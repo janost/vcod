@@ -2666,6 +2666,8 @@ sweep, as the `body` lines are):
   That a step draws as many times as its reorder's rows, as world 2's
   do (`cod4-player-anims.md` 10.4), answering 3.6.2, is INFERRED (the
   seeds agree).
+- The watermelon's chunks spawned through the FX path rather than off
+  their `new` lines run the same (`cod4-effects.md` 9.1.1).
 - The impact sounds: 23, 37 and 6 on retail's steps, each retail handle
   met under one alias and each alias under one handle
   (`physics_metal_default`, `physics_tire_default`,

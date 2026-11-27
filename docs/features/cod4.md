@@ -264,8 +264,11 @@ CoD2 effect path:
 - Muzzle flashes and shell ejects on the posed weapon's tags, impacts,
   explosions, effects emitted along an element's flight, missile smoke
   trails on `tag_fx`. Effect model elements (debris) draw the zones'
-  xmodels at their visual scale, turning as 1.7 turns them; an element
-  with its own physics body moves on vcod's path instead.
+  xmodels at their visual scale, turning as 1.7 turns them. An element
+  with its own physics body (a watermelon's chunks, a paper box's, a
+  cluster bomb's) flies as a body on the same physics as the launched
+  parts, spawned where 1.7 spawns it, and its body goes when its life
+  ends ([cod4-effects.md](../research/cod4-effects.md) 9.1.1).
 - Looping effects for their whole life: `spawnFx`, `playLoopedFx` and
   the map's createfx ambience (mp_crash's fires start settled). Each
   element spawns inside its `spawnRange` and fades over its distances.
@@ -500,29 +503,21 @@ Ranked by how much a player notices. The research-side lists are
    and custom classes are safe, and no use here. Create a Class opens at
    rank 3 and edits classes as 1.7 does
    ([cod4-front-end.md](../research/cod4-front-end.md) 4).
-3. **Effect debris off the physics.** Launched parts, props and
-   ragdolls run on the ODE port, as on 1.7, but an effect's physics
-   models (a watermelon's chunks, a cluster bomb's) move on vcod's own
-   path, not as bodies. Each client still runs its own props, so two
-   clients see them land apart, as on 1.7
-   ([cod4-gsc.md](../research/cod4-gsc.md) 3.6,
-   [cod4-world.md](../research/cod4-world.md) 13,
-   [cod4-effects.md](../research/cod4-effects.md) 9.1).
-4. **Stereo only.** A 5.1 or 7.1 device gets the stereo mix on its front
+3. **Stereo only.** A 5.1 or 7.1 device gets the stereo mix on its front
    pair ([cod4-sound.md](../research/cod4-sound.md) 5). 139 alias rows
    whose curve no zone holds fall off straight.
-5. **Demos not yet swapped with a retail client.** The file layout is
+4. **Demos not yet swapped with a retail client.** The file layout is
    gated both ways against `iw3mp.exe`'s and a retail capture, but no
    retail client has played a vcod demo or recorded one for vcod
    ([cod4-demos.md](../research/cod4-demos.md) 8).
-6. **Small menus.** Single Player's Yes does nothing (this is a
+5. **Small menus.** Single Player's Yes does nothing (this is a
    multiplayer client). Of the `winvoice_*` voice settings the record
    level scales the captured voice (1.7 sets the Windows mixer) and the
    scaler applies as 1.7's; the playback mute and `voice.wav` do nothing
    ([cod4-voice.md](../research/cod4-voice.md) 4). The
    CD key menu keeps a verified key until vcod quits, where 1.7 writes
    the registry.
-7. **Server-side differences.** vcod-server never asks the authorize
+6. **Server-side differences.** vcod-server never asks the authorize
    server, so it answers an off-LAN challenge at once where 1.7 waits on
    the authorize server (cod4-handshake.md 15); in its place one public
    address holds at most `vc_maxClientsPerIP` slots (4). No PunkBuster (a stock

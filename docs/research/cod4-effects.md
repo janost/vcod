@@ -397,10 +397,113 @@ direction vcod's spawn offset took. The rest is vcod's update holding
 the element's position, as 0x4a4a00 tests it. Until this, a model
 element took CoD1's debris spin, 10 times too fast (CoD1's angle rate
 is per 100 ms) and turned by the spawn direction under every run bit.
-Not modelled: 0x8000000's physics body. vcod moves such an element as
-it moves the others and turns it as the non-physics arm does, which
-matches the body only up to its first contact. How the models sit
-beside retail's is pending a look.
+An element with flag 0x8000000 is no particle: it flies as a world 1
+body (9.1.1). How the models sit beside retail's is pending a look.
+
+#### 9.1.1 Physics model elements, as ported
+
+The spawn of a type 5 element with flag 0x8000000 as a body in physics
+world 1, its draw and its free, read with `objdump` off `iw3mp.exe`
+1.7; `vcod_cod4::fx_phys`, and `play::cod4_physics` on the client.
+`fx_randomTable` is the 479 floats at 0x6bce70, followed by its first 28
+again (0x6bd5ec..0x6bd65b), so an index up to the seed plus 27 reads
+through; the word at 0x6bd65c is 0. VERIFIED (the bytes). An integer
+draw takes the entry's low 16 bits (`movzx` of the word):
+`base + (word (amplitude + 1) >> 16)`. VERIFIED (the instructions,
+0x4a20bd..0x4a20d6).
+
+The seeds:
+
+- The effect's seed (`FX_SpawnEffect`, effect +0x12): when 0x4a0ea0
+  finds flag 0x1000 on an element of the effect, or of the effects its
+  elements name at +0xd8 and +0xdc, it is `(((t 0x343fd + 0x269ec3) >>
+  17) 479) >> 15` off the start time `t` (0x4a12b4..0x4a12cc); else
+  `rand() 479 / 32768` (0x4a12d2..0x4a12e9). VERIFIED (the
+  instructions). That 0x4a0ea0 answers true on the flag is INFERRED
+  (its arm at 0x4a0f4e not read). `fx_phys::PhysEffect` tests the
+  effect's own elements only; the client draws `rand()` off the
+  session's CRT stream, which vcod's other effects do not draw from
+  (vcod's).
+- A one-shot element spawns `spawn.base` times, plus the integer draw at
+  entry 19 past the effect's seed when the amplitude is set, each with
+  its index as the sequence (0x4a3241..0x4a3295). VERIFIED (the
+  instructions).
+- `FX_SpawnElem` (0x4a25b0): the start is `spawnDelayMsec.base` plus the
+  spawn time, plus, when the amplitude is set, the draw at entry 18 past
+  `(296 sequence + effect seed + start) % 479`; the element's seed is
+  `(effect seed + start + 296 sequence) % 479` (0x4a25fb..0x4a2660).
+  VERIFIED (the instructions).
+
+The body (0x4a1ff0, called at 0x4a2849 for type 5 with the flag):
+
+- The frame (0x4a5d30): run bits 0 the world's axes at the origin,
+  0x40 and 0x80 the effect's; 0xc0 the spawn origin (0x4a5cb0, entries
+  6..8) moved by the spawn offset (0x4a5ab0), forward along that offset
+  normalized (0x4076d0), `(1, 0, 0)` when its length is 0. A sphere
+  offset's up is 0x55fed0's perpendicular and left `up x forward`
+  (0x55fa30). VERIFIED (the instructions, 0x4a5dcc..0x4a5e54).
+- The sphere offset (0x4a5bf2): 0x49f8e0's direction, `z = 2 r10 - 1`,
+  `s = sqrt(1 - z z)` stored, the angle `r9` times the double at
+  0x70b078 (6.2831854820251465, the float 2 pi) stored, `(cos s, s sin,
+  z)`, times the radius drawn at entry 11, added in the world's axes.
+  The cylinder (0x4a5ad6) turns the radius and angle through the
+  effect's axes 1 and 2 and adds the height at entry 10 along axis 0.
+  VERIFIED (the instructions).
+- The element's origin in its frame (0x4a2220): zero under 0xc0
+  (0x4a2311); under 0x40 and 0x80 the spawn origin plus offset less the
+  frame's origin, taken into its axes (0x4a227c..0x4a22f6). The body's
+  position is the frame's origin plus that origin in the frame's axes,
+  `((o0 a0 + origin) + o1 a1) + o2 a2` stored (0x4a2021..0x4a2090).
+  VERIFIED (the instructions). Element +0x18 holds that origin and then
+  the body's id (0x4a21c3).
+- The axes: 0x4a6500 at 0 ms (`spawnAngles` at entries 12..14, plus
+  `angularVelocity` at 3..5 times the ms), 0x4a62f0's forward, left and
+  up of them turned into the frame, then `AxisToQuat` (0x562980) and
+  back (0x560fb0) into `Phys_ObjCreate`. 0x562980 takes the first of
+  four candidates, `(m5 - m7, m6 - m2, m1 - m3, trace + 1)` and the
+  three others on the diagonal's other signs, whose stored squared
+  length is 1 or more (the last otherwise), over its stored square root.
+  VERIFIED (the instructions, 0x562989..0x562b4c).
+- The velocity (0x4a5f30) at 0 ms of the life the draw at entry 17
+  gives: the graph's first two samples weighted `count (1 - u)` and
+  `count u` (`u` 0 at the spawn), each axis's `base + amplitude r` at
+  entries 0..2 (0x4a5ec0); the world graph under 0x2000000, the local
+  one turned into the frame under 0x1000000, each times the double 1000
+  at 0x70af28, added to element +0xc (zeroed at 0x4a2772). VERIFIED (the
+  instructions).
+- The model: the visual at `word(r21) count >> 16` (the one visual when
+  there is one, 0x4a2167..0x4a2193), its own preset (+0xd4) into
+  `Phys_ObjCreate` in world 1 (`edi` 1 at 0x4a21b4), its collision off
+  the model (0x5a5710 at 0x4a21cc). Then `angularVelocity` at entries
+  3..5, each times 1000, written over the body's spin as `(roll, pitch,
+  yaw)`: +0x140 the third, +0x144 the first, +0x148 the second
+  (0x4a20f6..0x4a215d, 0x4a21d1..0x4a21ef). VERIFIED (the instructions).
+- No body (the pool spent) frees the element at once (0x4a2851..0x4a286f);
+  the free of an element with the flag and a body destroys it in world 1
+  under the critical section 0xcc12038 (0x4a2901..0x4a2927, 0x5a58c0).
+  VERIFIED (the instructions). vcod frees it when its start plus life
+  passes world 1's clock; that the FX update kills an element there is
+  INFERRED (0x4a26ee..0x4a2710 refuses a spawn already past it).
+
+The draw: `FX_DrawElem_Model` scales by each visual sample's `base +
+amplitude r28` lerped by its draw state's weights (+0x84, +0x88), and
+under the flag takes the body's pose through 0x5a6ec0 in world 1
+(0x498340..0x498377, called at 0x498416). VERIFIED (the instructions).
+`fx_phys::scale_at` lerps by the life fraction over the visual
+intervals; that the weights are that is INFERRED.
+
+What the port matches, `cod4::phys_ab::the_watermelon_spawned_through_the_fx_path`
+on the watermelon take (cod4-gsc.md 3.6.2): `props/watermelon` played at
+the dynamic entity's origin, element 3 (flags 0x0d0001d6, six spawns,
+run bits 0xc0, a sphere offset of radius 10 to 16), the six bodies'
+positions met by one effect seed of 479 (140, with the start time
+folded in), and with it every body's position, quaternion and both
+velocities equal to the take's `new` lines to the bit, each body's
+visual the model 3.6.3 pinned, and the run passing 3.6.7's rule to step
+170, as the bodies built from the capture do: to the bit through step
+27, then within 2.5e-4 units. VERIFIED (the run, ours). The angles at
+0 ms are zero in that element, so 0x4a62f0's turn and the non-sphere
+frames rest on the instructions alone.
 
 ## 10. The weapon's tags
 
