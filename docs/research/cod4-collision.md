@@ -127,6 +127,27 @@ section 6 says.
   a float (0x4f4e1f, 0x4f4e4c, 0x4f4e65). VERIFIED (the instructions).
   The client's prediction keeps the server's set-up all the same
   (cod4-client-view.md 5.1).
+- `iw3mp.exe`'s trace walk: 0x4f4d30 calls the tree walk 0x4f4920
+  (recursive), whose leaf is 0x4f40b0; that calls 0x4f3fc0 for the
+  brushes (into the leaf brush node walk 0x4f3c40, then 0x4f37e0 per
+  brush) and 0x4f2250 for the AABB trees (into 0x4f2000, whose partitions
+  go to 0x4efce0, 0x4f05c0 and the border arm 0x4f1ae0). VERIFIED (the
+  calls). That 0x4f37e0 is `CM_TraceThroughBrush` and 0x4f05c0 the
+  capsule against the triangles is INFERRED (their shape; 0x4f05c0 reads
+  the radius and the sphere offset, trace work +0x88 and +0x8c).
+- The client's brush kernel (0x4f37e0) runs at the client's 53-bit
+  precision (cod4-player-anims.md 11) and stores as CoD2's does: each axial
+  `d1`, `d2`, `fmin(d1, 0.125)`'s difference and each fraction is a float
+  (0x4f383a..0x4f3978); each side's `dist` (0x4f39fd), `d1` and `d2`
+  (0x4f3a27, 0x4f3a48), `0.125 - d1`, `d1 - d2` and `d1 - 0.125`
+  (0x4f3a6d, 0x4f3ab7, 0x4f3abd) and the enter and leave fractions
+  (0x4f3ada, 0x4f3b2b) are stored. Unlike CoD2's port it stores each
+  side's dot with the start or the end (0x4f3a15, 0x4f3a40) before
+  taking `dist` off it, and a sweep all inside zeroes the surface flags
+  (trace +0x10, 0x4f3b8f). VERIFIED (the instructions).
+  `TraceFloats::Cod4Client` takes it; `ClipMap::trace_client` is the
+  client's trace, which the physics worlds' sweep and the ragdolls use
+  (cod4-gsc.md 3.6.9).
 - Two other differences, INFERRED: `CM_TestBoxInBrush` culls on strict
   bounds where CoD2's accepts a touch (unported; matters only for a box
   exactly touching a brush), and the AABB position walk stops at the
@@ -274,6 +295,39 @@ and `placeSpawnPoint`'s drop stopped a bit under retail's; with it all
 of them match retail. VERIFIED (the gates). The border's own corner arm
 (0x811633c on) and the position test (`segment_tri_dist2`) are still
 plain `f32`.
+
+The client's capsule (`iw3mp.exe` 0x4f05c0) runs the same tests in the
+same order but stores nearly every value, at its 53-bit precision.
+VERIFIED (the instructions), each item:
+
+- `v0 - v1` and `v0 - v2` are six stored floats (0x4f05f6..0x4f062c);
+  `n`'s three components are one store each (0x4f0650, 0x4f066a,
+  0x4f0674). The closing speed `(sweep.y n.y + n.x sweep.x) + sweep.z
+  n.z` is stored, then compared (0x4f0691..0x4f06a0).
+- The normal is 0x55f6e0's: the squared length `(x^2 + y^2) + z^2`
+  stored, its root through 0x401050 stored, `1 / len` stored, each
+  component one store; the stored length is the face's scale (0x4f06b3).
+- The sphere's z is stored (0x4f06ee); the lead point `sphere - r n` is
+  three stores (0x4f0714..0x4f0734), less `v0` three more
+  (0x4f073f..0x4f0755); the gap `(n.y l.y + n.x l.x) + l.z n.z` is
+  stored (0x4f0779). The fraction is `-(((gap - 0.125) scale) /
+  closing)`, rounded once (0x4f085a..0x4f0871).
+- Past the plane: `sphere - v0` stored, the distance stored (0x4f07d9),
+  the test `stored(r^2) > d^2` (0x4f07e1..0x4f07fc), the foot three
+  stores (0x4f082a..0x4f0842).
+- `m = sweep x foot` is three stores (0x4f08ad, 0x4f08bf, 0x4f08cd);
+  `s = (m.y e01.y + m.x e01.x) + m.z e01.z` and `t` likewise off `v0 -
+  v2` are stored before their compares (0x4f08ed, 0x4f098c); the third
+  test is `closing > t - s` (0x4f0a30..0x4f0a43). The face contact's
+  fraction goes through 0x4093c0 against 0 (0x4f0b18).
+- The edge kernel 0x4eff70 and the corner 0x4f0370 get the stored
+  sphere; their own arithmetic is not read.
+
+`mesh4::capsule_tri_client` takes this model, with the server's edge and
+corner kernels. With the server's model instead, the shipment take's
+step 25 sweep put a bottle a z ulp off retail's and the watermelon's
+step 27 sweep a chunk an ulp of x; with it both match retail on every
+step. VERIFIED (`phys_ab`, cod4-gsc.md 3.6.9).
 
 ## 4. Submodels and static models
 

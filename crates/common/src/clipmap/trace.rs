@@ -7,7 +7,7 @@
 use glam::Vec3;
 
 use super::BrushNode;
-use super::{CBrush, CLeaf, ClipMap, ClipTrace, Stamps};
+use super::{CBrush, CLeaf, ClipMap, ClipTrace, Stamps, TraceFloats};
 
 /// The parallel split's epsilon (rodata 0x8140254, 0x8140268).
 const SPLIT_EPS: f32 = 4.768_371_6e-7;
@@ -87,9 +87,8 @@ pub(super) struct Sweep {
     /// along the sweep, grown by [`REACH_SLACK`]: a brush box it misses
     /// has a side both ends clear.
     pub brush_reach: [Vec3; 2],
-    /// 1.7's float model: what `CM_Trace` and the brush kernel keep on the
-    /// x87 stack (cod4-collision.md 2); CoD2 1.3 stores each value.
-    pub kept: bool,
+    /// Whose float model the set-up and the kernels keep.
+    pub floats: TraceFloats,
 }
 
 /// How far past a node's reach ([`ClipMap::node_reach`]) a sweep's box
@@ -98,15 +97,23 @@ pub(super) struct Sweep {
 const REACH_SLACK: f32 = 1.0;
 
 impl Sweep {
-    /// `kept` is CoD4 1.7's set-up (`CM_Trace`, `cod4_lnxded`
+    /// CoD4 1.7's server set-up (`CM_Trace`, `cod4_lnxded`
     /// 0x811ce9f..0x811cfb8): the box's centre offset and the shifted end
     /// stay on the x87 stack, so the sweep is the unrounded end less the
-    /// stored start, rounded once (cod4-collision.md 2). CoD2 1.3 stores
-    /// each (0x0805b414).
-    fn new(start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: u32, kept: bool) -> Sweep {
+    /// stored start, rounded once (cod4-collision.md 2). CoD2 1.3
+    /// (0x0805b414) and the 1.7 client (0x4f4e1f..0x4f4e65) store each.
+    pub fn new(
+        start: Vec3,
+        end: Vec3,
+        mins: Vec3,
+        maxs: Vec3,
+        mask: u32,
+        floats: TraceFloats,
+    ) -> Sweep {
+        let kept = floats == TraceFloats::Cod4Server;
         let mut sw = Sweep {
             mask,
-            kept,
+            floats,
             ..Sweep::default()
         };
         for k in 0..3 {
@@ -206,20 +213,8 @@ enum Lead {
 }
 
 impl<'a> Cx<'a> {
-    pub fn new(
-        map: &'a ClipMap,
-        stamps: &'a mut Stamps,
-        start: Vec3,
-        end: Vec3,
-        mins: Vec3,
-        maxs: Vec3,
-        mask: u32,
-    ) -> Cx<'a> {
-        Cx {
-            map,
-            stamps,
-            sw: Sweep::new(start, end, mins, maxs, mask, map.indexed.is_some()),
-        }
+    pub fn new(map: &'a ClipMap, stamps: &'a mut Stamps, sw: Sweep) -> Cx<'a> {
+        Cx { map, stamps, sw }
     }
 
     /// The moving arm of `CM_Trace` on model 0.
@@ -415,7 +410,10 @@ impl<'a> Cx<'a> {
     }
 
     /// `CM_TraceThroughBrush` (0x08059dc0): the axial sides against the
-    /// capsule's box, every other side against the sphere nearer it.
+    /// capsule's box, every other side against the sphere nearer it. The
+    /// 1.7 client's (`iw3mp.exe` 0x4f37e0) also stores each side's dot
+    /// before taking the distance off it, and a sweep all inside clears the
+    /// surface flags (cod4-collision.md 2).
     fn trace_brush(&self, b: &CBrush, tr: &mut ClipTrace) {
         let sw = &self.sw;
         // Both ends more than the slack outside one axial side: the loop
@@ -424,9 +422,15 @@ impl<'a> Cx<'a> {
         if sw.brush_reach[1].cmplt(b.mins).any() || sw.brush_reach[0].cmpgt(b.maxs).any() {
             return;
         }
-        if sw.kept {
+        if sw.floats == TraceFloats::Cod4Server {
             return self.trace_brush_kept(b, tr);
         }
+        let client = sw.floats == TraceFloats::Cod4Client;
+        let side_dist = |p: Vec3, n: Vec3, dist: f32| {
+            let d = dot(p, n);
+            let d = if client { f64::from(d as f32) } else { d };
+            (d - f64::from(dist)) as f32
+        };
         let (mut enter, mut leave) = (0.0f32, tr.fraction);
         let mut allsolid = true;
         let mut lead: Option<Lead> = None;
@@ -472,8 +476,8 @@ impl<'a> Cx<'a> {
             let p = self.map.planes[plane as usize];
             let lift = (p.normal.z * sw.sphere_z).abs();
             let dist = (f64::from(p.dist) + f64::from(sw.radius) + f64::from(lift)) as f32;
-            let d1 = (dot(sw.start, p.normal) - f64::from(dist)) as f32;
-            let d2 = (dot(sw.end, p.normal) - f64::from(dist)) as f32;
+            let d1 = side_dist(sw.start, p.normal, dist);
+            let d2 = side_dist(sw.end, p.normal, dist);
             if d1 > 0.0 {
                 if fmin(d1, CLIP_EPS) <= d2 {
                     return;
@@ -509,6 +513,9 @@ impl<'a> Cx<'a> {
             if allsolid {
                 tr.allsolid = true;
                 tr.fraction = 0.0;
+                if client {
+                    tr.surface_flags = 0;
+                }
             }
             return;
         };
