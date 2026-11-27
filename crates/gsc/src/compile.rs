@@ -267,7 +267,7 @@ impl<'a> Compiler<'a> {
 
     fn patch(&mut self, idx: usize, target: u32) {
         match &mut self.code[idx] {
-            Op::Jump(t) | Op::JumpIfFalse(t) | Op::JumpIfTrue(t) => *t = target,
+            Op::Jump(t) | Op::JumpIfFalse(t) | Op::JumpIfTrue(t) | Op::SwitchKey(t) => *t = target,
             other => unreachable!("patch target {other:?} is not a jump"),
         }
     }
@@ -607,6 +607,7 @@ impl<'a> Compiler<'a> {
     // the corpus's stacked labels rely on.
     fn compile_switch(&mut self, subject: &Expr, arms: &[SwitchArm]) -> Result<(), CompileError> {
         self.compile_expr(subject)?;
+        let key = self.emit(Op::SwitchKey(0));
         let tmp_name = format!("$switch{}", self.switch_counter);
         self.switch_counter += 1;
         let tmp = self.local_slot(&tmp_name)?;
@@ -615,9 +616,14 @@ impl<'a> Compiler<'a> {
         let mut case_sites = Vec::with_capacity(arms.len());
         for arm in arms {
             if let ArmLabel::Case(label) = &arm.label {
+                // A literal only: `case -1:` and `case 1.5:` are refused
+                // (cod11-gsc-object-model.md 9.3.1).
+                if !matches!(label, Expr::Int(_) | Expr::Str(_)) {
+                    return Err(self.err("case expression must be an int or string"));
+                }
                 self.emit(Op::LoadLocal(tmp));
                 self.compile_expr(label)?;
-                self.emit(Op::Eq);
+                self.emit(Op::CaseEq);
                 case_sites.push(self.emit(Op::JumpIfTrue(0)));
             }
         }
@@ -660,6 +666,7 @@ impl<'a> Compiler<'a> {
         // Whatever's left over (trailing empty cases, a trailing empty
         // `default`, or no `default` at all) lands at the switch's end.
         let epilogue = self.code.len() as u32;
+        self.patch(key, epilogue);
         for p in pending.drain(..) {
             self.patch(p, epilogue);
         }
@@ -1433,6 +1440,20 @@ mod tests {
         assert!(compile_cod2("m(a) { if (a) y = 1; else y = 2; f(y); }").is_ok());
         // 1.1 reads it as undefined.
         compile("m() { isDefined(x); }");
+    }
+
+    /// A `case` label is an int or a string literal; `-1` and `1.5` are
+    /// refused, in every dialect (`probe_switch_case_neg`, `probe_switch_case_float`).
+    #[test]
+    fn a_case_label_is_an_int_or_string_literal() {
+        for label in ["-1", "1.5", "a", "\"a\" + \"b\""] {
+            let src = format!("m(x) {{ switch (x) {{ case {label}: break; }} }}");
+            let ast = crate::parse::parse_file(&src).unwrap();
+            let e = compile_file(&ast, "test/script", &mut Interner::default()).unwrap_err();
+            assert_eq!(e.msg, "case expression must be an int or string", "{label}");
+            assert_eq!(cod2_err(&src), "case expression must be an int or string");
+        }
+        compile(r#"m(x) { switch (x) { case 0: case "a": break; } }"#);
     }
 
     #[test]

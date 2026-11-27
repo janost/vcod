@@ -522,6 +522,9 @@ refusal of both (VERIFIED,
   it at 80 bits; `!=` is its negation (Mac 0x90a70, lnxded 0x807dd26).
   VERIFIED live, `probe_eq_tol` on `cod2_lnxded` 1.3. Addresses, the
   capture and vcod's `NumberEq::Stored`: cod11-gsc-object-model.md 9.3.1.
+  So `!=` is true on a NaN, where 1.1d's, 1.5b's and UO's is false
+  (VERIFIED live, `probe_nan`; the same section, with `switch` on a
+  float, fatal here at `developer 1`).
 - VERIFIED, `Scr_EvalMultiply` (lnxded 0x807e290): `*` takes two numbers
   only, an int promoted to a float beside a float (0x807d7aa); a vector
   operand is `pair '(1, 0, -0)' and '200' has unmatching types 'vector'

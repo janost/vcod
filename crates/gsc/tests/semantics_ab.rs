@@ -370,6 +370,54 @@ fn probe_eq_tol_matches_retail_stored() {
     }
 }
 
+/// `probe_switch`, `probe_nan` and the two `case` label probes on 1.5b, UO
+/// 1.51b, CoD2 1.3 and CoD4 1.7 (retail, 2026-11-27; CoD2's and CoD4's
+/// copies without the `SetupCallbacks` line): 1.5b's float switch runs on
+/// with the last switch's key, and CoD2's and CoD4's `!=` holds on a NaN
+/// (cod11-gsc-object-model.md 9.3.1).
+#[test]
+fn probe_switch_and_nan_match_retail_per_game() {
+    let caps = captures();
+    let (switch_fatal, _) = &caps["probe_switch"];
+    let (nan_ordered, _) = &caps["probe_nan"];
+    let mut switch_15 = switch_fatal.clone();
+    switch_15.extend(["PROBE float default".to_string(), "PROBE done".to_string()]);
+    let nan_ne: Vec<String> = nan_ordered
+        .iter()
+        .map(|l| match l.split(' ').nth(1) {
+            Some(n @ ("nan_ne_nan" | "nan_ne_zero" | "nan_ne_one" | "inf_ne_inf")) => {
+                format!("PROBE {n} 1")
+            }
+            _ => l.clone(),
+        })
+        .collect();
+    assert_ne!(
+        &nan_ne, nan_ordered,
+        "the 1.1d capture holds the four lines"
+    );
+    for (profile, switch_lines, nan_lines) in [
+        (VmProfile::COD1_15, &switch_15, nan_ordered),
+        (VmProfile::COD1_UO, switch_fatal, nan_ordered),
+        (VmProfile::COD2, switch_fatal, &nan_ne),
+        (VmProfile::COD4, switch_fatal, &nan_ne),
+    ] {
+        let ours = run_probe_as("probe_switch", &profile).expect("probe_switch runs");
+        assert_eq!(&ours.lines, switch_lines, "{profile:?}");
+        let dies = !std::ptr::eq(switch_lines, &switch_15);
+        assert_eq!(ours.error.is_some(), dies, "{profile:?}: {:?}", ours.error);
+        let ours = run_probe_as("probe_nan", &profile).expect("probe_nan runs");
+        assert_eq!((&ours.lines, ours.error), (nan_lines, None), "{profile:?}");
+        for p in ["probe_switch_case_float", "probe_switch_case_neg"] {
+            let ours = run_probe_as(p, &profile).expect("the probe loads");
+            assert_eq!(
+                ours.error.as_deref(),
+                Some(COMPILE_ERROR),
+                "{p} {profile:?}"
+            );
+        }
+    }
+}
+
 /// A skip name that matches no capture section is inert, and an inert skip
 /// silently stops covering the probe it was meant to exempt.
 #[test]

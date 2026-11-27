@@ -18,7 +18,7 @@ use crate::bytecode::{Function, Op};
 use crate::heap::ArrayKey;
 use crate::value::{FuncRef, Value, format_number};
 
-use super::profile::NumberEq;
+use super::profile::{NumberEq, SwitchOther};
 use super::sched::ThreadId;
 use super::{Cx, ErrorKind, Host, QueuedSpawn, ScriptError, Target, Vm};
 
@@ -181,6 +181,30 @@ fn floats_equal(rule: NumberEq, a: f32, b: f32) -> bool {
             e < -(2f64.powi(-84))
         }
     }
+}
+
+/// Two numbers, not both ints, whose difference is NaN: a NaN operand or
+/// two like infinities. Never equal; `!=` reads them per `Vm::set_nan_ne`.
+fn nan_difference(a: Value, b: Value) -> bool {
+    match (a, b) {
+        (Value::Int(_), Value::Int(_)) => false,
+        _ => matches!((to_f32(a), to_f32(b)), (Some(x), Some(y)) if (x - y).is_nan()),
+    }
+}
+
+/// `cannot switch on <type>`, the type named as retail's type-name table
+/// does (1.1 `CoDMP.exe` 0x5757c8, CoD2 `cod2_lnxded` 0x817d960).
+fn switch_type_error(v: Value) -> ErrorKind {
+    ErrorKind::BadType(match v {
+        Value::Undefined => "cannot switch on undefined",
+        Value::Localized(_) => "cannot switch on localized string",
+        Value::Vector(_) => "cannot switch on vector",
+        Value::Float(_) => "cannot switch on float",
+        Value::Function(_) => "cannot switch on function",
+        Value::Anim(_) => "cannot switch on animation",
+        Value::Entity(_) | Value::Struct(_) | Value::Array(_) => "cannot switch on object",
+        Value::Int(_) | Value::String(_) => unreachable!("an int or a string switches"),
+    })
 }
 
 /// Numeric equality promotes an Int beside a Float to a float and holds
@@ -693,6 +717,23 @@ impl Vm {
         notifies: &mut Vec<(Target, Atom, Vec<Value>)>,
         errors: &mut Vec<ScriptError>,
     ) -> Result<Step, ScriptError> {
+        // Retail's last switch key is a `VM_Execute` local: a step starts
+        // without one, and a nested spawn's step leaves this one's alone.
+        let outer = std::mem::replace(&mut self.switch_key, Value::Undefined);
+        let r = self.step_frames_inner(host, frames, remaining, thread_id, notifies, errors);
+        self.switch_key = outer;
+        r
+    }
+
+    fn step_frames_inner(
+        &mut self,
+        host: &mut dyn Host,
+        frames: &mut Vec<Frame>,
+        remaining: &mut u32,
+        thread_id: Option<ThreadId>,
+        notifies: &mut Vec<(Target, Atom, Vec<Value>)>,
+        errors: &mut Vec<ScriptError>,
+    ) -> Result<Step, ScriptError> {
         loop {
             match self.step_ops(host, frames, remaining, thread_id, notifies, errors) {
                 Err(e) if self.recover_errors && e.kind.recoverable() => {
@@ -710,8 +751,16 @@ impl Vm {
                     // agrees on (`bytecode::Prepared::depths`).
                     let base = f.func_rc.prepared.depths.get(at).copied().unwrap_or(f.sp);
                     f.sp = f.sp.min((base as i32 - pops).max(0) as u32);
-                    for _ in 0..pushes {
-                        f.push(Value::Undefined);
+                    match f.func_rc.code[at] {
+                        // 1.1d and UO go on past the switch.
+                        Op::SwitchKey(end) if self.switch_other == SwitchOther::ErrorSkips => {
+                            f.ip = end;
+                        }
+                        _ => {
+                            for _ in 0..pushes {
+                                f.push(Value::Undefined);
+                            }
+                        }
                     }
                 }
                 r => return r,
@@ -1561,7 +1610,25 @@ impl Vm {
                     let b = pop!();
                     let a = pop!();
                     let eq = tri!(values_equal(&self.interner, self.number_eq, a, b));
-                    push!(Value::Int(!eq as i32));
+                    let ne = !eq && (self.nan_ne || !nan_difference(a, b));
+                    push!(Value::Int(ne as i32));
+                }
+                Op::SwitchKey(_) => {
+                    let v = pop!();
+                    let key = match v {
+                        Value::Int(_) | Value::String(_) => {
+                            self.switch_key = v;
+                            v
+                        }
+                        _ if self.switch_other == SwitchOther::LastKey => self.switch_key,
+                        _ => fail!(switch_type_error(v)),
+                    };
+                    push!(key);
+                }
+                Op::CaseEq => {
+                    let b = pop!();
+                    let a = pop!();
+                    push!(Value::Int((a == b) as i32));
                 }
                 Op::Lt => {
                     let b = pop!();
@@ -2243,6 +2310,7 @@ impl Vm {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vm::profile::VmProfile;
     use crate::vm::tests::TestHost;
 
     /// Compiles and runs one `main`, returning what it `return`s or the
@@ -2281,6 +2349,130 @@ mod tests {
         // `if` stays strict: this is the divergence, not a relaxation of
         // both paths.
         assert!(run_result(r#"main() { if ("a") { } }"#).is_err());
+    }
+
+    /// Runs `main` under `profile`, below developer 1 with `recover`, and
+    /// renders what it returns.
+    fn run_as(src: &str, profile: &VmProfile, recover: bool) -> Result<String, ErrorKind> {
+        let ast = crate::parse::parse_file(src).unwrap();
+        let mut vm = Vm::new();
+        vm.apply_profile(profile);
+        vm.set_recover_errors(recover);
+        let fns = crate::compile::compile_file(&ast, "test/script", vm.interner_mut()).unwrap();
+        vm.install(fns).unwrap();
+        let main = vm.func_ref("test/script", "main");
+        let v = vm
+            .call_now(&mut TestHost::default(), main, None, vec![])
+            .map_err(|e| e.kind)?;
+        Ok(match v {
+            Value::String(a) => vm.interner().resolve(a).to_string(),
+            n => format_number(n, vm.interner()).expect("a string or a number"),
+        })
+    }
+
+    const SW: &str = r#"
+sw(v)
+{
+    r = "none";
+    switch (v)
+    {
+    case 1:
+        r = "one";
+        break;
+    case 2:
+        r = "two";
+        break;
+    case "a":
+        r = "a";
+        break;
+    default:
+        r = "default";
+        break;
+    }
+    return r;
+}
+"#;
+
+    const ALL: [VmProfile; 5] = [
+        VmProfile::COD1,
+        VmProfile::COD1_15,
+        VmProfile::COD1_UO,
+        VmProfile::COD2,
+        VmProfile::COD4,
+    ];
+
+    /// A case matches a key of its own type only: `"1"` is not `1`, and no
+    /// tolerance applies (`probe_switch`).
+    #[test]
+    fn a_case_matches_its_own_type_only() {
+        let src =
+            format!("main() {{ return sw(1) + sw(3) + sw(\"1\") + sw(\"a\") + sw(\"A\"); }}{SW}");
+        for p in ALL {
+            assert_eq!(
+                run_as(&src, &p, false).as_deref(),
+                Ok("onedefaultdefaultadefault"),
+                "{p:?}"
+            );
+        }
+    }
+
+    /// `cannot switch on float` everywhere but 1.5b, which takes the step's
+    /// last key and before one matches nothing (`probe_switch`).
+    #[test]
+    fn a_float_switch_is_fatal_but_on_1_5() {
+        let src = format!("main() {{ return sw(1.0000001); }}{SW}");
+        for p in [
+            VmProfile::COD1,
+            VmProfile::COD1_UO,
+            VmProfile::COD2,
+            VmProfile::COD4,
+        ] {
+            assert_eq!(
+                run_as(&src, &p, false),
+                Err(ErrorKind::BadType("cannot switch on float")),
+                "{p:?}"
+            );
+        }
+        let last = format!(
+            "main() {{ return sw(1.0) + sw(1) + sw(5.0) + sw(2) + sw((1, 2, 3)) + sw(level.unset); }}{SW}"
+        );
+        assert_eq!(
+            run_as(&last, &VmProfile::COD1_15, false).as_deref(),
+            Ok("defaultoneonetwotwotwo")
+        );
+    }
+
+    /// Below developer 1 a bad switch is skipped on 1.1d and UO and matches
+    /// no case on CoD2 and CoD4 (`probe_switch` at `developer 0`).
+    #[test]
+    fn below_developer_1_a_bad_switch_skips_or_matches_none() {
+        let src = format!("main() {{ return sw(1.5) + sw(level.unset) + sw(2); }}{SW}");
+        for (p, want) in [
+            (VmProfile::COD1, "nonenonetwo"),
+            (VmProfile::COD1_UO, "nonenonetwo"),
+            (VmProfile::COD2, "defaultdefaulttwo"),
+            (VmProfile::COD4, "defaultdefaulttwo"),
+        ] {
+            assert_eq!(run_as(&src, &p, true).as_deref(), Ok(want), "{p:?}");
+        }
+    }
+
+    /// `!=` on a NaN is false on 1.1d, 1.5b and UO, true on CoD2 and CoD4;
+    /// `==` is false on all (`probe_nan`).
+    #[test]
+    fn ne_on_a_nan_follows_the_game() {
+        let src = "main() { inf = 300000000000000000000000000000000000000.0 * 10; \
+                   nan = inf - inf; \
+                   return \"\" + (nan != nan) + (nan != 0) + (inf != inf) + (nan == nan) + (1 != 2.5); }";
+        for (p, want) in [
+            (VmProfile::COD1, "00001"),
+            (VmProfile::COD1_15, "00001"),
+            (VmProfile::COD1_UO, "00001"),
+            (VmProfile::COD2, "11101"),
+            (VmProfile::COD4, "11101"),
+        ] {
+            assert_eq!(run_as(src, &p, false).as_deref(), Ok(want), "{p:?}");
+        }
     }
 
     /// A fused run answers as its ops do one at a time, whatever budget

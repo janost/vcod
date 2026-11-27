@@ -13,7 +13,7 @@ use crate::atom::{Atom, Interner};
 use crate::bytecode::Function;
 use crate::heap::{ArrayKey, Heap};
 use crate::value::{ArrayId, EntId, FuncRef, StructId, Value};
-use profile::NumberEq;
+use profile::{NumberEq, SwitchOther};
 use sched::Thread;
 
 mod interp;
@@ -812,6 +812,13 @@ pub struct Vm {
     struct_index_reads_undefined: bool,
     /// How `==` and `!=` round the difference of two numbers.
     number_eq: NumberEq,
+    /// `!=` on a NaN difference holds (CoD2, CoD4).
+    nan_ne: bool,
+    /// A `switch` on another type than an int or a string.
+    switch_other: SwitchOther,
+    /// The thread step's last `switch` key, `Undefined` before one
+    /// ([`SwitchOther::LastKey`]).
+    switch_key: Value,
     /// `.size` on an array or string, interned once here rather than per
     /// `LoadField`: `_load.gsc` reads it inside three loops.
     size_atom: Atom,
@@ -938,6 +945,9 @@ impl Vm {
             anim,
             struct_index_reads_undefined: false,
             number_eq: NumberEq::Kept,
+            nan_ne: false,
+            switch_other: SwitchOther::ErrorSkips,
+            switch_key: Value::Undefined,
             size_atom,
             threads: Vec::new(),
             next_thread: 0,
@@ -995,6 +1005,20 @@ impl Vm {
     /// numbers (VERIFIED live, `probe_eq_tol`, cod11-gsc-object-model.md 9.3.1).
     pub fn set_number_eq(&mut self, eq: NumberEq) {
         self.number_eq = eq;
+    }
+
+    /// `!=` on two numbers whose difference is NaN: true on CoD2 and CoD4
+    /// (`!(a == b)`), false on 1.1d, 1.5b and UO, whose `!=` is an ordered
+    /// `|a - b| >= 1e-6` (VERIFIED live, `probe_nan`,
+    /// cod11-gsc-object-model.md 9.3.1).
+    pub fn set_nan_ne(&mut self, on: bool) {
+        self.nan_ne = on;
+    }
+
+    /// What a `switch` on a value other than an int or a string does
+    /// (VERIFIED live, `probe_switch`, cod11-gsc-object-model.md 9.3.1).
+    pub fn set_switch_other(&mut self, rule: SwitchOther) {
+        self.switch_other = rule;
     }
 
     /// CoD2's notify wake order: the waiter whose `waittill` parked last

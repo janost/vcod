@@ -898,21 +898,86 @@ an 80-bit one does not, so 1.1d's difference is not a double.
   0x80a755f, CoD2's at 0x80837c1 and CoD4's at 0x815dc0c (INFERRED:
   which caller is the match). vcod compiles `waittillmatch` for CoD4
   only.
-- `switch` does not use it: `switch (1.0000001)` with `case 1:` is the
-  fatal `cannot switch on float` on 1.1d (VERIFIED, live, a scratch
-  probe, 2026-11-26), and every build holds `case expression must be an
-  int or string` (the strings, VERIFIED). vcod compiles a `switch` into
-  `==` tests, so it runs the case; open.
-- NaN: 1.1d's and 1.5b's `!=` arms are false on an unordered compare, as
-  `==` is, where CoD2's and CoD4's `!(a == b)` is true (the instructions
-  above, VERIFIED). vcod's `!=` is `!(a == b)` for all; no probe made a
-  NaN.
+- `switch` does not use it. A switch keys on an int or a string, and a
+  key matches a case of its own type only: `switch ("1")` misses `case 1:`,
+  `switch (1)` misses `case "1":` and `"ABC"` misses `case "abc":`
+  (VERIFIED, live, `probe_switch` on 1.1d, 1.5b, UO 1.51b, `cod2_lnxded`
+  1.3 and `cod4_lnxded` 1.7, 2026-11-27).
+- The switch handler passes the two key types and formats `cannot switch
+  on %s` from the type-name table for any other: 1.1 `CoDMP.exe`
+  0x479a7e..0x479aaf (types 1 and 5, the string at 0x55ab70, the table at
+  0x5757c8), 1.5 `CoDMP.exe` 0x47f0a9..0x47f0cf (0x5994c8), UO
+  `CoDUOMP.exe` 0x48c5c9..0x48c5f2 (0x5a1118), `cod2_lnxded`
+  0x8081e3d..0x8081ec5 (types 2 and 6, 0x8145290, the table at
+  0x817d960), `cod4_lnxded` 0x816328c..0x81632b8 (types 2 and 6,
+  0x822cb35). VERIFIED (the instructions). The CoD1 handlers were read in
+  the Windows binaries, the live runs on the Linux servers.
+- An int key passes a range check too, `switch index %d out of range`
+  past it: -0x7e0000..0x7fffff on 1.1, 1.5 and UO (1.1 `CoDMP.exe`
+  0x479af2..0x479b00), -0x7e0002..0x7fffff on CoD2 (0x807c104),
+  -0x7e8000..0x7fffff on CoD4 (0x8152158). VERIFIED (the instructions).
+- A key of another type (a float, a vector, undefined), each cell VERIFIED
+  live (`probe_switch` and scratch probes at `developer 0`, 2026-11-27):
+
+  | Build | `developer 1` | `developer 0` |
+  |---|---|---|
+  | 1.1d, UO 1.51b | fatal `cannot switch on float` | the switch is skipped: no case and no `default` |
+  | 1.5b | no error: the last switch's key | the same |
+  | CoD2 1.3, CoD4 1.7 | fatal `cannot switch on float` | no case matches, `default` runs |
+
+  On CoD2 and CoD4 the `developer 0` probe ran in a thread past a `wait`:
+  an error in the load ends the level there, as the CoD2 run in `main`
+  did (cod4-gsc.md 8.1).
+- 1.5b's last key belongs to the thread's step: after `switch (2)` a
+  float, a vector and undefined each ran `case 2:`, while a thread
+  spawned with `thread`, or resumed after a `wait`, ran `default` on a
+  float though its spawner's last key matched (VERIFIED, live, a scratch
+  probe). INFERRED: the key is a `VM_Execute` local, kept from the last
+  switch when the type test fails, and 1.5b's Linux server skips the
+  error that its Windows handler raises (the same gap as the bracket read
+  in cod11-gsc-language.md, "Why: the compiler types the bare globals").
+- A `case` label is an int or string literal: `case 1.5:` and `case -1:`
+  are the compile error `case expression must be an int or string` on
+  all five builds (VERIFIED, live, `probe_switch_case_float`,
+  `probe_switch_case_neg`). The compiler tests the label node's kind: 1.1
+  `CoDMP.exe` 0x46bfd0..0x46bfe6 (kinds 5 and 9, the string at 0x55b7ec),
+  1.5 0x471693..0x4716ad, UO 0x47e951..0x47e96b, `cod4_lnxded`
+  0x814a093..0x814a0ae (kinds 7 and 0xb, 0x822aba4); `cod2_lnxded`
+  pushes the string at 0x8073f83. VERIFIED (the instructions).
+- NaN: a NaN difference (a NaN operand, or two like infinities) is
+  unordered, and every build's `==` reads it unequal. 1.1d's, 1.5b's and
+  UO's `!=` is its own ordered `|a - b| >= T`, false on it; CoD2's and
+  CoD4's `!(a == b)` is true (the instructions above, VERIFIED).
+- The Windows builds' `!=` arms test C0 alone, so they agree: 1.1
+  `CoDMP.exe` 0x478a84..0x478aac, 1.5 0x47e1c4..0x47e1e9, UO
+  0x48b588..0x48b5af. VERIFIED (the instructions). Unlike 1.1d's, 1.1
+  `CoDMP.exe` stores the difference as a float first (`fstp` at
+  0x476227 and 0x478a88). VERIFIED (the instructions).
+- A script makes a NaN: a float product past the range is inf, and
+  `inf - inf` is NaN; a division by 0 is fatal instead. Each cell
+  VERIFIED live (`probe_nan`, all five builds, 2026-11-27), with `inf` as
+  `300000000000000000000000000000000000000.0 * 10`:
+
+  | Line | Expression | 1.1d, 1.5b, UO | CoD2, CoD4 |
+  |---|---|---|---|
+  | `nan_eq_nan`, `nan_ne_nan` | `nan == nan`, `!=` | 0, 0 | 0, 1 |
+  | `nan_ne_zero`, `nan_ne_one` | `nan != 0`, `nan != 1.5` | 0, 0 | 1, 1 |
+  | `nan_gt_zero`, `nan_lt_zero` | `nan > 0`, `nan < 0` | 0, 0 | 0, 0 |
+  | `inf_eq_inf`, `inf_ne_inf` | `inf == inf`, `!=` | 0, 0 | 0, 1 |
 
 vcod: `values_equal` and `floats_equal` (`crates/gsc/src/vm/interp.rs`)
 under `VmProfile::number_eq`: `NumberEq::Kept` for 1.1, `Stored` for
 1.5, UO, CoD2 and CoD4. `Kept` gets the 80-bit rounding exact off an f64
-TwoSum. `semantics_ab` replays the 1.1d capture and
-`probe_eq_tol_matches_retail_stored` the others.
+TwoSum. `VmProfile::nan_ne` makes `!=` true on a NaN difference for CoD2
+and CoD4 alone (`nan_difference`). A `switch` compiles to
+`Op::SwitchKey`, which passes an int or a string and follows
+`VmProfile::switch_other` for the rest (`SwitchOther::ErrorSkips` for 1.1
+and UO, `LastKey` for 1.5, `ErrorNoMatch` for CoD2 and CoD4), then an
+`Op::CaseEq` per label, same type and value. The compiler refuses a label
+but an int or string literal. vcod does not check the int key's range.
+`semantics_ab` replays the 1.1d captures (`probe_eq_tol`, `probe_switch`,
+`probe_nan` and the two label probes), `probe_eq_tol_matches_retail_stored`
+and `probe_switch_and_nan_match_retail_per_game` the other builds'.
 
 ## 10. `getEntArray` returns ascending entity number
 

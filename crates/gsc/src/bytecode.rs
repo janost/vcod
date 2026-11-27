@@ -90,6 +90,13 @@ pub enum Op {
     Shr,
     Eq,
     Ne,
+    /// A `switch`'s subject: an int or a string passes, any other type
+    /// follows `Vm::set_switch_other`. The operand is the switch's end,
+    /// where 1.1d and UO go on below developer 1.
+    SwitchKey(u32),
+    /// A `case` test: the same type and value, no number tolerance and no
+    /// string-to-number reading.
+    CaseEq,
     Lt,
     Gt,
     Le,
@@ -256,6 +263,7 @@ pub(crate) fn stack_effect(op: &Op) -> (i32, i32) {
         | Op::CastInt
         | Op::CastFloat
         | Op::CastVector
+        | Op::SwitchKey(_)
         | Op::EnsureArrayField(_) => (1, 1),
         Op::EnsureArrayLocal(_) | Op::OwnLocal(_) => (0, 1),
         Op::WaitTillFrameEnd => (0, 0),
@@ -280,6 +288,7 @@ pub(crate) fn stack_effect(op: &Op) -> (i32, i32) {
         | Op::Shr
         | Op::Eq
         | Op::Ne
+        | Op::CaseEq
         | Op::Lt
         | Op::Gt
         | Op::Le
@@ -602,14 +611,16 @@ fn entry_depths(f: &Function) -> Result<Vec<Option<i32>>, String> {
                 *t as usize,
                 depth_out,
             )?,
-            Op::JumpIfFalse(t) | Op::JumpIfTrue(t) => {
+            Op::JumpIfFalse(t) | Op::JumpIfTrue(t) | Op::SwitchKey(t) => {
+                // A skipped switch leaves no key behind.
+                let skip = if matches!(op, Op::SwitchKey(_)) { 1 } else { 0 };
                 visit(
                     &mut entry_depth,
                     &mut queue,
                     f.code.len(),
                     ip,
                     *t as usize,
-                    depth_out,
+                    depth_out - skip,
                 )?;
                 visit(
                     &mut entry_depth,
