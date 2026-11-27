@@ -308,6 +308,9 @@ pub struct Cod4Session {
     keep_snapshots: usize,
     /// The `physicsLaunch`ed parts this client flies (`play::cod4_physics`).
     pub physics: super::cod4_physics::Cod4Physics,
+    /// How many times [`Self::restart_dynents`] ran: the ragdolls (world 2,
+    /// the players' side) restart when it moves.
+    pub restarts: u32,
     /// The map's dynamic entities, made with the world and again by a
     /// new gamestate or `CG_MapRestart` (cod4-world.md 13).
     pub dynents: Option<vcod_cod4::dynent::DynEnts>,
@@ -430,6 +433,7 @@ impl Cod4Session {
             kick_seen: 0,
             keep_snapshots: KEEP_SNAPSHOTS,
             physics: Default::default(),
+            restarts: 0,
             dynents: None,
             crt_rand: Default::default(),
             third_person: Default::default(),
@@ -540,9 +544,10 @@ impl Cod4Session {
 
     /// `DynEntCl_InitEntities` (iw3mp.exe 0x48d000, from `CG_Init` and
     /// `CG_MapRestart` 0x44b3eb): every dynamic entity back at its def's
-    /// pose and health, after `Phys_Init` (0x43fbe7, 0x44b3e2) made worlds
-    /// 0 and 1 anew.
+    /// pose and health, after `Phys_Init` (0x43fbe7, 0x44b3e2) made the worlds
+    /// anew: worlds 0 and 1 here, world 2 through [`Self::restarts`].
     pub fn restart_dynents(&mut self) {
+        self.restarts += 1;
         self.physics = Default::default();
         self.dynents = self
             .world

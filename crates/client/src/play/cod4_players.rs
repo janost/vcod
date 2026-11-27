@@ -286,6 +286,17 @@ impl Cod4Players {
         self.ragdolls.as_ref().map_or(0, |(_, r)| r.body_count())
     }
 
+    /// `CG_MapRestart`'s `Phys_Init` for world 2: its bodies and slots go,
+    /// and every corpse asks for a ragdoll again.
+    pub fn restart_ragdolls(&mut self) {
+        if let Some((_, r)) = &mut self.ragdolls {
+            r.restart_world();
+        }
+        for b in self.bodies.values_mut() {
+            b.ragdoll = Rag::None;
+        }
+    }
+
     /// The bodies worlds 0 and 1 hold, which world 2's share of the one
     /// body pool counts.
     pub fn set_ragdoll_others(&mut self, n: usize) {

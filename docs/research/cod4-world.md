@@ -2259,9 +2259,20 @@ nothing. VERIFIED (13.1's census).
   gamestate. VERIFIED (the code against the above; `dynent::tests`,
   `dynent_census`, `cod4_live_a_frag_flings_the_maps_clutter_and_breaks_a_plate`,
   `cod4_live_fast_restart_puts_the_dynents_back`).
-- Not ported: the rest of `CG_MapRestart` (0x44b350); vcod resets the
-  dynamic entities and worlds 0 and 1 on `n` and `B` (`restart_dynents`),
-  not the ragdolls (cod4-gsc.md 3.6.8). INFERRED (the code).
+- `CG_MapRestart` (0x44b350) calls `Phys_Shutdown` (0x5a6ff0, at 0x44b3dd)
+  and `Phys_Init` (0x5a2cd0, at 0x44b3e2), which destroy and remake all three
+  worlds: the block from 0xcc54478 (0x23cd0 bytes) is cleared, each world's
+  sleep flag set and idle steps and clock start and time zeroed. VERIFIED
+  (the instructions). vcod remakes worlds 0 and 1 in `restart_dynents` and
+  world 2 through `Cod4Session::restarts` (`Ragdolls::restart_world`: no
+  bodies, `msecStep` 17, the seed 0x89abcdef, every slot free, the ragdoll
+  clock at 0xd5ec534 kept, as only `Ragdoll_Update` writes it). VERIFIED
+  (the code against the above; `ragdoll::tests::pool::a_restart_remakes_world_2_and_frees_its_slots`).
+  Not ported: the rest of `CG_MapRestart`. That retail frees the slots
+  (0xcc78a00, `Ragdoll_Init` 0x5ba820 clears them only from `CG_Init`,
+  0x43fbe2) is not read: nothing in the restart's calls touches them, so the
+  corpses' entities letting go does, INFERRED; vcod frees them with the
+  world, as their bodies die with it.
 - The body is world 0 of the ODE port (cod4-gsc.md 3.6.3 to 3.6.7):
   `DynEntCl_CreatePhysObj`'s body and collision
   (`PhysWorld::create_from`), the blast's `Phys_ObjAddForce` and the

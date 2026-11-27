@@ -115,6 +115,8 @@ pub(crate) struct Cod4Client {
     /// The bodies' tags and `turret_tags` together, as the last draw left
     /// them: where the others' shots flash and leave from.
     weapon_tags: HashMap<u32, WeaponTags>,
+    /// [`Cod4Session::restarts`] as the ragdolls last saw it.
+    ragdoll_restarts: u32,
     /// The zones' script menus went to the session.
     menus_loaded: bool,
     /// The impact sound handles by slot, for the world (by its address)
@@ -303,6 +305,7 @@ impl Cod4Client {
             view_tags: None,
             turret_tags: HashMap::new(),
             weapon_tags: HashMap::new(),
+            ragdoll_restarts: 0,
             menus_loaded: false,
             impact_aliases: None,
             look,
@@ -1296,6 +1299,10 @@ impl Cod4Client {
     /// pool of 512 (0x5b6aa0): worlds 0 and 1 the session's, 2 the
     /// corpses'.
     fn share_body_pool(&mut self) {
+        if self.ragdoll_restarts != self.session.restarts {
+            self.ragdoll_restarts = self.session.restarts;
+            self.players.restart_ragdolls();
+        }
         let w0 = self.session.dynents.as_ref().map_or(0, |d| d.pw.bodies());
         let w1 = self.session.physics.pw.bodies();
         let w2 = self.players.ragdoll_bodies();

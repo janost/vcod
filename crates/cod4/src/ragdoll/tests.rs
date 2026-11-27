@@ -352,6 +352,33 @@ ragdoll_baselerp_bone 1 j_head 1000
         assert_eq!(r.pose(id).unwrap(), pose.as_slice());
     }
 
+    /// A map restart (`Phys_Shutdown`, `Phys_Init`) makes world 2 anew: no
+    /// bodies, every slot free, the step clock at its start. The ragdoll
+    /// clock keeps counting.
+    #[test]
+    fn a_restart_remakes_world_2_and_frees_its_slots() {
+        let (skel, base) = figure();
+        let floor = Floor::new(false);
+        let mut r = pool(Dvars::default());
+        let id = r.create().unwrap();
+        feed(&mut r, id, &skel, &base, &worlds(&base, 20.0));
+        r.update(17, &floor);
+        feed(&mut r, id, &skel, &base, &worlds(&base, 21.0));
+        r.update(17, &floor);
+        assert_eq!(r.state(id), Some(State::Simulating));
+        assert!(r.body_count() > 0);
+        let (time, now) = (r.time, r.pw.clock.now);
+        assert!(now > 0);
+        r.restart_world();
+        assert_eq!(r.body_count(), 0);
+        assert_eq!(r.state(id), None);
+        assert_eq!((r.pw.clock.now, r.pw.clock.msec_step), (0, 17));
+        assert_eq!(r.time, time);
+        // the pool takes a new corpse as it did at the load
+        let id2 = r.create().unwrap();
+        assert_eq!(r.state(id2), Some(State::WaitDObj));
+    }
+
     /// A bone whose length crosses a wall fails the tunnel test at the
     /// build, and the slot goes free.
     #[test]
