@@ -648,6 +648,26 @@ pub struct VoiceFrame {
     pub quality: i32,
     /// The microphone's level and scaler ([`mic_gain`]).
     pub mic: MicGain,
+    /// The directory `voice.wav` appends to while `winvoice_save_voice` is
+    /// on ([`append_voice`]).
+    pub save: Option<std::path::PathBuf>,
+}
+
+/// `winvoice_save_voice`: the frame a heard packet decoded to, appended as
+/// raw little-endian 16-bit mono samples (no header) to `voice.wav` in
+/// `dir`, which `Voice_IncomingVoiceData` does with `fopen("voice.wav",
+/// "ab")` in the working directory (cod4-voice.md 4.1).
+pub fn append_voice(dir: &std::path::Path, pcm: &[i16]) -> std::io::Result<()> {
+    use std::io::Write;
+    let Some(path) = vcod_common::game_dir::confined(dir, "voice.wav") else {
+        return Ok(());
+    };
+    let bytes: Vec<u8> = pcm.iter().flat_map(|s| s.to_le_bytes()).collect();
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?
+        .write_all(&bytes)
 }
 
 /// What the capture does to each sample: the recording volume, then the
@@ -713,11 +733,15 @@ pub fn step(
     quality: i32,
     shell: &crate::console::shell::Shell,
     audio: &mut crate::audio::AudioSystem,
+    save_dir: Option<&std::path::Path>,
 ) {
     let f = VoiceFrame {
         sending,
         quality,
         mic: shell_mic_gain(shell),
+        save: save_dir
+            .filter(|_| shell.cvar_f32("winvoice_save_voice") != 0.0)
+            .map(std::path::Path::to_path_buf),
     };
     chat.get_or_insert_with(|| VoiceChat::new(sample_rate))
         .frame(link, &f, Some(audio));
@@ -827,6 +851,11 @@ impl VoiceChat {
         for (talker, packet) in heard {
             let pcm = speex.decode(&packet);
             self.played += 1;
+            if let Some(dir) = &f.save
+                && let Err(e) = append_voice(dir, &pcm)
+            {
+                log::debug!("voice: voice.wav: {e}");
+            }
             let ring = match &self.streams[talker as usize] {
                 Some(r) => r.clone(),
                 None => {
@@ -950,6 +979,7 @@ mod tests {
             sending: false,
             quality: 3,
             mic: MicGain::default(),
+            save: None,
         };
         v.frame(&mut link, &idle, None);
         assert!(v.speex.is_none(), "opened with nothing sent or heard");
@@ -1005,6 +1035,16 @@ mod tests {
             l.queue(vec![3]);
         }
         assert_eq!(l.due(5202.0).map(|b| b.len()), Some(10));
+    }
+
+    /// `winvoice_save_voice` appends raw little-endian samples, no header.
+    #[test]
+    fn save_voice_appends_raw_samples_to_voice_wav() {
+        let dir = tempfile::tempdir().unwrap();
+        append_voice(dir.path(), &[1, -2, 0x1234]).unwrap();
+        append_voice(dir.path(), &[i16::MIN]).unwrap();
+        let bytes = std::fs::read(dir.path().join("voice.wav")).unwrap();
+        assert_eq!(bytes, [1, 0, 0xfe, 0xff, 0x34, 0x12, 0x00, 0x80]);
     }
 
     /// The voice options' level and scaler (cod2-voice.md 4): the scaler
@@ -1082,6 +1122,7 @@ mod tests {
                 sending,
                 quality: 3,
                 mic: MicGain::default(),
+                save: None,
             };
             v.frame(&mut link, &f, None);
         }
