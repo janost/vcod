@@ -822,10 +822,17 @@ mod tests {
             (2.5, vec![], 3),
             (3.1, vec![], 4),
         ];
+        // The floor's two triangles meet under the origin: each mark is one
+        // pooled fragment per triangle it touches.
+        let mut per_mark = 0;
         for (time, requests, rebuilds) in steps {
             r.set_marks(&fs, &requests, &[], time, true);
             assert_eq!(r.marks.rebuilds, rebuilds, "at {time}");
+            if per_mark == 0 {
+                per_mark = r.mark_count();
+            }
         }
-        assert_eq!(r.mark_count(), 1);
+        assert!(per_mark > 0);
+        assert_eq!(r.mark_count(), per_mark, "only the 20 s mark is left");
     }
 }

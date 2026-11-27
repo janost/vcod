@@ -1715,8 +1715,23 @@ two dumps).
   root bones of model 0 take that origin and the entity's axes
   (0x4468b0, from 0x446d40: 0x446914..0x446a2b). VERIFIED (the
   instructions). In the take `tag_origin` sits on `j_mainroot` every
-  drawn frame after the build. VERIFIED (the capture). vcod's root bones
-  keep the entity's origin; nothing is skinned to `tag_origin`. INFERRED.
+  drawn frame after the build. VERIFIED (the capture). vcod (2026-11-27)
+  moves the corpse's transform onto `Ragdolls::root` (the drawn pose's
+  first def bone) while the slot draws, from state 4 where 1.7 moves it
+  from state 3 (the build frame draws the death anim). What reads the
+  entity's origin on the client: the model's transform (the skins are
+  taken in it and drawn under it, so the move cancels in the world pose),
+  the dynamic pass's LOD distance (`lod_origin`, the transform's
+  translation), the light grid sample (`BodyFrame::light_origin`, the
+  origin raised by the torso height and the stance) and the slot's
+  `DObj::origin` (the idle exit's rebuild, whose bodies `place` then sets
+  from the snapshot); all four take the root now. The view cull and the
+  light boxes pose the skins' own box, the names read the head tag a
+  corpse sets none of, and no attached model, sound or tag follows a
+  corpse (`corpse_character` strips the attachments, a corpse fires no
+  tag), so none of those read it. Nothing is skinned to `tag_origin`.
+  INFERRED (the readers read in `cod4_client.rs` and `cod4_players.rs`,
+  not run against retail's).
 - **Each drawn frame's pose** (0x4352e0): 0x57de10, the controllers
   (0x446d40), then 0x580190. The controllers end with the ragdoll's DObj
   write (0x5bb580, called at 0x446de5 when the pose's +0xc is set and a

@@ -2079,7 +2079,11 @@ impl Cod4Client {
         );
         let mut drawn = Vec::new();
         for (i, rig, p) in posed {
-            let light_origin = views[i].1.frame.light_origin();
+            // A ragdolled corpse's transform sits on its root, which the light
+            // origin follows with the entity's origin (cod4-player-anims.md 10.7.2).
+            let frame = &views[i].1.frame;
+            let light_origin =
+                frame.light_origin() + (p.transform.w_axis.truncate() - frame.origin);
             for ((name, model), (_, skins)) in rig.models.iter().zip(p.models) {
                 let Some(model) = self.upload(cx, name, || Some((**model).clone())) else {
                     continue;
