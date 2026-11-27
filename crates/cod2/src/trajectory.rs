@@ -89,6 +89,9 @@ impl Trajectory2 {
     /// `physicsLaunch` sends `trDuration` 0x7fffffff (cod4-gsc.md).
     pub fn evaluate_f32(&self, at_ms: i32) -> Vec3 {
         use vcod_common::net::trajectory as v1;
+        if self.tr_type == TR_SINE {
+            return self.sine(at_ms);
+        }
         let tr_type = match self.tr_type {
             TR_STATIONARY..=TR_GRAVITY => self.tr_type,
             TR_GRAVITY_PAUSED => v1::TR_GRAVITY_PAUSED,
@@ -111,6 +114,17 @@ impl Trajectory2 {
         }
         .evaluate_stored(at_ms)
     }
+
+    /// The `TR_SINE` arm (0x80df61f..0x80df6b6): the clock ratio stored as a
+    /// float, `2 * (ratio * pi)` with the double pi (rodata 0x8154d30) passed
+    /// to libm's double `sin`, the result stored as a float, then
+    /// `delta * phase + base` rounded once per component.
+    fn sine(&self, at_ms: i32) -> Vec3 {
+        let ratio =
+            (f64::from(at_ms.wrapping_sub(self.tr_time)) / f64::from(self.tr_duration)) as f32;
+        let phase = (2.0 * (f64::from(ratio) * std::f64::consts::PI)).sin() as f32;
+        (self.delta.as_dvec3() * f64::from(phase) + self.base.as_dvec3()).as_vec3()
+    }
 }
 
 #[cfg(test)]
@@ -129,6 +143,23 @@ mod tests {
 
     fn x(tr_type: i32, at: i32) -> f32 {
         tr(tr_type).evaluate_f32(at).x
+    }
+
+    /// Pinned to the retail arm's arithmetic: the ratio rounds to a float
+    /// before the double `sin`, whose result rounds to a float.
+    #[test]
+    fn sine_follows_the_stored_float_chain() {
+        let at = |t: i32| tr(TR_SINE).evaluate_f32(t).x;
+        assert_eq!(at(1000), 10.0);
+        assert_eq!(at(1500), 110.0);
+        let ratio = (1300.0_f64 - 1000.0) / 2000.0;
+        let want = (100.0
+            * f64::from((2.0 * (f64::from(ratio as f32) * std::f64::consts::PI)).sin() as f32)
+            + 10.0) as f32;
+        assert_eq!(at(1300), want);
+        // The all-float form reads 0x4223_9b58 here.
+        assert_eq!(at(1100).to_bits(), 0x4223_9b57);
+        assert_eq!(at(1999).to_bits(), 0x4125_06c7);
     }
 
     fn close(a: f32, b: f32) -> bool {
