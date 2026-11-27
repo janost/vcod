@@ -73,6 +73,28 @@ pub fn axes(q: IwQuat) -> M3 {
     ]
 }
 
+/// 0x561100: a unit quaternion's axes as rows, with no `2 / |q|^2`: each
+/// doubled part and each product stored, each sum rounded once
+/// (0x561103..0x5611e9, cod4-effects.md 9.1.1).
+pub fn unit_axes(q: IwQuat) -> M3 {
+    let f = |x: f64| x as f32;
+    let [x, y, z, qw] = q;
+    let (x2, y2, z2) = (f(w(x) + w(x)), f(w(y) + w(y)), f(w(z) + w(z)));
+    let (xx, xy, xz, xw) = (
+        f(w(x) * w(x2)),
+        f(w(x2) * w(y)),
+        f(w(z) * w(x2)),
+        f(w(x2) * w(qw)),
+    );
+    let (yy, yz, yw) = (f(w(y2) * w(y)), f(w(z) * w(y2)), f(w(y2) * w(qw)));
+    let (zz, zw) = (f(w(z2) * w(z)), f(w(z2) * w(qw)));
+    [
+        [f(1.0 - (w(zz) + w(yy))), f(w(zw) + w(xy)), f(w(xz) - w(yw))],
+        [f(w(xy) - w(zw)), f(1.0 - (w(zz) + w(xx))), f(w(yz) + w(xw))],
+        [f(w(xz) + w(yw)), f(w(yz) - w(xw)), f(1.0 - (w(xx) + w(yy)))],
+    ]
+}
+
 /// 0x596b80: axes as rows to ODE's `R`, whose columns they are.
 pub fn axes_to_r(a: &M3) -> M3 {
     std::array::from_fn(|i| std::array::from_fn(|j| a[j][i]))

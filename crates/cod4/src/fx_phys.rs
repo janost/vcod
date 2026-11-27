@@ -58,7 +58,7 @@ pub fn effect_seed(rand: i32) -> u16 {
 }
 
 /// An effect's seed off its start time, when an element of it or of an
-/// effect it plays carries flag 0x1000 (0x4a0ea0, 0x4a12b4..0x4a12cc):
+/// effect it plays carries flag 0x1000 ([`timed_seed`], 0x4a12b4..0x4a12cc):
 /// the MSVC LCG's next draw off the time, times 479, over 32768.
 pub fn effect_seed_at(msec: i32) -> u16 {
     let r = (msec as u32).wrapping_mul(0x343fd).wrapping_add(0x269ec3) >> 17;
@@ -76,20 +76,61 @@ pub fn one_shot_count(def: &ElemDef, effect_seed: u16) -> i32 {
 
 /// `FX_SpawnElem`'s start and seed (0x4a25fb..0x4a2660) for the
 /// `sequence`th of an element spawned at `msec`: the start takes
-/// `spawnDelayMsec`, its amplitude drawn at the seed the start gives, and
-/// the seed is `(effect seed + start + 296 sequence) % 479`.
-pub fn elem_seed(def: &ElemDef, effect_seed: u16, msec: i32, sequence: u8) -> (i32, u16) {
-    let mix = |begin: i32| {
-        ((u32::from(sequence) * 0x128)
+/// `spawnDelayMsec`, its amplitude drawn at `(296 sequence + effect seed +
+/// start) % 479` off the whole sequence, and the seed is the same sum off
+/// its low byte (the `movzx` at 0x4a263a).
+pub fn elem_seed(def: &ElemDef, effect_seed: u16, msec: i32, sequence: u32) -> (i32, u16) {
+    let mix = |sequence: u32, begin: i32| {
+        (sequence
+            .wrapping_mul(0x128)
             .wrapping_add(begin as u32)
             .wrapping_add(u32::from(effect_seed))
             % SEEDS) as usize
     };
     let mut begin = def.spawn_delay_msec.0.wrapping_add(msec);
     if def.spawn_delay_msec.1 != 0 {
-        begin = begin.wrapping_add(draw_int((0, def.spawn_delay_msec.1), mix(begin) + 18));
+        let at = mix(sequence, begin) + 18;
+        begin = begin.wrapping_add(draw_int((0, def.spawn_delay_msec.1), at));
     }
-    (begin, mix(begin) as u16)
+    (begin, mix(sequence & 0xff, begin) as u16)
+}
+
+/// The longest a non-runner element lives past its spawn (0x4a2fa0 off no
+/// loop count): `spawnDelayMsec`'s and `lifeSpanMsec`'s bases and
+/// amplitudes summed (0x4a2fbe..0x4a2fc7).
+fn max_life(def: &ElemDef) -> i32 {
+    let (d, l) = (def.spawn_delay_msec, def.life_span_msec);
+    d.0.wrapping_add(d.1).wrapping_add(l.0).wrapping_add(l.1)
+}
+
+/// 0x4a30e0: the sequences and times an update over `(from, to]` spawns of
+/// looping element `def`, on the grid of its `intervalMsec` from the
+/// effect's start `start` and under its count (0x4a314b..0x4a3207). An
+/// update past 128 ms first moves `from` up to `to` less the element's
+/// longest life plus 1 (0x4a310f..0x4a3147). Sequence 0 is the effect's own
+/// spawn (0x4a33b0); an interval of 0, which retail divides by, spawns
+/// nothing more (vcod's).
+pub fn looping_spawns(def: &ElemDef, start: i32, mut from: i32, to: i32) -> Vec<(u32, i32)> {
+    let (interval, count) = def.spawn;
+    if interval <= 0 {
+        return Vec::new();
+    }
+    let span = to.wrapping_sub(from);
+    if to != i32::MAX && span > 0x80 {
+        let keep = max_life(def).min(span).wrapping_add(1);
+        if span > keep {
+            from = from.wrapping_add(span - keep);
+        }
+    }
+    let mut k = from.wrapping_sub(start) / interval + 1;
+    let mut at = interval.wrapping_mul(k).wrapping_add(start);
+    let mut out = Vec::new();
+    while at <= to && k < count {
+        out.push((k as u32, at));
+        k += 1;
+        at = at.wrapping_add(interval);
+    }
+    out
 }
 
 /// The frame an effect plays in: its origin and its axes as rows
@@ -98,6 +139,19 @@ pub fn elem_seed(def: &ElemDef, effect_seed: u16, msec: i32, sequence: u8) -> (i
 pub struct EffectFrame {
     pub origin: V3,
     pub axes: M3,
+}
+
+impl EffectFrame {
+    /// `FX_SpawnEffect`'s frame off the caller's `axis` (rows): kept as
+    /// its `AxisToQuat` (0x562980 at 0x4a13ef, effect +0x28) and read back
+    /// through 0x561100 wherever the spawn turns by it (0x4a5a07, 0x4a5b00,
+    /// 0x4a5da0, 0x4a5dc7).
+    pub fn of_axis(origin: V3, axis: &M3) -> EffectFrame {
+        EffectFrame {
+            origin,
+            axes: iw::unit_axes(axis_to_quat(axis)),
+        }
+    }
 }
 
 /// `FX_GetSpawnOrigin` (0x4a5cb0): the element's `spawnOrigin` drawn at
@@ -463,28 +517,71 @@ impl PhysWorld {
 }
 
 /// A physics model element of an effect: its def, its place among the
-/// effect's elements and its visuals' model names.
+/// effect's elements, its visuals' model names, whether it loops, and
+/// whether it names an impact, death or emitted effect, which keeps
+/// `FX_SpawnElem` from refusing it when its life is already past (0x4a0c60
+/// at 0x4a26e5).
 #[derive(Clone, Debug)]
 pub struct PhysElem {
     pub def: ElemDef,
     pub index: usize,
     pub models: Vec<String>,
+    pub looping: bool,
+    pub chains: bool,
 }
 
-/// An effect's physics model elements, and whether its seed comes off its
-/// start time (an element of it, or of an effect it plays, with flag
-/// 0x1000) rather than `rand()`.
+/// An effect's physics model elements, `msecLoopingLife` (effect +0xc),
+/// and whether its seed comes off its start time (an element of it, or of
+/// an effect it plays, with flag 0x1000) rather than `rand()`.
 #[derive(Clone, Debug)]
 pub struct PhysEffect {
     pub elems: Vec<PhysElem>,
+    pub looping_life: i32,
     pub timed_seed: bool,
 }
 
+/// An element's flags (`FxElemDef` +0).
+fn raw_flags(e: &crate::assets::fx::FxElem) -> u32 {
+    u32::from_le_bytes(e.raw[0..4].try_into().unwrap())
+}
+
+/// 0x4a0ea0: whether an element of `fx`, or of an effect one of them
+/// plays (its death, impact and emitted effects, a runner's visuals), has
+/// flag 0x1000 (0x4a0ed4..0x4a0f9f). `find` names an effect by name;
+/// `seen` stops a cycle, which retail would recurse through for ever
+/// (vcod's).
+fn timed_seed<'a>(
+    fx: &'a Fx,
+    find: &dyn Fn(&str) -> Option<&'a Fx>,
+    seen: &mut Vec<&'a str>,
+) -> bool {
+    if seen.contains(&fx.name.as_str()) {
+        return false;
+    }
+    seen.push(&fx.name);
+    fx.elems.iter().any(|e| {
+        let runners = e.visuals.iter().filter_map(|v| match v {
+            FxVisual::Effect(Some(n)) => Some(n),
+            _ => None,
+        });
+        raw_flags(e) & 0x1000 != 0
+            || [&e.effect_on_death, &e.effect_on_impact, &e.effect_emitted]
+                .into_iter()
+                .flatten()
+                .chain(runners)
+                .any(|n| find(n).is_some_and(|f| timed_seed(f, find, seen)))
+    })
+}
+
 impl PhysEffect {
-    /// `fx`'s one-shot physics model elements, its models named off `a`;
-    /// None when it has none. Looping ones spawn on their interval, which
-    /// vcod's FX system does not hand over.
-    pub fn of(a: &Assets, fx: &Fx) -> Option<PhysEffect> {
+    /// `fx`'s looping and one-shot physics model elements, its models
+    /// named off `a` and its other effects found through `find`; None when
+    /// it has none.
+    pub fn of<'a>(
+        a: &Assets,
+        fx: &'a Fx,
+        find: &dyn Fn(&str) -> Option<&'a Fx>,
+    ) -> Option<PhysEffect> {
         let looping = fx.looping.max(0) as usize;
         let end = looping + fx.one_shot.max(0) as usize;
         let elems: Vec<PhysElem> = fx
@@ -492,7 +589,6 @@ impl PhysEffect {
             .iter()
             .enumerate()
             .take(end)
-            .skip(looping)
             .filter_map(|(index, e)| {
                 let def = ElemDef::of(e);
                 is_physics(&def).then(|| PhysElem {
@@ -506,34 +602,141 @@ impl PhysEffect {
                             _ => None,
                         })
                         .collect(),
+                    looping: index < looping,
+                    chains: e.effect_on_impact.is_some()
+                        || e.effect_on_death.is_some()
+                        || e.effect_emitted.is_some(),
                 })
             })
             .collect();
         if elems.is_empty() {
             return None;
         }
-        // 0x4a0ea0 follows the impact and death effects too; the names
-        // alone are kept here, so only the effect's own elements count.
-        let timed_seed = fx
-            .elems
-            .iter()
-            .any(|e| i32::from_le_bytes(e.raw[0..4].try_into().unwrap()) as u32 & 0x1000 != 0);
-        Some(PhysEffect { elems, timed_seed })
+        Some(PhysEffect {
+            elems,
+            looping_life: fx.msec_looping_life,
+            timed_seed: timed_seed(fx, find, &mut Vec::new()),
+        })
     }
 }
 
-/// Every effect of `zones` with a physics model element, by name.
+/// Every effect of `zones` with a physics model element, by name; the
+/// first zone holding a name wins, for the effect and the ones it plays.
 pub fn effects(zones: &[&Assets]) -> std::collections::HashMap<String, Arc<PhysEffect>> {
+    let find = |n: &str| {
+        zones
+            .iter()
+            .find_map(|z| z.fx.iter().find(|f| f.name.eq_ignore_ascii_case(n)))
+    };
     let mut out = std::collections::HashMap::new();
     for z in zones {
         for fx in &z.fx {
             if out.contains_key(&fx.name) {
                 continue;
             }
-            if let Some(p) = PhysEffect::of(z, fx) {
+            if let Some(p) = PhysEffect::of(z, fx, &find) {
                 out.insert(fx.name.clone(), Arc::new(p));
             }
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assets::fx::FxElem;
+
+    /// A model element of `flags` whose words at `+o` are `v`.
+    fn elem(flags: u32, words: &[(usize, i32)]) -> FxElem {
+        let mut raw = vec![0u8; 0xfc];
+        raw[0..4].copy_from_slice(&flags.to_le_bytes());
+        for &(o, v) in words {
+            raw[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        raw[0xb0] = 5;
+        FxElem {
+            elem_type: 5,
+            visuals: Vec::new(),
+            effect_on_impact: None,
+            effect_on_death: None,
+            effect_emitted: None,
+            vel_samples: None,
+            vis_samples: None,
+            raw,
+            trail: None,
+        }
+    }
+
+    fn fx(name: &str, elems: Vec<FxElem>) -> Fx {
+        Fx {
+            name: name.into(),
+            flags: 0,
+            msec_looping_life: 0,
+            looping: 0,
+            one_shot: elems.len() as i32,
+            emission: 0,
+            elems,
+        }
+    }
+
+    /// 0x4a30e0 on `explosions/grenadeexp_wood`'s element 1 (every 5 ms,
+    /// 30 of them, a life of 1 s): each update spawns the grid's times
+    /// past its start up to its end, under the count, and one past 128 ms
+    /// first drops the spawns whose life would be over.
+    #[test]
+    fn looping_spawns_walk_the_interval_grid_under_the_count() {
+        let def = ElemDef::of(&elem(flags::PHYSICS, &[(4, 5), (8, 30), (0x30, 1000)]));
+        assert_eq!(
+            looping_spawns(&def, 1000, 1000, 1017),
+            [(1, 1005), (2, 1010), (3, 1015)]
+        );
+        assert_eq!(
+            looping_spawns(&def, 1000, 1017, 1034),
+            [(4, 1020), (5, 1025), (6, 1030)]
+        );
+        let tail = looping_spawns(&def, 1000, 1130, 1200);
+        assert_eq!(tail.last(), Some(&(29, 1145)), "sequence 29 is the 30th");
+        let short = ElemDef::of(&elem(flags::PHYSICS, &[(4, 5), (8, 1000), (0x30, 50)]));
+        assert_eq!(looping_spawns(&short, 0, 0, 300).first(), Some(&(50, 250)));
+        let none = ElemDef::of(&elem(flags::PHYSICS, &[(4, 0), (8, 30)]));
+        assert!(looping_spawns(&none, 0, 0, 100).is_empty());
+    }
+
+    /// `FX_SpawnElem` draws the delay off the whole sequence and the
+    /// element's seed off its low byte.
+    #[test]
+    fn the_elements_seed_takes_the_sequences_low_byte() {
+        let def = ElemDef::of(&elem(flags::PHYSICS, &[(0x2c, 100)]));
+        let (b0, s0) = elem_seed(&def, 7, 1000, 0);
+        let (b1, s1) = elem_seed(&def, 7, 1000, 256);
+        assert_ne!(b0, b1, "the delay's draw reads the whole sequence");
+        assert_eq!(
+            (i32::from(s0), i32::from(s1)),
+            ((b0 + 7) % 479, (b1 + 7) % 479)
+        );
+    }
+
+    /// 0x4a0ea0 finds flag 0x1000 on an effect a death effect's runner
+    /// plays, and a cycle of effects ends.
+    #[test]
+    fn a_timed_seed_follows_the_chained_and_run_effects() {
+        let mut parent = elem(flags::PHYSICS, &[]);
+        parent.effect_on_death = Some("b".into());
+        let mut runner = elem(0, &[]);
+        runner.elem_type = 10;
+        runner.visuals = vec![FxVisual::Effect(Some("c".into()))];
+        let mut back = elem(0, &[]);
+        back.effect_on_impact = Some("a".into());
+        let all = [
+            fx("a", vec![parent]),
+            fx("b", vec![runner, back]),
+            fx("c", vec![elem(0x1000, &[])]),
+        ];
+        let find = |n: &str| all.iter().find(|f| f.name == n);
+        assert!(timed_seed(&all[0], &find, &mut Vec::new()));
+        let untimed = [all[0].clone(), all[1].clone(), fx("c", vec![elem(0, &[])])];
+        let find = |n: &str| untimed.iter().find(|f| f.name == n);
+        assert!(!timed_seed(&untimed[0], &find, &mut Vec::new()));
+    }
 }

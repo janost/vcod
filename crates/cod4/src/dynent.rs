@@ -281,8 +281,7 @@ pub struct DynEnts {
 
 /// A pose quaternion's axes (0x561100), the phys object's frame.
 fn quat_axes(q: Quat) -> M3 {
-    let m = glam::Mat3::from_quat(q);
-    [m.x_axis.into(), m.y_axis.into(), m.z_axis.into()]
+    crate::ragdoll::iw::unit_axes(q.to_array())
 }
 
 impl DynEnts {
@@ -586,12 +585,11 @@ impl DynEnts {
         // 0x48de98: neither an effect nor pieces, nothing more.
         let d = &self.defs[i];
         d.destroy_fx.as_ref()?;
-        let m = glam::Mat3::from_quat(e.rot);
         Some(Broken {
             index: i,
             fx: d.destroy_fx.clone(),
             origin: e.origin,
-            axis: [m.x_axis, m.y_axis, m.z_axis],
+            axis: quat_axes(e.rot).map(Vec3::from),
         })
     }
 

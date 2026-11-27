@@ -25,6 +25,7 @@ frame 700, contacts on steps 1-40), and was cut by
 | `frag-mp_crash-1.7.txt` | mp_crash | 0 | `SCENARIO=frag POS="460 125 196 0" PITCH=85` | a frag held 30 frames and dropped at the feet beside the plastic crate at (496.6, 125.1, 138.6) |
 | `car-mp_backlot-1.7.txt` | mp_backlot | 1 | `SCENARIO=burst FIRE=120 POS="466.4 -425.4 128.1 169" PITCH=15 QUIET=600 STEPS=2500 CONTACTS_FROM=launch` | 120 frames of MP5 fire into the side of the first sedan, `vehicle_80s_sedan1_silv` at (368.2, -406.3, 68), until `_destructible.gsc` blows it and launches its parts |
 | `watermelon-mp_bog-1.7.txt` | mp_bog | 1 | `SCENARIO=round POS="3624.6 -32.2 52 0" PITCH=10` | one round into the watermelon `me_fruit_watermelon_round` at (3672.6, -32.2, 43.5); its `props/watermelon` effect's chunks. Cut at step 170 (`--steps 170`): one chunk was still rolling at 4 u/s and 2.2 rad/s at step 600, where the take stopped |
+| `copypaper-mp_broadcast-1.7.txt` | mp_broadcast | 1 | `SCENARIO=burst FIRE=120 POS="-201.2 240.9 60 90" PITCH=41 CONTACTS_FROM=fxmodel`, the four timeouts at 1800 | MP5 fire into the copy paper box `com_copypaper_box` at (-201.2, 300.9, 0) (health 200) until it breaks; its `props/copypaper_box_exp` effect's lid and open box (elements 4 and 5, run bits 0x40). The rounds push the box about first, so where it breaks varies by run: one run of 60 frames never broke it |
 
 The summary of each, as `cod4_phys_summary.py` reads it:
 
@@ -34,6 +35,7 @@ The summary of each, as `cod4_phys_summary.py` reads it:
 | frag | 8 dynents: two crates 1 (1), a bottle and a can 0.1 (6 over 13), two barrel shards 6 (1), two tyres 18 (6 over 13) | 140 | 17 | 74 to 140 | 320 calls, 642 contacts, at most 14 | 23 |
 | car | 9 launched: four bounds boxes 6 (1), two doors 25 and one part 6 as brushes (12), two tyres 18 (6 over 13) | 132 | 17 | 89 to 132 | 360 calls, 1017 contacts, at most 24 | 37 |
 | watermelon | 6 FX models, 1 each (1) | 170 (cut) | 17 | 95 to 165, one never | 240 calls, 682 contacts, at most 12 | 6 |
+| copypaper | 2 FX models, 1 each (1) | 97 | 17 | 76 and 97 | 80 calls, 186 contacts, at most 8 | 1 |
 
 ## Lines
 
@@ -47,6 +49,11 @@ dump first met each body.
 - `made ID ADDR CREATOR`: a body of this world from `Phys_ObjCreate`
   (0x5a4fb0), by its call's return address: `launch` 0x434d4e, `dynent`
   0x48dcc8, `jitter` 0x48ed9f, `pieces` 0x490fda, `fxmodel` 0x4a21be.
+- `fxbody elem I seed S | effect W0..W23`: an FX model element's body at
+  0x4a1ff0's entry (world 1 only): the element's index in its effect, its
+  seed, and the effect's first 0x60 bytes (+0x12 the effect's seed, +0x20
+  its start, +0x28 its frame's quaternion `x y z w` and +0x38 its origin).
+  It comes before the body's `made` line.
 - `push STEP ID CALLER px py pz | fx fy fz | MSEC`: `Phys_ObjAddForce`
   (0x5a5900) on this world: the step count so far, the body, the return
   address (0x48eaa6 a blast, 0x5a5db4 `Phys_ObjBulletImpact`), the point,
