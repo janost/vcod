@@ -1293,7 +1293,7 @@ The ragdoll's world steps them (10.7).
   through 0x5a2320's cut (cod4-gsc.md 3.6.1, at most 15). VERIFIED (the
   instructions, the registrations). A ragdoll bone's preset has bounce
   0 and the bone's friction (0x5bc980..0x5bc9b6). VERIFIED (the stores).
-  The impact callback after the pass (0x5a5de0) is not ported.
+  The impact callback after the pass (0x5a5de0) is cod4-gsc.md 3.6.7.
 - **The contact pass** (0x5a2760, `contact_pass`). 0x5a2280 sets both
   bodies' state 1 when two contacts' stored normal dot is under -0.99
   (the double at 0x70b268); with `b1` in state 1, else `b2`, 0x5a25d0
@@ -1607,10 +1607,8 @@ hook and calls `PhysWorld::run_to_time` for world 2.
   unless `2 r + h` (the double 2.0 at 0x70ae50, `h` at +0x54) is less
   (0x5a68b7). The box is `-m..m` on each axis for 1, 13 and 14.
   VERIFIED (the instructions). The port has the box's, the cylinder's,
-  the capsule's and the transform's arms (`Geom::bounds`); class 12's
-  waits for 0x561910. `run_frame` refuses a body whose first geom is not
-  a capsule until P3 brings the colliders: `run_to_time` returns its
-  class as an error (cod4-gsc.md 3.6.3). vcod's.
+  the capsule's, the transform's and class 12's arms (`Geom::bounds`,
+  cod4-gsc.md 3.6.4), and every class its collider (cod4-gsc.md 3.6.7).
 - **The sweep box.** With `m` the box's top x: `m` under `2 phys_csl`
   (the sum stored) sweeps a point (corners -0.001 and 0.001, 0x70b460,
   0x70b278); else the box at 0.2 of the bounds (the double at 0x70b3e8,

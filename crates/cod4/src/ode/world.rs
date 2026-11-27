@@ -81,6 +81,10 @@ pub struct PhysDvars {
     pub drag_angular: f32,
     pub bullet_up_bias: f32,
     pub bullet_spin_scale: f32,
+    /// `phys_minImpactMomentum` (0xcc5442c): the impact sound's gate.
+    pub min_impact_momentum: f32,
+    /// `phys_jitterMaxMass` (0xcc7815c): the jitter's mass cap.
+    pub jitter_max_mass: f32,
 }
 
 impl Default for PhysDvars {
@@ -100,6 +104,8 @@ impl Default for PhysDvars {
             drag_angular: 0.5,
             bullet_up_bias: 0.5,
             bullet_spin_scale: 3.0,
+            min_impact_momentum: 250.0,
+            jitter_max_mass: 200.0,
         }
     }
 }

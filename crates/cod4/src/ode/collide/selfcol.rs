@@ -148,6 +148,7 @@ pub fn self_pair(world: &mut World, a: &Bone, oa: &mut Obj, b: &Bone, ob: &mut O
         vec![c],
         [Some((b.body, ob)), Some((a.body, oa))],
         surface,
+        None,
     );
 }
 

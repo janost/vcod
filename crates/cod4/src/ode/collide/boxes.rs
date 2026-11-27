@@ -10,6 +10,7 @@
 use glam::Vec3;
 
 use super::ContactGeom;
+use super::poly::clip;
 use super::world::Pieces;
 use crate::collision::{BrushFaces, Piece};
 use crate::ode::math::{M3, V3, cross, dot, dot_wide, neg, normalize3};
@@ -146,89 +147,6 @@ impl Out<'_> {
     }
 }
 
-/// 0x597800: clips `p` in place to `n . x <= d` (the dot stored): with no
-/// corner inside it gives 0 and leaves `p`; with all inside, `p`; else the
-/// corner the polygon leaves by and the one it comes back by move onto the
-/// plane along their edges and the run between goes (0x597440), or, with
-/// one corner outside, a corner is put in after it.
-// A NaN dot reads inside, as the compare's flags do.
-#[allow(clippy::neg_cmp_op_on_partial_ord)]
-fn clip(p: &mut Vec<V3>, n: V3, d: f32) -> usize {
-    let len = p.len();
-    if len == 0 {
-        return 0;
-    }
-    let inside = |q: V3| !(d < dot(q, n));
-    let last_in = inside(p[len - 1]);
-    let (mut l0, mut l1, mut e0, mut e1) = (None, 0, 0, 0);
-    let mut any = false;
-    let (mut prev, mut prev_in) = (len - 1, last_in);
-    for i in 0..len {
-        let cur_in = if i == len - 1 { last_in } else { inside(p[i]) };
-        if prev_in {
-            any = true;
-            if !cur_in {
-                (l0, l1) = (Some(prev), i);
-            }
-        } else if cur_in {
-            (e0, e1) = (prev, i);
-        }
-        (prev, prev_in) = (i, cur_in);
-    }
-    if !any {
-        return 0;
-    }
-    let Some(mut l0) = l0 else { return len };
-    // `to` moved onto the plane along the edge from `from`; `None` when the
-    // edge runs along the plane.
-    let meet = |p: &[V3], to: usize, from: usize| -> Option<V3> {
-        let (a, b) = (p[to], p[from]);
-        let denom = dot(n, sub(a, b));
-        if denom == 0.0 {
-            return None;
-        }
-        let t = ((w(d) - w(dot(n, b))) / w(denom)) as f32;
-        Some(std::array::from_fn(|j| {
-            ((w(a[j]) - w(b[j])) * w(t) + w(b[j])) as f32
-        }))
-    };
-    if l1 != e0 {
-        if let Some(q) = meet(p, l1, l0) {
-            p[l1] = q;
-        }
-        if let Some(q) = meet(p, e0, e1) {
-            p[e0] = q;
-        }
-        // 0x597440: the run strictly between `l1` and `e0` goes.
-        if (l1 + 1) % len == e0 {
-            return len;
-        }
-        if l1 < e0 {
-            p.drain(l1 + 1..e0);
-        } else {
-            p.truncate(l1 + 1);
-            p.drain(..e0);
-        }
-        return p.len();
-    }
-    // One corner `v` outside: a slot after it takes the meet on its edge to
-    // the next corner, and `v` the meet on its edge from the one before.
-    let v = l1;
-    let fill = p[(v + 1) % len];
-    p.insert(v + 1, fill);
-    let n1 = len + 1;
-    let slot = (e0 + 1) % n1;
-    if v < l0 {
-        l0 += 1;
-    }
-    let next = (slot + 1) % n1;
-    p[slot] = meet(p, v, next).unwrap_or(p[v]);
-    if let Some(q) = meet(p, v, l0) {
-        p[v] = q;
-    }
-    n1
-}
-
 /// 0x5974b0: how polygon `p` winds round `n`: 0 when the first corner pair
 /// whose cross product with the first edge is longer than 0.1 turns with
 /// `n` (dot at least 0), 1 against it, 2 when none is.
@@ -275,7 +193,7 @@ fn clip_by(mut p: Vec<V3>, clipper: &[V3], n: V3) -> Vec<V3> {
     for i in 0..m {
         let prev = clipper[(i + m - 1) % m];
         if let Some((en, ed)) = edge_plane(prev, clipper[i], n, sense == 1)
-            && clip(&mut p, en, ed) < 3
+            && clip(&mut p, (en, ed)) < 3
         {
             return Vec::new();
         }
@@ -380,7 +298,7 @@ fn box_reference(
     let mut pts = wind.to_vec();
     for i in 0..4 {
         if let Some((en, ed)) = edge_plane(proj[i], proj[(i + 1) % 4], pn, sense == 1)
-            && clip(&mut pts, en, ed) < 3
+            && clip(&mut pts, (en, ed)) < 3
         {
             return;
         }
@@ -445,10 +363,10 @@ fn meets_box(b: &BoxGeom, wind: &[V3]) -> bool {
     for k in 0..3 {
         let a = b.axes[k];
         let ac = dot(b.centre, a);
-        if clip(&mut p, a, (w(b.half[k]) + w(ac)) as f32) == 0 {
+        if clip(&mut p, (a, (w(b.half[k]) + w(ac)) as f32)) == 0 {
             return false;
         }
-        if clip(&mut p, neg(a), (w(b.half[k]) - w(ac)) as f32) == 0 {
+        if clip(&mut p, (neg(a), (w(b.half[k]) - w(ac)) as f32)) == 0 {
             return false;
         }
     }
@@ -921,47 +839,6 @@ mod tests {
     use super::*;
     use crate::ode::collide::tests::{Brushes, cuboid};
     use crate::ode::math::IDENTITY;
-
-    const SQUARE: [V3; 4] = [
-        [0.0, 0.0, 0.0],
-        [2.0, 0.0, 0.0],
-        [2.0, 2.0, 0.0],
-        [0.0, 2.0, 0.0],
-    ];
-
-    /// 0x597800 with one corner outside puts a corner in after it: the
-    /// square cut by `x + y <= 3` keeps its order round the cut.
-    #[test]
-    fn a_clip_past_one_corner_puts_a_corner_in() {
-        let mut p = SQUARE.to_vec();
-        assert_eq!(clip(&mut p, [1.0, 1.0, 0.0], 3.0), 5);
-        assert_eq!(
-            p,
-            [
-                [0.0, 0.0, 0.0],
-                [2.0, 0.0, 0.0],
-                [2.0, 1.0, 0.0],
-                [1.0, 2.0, 0.0],
-                [0.0, 2.0, 0.0]
-            ]
-        );
-    }
-
-    /// 0x597800 with two corners outside moves the two onto the plane.
-    #[test]
-    fn a_clip_past_two_corners_moves_them_onto_the_plane() {
-        let mut p = SQUARE.to_vec();
-        assert_eq!(clip(&mut p, [1.0, 0.0, 0.0], 1.0), 4);
-        assert_eq!(
-            p,
-            [
-                [0.0, 0.0, 0.0],
-                [1.0, 0.0, 0.0],
-                [1.0, 2.0, 0.0],
-                [0.0, 2.0, 0.0]
-            ]
-        );
-    }
 
     /// A box half a unit into a brush's top and half a unit past its +x
     /// edge: the +x face is the reference; a narrow box (a side under

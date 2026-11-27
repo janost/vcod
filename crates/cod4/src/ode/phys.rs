@@ -6,13 +6,14 @@
 //! (0x5a5a20). cod4-player-anims.md 10.7.1.
 
 use glam::Vec3;
+use vcod_common::rng::MsvcRand;
 
-pub use super::geom::{Geom, GeomClass, Unported};
+pub use super::geom::{Geom, GeomClass};
 
 use super::Body;
 use super::body::DISABLED;
-use super::collide::brushgeom::{self, BrushGeom, NARROW_MAX_LENGTH};
-use super::collide::{self, Capsule, Obj, Pieces};
+use super::collide::brushgeom::NARROW_MAX_LENGTH;
+use super::collide::{self, Impact, Jitter, JitterRegion, Obj, Pieces};
 use super::math::{M3, V3};
 use super::world::{BodyId, Params, PhysDvars, World};
 use crate::ragdoll::{CLIP_MASK, Sweep};
@@ -51,6 +52,11 @@ const AVEL_DAMP: f64 = -0.009_999_999_776_482_582;
 const SWEEP_SHARE: f64 = 0.200_000_002_980_232_24;
 /// A thin geom's sweep is a point this big (the floats at 0x70b460, 0x70b278).
 const POINT: f32 = 0.001;
+/// The body pool all three worlds share (0x5b6aa0; `dBodyCreate` gives
+/// none past it, "more than %i" with 0x200 at 0x5a4e10).
+pub const MAX_BODIES: usize = 0x200;
+/// The jitter regions a world keeps (0x5a7738: a sixth overwrites the fifth).
+pub const MAX_JITTER_REGIONS: usize = 5;
 
 /// What a world's bodies sweep against after a frame, and collide with.
 pub trait Clip: Pieces {
@@ -121,8 +127,22 @@ pub struct PhysWorld {
     pub clock: Clock,
     /// By body index.
     objs: Vec<Option<PhysObj>>,
-    /// The bodies' geoms in the space's order, newest first (0x5a9f00).
-    space: Vec<BodyId>,
+    /// The space's geoms (0xcc546e8 by world), newest first (0x5a9f00's
+    /// add at the head): a body and the geom's place among its geoms in
+    /// the order made. Nothing reorders them under the default dvars
+    /// (cod4-gsc.md 3.6.7).
+    space: Vec<(BodyId, usize)>,
+    /// The impact sounds of the last [`Self::run_to_time`], in order.
+    pub impacts: Vec<Impact>,
+    /// The `physicsJitter` regions the next step's contacts take
+    /// ([`Self::add_jitter`]); `Phys_PostStep` drops them (0x5a66ff).
+    pub jitter: Vec<JitterRegion>,
+    /// The CRT `rand()` state the jitter draws on; retail's is the
+    /// process's one stream, which other client code draws on too.
+    pub rand: MsvcRand,
+    /// The bodies the other worlds hold, which count against the shared
+    /// [`MAX_BODIES`] (0x5b6aa0's one pool).
+    pub others: usize,
 }
 
 impl PhysWorld {
@@ -142,31 +162,72 @@ impl PhysWorld {
             },
             objs: Vec::new(),
             space: Vec::new(),
+            impacts: Vec::new(),
+            jitter: Vec::new(),
+            rand: MsvcRand::default(),
+            others: 0,
         }
     }
 
-    /// A bare body; [`Self::add_obj`] gives it its object and geom.
-    pub fn create_body(&mut self) -> BodyId {
-        self.world.create_body()
+    /// A bare body; [`Self::add_obj`] gives it its object and geoms. None
+    /// once the worlds hold [`MAX_BODIES`] (`dBodyCreate` 0x5b6b10).
+    pub fn create_body(&mut self) -> Option<BodyId> {
+        (self.world.bodies().len() + self.others < MAX_BODIES).then(|| self.world.create_body())
     }
 
-    /// The body's phys object, its geom put at the head of the space.
+    /// The body's phys object, each geom it holds put at the head of the
+    /// space, the oldest first.
     pub fn add_obj(&mut self, id: BodyId, o: PhysObj) {
         let i = id.0 as usize;
         if self.objs.len() <= i {
             self.objs.resize(i + 1, None);
         }
+        for k in 0..o.geoms.len() {
+            self.space.insert(0, (id, k));
+        }
         self.objs[i] = Some(o);
-        self.space.insert(0, id);
     }
 
-    /// The body, its object and its geom.
+    /// A geom made on the body (0x5a9790): first on its list and at the
+    /// head of the space.
+    pub fn add_geom(&mut self, id: BodyId, g: Geom) {
+        let Some(o) = self.obj_mut(id) else { return };
+        o.geoms.insert(0, g);
+        let k = o.geoms.len() - 1;
+        self.space.insert(0, (id, k));
+    }
+
+    /// The body, its object and its geoms.
     pub fn destroy_body(&mut self, id: BodyId) {
         if let Some(o) = self.objs.get_mut(id.0 as usize) {
             *o = None;
         }
-        self.space.retain(|&b| b != id);
+        self.space.retain(|&(b, _)| b != id);
         self.world.destroy_body(id);
+    }
+
+    /// 0x5a7730: a `physicsJitter` region kept for the next step (at most
+    /// [`MAX_JITTER_REGIONS`], a sixth over the fifth), and every body whose
+    /// level distance squared from its origin (each difference stored, the
+    /// sum and `+ 0` stored) is not over the outer radius squared woken.
+    /// Retail runs it on world 0 alone.
+    pub fn add_jitter(&mut self, r: JitterRegion) {
+        if self.jitter.len() < MAX_JITTER_REGIONS {
+            self.jitter.push(r);
+        } else {
+            self.jitter[MAX_JITTER_REGIONS - 1] = r;
+        }
+        for k in 0..self.world.bodies().len() {
+            let id = self.world.bodies()[k];
+            let b = self.world.body_mut(id);
+            let dx = (w(b.pos[0]) - w(r.origin[0])) as f32;
+            let dy = (w(b.pos[1]) - w(r.origin[1])) as f32;
+            let d2 = (w(dx) * w(dx) + w(dy) * w(dy) + 0.0) as f32;
+            // a NaN wakes it: 0x5a77e7 skips on C0 alone
+            if w(r.outer_sq).partial_cmp(&w(d2)) != Some(std::cmp::Ordering::Less) {
+                b.enable();
+            }
+        }
     }
 
     pub fn obj(&self, id: BodyId) -> Option<&PhysObj> {
@@ -185,7 +246,7 @@ impl PhysWorld {
     /// [`Self::after_frame`]; last the lerp from the frame's start to the
     /// last step's end. `hook` is the world's own collision (`+0x90` of its
     /// block, ragdoll self collision on world 2), run each step before the
-    /// space's.
+    /// space's. The call's impact sounds are left in [`Self::impacts`].
     pub fn run_to_time(
         &mut self,
         target: i32,
@@ -193,7 +254,22 @@ impl PhysWorld {
         contact: &collide::Dvars,
         clip: &dyn Clip,
         hook: &mut dyn FnMut(&mut PhysWorld),
-    ) -> Result<(), Unported> {
+    ) {
+        self.run_to_time_with(target, dv, contact, clip, hook, &mut |_| {});
+    }
+
+    /// [`Self::run_to_time`] with `on_step` after each step's
+    /// `Phys_PostStep`, before the frame's sweep (where 0x5a6e69 returns).
+    pub fn run_to_time_with(
+        &mut self,
+        target: i32,
+        dv: &PhysDvars,
+        contact: &collide::Dvars,
+        clip: &dyn Clip,
+        hook: &mut dyn FnMut(&mut PhysWorld),
+        on_step: &mut dyn FnMut(&PhysWorld),
+    ) {
+        self.impacts.clear();
         let c = &mut self.clock;
         if target < c.last {
             let f = if c.now > c.last {
@@ -227,15 +303,16 @@ impl PhysWorld {
                 let msec = self.clock.msec_step.max(owed);
                 left -= 1;
                 let dt = (msec as u32 as f64 * MS_TO_S) as f32;
-                self.run_frame(dt, dv, contact, clip, hook)?;
+                self.run_frame(dt, dv, contact, clip, hook);
                 self.clock.now = self.clock.now.wrapping_add(msec);
                 self.post_step(dt, dv);
+                on_step(self);
                 // `left` can't run out first: the last step takes all owed
                 if self.clock.now >= target || left == 0 {
                     break;
                 }
             }
-            self.after_frame(clip, dv.csl)?;
+            self.after_frame(clip, dv.csl);
         }
         let c = &mut self.clock;
         c.frac = if c.now > c.last {
@@ -243,13 +320,15 @@ impl PhysWorld {
         } else {
             1.0
         };
-        Ok(())
     }
 
     /// `Phys_RunFrame` (0x5a6440): the dvars stored, the world's hook,
-    /// each awake geom against the world newest first (0x5aa100 into the
-    /// near callback 0x5a5f20), the world's step. `phys_collUseEntities`
-    /// (body against body, 0x5a65b8) is off by default and not ported.
+    /// each geom of an awake body against the world from the space's head
+    /// (0x5aa100 into the near callback 0x5a5f20: [`collide::collide_geom`],
+    /// [`collide::near_contacts`] with the world's jitter, then 0x5a5de0's
+    /// [`collide::impact`] off the object's sound row), the world's step.
+    /// `phys_collUseEntities` (body against body, 0x5a65b8) is off by
+    /// default and not ported.
     fn run_frame(
         &mut self,
         dt: f32,
@@ -257,82 +336,62 @@ impl PhysWorld {
         contact: &collide::Dvars,
         clip: &dyn Clip,
         hook: &mut dyn FnMut(&mut PhysWorld),
-    ) -> Result<(), Unported> {
+    ) {
         self.world.params.apply_phys_frame(dv, self.id);
         hook(self);
-        for g in 0..self.space.len() {
-            let id = self.space[g];
+        for e in 0..self.space.len() {
+            let (id, k) = self.space[e];
             let body = self.world.body(id);
             if body.flags & DISABLED != 0 {
                 continue;
             }
             let Some(o) = self.obj(id) else { continue };
-            if let Some(Geom::Brush { brush, offset }) = o.geom() {
-                let (brush, offset, mut obj) = (brush.clone(), *offset, o.obj);
-                let g = BrushGeom::new(&brush, offset, body.pos, &body.r, NARROW_MAX_LENGTH);
-                brushgeom::near_world(
-                    &mut self.world,
-                    id,
-                    &mut obj,
-                    &g,
-                    clip,
-                    contact,
-                    self.id.index(),
-                );
-                if let Some(o) = self.obj_mut(id) {
-                    o.obj = obj;
-                }
-                continue;
-            }
-            // A body of a class with no collider yet refuses the frame.
-            let contacts = match o.geom() {
-                Some(&Geom::Capsule { radius, half_len }) => {
-                    let cap = Capsule {
-                        centre: body.pos,
-                        axis: [body.r[0][0], body.r[1][0], body.r[2][0]],
-                        radius,
-                        half_len,
-                    };
-                    collide::collide_world(clip, &cap, CLIP_MASK, collide::MAX_CONTACTS)
-                }
-                Some(g @ (Geom::Cylinder { .. } | Geom::Transform(_))) => {
-                    collide::transform::collide_geom(
-                        clip,
-                        g,
-                        body.pos,
-                        &body.r,
-                        body.pos,
-                        NARROW_MAX_LENGTH,
-                        CLIP_MASK,
-                        collide::MAX_CONTACTS,
-                    )?
-                }
-                Some(g) => return Err(Unported(g.class())),
-                None => continue,
+            let g = &o.geoms[o.geoms.len() - 1 - k];
+            let contacts = collide::collide_geom(
+                clip,
+                g,
+                body.pos,
+                &body.r,
+                body.pos,
+                NARROW_MAX_LENGTH,
+                CLIP_MASK,
+                collide::MAX_CONTACTS,
+            );
+            let (mut obj, sound) = (o.obj, o.sound);
+            let mut jitter = Jitter {
+                regions: &self.jitter,
+                msec_step: self.clock.msec_step,
+                max_mass: dv.jitter_max_mass,
+                rand: &mut self.rand,
             };
-            let mut obj = o.obj;
-            collide::near_contacts(
+            let list = collide::near_contacts(
                 &mut self.world,
                 id,
                 &mut obj,
                 contacts,
                 contact,
                 self.id.index(),
+                Some(&mut jitter),
             );
             if let Some(o) = self.obj_mut(id) {
                 o.obj = obj;
             }
+            let body = self.world.body(id);
+            if let Some(i) = collide::impact(body, &list, sound, dv.min_impact_momentum) {
+                self.impacts.push(i);
+            }
         }
         self.world.quick_step(dt);
-        Ok(())
     }
 
     /// `Phys_PostStep` (0x5a6640): awake bodies' accumulators cleared, the
-    /// contacts emptied, [`drag`] on each body, the next step's length
-    /// off the count it found awake ([`msec_step`]).
+    /// contacts emptied, the jitter regions dropped (0x5a66ff), [`drag`] on
+    /// each body, the next step's length off the count it found awake
+    /// ([`msec_step`]).
     fn post_step(&mut self, dt: f32, dv: &PhysDvars) {
         self.world.zero_forces();
         self.world.empty_contacts();
+        self.jitter.clear();
         let mut awake = 0;
         for k in 0..self.world.bodies().len() {
             let id = self.world.bodies()[k];
@@ -345,21 +404,20 @@ impl PhysWorld {
 
     /// 0x5a6c10 on each awake body after a frame's steps: [`Self::sweep`],
     /// then one outside the world model's bounds is put to sleep.
-    fn after_frame(&mut self, clip: &dyn Clip, csl: f32) -> Result<(), Unported> {
+    fn after_frame(&mut self, clip: &dyn Clip, csl: f32) {
         let (mins, maxs) = clip.bounds();
         for k in 0..self.world.bodies().len() {
             let id = self.world.bodies()[k];
             if self.world.body(id).flags & DISABLED != 0 {
                 continue;
             }
-            self.sweep(id, clip, csl)?;
+            self.sweep(id, clip, csl);
             let body = self.world.body_mut(id);
             let p = body.pos;
             if (0..3).any(|k| p[k] > maxs[k] || p[k] < mins[k]) {
                 body.flags |= DISABLED;
             }
         }
-        Ok(())
     }
 
     /// 0x5a6930: a box sweep from where the frame began to the body, when
@@ -369,16 +427,16 @@ impl PhysWorld {
     /// `m` less that fifth is under `2 phys_csl`. The state becomes 1 when
     /// the sweep starts solid, else 2. A hit not started solid pulls the
     /// body back to where it stopped (a point's fraction less `m / 2` over
-    /// the move's length first, at least 0), and a fraction under 0.001
+    /// the move's length first, at least 0), and that fraction under 0.001
     /// stills it.
-    fn sweep(&mut self, id: BodyId, clip: &dyn Clip, csl: f32) -> Result<(), Unported> {
+    fn sweep(&mut self, id: BodyId, clip: &dyn Clip, csl: f32) {
         let Some(o) = self.obj(id) else {
-            return Ok(());
+            return;
         };
         let Some(geom) = o.geom() else {
-            return Ok(());
+            return;
         };
-        let (lo, hi) = geom.bounds()?;
+        let (lo, hi) = geom.bounds();
         let m = hi[0];
         let csl2 = (w(csl) + w(csl)) as f32;
         let thin = csl2 > m;
@@ -412,7 +470,8 @@ impl PhysWorld {
                     f = fmax(0.0, (w(f) - 0.5 * w(m) * w(rsqrt(l2))) as f32);
                 }
                 body.pos = std::array::from_fn(|k| (w(prev[k]) + w(d[k]) * w(f)) as f32);
-                if tr.fraction < POINT {
+                // the fraction backed off (0x5a6b83 writes it over the trace's)
+                if f < POINT {
                     body.lvel = [0.0; 3];
                     body.avel = [0.0; 3];
                 }
@@ -421,7 +480,6 @@ impl PhysWorld {
         if let Some(o) = self.obj_mut(id) {
             o.obj = obj;
         }
-        Ok(())
     }
 }
 

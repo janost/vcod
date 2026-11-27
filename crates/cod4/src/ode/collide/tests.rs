@@ -415,3 +415,90 @@ fn a_cylinder_on_a_floor_meets_it_with_its_cap_or_its_side() {
         ]
     );
 }
+
+/// A contact at `pos` with normal `normal` and surface flags `surface`.
+fn contact(pos: V3, normal: V3, surface: u32) -> ContactGeom {
+    ContactGeom {
+        pos,
+        normal,
+        depth: 0.5,
+        surface,
+    }
+}
+
+/// 0x5a5de0: a body of mass 10 coming down at 30 u/s onto two floor
+/// contacts has 300 of momentum into them, past the default 250: a sound
+/// at the contacts' mean, in the row's slot for the first contact's
+/// surface type (metal, 13). At 20 u/s, 200, none; nor rising.
+#[test]
+fn an_impact_sounds_past_the_least_momentum_into_the_contacts() {
+    let mut world = World::new();
+    let id = world.create_body();
+    let b = world.body_mut(id);
+    let mut m = Mass::unit();
+    m.adjust(10.0);
+    b.set_mass(m);
+    let c = [
+        contact([1.0, 0.0, 0.0], [0.0, 0.0, 1.0], 13 << 20 | 1),
+        contact([3.0, 2.0, 0.0], [0.0, 0.0, 1.0], 7 << 20),
+    ];
+    let mut at = |vz: f32| {
+        let b = world.body_mut(id);
+        b.lvel = [0.0, 0.0, vz];
+        impact(world.body(id), &c, 2, 250.0)
+    };
+    assert_eq!(
+        at(-30.0),
+        Some(Impact {
+            slot: 2 * SURFACE_TYPES + 13,
+            pos: [2.0, 1.0, 0.0]
+        })
+    );
+    assert_eq!(at(-20.0), None);
+    assert_eq!(at(30.0), None);
+    // a preset never registered plays nothing
+    world.body_mut(id).lvel = [0.0, 0.0, -30.0];
+    assert_eq!(impact(world.body(id), &c, -1, 250.0), None);
+}
+
+/// 0x5a23e0 on a kept floor contact of a body of mass 50 inside one
+/// region's inner radius: `(min + u (max - min)) (1 - (50/200)^3) 50
+/// 1000/17` up at the contact through `Phys_ObjAddForce` (another `1000 /
+/// 17`), `u` the CRT's first draw; a wall's contact (normal z 0) takes none.
+#[test]
+fn a_jitter_lifts_a_body_at_its_floor_contacts() {
+    let mut world = World::new();
+    let id = world.create_body();
+    let mut m = Mass::unit();
+    m.adjust(50.0);
+    world.body_mut(id).set_mass(m);
+    world.body_mut(id).pos = [0.0, 0.0, 1.0];
+    let regions = [JitterRegion::new([0.0, 0.0, 100.0], 64.0, 128.0, 1.0, 3.0)];
+    let mut rand = MsvcRand::default();
+    let mut j = Jitter {
+        regions: &regions,
+        msec_step: 17,
+        max_mass: 200.0,
+        rand: &mut rand,
+    };
+    let c = vec![
+        contact([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 0),
+        contact([5.0, 0.0, 1.0], [1.0, 0.0, 0.0], 0),
+    ];
+    let mut obj = Obj::default();
+    let surface = world_surface(&obj, &Dvars::default(), 0);
+    contact_pass(
+        &mut world,
+        c,
+        [Some((id, &mut obj)), None],
+        surface,
+        Some(&mut j),
+    );
+    let u = (MsvcRand::default().next() as f64 / 32768.0) as f32;
+    let per = 1000.0 / 17.0;
+    let want = (1.0 + u as f64 * 2.0) * (1.0 - 0.25f64.powi(3)) * 50.0 * per * per;
+    let f = world.body(id).facc;
+    assert_eq!((f[0], f[1]), (0.0, 0.0));
+    assert!((f[2] as f64 - want).abs() < want * 1e-5, "{f:?} {want}");
+    assert_eq!(world.contact_count(), 2);
+}

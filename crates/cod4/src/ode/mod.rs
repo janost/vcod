@@ -4,11 +4,11 @@
 //! The rigid body core iw3mp.exe 1.7 runs its ragdolls on: ODE 0.5 as IW
 //! modified it, read off the binary (cod4-player-anims.md 10.4). Bodies,
 //! masses, the ball, hinge, angular motor and contact joints, the island
-//! walk and IW's QuickStep; and the ragdoll world's contacts, IW's capsule
-//! colliders and near callback (`collide`, 10.6); the frame glue each
-//! world steps through (`phys`, 10.7.1); worlds 0 and 1's geoms and
-//! bodies (`geom`, `obj`, cod4-gsc.md 3.6.3). `ragdoll::pool` runs the
-//! corpses on world 2 (10.7).
+//! walk and IW's QuickStep; each geom class's colliders, the near callback
+//! with its jitter and impact sound (`collide`, 10.6, cod4-gsc.md
+//! 3.6.4..3.6.7); the frame glue each world steps through (`phys`,
+//! 10.7.1); worlds 0 and 1's geoms and bodies (`geom`, `obj`, cod4-gsc.md
+//! 3.6.3). `ragdoll::pool` runs the corpses on world 2 (10.7).
 
 pub mod body;
 pub mod collide;

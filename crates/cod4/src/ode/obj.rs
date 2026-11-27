@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use super::collide::Obj;
+use super::collide::{Obj, SURFACE_TYPES};
 use super::geom::{Geom, Transform};
 use super::mass::Mass;
 use super::math::{M3, V3};
@@ -98,7 +98,8 @@ impl PhysWorld {
     /// `R`'s columns), the phys object (its offset 0, the preset's
     /// friction, bounce and sound row, state 0), and a type 0 part of the
     /// preset's mass about `-0` (0x5a4f05..0x5a4f57). The object's pose is
-    /// then `pos` and `axes` as given (0x5a4f5f..0x5a4f7c).
+    /// then `pos` and `axes` as given (0x5a4f5f..0x5a4f7c). None when the
+    /// body pool is full (0x5a4e10).
     pub fn obj_create(
         &mut self,
         pos: V3,
@@ -106,13 +107,13 @@ impl PhysWorld {
         vel: V3,
         preset: &ObjPreset,
         dv: &PhysDvars,
-    ) -> BodyId {
+    ) -> Option<BodyId> {
         let sq = |x: f32| (w(x) * w(x)) as f32;
         let adis = &mut self.world.params.adis;
         adis.linear_threshold = sq(dv.auto_disable_linear);
         adis.angular_threshold = sq(dv.auto_disable_angular);
         adis.idle_time = dv.auto_disable_time;
-        let id = self.create_body();
+        let id = self.create_body()?;
         let b = self.world.body_mut(id);
         if self.id == WorldId::Ragdoll {
             b.flags &= !3;
@@ -144,7 +145,7 @@ impl PhysWorld {
         if let Some(o) = self.obj_mut(id) {
             o.prev.0 = pos;
         }
-        id
+        Some(id)
     }
 
     /// 0x5a4ab0: the body moved to sit at `centre` in its model's frame
@@ -194,9 +195,7 @@ impl PhysWorld {
                 })),
                 None => g,
             };
-            if let Some(o) = self.obj_mut(id) {
-                o.geoms.insert(0, g);
-            }
+            self.add_geom(id, g);
         }
         self.world.body_mut(id).set_mass(mass);
     }
@@ -361,6 +360,15 @@ pub fn db_hash(kind: u32, name: &str) -> u32 {
     h & 0x7fff
 }
 
+/// The impact sound rows the cgame registers (0x43e030): each preset's
+/// row by its name lowered (its +4), and each row's `sndAliasPrefix` in
+/// row order (the rows at 0x84db98).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SoundRows {
+    pub by_preset: HashMap<String, i32>,
+    pub prefixes: Vec<String>,
+}
+
 /// The impact sound row each preset's +4 holds once the cgame registers
 /// them (0x43e030): the loaded `PhysPreset`s (asset type 1) in the asset
 /// hash's order (0x489120: buckets up, each chain newest first, 0x489442),
@@ -370,7 +378,7 @@ pub fn db_hash(kind: u32, name: &str) -> u32 {
 /// again is the asset already in the table.
 pub fn impact_sound_rows<'a>(
     presets: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
-) -> HashMap<String, i32> {
+) -> SoundRows {
     let mut seen = HashSet::new();
     let mut table: Vec<(u32, usize, &str, &str)> = Vec::new();
     for (name, prefix) in presets {
@@ -379,17 +387,80 @@ pub fn impact_sound_rows<'a>(
         }
     }
     table.sort_by_key(|&(h, i, _, _)| (h, std::cmp::Reverse(i)));
-    let mut prefixes: Vec<&str> = Vec::new();
-    let mut out = HashMap::new();
+    let mut out = SoundRows::default();
     for &(_, _, name, prefix) in table.iter().take(50) {
-        let row = match prefixes.iter().position(|p| p.eq_ignore_ascii_case(prefix)) {
+        let row = match out
+            .prefixes
+            .iter()
+            .position(|p| p.eq_ignore_ascii_case(prefix))
+        {
             Some(i) => i,
             None => {
-                prefixes.push(prefix);
-                prefixes.len() - 1
+                out.prefixes.push(prefix.to_string());
+                out.prefixes.len() - 1
             }
         };
-        out.insert(name.to_ascii_lowercase(), row as i32);
+        out.by_preset.insert(name.to_ascii_lowercase(), row as i32);
+    }
+    out
+}
+
+/// The 28 surface type names after `default` (the table at 0x71fbd0, 0x14
+/// bytes an entry, its name pointer first): type `k` is `(surface flags >>
+/// 20) & 0x1f`.
+pub const SURFACE_NAMES: [&str; SURFACE_TYPES] = [
+    "default",
+    "bark",
+    "brick",
+    "carpet",
+    "cloth",
+    "concrete",
+    "dirt",
+    "flesh",
+    "foliage",
+    "glass",
+    "grass",
+    "gravel",
+    "ice",
+    "metal",
+    "mud",
+    "paper",
+    "plaster",
+    "rock",
+    "sand",
+    "snow",
+    "water",
+    "wood",
+    "asphalt",
+    "ceramic",
+    "plastic",
+    "rubber",
+    "cushion",
+    "fruit",
+    "paintedmetal",
+];
+
+/// The impact sound handles 0x43de60 fills for each row (0x74 bytes from
+/// 0x84db98), by slot `row 29 + surface type`, each the sound alias list
+/// it names or none: `<prefix>_<surface>` (`%s_%s`, 0x6c2518) when
+/// `exists` finds it (0x565560: a sound asset by name that is not the
+/// zone's default), else `<prefix>_default` (`%s_default`, 0x6c4d30, the
+/// same lookup with a warning, 0x565590); a row with an empty prefix
+/// warns "no alias prefix defined, using default" and takes
+/// `collision_default` (0x6cb7e0) in every slot.
+pub fn impact_aliases(prefixes: &[String], exists: impl Fn(&str) -> bool) -> Vec<Option<String>> {
+    let find = |name: String| exists(&name).then_some(name);
+    let mut out = Vec::with_capacity(prefixes.len() * SURFACE_TYPES);
+    for p in prefixes {
+        if p.is_empty() {
+            let d = find("collision_default".into());
+            out.extend(std::iter::repeat_n(d, SURFACE_TYPES));
+            continue;
+        }
+        let d = find(format!("{p}_default"));
+        for s in SURFACE_NAMES {
+            out.push(find(format!("{p}_{s}")).or_else(|| d.clone()));
+        }
     }
     out
 }

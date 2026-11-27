@@ -10,6 +10,7 @@
 use glam::Vec3;
 
 use super::ContactGeom;
+use super::poly::clip;
 use super::world::Pieces;
 use crate::collision::{BrushFaces, Piece};
 use crate::ode::math::{M3, V3, cross, dot, neg, sub};
@@ -133,7 +134,7 @@ impl Out<'_> {
 }
 
 /// `p - q` turned by `t` from `q`, each part stored: `(p - q) t + q`
-/// (0x432700, 0x597700's and 0x597800's cuts).
+/// (0x432700, 0x597700's cut).
 fn lerp(q: V3, p: V3, t: f32) -> V3 {
     std::array::from_fn(|k| ((w(p[k]) - w(q[k])) * w(t) + w(q[k])) as f32)
 }
@@ -395,77 +396,6 @@ fn seg_in_poly(poly: &[V3], n: V3, q: &mut V3, p: &mut V3) -> bool {
     true
 }
 
-/// 0x597800 with 0x597440: a convex polygon cut to the plane's back
-/// (`n . x` at most `d`) in place, its corners kept in order: the corner
-/// leaving the back becomes the exit, the one coming back the entry
-/// (one corner out is split in two), those between go. Returns the
-/// count, 0 when no corner is behind.
-fn clip_poly(pts: &mut Vec<V3>, (m, d): Plane) -> usize {
-    let n = pts.len();
-    if n == 0 {
-        return 0;
-    }
-    let inside: Vec<bool> = pts.iter().map(|&p| !(d < dot(p, m))).collect();
-    let (mut exit, mut entry, mut any) = (None, None, false);
-    let mut prev = n - 1;
-    for i in 0..n {
-        if inside[prev] {
-            any = true;
-            if !inside[i] {
-                exit = Some((prev, i));
-            }
-        } else if inside[i] {
-            entry = Some((prev, i));
-        }
-        prev = i;
-    }
-    if !any {
-        return 0;
-    }
-    let (Some((mut xp, xc)), Some((ep, ec))) = (exit, entry) else {
-        return n;
-    };
-    // `p` toward `q` cut at the plane, `p` kept when the edge lies in it.
-    let cut = |p: V3, q: V3| {
-        let dd = dot(m, sub(p, q));
-        (dd != 0.0).then(|| {
-            let t = ((w(d) - w(dot(q, m))) / w(dd)) as f32;
-            lerp(q, p, t)
-        })
-    };
-    if xc == ep {
-        let p = pts[xc];
-        pts.insert(xc + 1, p);
-        let n1 = n + 1;
-        let s = (ep + 1) % n1;
-        let q = (s + 1) % n1;
-        if xp > xc {
-            xp += 1;
-        }
-        pts[s] = cut(p, pts[q]).unwrap_or(p);
-        if let Some(x) = cut(pts[xc], pts[xp]) {
-            pts[xc] = x;
-        }
-        return n1;
-    }
-    if let Some(x) = cut(pts[xc], pts[xp]) {
-        pts[xc] = x;
-    }
-    if let Some(x) = cut(pts[ep], pts[ec]) {
-        pts[ep] = x;
-    }
-    if (xc + 1) % n == ep {
-        n
-    } else if xc < ep {
-        pts.drain(xc + 1..ep);
-        pts.len()
-    } else {
-        pts.truncate(xc + 1);
-        pts.drain(..ep);
-        pts.len()
-    }
-}
-
 /// 0x597e70: `pts` cut by each edge of `poly` in turn (0x5975e0 from the
 /// corner before to each), empty once fewer than three corners stay.
 fn poly_in_poly(mut pts: Vec<V3>, poly: &[V3], n: V3) -> Vec<V3> {
@@ -477,7 +407,7 @@ fn poly_in_poly(mut pts: Vec<V3>, poly: &[V3], n: V3) -> Vec<V3> {
     for i in 0..k {
         let prev = if i == 0 { k - 1 } else { i - 1 };
         if let Some(pl) = edge_plane(poly[i], poly[prev], n, o == 1) {
-            let c = clip_poly(&mut pts, pl);
+            let c = clip(&mut pts, pl);
             pts.truncate(c);
             if c < 3 {
                 return Vec::new();

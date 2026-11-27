@@ -458,8 +458,7 @@ impl Ragdolls {
         self.pw
             .run_to_time(self.time, &self.phys, contact, clip, &mut |pw| {
                 self_collide(slots, def, contact, pw)
-            })
-            .expect("world 2 holds capsules only");
+            });
     }
 
     fn handle(&mut self, i: usize, clip: &dyn Clip) {
@@ -559,7 +558,10 @@ impl Ragdolls {
             }
             // a p1 at DObj bone 0 reads as none (0x5bc947)
             let p1 = f.p1[b].filter(|&k| k != 0).map_or(p0, |k| at(f.base[k].0));
-            let id = self.pw.create_body();
+            // a full body pool fails the build
+            let Some(id) = self.pw.create_body() else {
+                return false;
+            };
             let body = self.pw.world.body_mut(id);
             body.flags &= !3;
             body.set_finite_rotation(true);
