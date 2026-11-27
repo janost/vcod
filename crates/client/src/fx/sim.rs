@@ -149,6 +149,14 @@ pub struct FxModel {
     pub axis: [Vec3; 3],
 }
 
+/// An effect with CoD4 physics model elements, played: its path (a
+/// [`crate::cod4_fx::key`]) and where.
+#[derive(Clone, Debug)]
+pub struct PhysPlay {
+    pub path: String,
+    pub at: SpawnAt,
+}
+
 /// A `Sound` block cue for the audio system.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FxSound {
@@ -503,6 +511,14 @@ fn sample_curve_v3(rng: &mut Rng, c: &efx::CurveV3) -> (Vec3, Vec3) {
     let a = sample_r3(rng, c.start);
     let b = sample_r3(rng, c.end);
     if c.linear { (a, b) } else { (a, a) }
+}
+
+impl SpawnAt {
+    /// Its point and the emitter frame it plays in, `[forward, left, up]`.
+    pub fn frame(self) -> (Vec3, [Vec3; 3]) {
+        let (x, y, z) = spawn_frame(self).unwrap_or(UP_AXIS);
+        (spawn_pos(self), [x, y, z])
+    }
 }
 
 fn spawn_pos(at: SpawnAt) -> Vec3 {
@@ -1714,6 +1730,9 @@ pub struct FxSystem {
     cod2_tracers: Vec<cod2_tracer::Tracer>,
     /// CoD4 trails on their effects' tags.
     trails: Vec<(Bolt, cod4_trail::Trail)>,
+    /// Effects with CoD4 physics model elements played since
+    /// [`Self::take_phys_plays`].
+    phys_plays: Vec<PhysPlay>,
 }
 
 /// Most CoD4 trails running at once; a new one past it ends the oldest.
@@ -1767,7 +1786,14 @@ impl FxSystem {
             tracer_rules: TracerRules::default(),
             cod2_tracers: Vec::new(),
             trails: Vec::new(),
+            phys_plays: Vec::new(),
         }
+    }
+
+    /// The effects played since the last call whose CoD4 physics model
+    /// elements the caller spawns as bodies (`Emitter::cod4_phys`).
+    pub fn take_phys_plays(&mut self) -> Vec<PhysPlay> {
+        std::mem::take(&mut self.phys_plays)
     }
 
     /// A CoD2 or CoD4 tracer from `muzzle` to `hit` (`CG_SpawnTracer`
@@ -1962,6 +1988,7 @@ impl FxSystem {
         self.bolts.clear();
         self.cod2_tracers.clear();
         self.trails.clear();
+        self.phys_plays.clear();
     }
 
     /// The camera this frame's spawns are culled against. Drops the last
@@ -2173,7 +2200,16 @@ impl FxSystem {
                 trails: &mut self.trails,
                 budget: &mut self.budget,
             };
+            if effect.emitters.iter().any(|em| em.cod4_phys) {
+                self.phys_plays.push(PhysPlay {
+                    path: path.to_string(),
+                    at,
+                });
+            }
             for em in &effect.emitters {
+                if em.cod4_phys {
+                    continue;
+                }
                 if em.kind == Kind::CameraShake && em.cod2.is_some() {
                     // `FX_AddCameraShake` (Mac 0x59fec) hands the cgame
                     // origin, intensity and radius; not drawn yet.

@@ -1,11 +1,15 @@
 //! `physicsLaunch`ed parts on the client: `CG_CalcEntityPhysicsPositions`
 //! (iw3mp.exe 0x434e50). The server sends a launched part's launch once
 //! and never moves it; each client flies it itself in physics world 1
-//! (`vcod_cod4::ode::phys`, cod4-gsc.md 3.6).
+//! (`vcod_cod4::ode::phys`, cod4-gsc.md 3.6). The FX system's physics
+//! model elements fly in the same world (`vcod_cod4::fx_phys`,
+//! cod4-effects.md 9.1.1).
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use glam::Vec3;
+use vcod_cod4::fx_phys::{self, EffectFrame, PhysEffect};
 use vcod_cod4::net::delta::EntityState;
 use vcod_cod4::ode::collide::{self, Impact};
 use vcod_cod4::ode::obj::PhysModel;
@@ -32,10 +36,24 @@ struct Part {
     body: Option<(BodyId, f32)>,
 }
 
-/// Every launched part a session has seen, by entity number, and
-/// physics world 1, which steps their bodies.
+/// A physics model element in flight: its body, its visual's model, its
+/// def (element `elem` of `effect`), its seed, start and life, ms.
+struct FxBody {
+    body: BodyId,
+    model: String,
+    effect: Arc<PhysEffect>,
+    elem: usize,
+    seed: u16,
+    begin: i32,
+    life: i32,
+}
+
+/// Every launched part a session has seen, by entity number, the FX
+/// system's physics model elements, and physics world 1, which steps
+/// their bodies.
 pub struct Cod4Physics {
     parts: HashMap<u32, Part>,
+    fx: Vec<FxBody>,
     pub phys: PhysDvars,
     pub contact: collide::Dvars,
     pub pw: PhysWorld,
@@ -50,6 +68,7 @@ impl Default for Cod4Physics {
     fn default() -> Self {
         Cod4Physics {
             parts: HashMap::new(),
+            fx: Vec::new(),
             phys: PhysDvars::default(),
             contact: collide::Dvars::default(),
             pw: PhysWorld::new(WorldId::Fx),
@@ -91,6 +110,83 @@ impl Cod4Physics {
             .run_to_time(time, &phys, &contact, &*world.clip, &mut |_| {});
         std::mem::swap(&mut self.pw.rand, rand);
         self.impacts.append(&mut self.pw.impacts);
+        // An element past its life frees its body (0x4a2909..0x4a291d).
+        let pw = &mut self.pw;
+        self.fx.retain(|b| {
+            let live = time.wrapping_sub(b.begin) < b.life;
+            if !live {
+                pw.destroy_body(b.body);
+            }
+            live
+        });
+    }
+
+    /// `effect` played at `frame` at `now` (`FX_SpawnEffect` into
+    /// `FX_SpawnElem`, cod4-effects.md 9.1.1): its seed off the CRT's
+    /// `rand()`, or its start under flag 0x1000, and each one-shot physics
+    /// element's instances made as world 1 bodies with their visual's
+    /// model and preset (0x4a1ff0). One the pool has no room for, or whose
+    /// model has no preset, is dropped, as retail frees the element.
+    pub fn play_fx(
+        &mut self,
+        world: &Cod4World,
+        effect: &Arc<PhysEffect>,
+        frame: &EffectFrame,
+        now: i32,
+        rand: &mut MsvcRand,
+    ) {
+        self.start(now);
+        let seed = if effect.timed_seed {
+            fx_phys::effect_seed_at(now)
+        } else {
+            fx_phys::effect_seed(rand.next() as i32)
+        };
+        for (elem, e) in effect.elems.iter().enumerate() {
+            // the sequence is a byte (0x4a263a)
+            for k in 0..fx_phys::one_shot_count(&e.def, seed).clamp(0, 256) {
+                let (begin, s) = fx_phys::elem_seed(&e.def, seed, now, k as u8);
+                let spawn = fx_phys::spawn(&e.def, e.models.len(), frame, s);
+                let Some(model) = e.models.get(spawn.visual) else {
+                    continue;
+                };
+                let Some(m) = world.parts.get(&model.to_ascii_lowercase()) else {
+                    continue;
+                };
+                let Some(body) = self.pw.fx_body(&spawn, &m.model, &m.preset.obj, &self.phys)
+                else {
+                    continue;
+                };
+                self.fx.push(FxBody {
+                    body,
+                    model: model.clone(),
+                    effect: effect.clone(),
+                    elem,
+                    seed: s,
+                    begin,
+                    life: spawn.life,
+                });
+            }
+        }
+    }
+
+    /// The physics model elements drawn at `time`: each at its body's
+    /// interpolated pose (0x498340), its axes scaled by the element's
+    /// scale then (0x498399).
+    pub fn fx_models(&self, time: i32) -> Vec<crate::fx::sim::FxModel> {
+        self.fx
+            .iter()
+            .filter_map(|b| {
+                let (origin, rot) = self.pw.pose(b.body)?;
+                let def = &b.effect.elems[b.elem].def;
+                let scale = fx_phys::scale_at(def, b.seed, time.wrapping_sub(b.begin), b.life);
+                let m = glam::Mat3::from_quat(rot) * scale;
+                Some(crate::fx::sim::FxModel {
+                    model: b.model.clone(),
+                    origin,
+                    axis: [m.x_axis, m.y_axis, m.z_axis],
+                })
+            })
+            .collect()
     }
 
     /// Where launched part `e`, drawn as `model`, is at `time`: its body
@@ -202,5 +298,56 @@ impl Cod4Physics {
     pub fn counts(&self) -> (usize, usize) {
         let flying = self.parts.values().filter(|p| p.body.is_some()).count();
         (self.parts.len(), flying)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// mp_bog's watermelon's `destroyFx` played at its pose: its six
+    /// chunks fly as world 1 bodies drawn at their poses, fall, and free
+    /// their bodies when their lives (10 to 15 s) run out; a pool with
+    /// room for two makes two. Returns at once without an install.
+    #[test]
+    fn a_watermelons_chunks_fly_as_world_1_bodies_until_their_lives_end() {
+        let Some(install) = vcod_cod4::testing::cod4_install() else {
+            return;
+        };
+        let world = crate::cod4_fly::load_world(install.root(), "mp_bog").unwrap();
+        let effect = world.fx_phys[&crate::cod4_fx::key("props/watermelon")].clone();
+        let melon = world
+            .dynents
+            .iter()
+            .find(|d| d.destroy_fx.as_deref() == Some("props/watermelon"))
+            .unwrap();
+        let m = glam::Mat3::from_quat(melon.rot);
+        let frame = EffectFrame {
+            origin: melon.origin.into(),
+            axes: [m.x_axis.into(), m.y_axis.into(), m.z_axis.into()],
+        };
+        let mut rand = MsvcRand::default();
+        let mut p = Cod4Physics::default();
+        p.play_fx(&world, &effect, &frame, 1000, &mut rand);
+        assert_eq!(p.pw.bodies(), 6);
+        let start = p.fx_models(1000);
+        assert_eq!(start.len(), 6);
+        for t in (1017..=1500).step_by(17) {
+            p.advance(&world, t, &mut rand);
+        }
+        let later = p.fx_models(1500);
+        assert_eq!(later.len(), 6);
+        for (a, b) in start.iter().zip(&later) {
+            assert_eq!(a.model, b.model);
+            assert!(b.origin.distance(a.origin) > 1.0, "{} held still", a.model);
+        }
+        p.advance(&world, 16_500, &mut rand);
+        assert_eq!(p.pw.bodies(), 0, "a body outlived its element");
+        assert!(p.fx_models(16_500).is_empty());
+
+        let mut full = Cod4Physics::default();
+        full.pw.others = vcod_cod4::ode::phys::MAX_BODIES - 2;
+        full.play_fx(&world, &effect, &frame, 1000, &mut rand);
+        assert_eq!(full.fx_models(1000).len(), 2);
     }
 }
