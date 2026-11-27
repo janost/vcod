@@ -655,6 +655,19 @@ impl Follower {
             self.next = 0;
             self.best = f32::INFINITY;
             self.idle = 0;
+            // A plan for a moved goal that sets off along the edge the one
+            // it replaced was under way on keeps that edge's progress: sent
+            // back to the foot each time, a chase never gave the edge up
+            // (bot-objectives.md 4.2.4).
+            if let Some(k) = self.parked.as_ref().filter(|k| {
+                clock - k.at <= PARK_TICKS
+                    && k.next > 0
+                    && self.path.get(..2) == k.path.get(k.next - 1..=k.next)
+            }) {
+                self.next = 1;
+                self.best = k.best;
+                self.idle = k.idle;
+            }
         }
         let flat = |p: Vec3| (p - here).truncate().length();
         // A plan made or taken up on the rungs starts at the ladder's end the
@@ -2431,6 +2444,50 @@ mod tests {
         let mut g = zigzag();
         g.edge_mut(1, 2).unwrap().jump = true;
         assert_eq!(run(&g, &open, at)[0], Some([32.0, 0.0]));
+    }
+
+    /// A row along +x with a jump up from node 2 to node 3. Under way on
+    /// that jump and off to the side, nearer node 2, the bot's goal moves
+    /// on: the new plan starts at node 2 and heads on for node 3, not back
+    /// to node 2 (mp_brecourt `re` seed 10, bot-objectives.md 4.2.4).
+    #[test]
+    fn a_plan_for_a_moved_goal_goes_on_along_the_edge_under_way() {
+        use crate::bots::Goal;
+        let nodes: Vec<Vec3> = (0..16)
+            .map(|i| match i {
+                0..=2 => Vec3::new(i as f32 * 32.0, 0.0, 0.0),
+                _ => Vec3::new(64.0 + (i - 2) as f32 * 64.0, 0.0, 40.0),
+            })
+            .collect();
+        let edges = (0..16u32)
+            .map(|i| {
+                [i.wrapping_sub(1), i + 1]
+                    .into_iter()
+                    .filter(|&n| n < 16)
+                    .collect()
+            })
+            .collect();
+        let mut g = NavGraph::from_parts(nodes, edges);
+        g.edge_mut(2, 3).unwrap().jump = true;
+        let mut f = Follower::default();
+        let mut step = |at: [f32; 3], goal: usize| {
+            f.waypoint(
+                &g,
+                None,
+                Goal::To(g.nodes[goal].into()),
+                at,
+                Footing::STANDING,
+                &mut 1000,
+                &mut || 0,
+            )
+        };
+        assert!(step([64.0, 0.0, 0.0], 9).is_some());
+        let off = [94.0, 20.0, 0.0];
+        assert_ne!(step(off, 9), Some([64.0, 0.0, 0.0]));
+        let w = step(off, 15);
+        assert_eq!(f.path.first(), Some(&2));
+        assert_eq!(f.next, 1);
+        assert_ne!(w, Some([64.0, 0.0, 0.0]));
     }
 
     /// The island is ruled out by the component table, not by a search of
