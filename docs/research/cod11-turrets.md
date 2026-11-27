@@ -2504,7 +2504,7 @@ server's receive order (`RECV`, docs/dev/retail.md "Receive order"):
 `-gunduel-1.5.txt` (1.5b), `-gunduel-uo.txt` (UO 1.51b). `gunduel_ab`
 replays them.
 
-The kill frame:
+#### 13.10.1 The kill frame
 
 - VERIFIED, all three captures: from 26250 to 26650 each frame logs one hit
   of A's round on B and one of B's on A. At 26700, the `lethal` frame, the
@@ -2517,7 +2517,9 @@ The kill frame:
   the `ClientEndFrame` pass (`server/cod1_frame.rs`), so the replay logs
   retail's hits, frame, victim and attacker, on all three.
 
-The pose a round meets (backlog #74). Two writes decide it:
+#### 13.10.2 The pose a round meets
+
+Two writes decide it:
 
 - VERIFIED, 7.1: the placement stores `AxisToAngles` of the gun's axis
   times the body's yaw axis into `ent.r.currentAngles` (1.1d 0x51ffb), and
@@ -2556,12 +2558,15 @@ trace reads it. Ours lands after both of 1.1d's thread passes, where
 retail's step sits between them: a gunner traced in 1.1d's second pass
 reads his rows a frame early on ours. INFERRED, unmeasured.
 
-The origins: VERIFIED, vcod measurement, every `PROBE at` row of the three
+#### 13.10.3 The origins
+
+VERIFIED, vcod measurement, every `PROBE at` row of the three
 captures reads retail's to one float step (2^-13 at 1024..2048).
 
-The fire group's time on 1.5b and UO (the duel, `DUEL_GAPS` until
-2026-11-16). A round on a firing gunner read 0.01 to 0.37 off from the
-second frame both fire, cells to 7.8, on both victims. Two causes:
+#### 13.10.4 The fire group's time on 1.5b and UO
+
+Without both rules below, a round on a firing gunner reads 0.01 to 0.37 off
+from the second frame both fire, cells to 7.8, on both victims:
 
 - VERIFIED, retail 1.5b and UO under gdb (`probe_gunduel`, both gunners'
   anim info records at the first skeleton build on each in the end-frame
@@ -2596,11 +2601,12 @@ second frame both fire, cells to 7.8, on both victims. Two causes:
 vcod measurement: `gunduel_ab` holds both 1.5b's and UO's duels with no
 gap.
 
-The 1.1d victim's pose (`POSE_GAPS_11` until 2026-11-16, victim 1 on
-every frame: points 0.0004 to 0.2 off, cells to 0.3). The cause was the
-gunners' gear, as in the gunner grid (13.9.5.1): every character
-script draws a head and gear at random (`randomint`, `xmodelalias`), the
-head is what the duel's rounds hit, and ours drew its own. VERIFIED, a
+#### 13.10.5 The 1.1d victim's pose and the gunners' gear
+
+As in the gunner grid (13.9.5.1), every character script draws a head and
+gear at random (`randomint`, `xmodelalias`), and the head is what the duel's
+rounds hit. A replay that draws its own reads victim 1 points 0.0004 to 0.2
+off and cells to 0.3. VERIFIED, a
 1.1d retake under gdb (2026-11-16, recipe in the fixture's header; every
 hitch warning came before the first client connected): with the probe's
 `PROBE models` line (each gunner's body and attachments, logged at the
@@ -2620,16 +2626,15 @@ its only `character/mp_*`, whose gear the UO retake's models carry. The
 replay puts the logged models on with the flag (`probe_model_<num>_ic`). vcod
 measurement: without it, UO's re-attach rebuilds the DObj on bits 0 and
 B's rounds hit A's head on seven `turn_a` frames retail's missed. With
-it, both retakes read retail's within `NEAR_15`. A first 1.5b retake read
-one cell 0.006 off (26250, victim 0, the duel's first frame), the
-run-to-run spread the 1.1d rerun below describes; the second, committed,
-reads within the bound.
+it, both retakes read retail's within `NEAR_15`. Retakes vary run to run by the
+spread the 1.1d rerun below describes (one cell 0.006 off at 26250, victim 0).
 
-What a 1.1d rerun of the duel holds (2026-11-16, `probe_gunduel` under gdb,
-both gunners' anim info records at the first `DObjCalcSkel` on each in the
-entity and end-frame passes, as `tools/re/gdb_gunner_tree.py` reads them;
-the rerun's hits sit up to 0.02 off the 2026-11-14 capture's, so it is read on its own
-and not replayed):
+#### 13.10.6 What a 1.1d rerun of the duel holds
+
+The 2026-11-16 `probe_gunduel` rerun under gdb reads both gunners' anim info
+records at the first `DObjCalcSkel` on each in the entity and end-frame
+passes, as `tools/re/gdb_gunner_tree.py` does. Its hits sit up to 0.02 off
+the 2026-11-14 capture's, so it is read on its own and not replayed:
 
 - VERIFIED: on the duel's first frame (26250) slot 0, placed this frame,
   holds `standMG42_aim` at 1 (goal 0, goal time 0.17) and `standMG42_fire`
