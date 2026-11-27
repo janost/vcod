@@ -765,6 +765,36 @@ PROBE_ERROR script compile error
 # probe_switch_case_neg
 PROBE_ERROR script compile error
 
+# probe_switch_dup_case
+PROBE compiled
+PROBE a lower
+PROBE upper upper
+
+# probe_switch_dup_default
+PROBE_ERROR script compile error
+
+# probe_switch_dup_int
+PROBE_ERROR script compile error
+
+# probe_switch_dup_str
+PROBE_ERROR script compile error
+
+# probe_switch_mixed
+PROBE compiled
+PROBE int int
+PROBE str str
+
+# probe_switch_range_hi
+PROBE hi_edge default
+PROBE at hi
+PROBE_FATAL switch index 8388608 out of range
+
+# probe_switch_range_lo
+PROBE at lo_cod1
+PROBE lo_cod1 default
+PROBE at lo_cod1_1
+PROBE_FATAL switch index -8257537 out of range
+
 # probe_testclient
 PROBE early 0
 PROBE before

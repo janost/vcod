@@ -418,6 +418,123 @@ fn probe_switch_and_nan_match_retail_per_game() {
     }
 }
 
+/// `probe_switch_range_*` and the `probe_switch_dup_*` probes against the
+/// 1.1d capture, and per game against the live runs on 1.5b, UO 1.51b and
+/// `cod2_lnxded` 1.3 (2026-11-27) and, for CoD4, the range predicate at
+/// 0x8152158 (INFERRED: no committed runner). The int key range is
+/// `-0x7e0000..=0x7fffff` on 1.1d and UO, `-0x7e0002` on CoD2, `-0x7e8000`
+/// on CoD4, unchecked on 1.5b; a repeated label, `default` included, is a
+/// compile error on every game and `1` beside `"1"` is not
+/// (cod11-gsc-object-model.md 9.3.1).
+#[test]
+fn probe_switch_range_and_dup_match_retail_per_game() {
+    let caps = captures();
+    let (hi, hi_fatal) = &caps["probe_switch_range_hi"];
+    let (lo, lo_fatal) = &caps["probe_switch_range_lo"];
+    assert_eq!(
+        hi_fatal.as_deref(),
+        Some("switch index 8388608 out of range")
+    );
+    assert_eq!(
+        lo_fatal.as_deref(),
+        Some("switch index -8257537 out of range")
+    );
+    let lo_all = |through: usize| -> Vec<String> {
+        let mut out = Vec::new();
+        for (i, name) in [
+            "lo_cod1",
+            "lo_cod1_1",
+            "lo_cod2",
+            "lo_cod2_1",
+            "lo_cod4",
+            "lo_cod4_1",
+        ]
+        .iter()
+        .enumerate()
+        {
+            out.push(format!("PROBE at {name}"));
+            if i < through {
+                out.push(format!("PROBE {name} default"));
+            }
+        }
+        out.truncate(2 * through + 1);
+        out
+    };
+    // The key each game stops at: 1.1d and UO at -0x7e0001, CoD2 at
+    // -0x7e0003, CoD4 at -0x7e8001.
+    for (profile, lo_lines, lo_msg) in [
+        (
+            VmProfile::COD1,
+            lo.clone(),
+            "switch index -8257537 out of range",
+        ),
+        (
+            VmProfile::COD1_UO,
+            lo.clone(),
+            "switch index -8257537 out of range",
+        ),
+        (
+            VmProfile::COD2,
+            lo_all(3),
+            "switch index -8257539 out of range",
+        ),
+        (
+            VmProfile::COD4,
+            lo_all(5),
+            "switch index -8290305 out of range",
+        ),
+    ] {
+        let ours = run_probe_as("probe_switch_range_hi", &profile).expect("hi runs");
+        assert_eq!(&ours.lines, hi, "{profile:?}");
+        let e = ours.error.expect("the key past 0x7fffff is fatal");
+        assert!(
+            e.contains("switch index 8388608 out of range"),
+            "{profile:?}: {e}"
+        );
+        let ours = run_probe_as("probe_switch_range_lo", &profile).expect("lo runs");
+        assert_eq!(ours.lines, lo_lines, "{profile:?}");
+        let e = ours.error.expect("the key past the lower bound is fatal");
+        assert!(e.contains(lo_msg), "{profile:?}: {e}");
+    }
+    // 1.5b checks nothing: retail's handler goes on to read the key as a
+    // string index and the server spins, which a run here does not copy.
+    let ours = run_probe_as("probe_switch_range_hi", &VmProfile::COD1_15).expect("hi runs");
+    assert_eq!(ours.error, None);
+
+    for (probe, clean) in [
+        ("probe_switch_dup_int", false),
+        ("probe_switch_dup_str", false),
+        ("probe_switch_dup_default", false),
+        ("probe_switch_dup_case", true),
+        ("probe_switch_mixed", true),
+    ] {
+        let (lines, fatal) = &caps[probe];
+        assert_eq!(fatal.is_none(), clean, "{probe}");
+        for profile in [
+            VmProfile::COD1,
+            VmProfile::COD1_15,
+            VmProfile::COD1_UO,
+            VmProfile::COD2,
+            VmProfile::COD4,
+        ] {
+            let ours = run_probe_as(probe, &profile).expect("the probe loads");
+            if clean {
+                assert_eq!(
+                    (&ours.lines, ours.error),
+                    (lines, None),
+                    "{probe} {profile:?}"
+                );
+            } else {
+                assert_eq!(
+                    ours.error.as_deref(),
+                    Some(COMPILE_ERROR),
+                    "{probe} {profile:?}"
+                );
+            }
+        }
+    }
+}
+
 /// A skip name that matches no capture section is inert, and an inert skip
 /// silently stops covering the probe it was meant to exempt.
 #[test]

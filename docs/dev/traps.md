@@ -64,8 +64,10 @@ by doc and section. Grep `Trap:` in the subsystem doc you were sent to.
   1, `if ("1")` passes). `""` or `"a"` there is fatal.
 - A float prints `%g`-style (`1e-05`, `1.23457e+06`), not Rust's format.
 - A `case` is not `==`: it matches a key of its own type exactly, so
-  `switch ("1")` misses `case 1:`, and a float key is an error but on 1.5b
-  (`Op::SwitchKey`, cod11-gsc-object-model.md 9.3.1).
+  `switch ("1")` misses `case 1:`, and a float key or an int past
+  -0x7e0000..0x7fffff (the lower bound is per game) is an error but on 1.5b.
+  A repeated label, `default` too, does not compile (`Op::SwitchKey`,
+  `compile_switch`, cod11-gsc-object-model.md 9.3.1).
 - An array is a value on every engine: `b = a; b[k] = v` leaves `a` alone.
   The VM flags an array stored a second time and copies it at the next write
   (`Heap::share`, `Heap::own`). A write path that skips the
