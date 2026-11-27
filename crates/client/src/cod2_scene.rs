@@ -672,17 +672,14 @@ impl Cod2Draw {
     }
 }
 
-#[cfg(test)]
-pub(crate) mod tests {
+/// The retail spectate capture as the snapshot view the session draws from,
+/// for the tests and the load profile.
+#[cfg(any(test, feature = "testing"))]
+pub(crate) mod fixture {
     use super::*;
     use vcod_cod2::net::capture::{Capture, Dir};
-    use vcod_cod2::net::delta::field_index;
-    use vcod_cod2::net::events::ET_FX;
     use vcod_cod2::net::oob::{self, Reply};
-    use vcod_cod2::net::protocol::CS_WEAPONS;
     use vcod_cod2::net::{Client, NetView};
-
-    const WEAPON_TAG_FOR_TEST: &str = "tag_weapon_right";
 
     const FIXTURE: &[u8] = include_bytes!("../../cod2/tests/fixtures/mp_toujane-spectate.bin");
 
@@ -726,6 +723,19 @@ pub(crate) mod tests {
         view.frame((a.server_time.raw() + b.server_time.raw()) / 2)
             .unwrap()
     }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use vcod_cod2::net::NetView;
+    use vcod_cod2::net::delta::field_index;
+    use vcod_cod2::net::events::ET_FX;
+    use vcod_cod2::net::protocol::CS_WEAPONS;
+
+    const WEAPON_TAG_FOR_TEST: &str = "tag_weapon_right";
+
+    pub(crate) use super::fixture::{mid, replay};
 
     fn weapons(view: &NetView) -> Vec<String> {
         view.configstrings

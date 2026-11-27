@@ -710,7 +710,7 @@ move 20-50% run to run). Means a view. VERIFIED (the test's log):
 | mp_toujane | 11 | 668 / 21.5 / 0.241 | 570 / 18.9 / 0.186 | 116.0 / 17.3 | 53, 0.229; 57, 0.222 |
 | mp_trainstation | 58 | 1184 / 34.1 / 0.350 | 729 / 18.3 / 0.236 | 509.7 / 55.0 | 100, 0.450; 107, 0.366 |
 
-`cod2_cell_walks_draw_alike` (vcod, ignored, lavapipe) draws 16 spawns a
+`cod2_cell_walks_draw_alike` (vcod, a `client_tools` run, lavapipe) draws 16 spawns a
 map at four yaws under both walks, 960 views: 59 differ. VERIFIED (the
 frames).
 

@@ -83,10 +83,14 @@ mod fx_cloud;
 mod shader_ops;
 pub use fx_cloud::OutdoorSource;
 mod bundles;
+#[cfg(all(feature = "testing", not(test)))]
+pub(crate) mod cod2_profile;
 mod draw_list;
 mod dynamic;
 mod fog;
 mod frame;
+#[cfg(any(test, feature = "testing"))]
+mod frame_rig;
 #[cfg(test)]
 mod fx_feather;
 mod fx_pass;

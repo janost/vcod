@@ -311,6 +311,8 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
     one-attachment passes, the world vertex layout.
   - `tests.rs` the unit tests; `pipeline_check.rs` and `*_live.rs` the GPU
     gates.
+    `frame_rig.rs` the headless frames they and `cod2_profile.rs` (the CoD2
+    `client_tools` profiles) share.
 - `hud/`: CoD1's HUD (chat, messages, kill feed, scoreboard, hudelems,
   script menus, UO's parts) as quads for `Renderer::set_hud_quads`.
 - `fx/`: effects (`efx.rs` the grammar, `sim.rs` the particles,
@@ -342,7 +344,7 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
 - `tools/`: the CoD4 map sweep, the CoD4 and CoD2 soaks and the CoD2 map
   census (`vcod::tools`, built under the `testing` feature outside
   `cfg(test)`). `examples/client_tools.rs` runs them and
-  `renderer/hud_shot.rs`'s CoD2 shots by name.
+  `renderer/hud_shot.rs`'s CoD2 shots and `renderer/cod2_profile.rs`'s profiles by name.
 - `lib.rs`: the module list, the arguments, `main`, `App` and its
   commands; `main.rs` only calls its `main`. `window_event`
   hands keys, pointer and wheel to `input_events.rs` and a redraw to
