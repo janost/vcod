@@ -74,7 +74,7 @@ The walk's cmd scale (0x23af5) picks `walkSpeedScale` for the ADS walk, a
 lean, or an LMG in `weaponstate` 13; else `sprintSpeedScale` while 0x10000
 is set; else `runSpeedScale`. While sprinting it leaves out the weapon's
 `moveSpeedScale` (INFERRED (decompile)). The air and ladder scale (0x23905)
-makes the same three-way pick (VERIFIED decompile). `sprintSpeedScale`
+makes the same three-way pick (VERIFIED (the instructions)). `sprintSpeedScale`
 reads 1.6 on the wire (VERIFIED, `coduo-diff.md` 5). In the capture the
 mg30cal (`moveSpeedScale` 1.1) runs at 209 and sprints at 304, 190 x 1.6
 with no weapon factor (VERIFIED).
@@ -93,10 +93,10 @@ immediates):
 | else | surface + 1 |
 
 The jump's own event (0x24328) is also `surface + 70`, 83 on a ladder
-(VERIFIED decompile). The UO cgame plays 70..92 as
+(VERIFIED (the instructions)). The UO cgame plays 70..92 as
 `step_sprint_<surface>` plus `gear_rattle_sprint` (`CG_EntityEvent`
 `uo_cgame_mp_x86.dll` 0x30022810, footstep ranges 0x3002289c-0x30022933,
-VERIFIED disassembly), so a UO jump sounds like a sprint step. The
+VERIFIED (the instructions)), so a UO jump sounds like a sprint step. The
 capture's sprint steps read 76, dirt (70 + 6) (VERIFIED, section 9).
 
 Acceleration and friction are 1.5's: rodata 0x9b4a4..0x9b4e4 equals 1.5's
@@ -155,7 +155,7 @@ nothing and does not drain on a jump or stance change.
 
 `PM_CheckJump` (0x24483) is 1.5's: takeoff curve, landing arms and the
 500 ms gate are equal (VERIFIED bytes and decompile). One refusal is new:
-no jump with the sight flag on an LMG (VERIFIED decompile). The capture's
+no jump with the sight flag on an LMG (INFERRED (decompile)). The capture's
 sprinting jump rose 40.8, 1.5's unpenalised height at 125 fps (VERIFIED,
 peak at ct 38890).
 
@@ -164,8 +164,7 @@ peak at ct 38890).
 There are no sprint weaponstates (state names at 0x9d6a0, VERIFIED).
 `PM_InteruptWeaponWithSprintMove` (0x33a44) drops a deploy or breakdown to
 `weaponstate` 0 with both timers 0 and the raise anim, and leaves every
-other state (VERIFIED decompile). Inside `PM_Weapon` (0x3726c, VERIFIED
-decompile):
+other state (VERIFIED (the instructions)). Inside `PM_Weapon` (0x3726c, VERIFIED (the instructions)):
 
 - The shot (0x36c0e) never fires while sprinting; a spotter fires only down
   an `adsFire` sight; an LMG only with the sight flag and `fWeaponPosFrac`
@@ -194,7 +193,7 @@ and bots alike (INFERRED, the sum of the three).
 
 ## 7. The LMG bipod
 
-`PM_UpdateAimDownSightFlag` (0x32c0b, VERIFIED decompile; 15.0 at 0x9d4cc
+`PM_UpdateAimDownSightFlag` (0x32c0b, VERIFIED (the instructions); 15.0 at 0x9d4cc
 and 1.0 at 0x9d4d0, VERIFIED bytes). The sight's usual conditions are
 1.5's plus one: `weaponstate` 13 keeps the flag only while the cmd's
 weapon byte is the held weapon. For an LMG without the flag, in order:
@@ -209,9 +208,8 @@ weapon byte is the held weapon. For an LMG without the flag, in order:
    `EV_STANCE_FORCE_STAND` or `_CROUCH`, unless `wbuttons` 0x2.
 4. Else the flag goes on with `pm_flags` 1: the body is put prone.
 
-An LMG with the flag keeps it while the conditions hold (VERIFIED
-decompile). The 16th argument adds a +/-6 box from 8 up to 38 ahead,
-which must be clear (VERIFIED decompile; 8, -38 and 180 at 0x9a9b4,
+An LMG with the flag keeps it while the conditions hold (INFERRED (decompile)). The 16th argument adds a +/-6 box from 8 up to 38 ahead,
+which must be clear (VERIFIED (the instructions); 8, -38 and 180 at 0x9a9b4,
 0x9a9b8 and 0x9a9ac, VERIFIED bytes). The mount contents are the
 `hmgstanding` and `hmgcrouching` brushes (`coduo-diff.md` 11). In the
 capture a sighted press standing against a wall was refused on every cmd
@@ -256,7 +254,7 @@ INFERRED (decompile):
 
 ### View cap
 
-`PM_UpdateViewAngles` (0x2b15c, VERIFIED decompile; VERIFIED bytes: 5 at
+`PM_UpdateViewAngles` (0x2b15c, VERIFIED (the instructions); VERIFIED bytes: 5 at
 0x9b948, 55 deg/s at 0x9b94c, 0.98 at 0x9b950, +/-45 at 0x9b954/0x9b958)
 runs its prone block for a prone body and for a deployed LMG.
 
@@ -314,7 +312,7 @@ A deployed LMG's rounds start from the eye pushed up to 19 forward along
 
 ## 8. Buttons and binds
 
-`CL_CmdButtons` (`CoDUOMP.exe` 0x40c700, VERIFIED decompile) puts
+`CL_CmdButtons` (`CoDUOMP.exe` 0x40c700, VERIFIED (the instructions)) puts
 `+sprint` in `buttons` 0x8; every other bit is 1.1's. UO's
 `default_mp.cfg` (`localized_english_pakuo01.pk3`, line 9) binds ALT to
 `+sprint` (VERIFIED, the file). There is no hold-breath or binoculars
@@ -398,7 +396,7 @@ what a UO-written config would hold. Client sounds and pose: section 14.
 
 ## 11. The mounts and the cursor hint
 
-`G_CheckForCursorHints` (0x575bb, VERIFIED decompile; 15.0 and 1.0 at
+`G_CheckForCursorHints` (0x575bb, VERIFIED (the instructions); 15.0 and 1.0 at
 0xa1098 and 0xa109c, VERIFIED bytes) clears `serverCursorHint`, its value
 and its string each frame. For a live client holding a `weaponClass` 3
 weapon, not sighted and not in a vehicle seat, it probes
@@ -412,7 +410,7 @@ order). So a crouched mount the server's own contents see sends value 0.
 0x4000, or 0x400000 with spawnflag 1. Script makes one with
 `spawnTriggerMount(mins, maxs, crouch)` (0x67974,
 `SP_trigger_mount_no_brush` 0x77754), a box with the same contents
-(VERIFIED decompile). No stock UO map places one and no stock script
+(VERIFIED (the instructions)). No stock UO map places one and no stock script
 spawns one (VERIFIED, every UO BSP's entity lump and every stock `.gsc`).
 Every stock UO map has both mount brushes (VERIFIED, the material lumps).
 
@@ -466,7 +464,7 @@ short.
 No stock LMG file sets `useHintString` (VERIFIED, the `pakuo` weapon
 files), so the string stays -1.
 
-`G_CheckPointInsideTriggerMount` (0x7780f, VERIFIED decompile) asks
+`G_CheckPointInsideTriggerMount` (0x7780f, VERIFIED (the instructions)) asks
 `trap_EntitiesInBox` for the point grown 0.1 under mask 0x405c0008 and
 takes the first entity whose classname is `trigger_mount`; the value is
 its spawnflag 1. The query walks linked boxes, which `SV_LinkEntity` grows
@@ -478,7 +476,7 @@ it does the entities' is not read out of the server binary. vcod masks
 both (INFERRED: otherwise every wall 15 ahead would hint 7, and the
 captures show no hint away from the mounts).
 
-`spawnTriggerMount(mins, maxs, crouch)` (0x67974, VERIFIED decompile)
+`spawnTriggerMount(mins, maxs, crouch)` (0x67974, VERIFIED (the instructions))
 reads two vectors and `Scr_GetBool`, sorts each axis, `G_Spawn`s, sets
 classname `trigger_mount` and `r.mins`/`r.maxs` to the sorted corners at
 origin 0, and calls `SP_trigger_mount_no_brush`:
@@ -619,11 +617,9 @@ So the pullback alone leaves the fuse whole, as on 1.1, and only the
 sight's edge starts it (INFERRED from the conditions).
 
 - The server's `ClientEvents` (0x40860) answers 210 with `player_die`,
-  means of death 0x15, unless the thrower has the god flag (VERIFIED
-  decompile).
+  means of death 0x15, unless the thrower has the god flag (VERIFIED (the instructions)).
 - `fire_grenade` (0x5f7ad) fuses the missile with what is left of
-  `grenadeTimeLeft` (2500 ms when that is 0) and zeroes it (VERIFIED
-  decompile).
+  `grenadeTimeLeft` (2500 ms when that is 0) and zeroes it (VERIFIED (the instructions)).
 - `PM_UpdatePlayerSprintingFlag` refuses the sprint while a `cookOffHold`
   grenade's fuse runs (section 2, INFERRED (decompile)).
 - Every stock UO grenade has `cookOffHold 1`; the frag's `fuseTime` is 4
@@ -803,8 +799,7 @@ the 16-slot played table over a newer shot's slot, and that shot played
 again when the next snapshot brought it (VERIFIED, a trace of seed 14).
 Retail's `CG_CheckChangedPredictableEvents` (cgame 0x30028c70) compares
 only sequences inside `(cg.eventSequence - 16, cg.eventSequence)`
-(`add eax,-0x10` at 0x30028c8e) and leaves the rest alone (VERIFIED,
-disassembly). `PredictedEvents::filter_snapshot` drops a sequence 16 or
+(`add eax,-0x10` at 0x30028c8e) and leaves the rest alone (VERIFIED (the instructions)). `PredictedEvents::filter_snapshot` drops a sequence 16 or
 more behind without recording it. The gate runs a lossy case (seed 14):
 77 fires for 76 rounds before the fix, and 13 seeds exact after it
 (VERIFIED, 2026-10-18).
@@ -891,7 +886,7 @@ in between).
 ## 17. The prone check
 
 `BG_CheckProneValid` (0x2162c) against 1.5b's (0x1cf58), read side by
-side in the decompile (VERIFIED). UO adds two arguments:
+side in the decompile (INFERRED (decompile)). UO adds two arguments:
 
 - The 16th turns on a sweep of a +/-6 box from the origin 8 up, 38 units
   along the facing (rodata 0x9a9b4 8.0, 0x9a9b8 -38.0 along the back
@@ -986,7 +981,7 @@ capture lies down in water on UO.
 
 ## 18. The stance box
 
-VERIFIED, disassembly, `PM_CheckDuck` (0x27e16): after the eye's target
+VERIFIED (the instructions), `PM_CheckDuck` (0x27e16): after the eye's target
 steps, UO calls `PM_GetEffectiveStance` (0x28d66; 1 for the prone target
 `ps+0x574`, 2 for the crouch target `ps+0x578`) and writes the box's top
 (`pm->maxs[2]`, `pm+0xec`) from both it and `pm_flags` 0x1 (prone) and
@@ -998,7 +993,7 @@ steps, UO calls `PM_GetEffectiveStance` (0x28d66; 1 for the prone target
 | crouch | `ps+0x570`, 70 (0x28e61) | 50 (0x28e77) | 50 (0x28e77) |
 | stand | `ps+0x570`, 70 (0x28edb) | 70 | 70 |
 
-VERIFIED, decompile: 1.5b writes 30, 50 or `ps+0x338` from the target
+VERIFIED (the instructions): 1.5b writes 30, 50 or `ps+0x338` from the target
 alone (game15.so, the same tail; `cod15-movement.md` 3). `eFlags` 0x40 and
 0x20 follow the target on both.
 
