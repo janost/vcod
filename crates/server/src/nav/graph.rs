@@ -750,7 +750,7 @@ impl NavGraph {
     /// whose way out is a drop scores the floors over its rim nearest
     /// (mp_ship's boat at (5250, -500, 27), bot-navigation.md section 3).
     pub fn nearest_walkable(&self, world: &CollisionWorld, p: Vec3) -> Option<u32> {
-        self.walkable_start(world, p).map(|(n, _)| n)
+        self.walkable_start(world, p, &|_| true).map(|(n, _)| n)
     }
 
     /// [`Self::nearest_walkable`], and whether the walk there takes a jump.
@@ -763,8 +763,14 @@ impl NavGraph {
     /// 12 s (bot-objectives.md 10.6). The node may stand as low as the feet:
     /// mp_cassino's pocket at (5882, -2038, -8), 30 under the steps round
     /// it, is ringed by nodes on its own floor beyond the walls
-    /// (bot-objectives.md 14.13).
-    pub fn walkable_start(&self, world: &CollisionWorld, p: Vec3) -> Option<(u32, bool)> {
+    /// (bot-objectives.md 14.13). Only nodes `keep` passes are scored,
+    /// unless it passes none.
+    pub fn walkable_start(
+        &self,
+        world: &CollisionWorld,
+        p: Vec3,
+        keep: &dyn Fn(u32) -> bool,
+    ) -> Option<(u32, bool)> {
         use vcod_common::pmove::JUMP_HEIGHT;
         let (cx, cy) = self.column(p);
         let mut near: Vec<(f32, u32)> = (-2..=2)
@@ -776,6 +782,9 @@ impl NavGraph {
                 (d.truncate().length() + 4.0 * d.z.abs(), n)
             })
             .collect();
+        if near.iter().any(|&(_, n)| keep(n)) {
+            near.retain(|&(_, n)| keep(n));
+        }
         near.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
         let walks = |n: u32| {
             let to = self.nodes[n as usize];

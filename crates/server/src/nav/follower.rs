@@ -428,8 +428,10 @@ pub struct Follower {
     shun: Arc<[u32]>,
     shun_until: u32,
     shun_through: bool,
-    /// Where the bodies [`Self::shun`] keeps off stood.
+    /// Where the bodies [`Self::shun`] keeps off stood, and whether all of
+    /// them stood still ([`Self::starts_clear`]).
     shunned: Vec<Vec3>,
+    shun_still: bool,
     /// A give way to an oncoming body ([`Self::stand_aside`]): the spot, the
     /// way the other came from, the ticks left; and the ticks before the
     /// next.
@@ -1093,10 +1095,11 @@ impl Follower {
                         || g.off_floor(here)
                         || g.nearest(here.into()).is_some_and(|n| self.blocks(n)) =>
                 {
-                    g.walkable_start(w, here).map(|(n, jump)| {
-                        self.jump_start = jump;
-                        n
-                    })
+                    g.walkable_start(w, here, &|n| self.starts_clear(g, here, n))
+                        .map(|(n, jump)| {
+                            self.jump_start = jump;
+                            n
+                        })
                 }
                 _ => {
                     self.proved_start = false;
