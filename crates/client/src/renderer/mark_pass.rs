@@ -80,6 +80,16 @@ fn cmp_runs(a: &(f32, u32, i32), b: &(f32, u32, i32)) -> std::cmp::Ordering {
     a.0.total_cmp(&b.0).then((a.1, a.2).cmp(&(b.1, b.2)))
 }
 
+/// What the uploaded mark buffers were built from: the pool's set, each
+/// mark's vertex colour (it moves only inside a fade window) and whether
+/// temporary marks were in them.
+#[derive(PartialEq)]
+struct Built {
+    generation: u64,
+    rgba: Vec<[u8; 4]>,
+    temporaries: bool,
+}
+
 /// One run of marks sharing a shader and a lightmap page, in draw order.
 #[derive(Clone)]
 pub(super) struct MarkRun {
@@ -126,6 +136,11 @@ pub(super) struct MarkPass {
     /// The marks' own runs and the vertex and index counts they fill.
     mark_runs: Vec<MarkRun>,
     mark_fill: (u32, u32),
+    /// `None`: the buffers are stale (map change, restart, shader reopen).
+    built: Option<Built>,
+    /// Buffer rebuilds so far, for the test.
+    #[cfg(test)]
+    rebuilds: u32,
     /// The marks' and this view's sprites' runs, by sort.
     pub(super) runs: Vec<MarkRun>,
 }
@@ -178,6 +193,9 @@ impl MarkPass {
             views: HashMap::new(),
             mark_runs: Vec::new(),
             mark_fill: (0, 0),
+            built: None,
+            #[cfg(test)]
+            rebuilds: 0,
             runs: Vec::new(),
         }
     }
@@ -200,6 +218,7 @@ impl MarkPass {
         self.materials.clear();
         self.mark_runs.clear();
         self.mark_fill = (0, 0);
+        self.built = None;
         self.runs.clear();
     }
 
@@ -209,6 +228,7 @@ impl MarkPass {
         self.materials.clear();
         self.views.clear();
         self.slots_used = 0;
+        self.built = None;
     }
 
     pub(super) fn live(&self) -> usize {
@@ -220,6 +240,7 @@ impl MarkPass {
         self.pool.clear();
         self.mark_runs.clear();
         self.mark_fill = (0, 0);
+        self.built = None;
         self.runs.clear();
     }
 
@@ -237,10 +258,11 @@ impl MarkPass {
         time: ShaderClock,
         enabled: bool,
     ) {
-        self.runs.clear();
-        self.mark_runs.clear();
-        self.mark_fill = (0, 0);
         if !enabled {
+            self.runs.clear();
+            self.mark_runs.clear();
+            self.mark_fill = (0, 0);
+            self.built = None;
             return;
         }
         for req in requests {
@@ -253,6 +275,29 @@ impl MarkPass {
             .flat_map(|req| marks::place(&self.world, req, now_ms))
             .take(MAX_DRAWN - MAX_MARKS)
             .collect();
+        let built = Built {
+            generation: self.pool.generation(),
+            rgba: self
+                .pool
+                .newest_first()
+                .map(|m| m.rgba_at(now_ms))
+                .collect(),
+            temporaries: !temps.is_empty(),
+        };
+        // temporary marks move every frame; only their absence lets it skip
+        if !built.temporaries && self.built.as_ref() == Some(&built) {
+            self.write_params(ctx, time);
+            self.runs.clone_from(&self.mark_runs);
+            return;
+        }
+        self.runs.clear();
+        self.mark_runs.clear();
+        self.mark_fill = (0, 0);
+        self.built = Some(built);
+        #[cfg(test)]
+        {
+            self.rebuilds += 1;
+        }
         let mut groups: Vec<((String, u16), Vec<usize>)> = Vec::new();
         for (i, m) in temps.iter().chain(self.pool.newest_first()).enumerate() {
             match groups
@@ -307,6 +352,14 @@ impl MarkPass {
             .write_buffer(&self.vertex_buf, 0, bytemuck::cast_slice(&verts));
         ctx.queue
             .write_buffer(&self.index_buf, 0, bytemuck::cast_slice(&indices));
+        self.write_params(ctx, time);
+        self.mark_fill = (verts.len() as u32, indices.len() as u32);
+        self.mark_runs = runs.clone();
+        self.runs = runs;
+    }
+
+    /// The animated stages' params for `time`; they move without the marks.
+    fn write_params(&self, ctx: &MarkCtx, time: ShaderClock) {
         for ms in self.shaders.values().flatten() {
             for (si, &slot) in ms.slots.iter().enumerate() {
                 if stage_animated(&ms.shader, si)
@@ -320,9 +373,6 @@ impl MarkPass {
                 }
             }
         }
-        self.mark_fill = (verts.len() as u32, indices.len() as u32);
-        self.mark_runs = runs.clone();
-        self.runs = runs;
     }
 
     /// Builds `name`'s unlit material ahead of `set_sprites`, which has no
@@ -742,5 +792,40 @@ mod tests {
                 (6.0, 1, 0)
             ]
         );
+    }
+
+    /// The buffers rebuild on a frame that adds or expires a mark and not
+    /// on one where nothing changed or only a fade-free mark ages.
+    #[test]
+    fn marks_rebuild_only_when_the_set_or_a_fade_changes() {
+        let fs = Pk3Fs::empty();
+        let Some((mut r, _)) = Renderer::headless_sized(&fs, false, 1, (64, 64)) else {
+            return;
+        };
+        r.marks.load(marks::tests::floor(), Vec::new());
+        let req = |life_ms| MarkRequest {
+            shader: "gfx/impact/bullethole1".into(),
+            origin: glam::Vec3::new(0.0, 0.0, 0.5),
+            dir: glam::Vec3::Z,
+            orientation: 0.0,
+            rgba: [1.0; 4],
+            alpha_fade: true,
+            radius: 8.0,
+            life_ms,
+        };
+        // seconds: add (2 s life), idle, idle, add a second, fade starts, expiry
+        let steps: [(f64, Vec<MarkRequest>, u32); 6] = [
+            (1.0, vec![req(2000)], 1),
+            (1.1, vec![], 1),
+            (1.2, vec![], 1),
+            (1.3, vec![req(20_000)], 2),
+            (2.5, vec![], 3),
+            (3.1, vec![], 4),
+        ];
+        for (time, requests, rebuilds) in steps {
+            r.set_marks(&fs, &requests, &[], time, true);
+            assert_eq!(r.marks.rebuilds, rebuilds, "at {time}");
+        }
+        assert_eq!(r.mark_count(), 1);
     }
 }
