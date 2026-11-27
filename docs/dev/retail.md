@@ -347,7 +347,9 @@ python3 -I tools/re/cod4_phys_summary.py tmp/phys.txt [--trim OUT]
   the weapon does not fire.
 - `sv_connectTimeout` 600 as well: at its default 45 the loopback join
   timed out during the map load on a loaded machine. Two clients at once
-  on one machine timed out even with it; run one at a time.
+  on one machine timed out even with it; run one at a time. At a load
+  average past 70 one client timed out at 600 too; the four at 1800 held
+  (the copy paper take).
 - Pick a spot with `vcod_cod4::collision::ClipMap::trace` from the eye
   to the prop's centre before a run: a run costs 5 to 10 minutes here,
   and a blocked line costs a run.

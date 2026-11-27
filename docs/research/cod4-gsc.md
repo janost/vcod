@@ -1717,7 +1717,9 @@ Captured from the Windows client under Wine and gdb on 2026-11-26
 (docs/dev/retail.md, "Worlds 0 and 1 from the first push to rest"), each
 the first physics event after its map load, at `fixedtime` 17. The four
 takes are `crates/cod4/tests/fixtures/phys/` (its README: the recipes, the
-line format and each take's summary). Addresses are `iw3mp.exe`'s (3.6).
+line format and each take's summary). A fifth, the copy paper box of
+2026-11-27, is `cod4-effects.md` 9.1.1.4's. Addresses are `iw3mp.exe`'s
+(3.6).
 
 Where the dump reads, and the layout it rests on:
 
@@ -2665,8 +2667,10 @@ sweep, as the `body` lines are):
   That a step draws as many times as its reorder's rows, as world 2's
   do (`cod4-player-anims.md` 10.4), answering 3.6.2, is INFERRED (the
   seeds agree).
-- The watermelon's chunks spawned through the FX path rather than off
-  their `new` lines run the same (`cod4-effects.md` 9.1.1).
+- The watermelon's chunks and the copy paper box's pieces spawned
+  through the FX path rather than off their `new` lines run the same
+  (`cod4-effects.md` 9.1.1, 9.1.1.4); the copy paper's to the bit on all
+  97 steps.
 - The impact sounds: 23, 37 and 6 on retail's steps, each retail handle
   met under one alias and each alias under one handle
   (`physics_metal_default`, `physics_tire_default`,
@@ -2696,9 +2700,12 @@ Running (`vcod_cod4::ode`, `fx_phys`, `play::cod4_physics`):
   `physicsJitter`.
 - The impact sounds (3.6.7), 32 a frame at most, world 1's then
   world 0's.
-- Matched on four retail takes (3.6.2): the round, the frag, the car and
-  the watermelon, step for step, the watermelon also spawned through the
-  FX path.
+- Matched on five retail takes (3.6.2): the round, the frag, the car,
+  the watermelon and the copy paper box, step for step, the last two
+  also spawned through the FX path (cod4-effects.md 9.1.1.4).
+- The effects' physics models: looping and one-shot elements, a chained
+  effect's in the frame its chain fires, the frame through 0x561100 and
+  the timed seed's walk (cod4-effects.md 9.1.1.1 to 9.1.1.3).
 
 Not ported, no take reaching them:
 
@@ -2709,12 +2716,14 @@ Not ported, no take reaching them:
   units and more at step edges are likely this (3.6.1). INFERRED.
 - Class 11 (brush dynamic entities are left out) and body against body
   (`phys_collUseEntities`, `phys_interBodyCollision`, 0 by default).
-- Looping physics elements of an effect, chained effects' bodies (made
-  one frame late), and a spawn's nonzero angles, cylinder frames and
-  0x40 / 0x80 origins, which no take checks (cod4-effects.md 9.1.1).
+- A moving effect's frame lerp for its looping physics spawns
+  (cod4-effects.md 9.1.1).
 
 Unchecked: the shipment frag's last body sleeps at 22.1 s on the port,
-which no retail capture has timed. VERIFIED (the run, ours).
+which no retail capture has timed. VERIFIED (the run, ours). An
+effect's physics elements' nonzero angles, cylinder and non-sphere 0xc0
+frames, 0x80 origins and looping spawns are ported on the instructions
+alone; no take checks them (cod4-effects.md 9.1.1.4).
 
 World 0 dropping a body once it sleeps is the dynamic entities' code
 (`DynEnts::advance`, cod4-world.md 13.2).

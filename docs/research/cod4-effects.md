@@ -414,11 +414,9 @@ The seeds:
   elements name at +0xd8 and +0xdc, it is `(((t 0x343fd + 0x269ec3) >>
   17) 479) >> 15` off the start time `t` (0x4a12b4..0x4a12cc); else
   `rand() 479 / 32768` (0x4a12d2..0x4a12e9). VERIFIED (the
-  instructions). That 0x4a0ea0 answers true on the flag is INFERRED
-  (its arm at 0x4a0f4e not read). `fx_phys::PhysEffect` tests the
-  effect's own elements only; the client draws `rand()` off the
-  session's CRT stream, which vcod's other effects do not draw from
-  (vcod's).
+  instructions). 0x4a0ea0's walk is 9.1.1.3. The client draws `rand()`
+  off the session's CRT stream, which vcod's other effects do not draw
+  from (vcod's).
 - A one-shot element spawns `spawn.base` times, plus the integer draw at
   entry 19 past the effect's seed when the amplitude is set, each with
   its index as the sequence (0x4a3241..0x4a3295). VERIFIED (the
@@ -427,12 +425,17 @@ The seeds:
   spawn time, plus, when the amplitude is set, the draw at entry 18 past
   `(296 sequence + effect seed + start) % 479`; the element's seed is
   `(effect seed + start + 296 sequence) % 479` (0x4a25fb..0x4a2660).
-  VERIFIED (the instructions).
+  The delay's draw reads the whole sequence word (0x4a2607), the seed its
+  low byte (`movzx` at 0x4a263a). VERIFIED (the instructions).
+- `FX_SpawnElem` refuses an element whose start plus the life drawn at
+  entry 17 is not past the FX system's clock (system +0x9d0), unless the
+  element names an impact, death or emitted effect (0x4a0c60, its +0xd8,
+  +0xdc, +0xe0) (0x4a26e3..0x4a2710). VERIFIED (the instructions).
 
 The body (0x4a1ff0, called at 0x4a2849 for type 5 with the flag):
 
 - The frame (0x4a5d30): run bits 0 the world's axes at the origin,
-  0x40 and 0x80 the effect's; 0xc0 the spawn origin (0x4a5cb0, entries
+  0x40 and 0x80 the effect's, through 0x561100 (9.1.1.2); 0xc0 the spawn origin (0x4a5cb0, entries
   6..8) moved by the spawn offset (0x4a5ab0), forward along that offset
   normalized (0x4076d0), `(1, 0, 0)` when its length is 0. A sphere
   offset's up is 0x55fed0's perpendicular and left `up x forward`
@@ -497,15 +500,154 @@ velocities equal to the take's `new` lines to the bit, each body's
 visual the model 3.6.3 pinned, and the run passing 3.6.7's rule to step
 170, as the bodies built from the capture do: to the bit through step
 27, then within 2.5e-4 units. VERIFIED (the run, ours). The angles at
-0 ms are zero in that element, so 0x4a62f0's turn and the non-sphere
-frames rest on the instructions alone.
+0 ms are zero in that element, so 0x4a62f0's turn rests on the
+instructions alone; the 0x40 origin has its own take (9.1.1.4).
 
-Not ported, no take reaching them: looping physics elements (a looping
-element with the flag spawns no body), a body for a chained effect's
-element in the frame it spawns (it comes one frame late), the frame axes
-off 0x561100 (the port builds them with `glam`), and a spawn's nonzero
-angles, cylinder frames and 0x40 / 0x80 origins. The rest of what the
-worlds leave out is cod4-gsc.md 3.6.8.
+Ported on the instructions alone, no take reaching them: a spawn's
+nonzero angles, the cylinder offset and the non-sphere 0xc0 frame (all
+three in `explosions/grenadeexp_wood`, 9.1.1.4), 0x80 origins and
+looping elements (9.1.1.1). Not ported: the frame 0x4a30e0 lerps
+between a moving effect's two frames for each looping spawn (0x4a2d50
+at 0x4a31c2; vcod spawns each in the frame the effect started in), and
+the order of the FX update against world 1's run in a frame (the update
+runs on the worker threads, world 1 at 0x5fa373 under the critical
+section 0xcc12038; vcod makes the bodies before the run, a chain's
+after it). The rest of what the worlds leave out is cod4-gsc.md 3.6.8.
+
+##### 9.1.1.1 Chained effects and looping elements
+
+An element's death and emitted effects start through `FX_SpawnEffect`
+(0x4a1150) inside the element update that raises them: the death effect
+off element +0xdc at 0x4a4684, called at 0x4a4694 from 0x4a45d0
+(0x4a4a00's call at 0x4a4b3d); the emitted one off +0xe0 at 0x4a367d,
+called at 0x4a36e9 from 0x4a34c0 (0x4a4770's at 0x4a4820). VERIFIED
+(the instructions). The impact effect starts at 0x4a3f7d in 0x4a3ee0,
+which 0x4a3fb0 calls at 0x4a4152 and 0x4a42c0. VERIFIED (the calls);
+that it reads +0xd8 is INFERRED (the read is not in 0x4a3ee0). A
+runner's effect starts at 0x4a1fb3 in 0x4a1e90, `FX_SpawnElem`'s type 10
+arm (0x4a2670). VERIFIED (the call). `FX_SpawnEffect` spawns its
+one-shot elements at once (0x4a3220 at 0x4a1471, into `FX_SpawnElem` at
+0x4a3288 and 0x4a1ff0 at 0x4a2849). VERIFIED (the calls). So a chained
+effect's bodies are made in the update that started it. vcod's FX step
+raises chains after the client's frame has handed its plays to world 1,
+so `Cod4Client::play_chained_fx_bodies` hands those the step started
+right after `FxSystem::spawn_chained`, in the same frame. No stock
+physics effect is any other's death, impact, emitted or runner effect
+(9.1.1.4).
+
+A looping element goes through `FX_SpawnElem` and 0x4a1ff0 as a
+one-shot one does: nothing in 0x4a25b0 reads the element's place
+(0x4a25b0..0x4a2877). VERIFIED (the instructions). Its spawns:
+
+- Sequence 0 with the effect: `FX_SpawnEffect` calls 0x4a33b0 with the
+  looping count (def +0x10) and the start time (0x4a1433..0x4a144a), and
+  0x4a33b0 spawns each looping element not a trail once, sequence 0, at
+  the start (0x4a33d0..0x4a340b). VERIFIED (the instructions). They come
+  before the one-shot elements (0x4a1471).
+- The effect's status takes 0x10000 only when `msecLoopingLife` (def
+  +0xc) is not 0 (0x4a121d..0x4a1233). An update with it set
+  (0x4a4e86) calls 0x4a32a0 into 0x4a30e0 for each looping element over
+  `(from, to]` with the effect's start as the grid's anchor (+0x20,
+  0x4a4ea4), then, when `to` less the start is past `msecLoopingLife`,
+  calls 0x4a19a0 (0x4a4ece..0x4a4edf). VERIFIED (the instructions). That
+  0x4a19a0 clears the bit is INFERRED.
+- 0x4a30e0 spawns sequence `k` at `start + k intervalMsec` (element +4)
+  from `k = (from - start) / interval + 1` while that time is not past
+  `to` and `k` is under the count (element +8), each through
+  `FX_SpawnElem` at that time with `k` as the sequence
+  (0x4a314b..0x4a3207). An update over more than 128 ms first moves
+  `from` up to `to` less the element's longest life plus 1, the longest
+  life 0x4a2fa0's sum of `spawnDelayMsec`'s and `lifeSpanMsec`'s bases
+  and amplitudes (0x4a310f..0x4a3147, 0x4a2fbe..0x4a2fc7). VERIFIED (the
+  instructions).
+
+vcod (`fx_phys::looping_spawns`, `Cod4Physics::run_loops`): sequence 0
+with the effect, then each frame's due spawns at their grid times before
+world 1 runs, the loop dropped once past its looping life;
+`FX_SpawnElem`'s refusal on both paths. A looping physics element spawned
+no body before. `cod4_physics::a_looping_physics_element_spawns_on_its_interval_until_its_count`
+runs `explosions/grenadeexp_wood`'s: 1 body with the effect, 4 after a
+17 ms frame, 30 by its end. VERIFIED (the test, ours).
+
+##### 9.1.1.2 The effect's frame, 0x561100
+
+`FX_SpawnEffect` keeps the axis its caller hands it as `AxisToQuat`'s
+quaternion (0x562980 at 0x4a13ef) at effect +0x28, the origin at +0x38,
+and copies those 7 words to +0x44 and +0x60 (0x4a13d5..0x4a1409). The
+spawn reads the axes back through 0x561100 wherever it turns by them:
+`spawnOrigin` under flag 2 (0x4a5a07), the cylinder offset (0x4a5b00),
+the 0x40 and 0x80 frames (tail calls at 0x4a5da0 and 0x4a5dc7). VERIFIED
+(the instructions). 0x561100 is a unit quaternion's axes with no `2 /
+|q|^2`: `x2 = x + x`, `y2`, `z2` stored, then `xx = x x2`, `xy = x2 y`,
+`xz = z x2`, `xw = x2 w`, `yy = y2 y`, `yz = z y2`, `yw = y2 w`, `zz =
+z2 z`, `zw = z2 w`, each stored; the rows `(1 - (zz + yy), zw + xy, xz
+- yw)`, `(xy - zw, 1 - (zz + xx), yz + xw)`, `(xz + yw, yz - xw, 1 - (xx
++ yy))`, each sum rounded once at its store (0x561103..0x5611e9).
+VERIFIED (the instructions). A broken dynamic entity hands its pose's
+0x561100 axes to `FX_PlayOrientedEffect` (0x4a1560) with the pose's
+origin (0x48deb1..0x48decf). VERIFIED (the instructions).
+
+`ragdoll::iw::unit_axes` is 0x561100; `fx_phys::EffectFrame::of_axis`
+takes a caller's axis through `axis_to_quat` and back through it, and
+`DynEnts` builds its pose axes and a broken entity's effect axis with
+it, where `glam`'s `Mat3::from_quat` rounded each diagonal term twice.
+The watermelon and copy paper takes pass with it (9.1.1.4); the copy
+paper take passes with `glam`'s axes as well, so no take parts the two.
+VERIFIED (the runs, ours).
+
+##### 9.1.1.3 The timed seed's walk
+
+0x4a0ea0 walks the effect's looping, one-shot and emitted elements (def
++0x10 + +0x14 + +0x18, 0xfc each from +0x1c) and answers 1 at the first
+element with flag 0x1000, or whose death (+0xdc), impact (+0xd8) or
+emitted (+0xe0) effect answers 1, in that order, or, for a runner (type
+10 at +0xb0), whose one visual (+0xbc, count +0xb1 of 1) or any of its
+visuals does; else 0 (0x4a0ea0..0x4a0fb0, the 1 at 0x4a0f50). VERIFIED
+(the instructions). Nothing in it stops a cycle. `fx_phys::PhysEffect`
+walks the same names across the loaded zones, a cycle ending at an
+effect already met (vcod's). Over the stock physics effects the walk
+answers as the effect's own elements do: only
+`breakables/exp_wall_cinderblock_96` is timed, off its own elements.
+VERIFIED (`fx_phys_census`, ours).
+
+##### 9.1.1.4 The stock physics elements, and the copy paper take
+
+Every type 5 element with flag 0x8000000 in `common_mp` and the MP map
+zones (`*_load` aside), by `cargo run -p vcod-cod4 --example
+fx_phys_census`. VERIFIED (the zones):
+
+| Effect | Elements | Kind | Run bits | Offset | Nonzero `spawnAngles` | `msecLoopingLife` |
+|---|---|---|---|---|---|---|
+| `explosions/grenadeexp_wood` | 1 | looping, every 5 ms, 30 | 0xc0 | cylinder | yes | 145 |
+| `breakables/exp_wall_cinderblock_96` | 0 | looping, every 1 ms, 50 | 0x80 | none | yes | 490 |
+| `explosions/wall_explosion_pm_a` | 0, 3 | looping, every 1 ms, 15 | 0x80 | none | yes | 14 |
+| `explosions/clusterbomb`, `clusterbomb_christmas` | 4, 7, 8 | one-shot, 1 | 0x40 | none | element 8 | 90 |
+| `test/brick_1` | 0 | one-shot, 1 | 0x40 | none | yes | 0 |
+| `props/watermelon` | 3 | one-shot, 6 | 0xc0 | sphere | no | 0 |
+| `props/copypaper_box_exp` | 4, 5 | one-shot, 1 | 0x40 | none | no | 210 |
+
+All carry flag 2. None is reached through another effect's death,
+impact, emitted or runner effect. So the stock effects use nonzero
+angles, the cylinder and the non-sphere 0xc0 frame (a frag on wood),
+0x40 origins (the cluster bombs, the copy paper box) and 0x80 ones.
+
+The copy paper take (`copypaper-mp_broadcast-1.7.txt`, 2026-11-27, the
+fixture README's recipe): MP5 fire into a box on mp_broadcast until it
+broke, its `fxbody` lines giving the effect's frame, seed and start at
+0x4a1ff0. The rounds had pushed the box from (-201.2, 300.9, 0) to an
+effect origin of (-200.9, 306.1, 8.6), tumbled. Both bodies took element
+seed 229 off effect seed 43 and start 16472. VERIFIED (the take).
+`phys_ab::the_copy_paper_box_spawned_through_the_fx_path` spawns both
+through `fx_phys` from the take's frame and effect seed: each element's
+seed is the take's, each body's position, quaternion and velocities
+equal its `new` line's to the bit (the lid and the open box, their mass
+centres 3.9 units off the spawn), and the run is retail's to the bit on
+all 97 steps, each sleep on retail's step and the one impact sound
+(`physics_cardboard_default`) at retail's point. VERIFIED (the run,
+ours). That puts 0x4a2220's origin taken into a turned 0x40 frame and
+0x4a2021's back out of it on the take. A frag on wood
+(`grenadeexp_wood`) would check the angles, the cylinder and looping;
+no take has one.
 
 ## 10. The weapon's tags
 
