@@ -82,44 +82,34 @@ impl Trajectory2 {
         }
     }
 
-    /// `BG_EvaluateTrajectory` at `at_ms` with every product and sum rounded
-    /// to a float. The server's items and missiles evaluate as 1.5b's
-    /// (`vcod_common`'s `Trajectory::evaluate_stored`). Retail `Com_Error`s
-    /// on a type past 8; this returns `base`. The clocks wrap as the C `int`s do: CoD4's
+    /// `BG_EvaluateTrajectory` at `at_ms` (lnxded 0x80df5d4): the stack-order
+    /// arithmetic of `vcod_common`'s `Trajectory::evaluate_stored`, which
+    /// CoD2's numbering is mapped onto. Retail `Com_Error`s on a type past 8;
+    /// this returns `base`. The clocks wrap as the C `int`s do: CoD4's
     /// `physicsLaunch` sends `trDuration` 0x7fffffff (cod4-gsc.md).
     pub fn evaluate_f32(&self, at_ms: i32) -> Vec3 {
-        let secs = |t: i32| t.wrapping_sub(self.tr_time) as f32 * 0.001;
-        let end = self.tr_time.wrapping_add(self.tr_duration);
-        match self.tr_type {
-            TR_LINEAR => self.base + self.delta * secs(at_ms),
-            TR_LINEAR_STOP => self.base + self.delta * secs(at_ms.min(end)).max(0.0),
-            TR_SINE => {
-                let frac = at_ms.wrapping_sub(self.tr_time) as f32 / self.tr_duration as f32;
-                let phase = (f64::from(frac) * std::f64::consts::PI * 2.0).sin() as f32;
-                self.base + self.delta * phase
-            }
-            TR_GRAVITY => {
-                let t = secs(at_ms);
-                let mut r = self.base + self.delta * t;
-                r.z += t * t * -400.0;
-                r
-            }
-            TR_ACCELERATE | TR_DECELERATE => {
-                let t = secs(at_ms.min(end));
-                let dur = self.tr_duration as f32 * 0.001;
-                if dur == 0.0 {
-                    return self.base;
-                }
-                let dir = self.delta.normalize_or_zero();
-                let accel = self.delta.length() / dur;
-                if self.tr_type == TR_ACCELERATE {
-                    self.base + dir * (accel * 0.5 * t * t)
-                } else {
-                    self.base + self.delta * t + dir * (accel * -0.5 * t * t)
-                }
-            }
-            _ => self.base, // stationary, interpolate, gravity paused
+        use vcod_common::net::trajectory as v1;
+        let tr_type = match self.tr_type {
+            TR_STATIONARY..=TR_GRAVITY => self.tr_type,
+            TR_GRAVITY_PAUSED => v1::TR_GRAVITY_PAUSED,
+            TR_ACCELERATE => v1::TR_ACCELERATE,
+            TR_DECELERATE => v1::TR_DECCELERATE,
+            _ => return self.base,
+        };
+        // A ramp with no duration or no pace stays at its base.
+        if matches!(tr_type, v1::TR_ACCELERATE | v1::TR_DECCELERATE)
+            && (self.tr_duration == 0 || self.delta == Vec3::ZERO)
+        {
+            return self.base;
         }
+        v1::Trajectory {
+            tr_type,
+            tr_time: self.tr_time,
+            tr_duration: self.tr_duration,
+            base: self.base,
+            delta: self.delta,
+        }
+        .evaluate_stored(at_ms)
     }
 }
 
