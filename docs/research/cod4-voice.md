@@ -202,6 +202,77 @@ At the default 180 the angle test always passes, so Eavesdrop is a
   the capture stores each sample as `_ftol2(sample * scaler)`'s low 16
   bits (0x4ed14a..0x4ed165). VERIFIED (asm).
 
+### 4.1 The winvoice dvars' readers
+
+Each dvar's pointer is the register call's return (0x56c350), stored by
+0x57a94f (`winvoice_mic_mute`, 0xcc1b4c4), 0x57a998 (`reclevel`,
+0xcc1b3bc), 0x57a9e4 (`save_voice`, 0xcc1b6e8) and 0x57aa37 (`scaler`,
+0xcc1b4c8). VERIFIED (the instructions).
+
+- **`winvoice_mic_mute`.** The one read of 0xcc1b4c4 is at 0x57aa92, in
+  the init, which passes the byte to 0x57b860, the `DST_SPEAKERS` `Mic`
+  `MUTE` control (section 4). VERIFIED (the instructions: a search of the
+  whole `.text` for the address finds only the store and that load). Nothing
+  on the capture side reads it, and a later change of the dvar is not
+  noticed. It is the mixer's speaker monitor of the microphone (sidetone),
+  not the capture. INFERRED (the mixer's names). vcod plays no microphone
+  monitor, so the dvar has nothing to drive: it stays registered and unread.
+- **`winvoice_save_voice`.** The one read of 0xcc1b6e8 is at 0x57b024, the
+  end of the function `Voice_IncomingVoiceData` calls for a packet whose
+  talker's byte in the table at 0xe11518 is 0 and while the dvar at
+  0xc5f8c0 (+0xc) is nonzero (0x4768b8..0x4768df). VERIFIED (the
+  instructions). The table is the mute list and the dvar `sv_voice` or
+  `cl_voice`. INFERRED. The function decodes the packet in chunks of at most
+  0xd5ec444 bytes through `Decode_Sample` (0x4ec940, which returns twice
+  the encoder's frame size 0xd5ec444, 320 for 160 samples, the Speex float
+  output cast to 16 bits), hands each chunk to `Sound_UpdateSample`
+  (0x4ecc40), then with the dvar nonzero calls `fopen("voice.wav", "ab")`
+  (strings 0x6f5f18, 0x6f5f14; 0x671e8f), `fwrite(buffer, ebp, 1, file)`
+  (0x6722b8) and `fclose` (0x671d4f). VERIFIED (the instructions,
+  0x57b024..0x57b05b). `ebp` is the last chunk's `Decode_Sample` return, so
+  a packet writes its last decoded frame only: 160 samples, 320 bytes,
+  raw little-endian 16-bit mono at 8000 Hz. No RIFF header is built
+  anywhere in the function, the name is a misnomer. VERIFIED (the
+  instructions). The file opens and closes for each packet, in the process's
+  working directory, and a failed `fopen` skips the write. VERIFIED (the
+  instructions). The samples are the decoded ones, after the talker's
+  stream is updated; the local microphone is never written (the function
+  has no capture caller). INFERRED. A packet of several chunks
+  writes only the last chunk's frame. VERIFIED (the instructions:
+  `ebp` is overwritten each pass).
+- **The record level meter.** `voicechat_level_indicator`, the last item of
+  `options_voice` (`menu_dump ui_mp options_voice`), type 8, rect 446 106
+  100 10, owner draw 265, colour white, no background and no dvar. VERIFIED
+  (zone walk). `UI_OwnerDraw` (0x544820) takes `ownerDraw - 205` through
+  the byte table at 0x544aa8 into the jump table at 0x544a78: 265 is index
+  60, byte 8, arm 0x544a1e, which calls 0x5443a0. VERIFIED (the
+  instructions). That function is the meter's draw. INFERRED (the name).
+  - The level: 0x57ad60 returns 0 until the voice init set 0xd5ec510
+    (0x57aade). Else it takes 0xcc1b4cc, divides it by 32767.0 (0x70ae48)
+    and by 6.0 (0x70aea8), stores it in the next of six floats at
+    0xcc1b6d0..0xcc1b6e4 (the counter 0xd5ec514, modulo 6) and returns their
+    sum: the mean of the last six draws' values, a full-scale signal
+    reading 1.0. VERIFIED (the instructions). It runs once for each
+    paint of the item, not for each capture batch. INFERRED.
+  - 0xcc1b4cc is set by the capture callback (0x4ed120, registered by
+    0x4ed330): zeroed at the entry, then, for a 16-bit buffer, the sum of
+    `|sample * scaler|` (the scaler at 0x71fb08, section 4) over the batch
+    divided by its sample count. VERIFIED (the instructions,
+    0x4ed12a..0x4ed19b). It does not look at the talk key. INFERRED (no
+    key read in the function; whether the capture runs while the talk key is
+    up rests on the per-frame call at 0x46c9bd, 0x57aeb0, which the client
+    frame makes whenever 0xd5ec510 is set).
+  - The draw (0x5443a0): with a level above 0 and `level * w - 4.0`
+    (0x70b340) above 0, a white bar at `x + 2.0`, `y + 2.0`, width
+    `level * w - 4.0`, height `h - 4.0`; then four 1.0 lines of the frame:
+    the top (`x`, `y`, `w`), the bottom (`y + h - 1.0`), the left (`y + 1.0`,
+    height `h - 2.0`) and the right (`x + w - 1.0`). The colour is the
+    static white at 0x6b4518 (1, 1, 1, 1), the material 0xcaf06f0 (the
+    white pixel, INFERRED). VERIFIED (the instructions, 0x5443d3..0x5445cf;
+    the 1.0 and 2.0 doubles at 0x70ad08, 0x70ae50).
+  - The text above it is the item before it, `@MENU_VOICECHAT_LEVEL_INDICATOR`
+    (rect -84 120 180 20). VERIFIED (zone walk).
+
 ## 5. vcod
 
 - vcod-server relays as section 3 (`cod4/voice.rs`), its dvars registered
@@ -226,6 +297,20 @@ At the default 180 the angle test always passes, so Eavesdrop is a
   sets `winvoice_mic_reclevel`, and the capture applies the level and the
   scaler as CoD2's does (section 4, `voice::mic_gain`).
 - The compass pings a talking friendly (`cod4_radar`, cod4-hud.md 15.9).
-- Not done: `winvoice_mic_mute` (the mixer's playback mute,
-  registered and unread), `winvoice_save_voice` (`voice.wav`), and the
-  options page's record level meter.
+- `winvoice_mic_mute` stays registered and unread: it drives the mixer's
+  speaker monitor of the microphone (4.1) and vcod plays none.
+- `winvoice_save_voice` appends each heard, unmuted packet's decoded frame
+  to `voice.wav` (`voice::append_voice`, the test
+  `save_voice_appends_raw_samples_to_voice_wav`), headerless as 4.1 reads
+  retail's. It lands in the base directory of the client's search path
+  rather than the working directory, through `vcod_common::game_dir::confined`.
+  CoD4 only; CoD2's client passes no directory. INFERRED (it follows 4.1).
+- The voice page's record level meter (`voice_meter`): the six-draw mean
+  of the batch's mean absolute sample, drawn as 4.1 reads it. The
+  microphone opens on the first paint of the item and closes after 500 ms
+  without one (retail records from init). The level comes through
+  `winvoice_mic_reclevel` and `winvoice_mic_scaler` (`MicGain`), where
+  retail's level is the mixer's. The bar and frame rects are tested
+  (`the_bar_starts_past_the_frame_and_stops_at_the_level`); how the meter
+  looks and moves against a real microphone is a pixel check still
+  pending.

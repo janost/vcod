@@ -207,8 +207,8 @@ pub struct Bot {
     pub team_play: bool,
     /// With [`Self::team_play`], keeps apart from its team on an objective
     /// level: its own route noise, a walk behind a teammate just ahead,
-    /// a staggered round start and the S&D attack's flank and rear
-    /// ([`team::Squad`], bot-objectives.md 9.1); off, it moves as before
+    /// a staggered round start and the S&D and `re` attack's flank and
+    /// rear ([`team::Squad`], bot-objectives.md 9.1); off, it moves as before
     /// (a `bot_match` measuring arm).
     pub squad: bool,
     /// With [`Self::team_play`], plays its objective by posts: guards of

@@ -98,6 +98,7 @@ fn cod4_live_voice_reaches_the_team_and_voice_global_the_enemy() {
                 ),
                 quality,
                 mic: Default::default(),
+                save: None,
             };
             if real {
                 chat.frame(&mut t.voice, &f, None);

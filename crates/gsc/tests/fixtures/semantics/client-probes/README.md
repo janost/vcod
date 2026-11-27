@@ -14,6 +14,10 @@ both. Their output is quoted in whatever
 research doc the measurement belongs to, or committed as a fixture a test in
 `crates/server` reads; neither is paired against `retail-captures.txt`.
 
+`probe_switch_dev0`, `probe_switch_late` and `probe_switch_scope` need no client: they run
+at `developer 0` (`PRE_MAP_ARGS='+set developer 0'`, or `+set developer 0` in the
+CoD2 script) and differ per build, so they cannot be a `retail-captures.txt` section.
+
 ## Running one
 
 Two shells. The first boots the retail server with the probe installed as a
