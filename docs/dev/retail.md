@@ -30,6 +30,17 @@ them on vcod.
 - `tools/run_probe_cod2_gsc.sh <probe.gsc> [map]` is `run_probe.sh` for
   CoD2: it installs a gametype, boots `cod2_lnxded` inside `unshare -rn`
   with no client and prints its `PROBE` lines (`cod2-gsc-diff.md` 7).
+- `tools/run_probe_cod4_gsc.sh <probe.gsc> [map]` is the same for CoD4 1.7
+  (`mp_crash` by default). It reads `COD4_DIR` and `COD4_LNXDED_DIR` (the
+  directory holding `cod4_lnxded` and its two libraries), installs the probe
+  as `maps/mp/gametypes/war.gsc` in an `fs_game` iwd under `COD4_HOME`
+  (default `tmp/cod4-gsc`) and links the install's `main/` and `zone/` into a
+  scratch basepath. A CoD1 probe runs unchanged: the runner drops its
+  `SetupCallbacks()` line and sets `level.script`. `DEVELOPER` and
+  `PRE_MAP_ARGS='+set developer 0'` set the cvar (it must come before the
+  map); a runtime error shows as `PROBE_FATAL` only at `developer 1`, below
+  it the engine logs a stack trace and runs on. `PROBE_UNTIL`, `PORT` (28975)
+  and `SECS` work as for CoD2.
 - Run the retail CoD2 and CoD4 Linux servers only inside `unshare -rn`.
   A new namespace's loopback is down: run `ip link set lo up` inside it
   before a probe client joins `127.0.0.1`.
