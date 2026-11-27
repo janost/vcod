@@ -311,6 +311,9 @@ pub struct Cod4Session {
     /// The map's dynamic entities, made with the world and again by a
     /// new gamestate or `CG_MapRestart` (cod4-world.md 13).
     pub dynents: Option<vcod_cod4::dynent::DynEnts>,
+    /// msvcrt `rand()`'s one stream, which the gunner's view jitter and
+    /// world 0's `physicsJitter` pushes draw on (cod4-gsc.md 3.6.7).
+    pub crt_rand: vcod_common::rng::MsvcRand,
     /// The third-person dvars the next [`Self::scene`] reads.
     pub third_person: cod4_third_person::Dvars,
 }
@@ -428,6 +431,7 @@ impl Cod4Session {
             keep_snapshots: KEEP_SNAPSHOTS,
             physics: Default::default(),
             dynents: None,
+            crt_rand: Default::default(),
             third_person: Default::default(),
         }
     }
@@ -538,11 +542,10 @@ impl Cod4Session {
     /// `CG_MapRestart` 0x44b3eb): every dynamic entity back at its def's
     /// pose and health.
     pub fn restart_dynents(&mut self) {
-        self.dynents = self.world.as_ref().map(|w| {
-            let mut d = vcod_cod4::dynent::DynEnts::new(w.dynents.clone());
-            d.pass_start_contents(|p| w.clip.point_contents(p));
-            d
-        });
+        self.dynents = self
+            .world
+            .as_ref()
+            .map(|w| vcod_cod4::dynent::DynEnts::new(w.dynents.clone()));
     }
 
     /// The prediction world, when one was handed in.

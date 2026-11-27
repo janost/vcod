@@ -14,16 +14,12 @@ use vcod_common::rng::MsvcRand;
 
 use crate::assets::Assets;
 use crate::assets::model::{XModel, XModelCollSurf};
-use crate::physics::{Body, Dvars as PhysDvars, Jitter, Preset, Shape, Solid, WorldClock};
-use crate::ragdoll::{Explosion, Sweep};
-
-/// A sweep of a sphere of the given radius from the first point to the
-/// second through the world under the given mask.
-pub type MaskedTrace<'a> = dyn FnMut(Vec3, Vec3, f32, u32) -> Sweep + 'a;
-
-/// The world's solids round a box under the given mask
-/// ([`crate::physics::clip_solids_masked`]).
-pub type MaskedSolids<'a> = dyn FnMut(Vec3, Vec3, u32) -> Vec<Solid> + 'a;
+use crate::ode::collide::{self, Impact, JitterRegion};
+use crate::ode::math::M3;
+use crate::ode::obj::{PhysModel, Presets};
+use crate::ode::phys::{self, Clip, PhysWorld, WorldId};
+use crate::ode::world::{BodyId, PhysDvars};
+use crate::ragdoll::Explosion;
 
 /// `DynEntityType`s (the table at 0x6bdb70): `clutter` and `destruct`.
 pub const CLUTTER: u32 = 1;
@@ -51,9 +47,6 @@ const MELEE_OFFSETS: [[f32; 2]; 5] = [
 /// The jitter's candidate box half size over its radius (the double at
 /// 0x70ae78, a float's `sqrt 2`).
 const JITTER_REACH: f64 = 1.414_213_538_169_860_8;
-/// The regions a physics world holds at once (0x5a7738); a sixth takes
-/// the last one's place (0x5a773d).
-const JITTER_MAX: usize = 5;
 
 /// One step of the shared MSVC LCG on a bare state; returns the new state.
 fn step_state(state: &mut u32) -> u32 {
@@ -95,11 +88,18 @@ pub struct DynDef {
     pub health: i32,
     /// `contents` (+0x5c).
     pub contents: u32,
-    /// The shape and `physPreset` (+0x30) its body is made with; `None`
+    /// The model and `physPreset` (+0x30) its body is made with; `None`
     /// when it names no preset any zone holds.
-    pub body: Option<(Arc<Shape>, Preset)>,
-    /// The preset's `explosiveForceScale` (+0x18).
-    pub explosive_force_scale: f32,
+    pub body: Option<Arc<PhysModel>>,
+}
+
+impl DynDef {
+    /// The preset's `explosiveForceScale` (+0x18), 0 with none.
+    pub fn explosive_force_scale(&self) -> f32 {
+        self.body
+            .as_ref()
+            .map_or(0.0, |m| m.preset.explosive_force_scale)
+    }
 }
 
 /// Every dynamic entity of `map`'s clip map, list 0 (the model ones): the
@@ -120,20 +120,7 @@ pub fn defs(map: &Assets, refs: &[&Assets]) -> Vec<DynDef> {
         );
     }
     let zones: Vec<&Assets> = std::iter::once(map).chain(refs.iter().copied()).collect();
-    let mut presets: HashMap<String, (Preset, f32)> = HashMap::new();
-    for z in &zones {
-        for p in z.phys_presets.iter().filter(|p| !p.name.starts_with(',')) {
-            let efs = p
-                .raw
-                .get(24..28)
-                .map_or(0.0, |b| f32::from_le_bytes(b.try_into().unwrap()));
-            if let Some(v) = Preset::from_raw(&p.raw) {
-                presets
-                    .entry(p.name.to_ascii_lowercase())
-                    .or_insert((v, efs));
-            }
-        }
-    }
+    let presets = Presets::of(&zones);
     // A zone holding only a stub (`,name`) of a model leaves its body to
     // the next.
     let whole = |name: &str| -> Option<&XModel> {
@@ -141,7 +128,7 @@ pub fn defs(map: &Assets, refs: &[&Assets]) -> Vec<DynDef> {
             .iter()
             .find_map(|z| z.xmodels.iter().find(|x| x.name == name))
     };
-    let mut shapes: HashMap<String, Arc<Shape>> = HashMap::new();
+    let mut models: HashMap<(String, String), Arc<PhysModel>> = HashMap::new();
     let mut colls: HashMap<String, Option<Arc<Vec<XModelCollSurf>>>> = HashMap::new();
     let mut out = Vec::new();
     for d in &clip.dyn_ents[0] {
@@ -156,14 +143,17 @@ pub fn defs(map: &Assets, refs: &[&Assets]) -> Vec<DynDef> {
             log::debug!("cod4: dynent model {name}: no zone holds it");
             continue;
         };
-        let preset = d.preset.and_then(|p| {
-            let n = map.phys_presets[p.index()].name.trim_start_matches(',');
-            presets.get(&n.to_ascii_lowercase()).copied()
+        let body = d.preset.and_then(|p| {
+            let pname = &map.phys_presets[p.index()].name;
+            let preset = presets.get(pname)?;
+            let key = (name.clone(), pname.to_ascii_lowercase());
+            Some(
+                models
+                    .entry(key)
+                    .or_insert_with(|| Arc::new(PhysModel::new(x, *preset)))
+                    .clone(),
+            )
         });
-        let shape = shapes
-            .entry(name.clone())
-            .or_insert_with(|| Arc::new(Shape::of_dynent(x)))
-            .clone();
         let coll = colls
             .entry(name.clone())
             .or_insert_with(|| (x.coll_lod >= 0).then(|| Arc::new(x.coll.clone())))
@@ -178,8 +168,7 @@ pub fn defs(map: &Assets, refs: &[&Assets]) -> Vec<DynDef> {
             destroy_fx: d.destroy_fx.map(|i| map.fx[i.index()].name.clone()),
             health: u(0x34) as i32,
             contents: u(0x5c),
-            body: preset.map(|(p, _)| (shape, p)),
-            explosive_force_scale: preset.map_or(0.0, |(_, e)| e),
+            body,
         });
     }
     out
@@ -248,12 +237,9 @@ pub struct DynEnt {
     /// Client flag 2: it draws.
     pub drawn: bool,
     pub health: i32,
-    /// Its body, made on its first push and dropped once it sleeps
-    /// (0x48d176).
-    pub body: Option<Body>,
-    /// The world contents its body passes: those its def's origin lies in
-    /// ([`DynEnts::pass_start_contents`]).
-    pub pass: u32,
+    /// Its body in world 0, made on its first push and dropped once it
+    /// sleeps (0x48d176).
+    pub body: Option<BodyId>,
 }
 
 /// A dynamic entity broken: its `destroyFx` to play at its pose (0x48dec7).
@@ -275,17 +261,28 @@ pub struct Struck {
     pub surface_flags: u32,
 }
 
-/// A map's dynamic entities.
+/// A map's dynamic entities and physics world 0, which steps their bodies.
 pub struct DynEnts {
     pub defs: Arc<Vec<DynDef>>,
     pub ents: Vec<DynEnt>,
     pub dvars: Dvars,
     pub phys: PhysDvars,
+    pub contact: collide::Dvars,
     /// The blast walk's random state (0x7209a8), which retail shares with
     /// other callers.
     pub rand: u32,
-    /// Physics world 0's clock.
-    pub clock: WorldClock,
+    pub pw: PhysWorld,
+    /// Whether world 0's clock runs ([`PhysWorld::set_time`]).
+    started: bool,
+    /// The impact sounds world 0's steps played since the owner last took
+    /// them.
+    pub impacts: Vec<Impact>,
+}
+
+/// A pose quaternion's axes (0x561100), the phys object's frame.
+fn quat_axes(q: Quat) -> M3 {
+    let m = glam::Mat3::from_quat(q);
+    [m.x_axis.into(), m.y_axis.into(), m.z_axis.into()]
 }
 
 impl DynEnts {
@@ -301,7 +298,6 @@ impl DynEnts {
                 drawn: true,
                 health: d.health,
                 body: None,
-                pass: 0,
             })
             .collect();
         DynEnts {
@@ -309,35 +305,39 @@ impl DynEnts {
             ents,
             dvars: Dvars::default(),
             phys: PhysDvars::default(),
-            clock: WorldClock::new(0),
+            contact: collide::Dvars::default(),
             rand: 0,
+            pw: PhysWorld::new(WorldId::Dynent),
+            started: false,
+            impacts: Vec::new(),
         }
     }
 
-    /// Lets each body pass the world contents but solid its def's centre
-    /// of mass lies in (`contents` a point's): mp_crash's pots stand inside
-    /// an item clip brush over their table, in which every point of theirs
-    /// would start solid and meet nothing, so they fell through the map.
-    /// vcod's.
-    pub fn pass_start_contents(&mut self, contents: impl Fn(Vec3) -> u32) {
-        for (e, d) in self.ents.iter_mut().zip(self.defs.iter()) {
-            let com = d.body.as_ref().map_or(Vec3::ZERO, |b| b.0.com);
-            let c = contents(d.origin + d.rot * com);
-            e.pass = c & crate::ragdoll::CLIP_MASK & !vcod_common::clipmap::CONTENTS_SOLID;
+    fn start(&mut self, now: i32) {
+        if !self.started {
+            self.pw.set_time(now);
+            self.started = true;
         }
     }
 
+    /// `DynEntCl_CreatePhysObj` (0x48dca0): a body in world 0 at the pose,
+    /// at rest, with its model's collision (0x490240). Whether it has one.
     fn make_body(&mut self, i: usize, now: i32) -> bool {
         if self.ents[i].body.is_some() {
             return true;
         }
-        let Some((shape, preset)) = &self.defs[i].body else {
+        let Some(m) = self.defs[i].body.clone() else {
             return false;
         };
-        let e = &mut self.ents[i];
-        e.body = Some(Body::at(e.origin, e.rot, shape, preset, now));
-        self.clock.start(now);
-        true
+        self.start(now);
+        let e = &self.ents[i];
+        let (pos, axes) = (e.origin.to_array(), quat_axes(e.rot));
+        let id = self.pw.create_from(&m, pos, &axes, true, &self.phys);
+        if id.is_none() {
+            log::debug!("DynEntCl_CreatePhysObj: Unable to create physic object.");
+        }
+        self.ents[i].body = id;
+        id.is_some()
     }
 
     /// Squared distance from `p` to entity `i`'s cube, level for a
@@ -393,7 +393,7 @@ impl DynEnts {
             if inner_sq < d_sq {
                 scale = (d_sq.sqrt() - e.outer) * inv_band * e.scale;
             }
-            let force = self.defs[i].explosive_force_scale * scale * self.dvars.explode_force;
+            let force = self.defs[i].explosive_force_scale() * scale * self.dvars.explode_force;
             let dir = if e.impulse == Vec3::ZERO {
                 if force < self.dvars.explode_min_force {
                     continue;
@@ -415,11 +415,11 @@ impl DynEnts {
             if pushes && self.make_body(i, now) {
                 let r = Vec3::new(self.next_rand(), self.next_rand(), self.next_rand());
                 let spin = self.dvars.explode_spin_scale;
-                let msec = self.clock.step_ms;
-                let b = self.ents[i].body.as_mut().unwrap();
-                let at = b.pos + r * spin;
+                let msec = self.pw.clock.msec_step;
+                let b = self.pw.world.body_mut(self.ents[i].body.unwrap());
+                let at = Vec3::from(b.pos) + r * spin;
                 // World 0's `msecStep` (`esi` 0 into 0x5a5900 at 0x48eaa1).
-                b.push(at, dir * force, msec);
+                phys::obj_add_force(b, msec, at.into(), (dir * force).into());
             }
             if breaks {
                 let dmg = ((damage[0] - damage[1]) as f32 * scale + damage[1] as f32) as i32;
@@ -497,13 +497,13 @@ impl DynEnts {
             let scale = self.defs[i]
                 .body
                 .as_ref()
-                .map_or(0.0, |b| b.1.bullet_force_scale);
-            let dir = (end - start).normalize_or_zero();
-            let (force, phys) = (self.dvars.bullet_force, self.phys);
-            let msec = self.clock.step_ms;
-            let b = self.ents[i].body.as_mut().unwrap();
+                .map_or(0.0, |m| m.preset.bullet_force_scale);
+            let dir = phys::normalize((end - start).into()).0;
+            let force = self.dvars.bullet_force;
+            let msec = self.pw.clock.msec_step;
+            let b = self.pw.world.body_mut(self.ents[i].body.unwrap());
             // World 0 (the `push 0` into 0x5a5a20 at 0x48e34f).
-            b.launch(s.at, dir * force, scale, msec, &phys);
+            phys::obj_bullet_impact(b, msec, s.at.into(), dir, force, scale, &self.phys);
         }
         let mut broken = Vec::new();
         if breaks && damage != 0 {
@@ -541,21 +541,20 @@ impl DynEnts {
     /// body for every live entity that takes pushes and whose cube meets
     /// the box `origin +- outer sqrt 2`, unbounded in z, the nearest
     /// `dynEnt_explodeMaxEnts` of them when more do (0x48db30, 0x48ef40);
-    /// then the region held for each body's next step
-    /// (`Phys_AddJitterRegion` 0x5a7730, which also wakes the bodies
-    /// within `outer` of it, level). Its push is [`Body`]'s.
-    pub fn jitter(&mut self, j: Jitter, now: i32) {
+    /// then the region held for world 0's next step
+    /// ([`PhysWorld::add_jitter`], 0x5a7730).
+    pub fn jitter(&mut self, j: JitterRegion, now: i32) {
         if !self.dvars.active || j.outer == 0.0 {
             return;
         }
+        let o = Vec3::from(j.origin);
         let reach = (f64::from(j.outer) * JITTER_REACH) as f32;
-        let meets = |o: Vec3, r: f32| {
-            (o.x - j.origin.x).abs() <= r + reach && (o.y - j.origin.y).abs() <= r + reach
-        };
+        let meets =
+            |p: Vec3, r: f32| (p.x - o.x).abs() <= r + reach && (p.y - o.y).abs() <= r + reach;
         let mut hit: Vec<(usize, f32)> = (0..self.ents.len())
             .filter(|&i| self.ents[i].live && self.defs[i].contents & MASK != 0)
             .filter(|&i| meets(self.ents[i].origin, self.defs[i].radius))
-            .map(|i| (i, self.dist_sq(i, j.origin, true)))
+            .map(|i| (i, self.dist_sq(i, o, true)))
             .collect();
         if hit.len() > self.dvars.explode_max_ents {
             hit.sort_by(|a, b| a.1.total_cmp(&b.1));
@@ -566,15 +565,7 @@ impl DynEnts {
                 self.make_body(i, now);
             }
         }
-        for e in &mut self.ents {
-            let Some(b) = &mut e.body else { continue };
-            b.jitter_rand = step_state(&mut self.rand);
-            if b.jitter.len() == JITTER_MAX {
-                b.jitter[JITTER_MAX - 1] = j;
-            } else {
-                b.jitter.push(j);
-            }
-        }
+        self.pw.add_jitter(j);
     }
 
     /// `DynEntCl_EntityDamage` (0x48de30): `dmg` off entity `i`'s health;
@@ -588,7 +579,10 @@ impl DynEnts {
         }
         e.live = false;
         e.drawn = false;
-        e.body = None;
+        if let Some(id) = e.body.take() {
+            self.pw.destroy_body(id);
+        }
+        let e = &self.ents[i];
         // 0x48de98: neither an effect nor pieces, nothing more.
         let d = &self.defs[i];
         d.destroy_fx.as_ref()?;
@@ -601,48 +595,33 @@ impl DynEnts {
         })
     }
 
-    /// `DynEntCl_ProcessEntities` (0x48d110) and world 0's
-    /// `Phys_RunToTime` at `time`: each body stepped through `trace` (a
-    /// sweep under a mask, [`crate::physics::clip_trace_masked`]), its
-    /// entity posed where it is drawn, and one asleep dropped where it
-    /// lies.
-    pub fn advance(&mut self, time: i32, trace: &mut MaskedTrace) {
-        self.advance_in(time, trace, &mut |_, _, _| Vec::new());
-    }
-
-    /// [`Self::advance`] with each body's boxes meeting `solids` under the
-    /// same mask as its points (cod4-gsc.md 3.6.1).
-    pub fn advance_in(&mut self, time: i32, trace: &mut MaskedTrace, solids: &mut MaskedSolids) {
-        let ents = &mut self.ents;
-        let stepped = self.clock.advance(time, &self.phys, |ms, until, first, d| {
-            let mut awake = 0;
-            for e in ents.iter_mut() {
-                let Some(b) = &mut e.body else { continue };
-                let mask = crate::ragdoll::CLIP_MASK & !e.pass;
-                let mut t = |a: Vec3, b: Vec3, r: f32| trace(a, b, r, mask);
-                let mut s = |lo: Vec3, hi: Vec3| solids(lo, hi, mask);
-                if first {
-                    b.begin_frame();
-                }
-                b.step_world(ms, until, &mut t, &mut s, d);
-                awake += usize::from(!b.asleep);
-            }
-            awake
-        });
+    /// `DynEntCl_ProcessEntities` (0x48d110): each entity with a body
+    /// posed at its body's drawn state, the body dropped once it sleeps,
+    /// then world 0 run to `time` against `clip` (`Phys_RunToTime`), its
+    /// jitter drawing on `rand`, the CRT's stream.
+    pub fn advance(&mut self, time: i32, clip: &dyn Clip, rand: &mut MsvcRand) {
         for e in &mut self.ents {
-            let Some(b) = &mut e.body else { continue };
-            if stepped {
-                let mask = crate::ragdoll::CLIP_MASK & !e.pass;
-                b.end_frame(
-                    &mut |a: Vec3, b: Vec3, r: f32| trace(a, b, r, mask),
-                    &self.phys,
-                );
+            let Some(id) = e.body else { continue };
+            if let Some((origin, rot)) = self.pw.pose(id) {
+                (e.origin, e.rot) = (origin, rot);
             }
-            (e.origin, e.rot) = b.pose_quat(time);
-            if b.asleep {
+            if self.pw.asleep(id) {
+                self.pw.destroy_body(id);
                 e.body = None;
             }
         }
+        self.start(time);
+        std::mem::swap(&mut self.pw.rand, rand);
+        let (phys, contact) = (self.phys, self.contact);
+        self.pw
+            .run_to_time(time, &phys, &contact, clip, &mut |_| {});
+        std::mem::swap(&mut self.pw.rand, rand);
+        self.impacts.append(&mut self.pw.impacts);
+    }
+
+    /// World 0's `msecStep`, which a push naming world 0 spreads over.
+    pub fn msec_step(&self) -> i32 {
+        self.pw.clock.msec_step
     }
 
     /// How many bodies are awake.
@@ -663,11 +642,29 @@ impl DynEnts {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ode::collide::tests::{Brushes, cuboid};
+    use crate::ode::obj::{ObjPreset, Preset};
 
     /// A clutter can at `at`: a 4-unit box, 1 unit of mass, explosive
     /// force scale 0.01 (125 at full force).
     fn can(at: Vec3) -> DynDef {
-        let shape = Shape::of_bounds(Vec3::splat(-2.0), Vec3::splat(2.0));
+        let model = XModel {
+            name: "can".into(),
+            mins: [-2.0; 3],
+            maxs: [2.0; 3],
+            ..XModel::default()
+        };
+        let preset = Preset {
+            obj: ObjPreset {
+                sound: 0,
+                mass: 1.0,
+                bounce: 0.1,
+                friction: 0.5,
+                cylinder: false,
+            },
+            bullet_force_scale: 0.5,
+            explosive_force_scale: 0.01,
+        };
         DynDef {
             kind: CLUTTER,
             model: "can".into(),
@@ -678,16 +675,7 @@ mod tests {
             destroy_fx: None,
             health: 0,
             contents: 1,
-            body: Some((
-                Arc::new(shape),
-                Preset {
-                    mass: 1.0,
-                    bounce: 0.1,
-                    friction: 0.5,
-                    bullet_force_scale: 0.5,
-                },
-            )),
-            explosive_force_scale: 0.01,
+            body: Some(Arc::new(PhysModel::new(&model, preset))),
         }
     }
 
@@ -702,6 +690,19 @@ mod tests {
         }
     }
 
+    /// Entity `i`'s body.
+    fn body(d: &DynEnts, i: usize) -> &crate::ode::Body {
+        d.pw.world.body(d.ents[i].body.unwrap())
+    }
+
+    /// A floor brush, its top at z 0.
+    fn floor() -> Brushes {
+        Brushes(vec![cuboid(
+            [-1024.0, -1024.0, -32.0],
+            [1024.0, 1024.0, 0.0],
+        )])
+    }
+
     #[test]
     fn a_blast_falls_off_from_inner_to_outer_and_tips_up() {
         // 50 off the edge of a 0..200 blast: falloff 150/200 of 125.
@@ -710,12 +711,8 @@ mod tests {
         d.dvars.explode_spin_scale = 0.0;
         assert!(d.explode(&blast(200.0, 0.0), [0, 0], 0).is_empty());
         assert_eq!(d.awake(), 1, "the far can woke");
-        // Each push spent over a step of world 0's 17, whole.
-        let spent = |d: &DynEnts| {
-            let mut b = d.ents[0].body.clone().unwrap();
-            b.spend_force(0.017);
-            b.vel
-        };
+        // Each push a force at world 0's 17 ms (`Phys_ObjAddForce`).
+        let spent = |d: &DynEnts| Vec3::from(body(d, 0).facc) * 0.017;
         let v = spent(&d);
         let want = Vec3::new(1.0, 0.0, 0.5).normalize() * (125.0 * 150.0 / 200.0);
         assert!(v.distance(want) < 1e-3, "{v} {want}");
@@ -735,6 +732,7 @@ mod tests {
         let mut d = DynEnts::new(Arc::new(defs));
         d.explode(&blast(400.0, 0.0), [0, 0], 0);
         assert_eq!(d.awake(), 20);
+        assert_eq!(d.pw.bodies(), 20);
         assert!(d.ents[..20].iter().all(|e| e.body.is_some()));
         // 125 times a falloff under 40/125 pushes nothing.
         let mut d = DynEnts::new(Arc::new(vec![can(Vec3::X * 150.0)]));
@@ -761,6 +759,7 @@ mod tests {
         assert_eq!(b.len(), 1);
         assert_eq!(b[0].fx.as_deref(), Some("props/plate"));
         assert!(!d.ents[0].drawn && !d.ents[0].live && d.ents[0].body.is_none());
+        assert_eq!(d.pw.bodies(), 0, "its body went with it");
         // Gone, a third meets nothing.
         assert!(d.explode(&blast(200.0, 0.0), [120, 20], 0).is_empty());
     }
@@ -797,28 +796,6 @@ mod tests {
         }
     }
 
-    /// A floor at z 0 under the kernels' 0.125 skin.
-    fn floor(a: Vec3, b: Vec3, _r: f32, _m: u32) -> Sweep {
-        let skin = 0.125;
-        if a.z <= 0.0 {
-            return Sweep {
-                fraction: 0.0,
-                normal: Vec3::Z,
-                startsolid: true,
-            };
-        }
-        let f = if b.z < skin && b.z < a.z {
-            ((a.z - skin) / (a.z - b.z)).clamp(0.0, 1.0)
-        } else {
-            1.0
-        };
-        Sweep {
-            fraction: f,
-            normal: Vec3::Z,
-            startsolid: false,
-        }
-    }
-
     #[test]
     fn a_swing_tries_its_five_rays_until_one_meets_a_prop() {
         let view = [Vec3::X, Vec3::Y, Vec3::Z];
@@ -841,92 +818,58 @@ mod tests {
         let (s, _) = d.melee(Vec3::ZERO, view, 50, 0);
         assert!(s.is_some());
         assert_eq!(d.ents[0].health, 50);
-        let f = d.ents[0].body.as_ref().unwrap().force();
-        assert!(f.x > 0.0, "{f}");
+        assert!(body(&d, 0).facc[0] > 0.0, "{:?}", body(&d, 0).facc);
     }
 
     #[test]
     fn a_jitter_lifts_the_props_on_the_ground_in_its_radius() {
-        // On the floor, its bottom within the kernels' skin of it.
-        let near = can(Vec3::new(10.0, 0.0, 2.05));
-        let far = can(Vec3::new(500.0, 0.0, 2.05));
+        // On the floor, its bottom half a unit into it.
+        let near = can(Vec3::new(10.0, 0.0, 1.5));
+        let far = can(Vec3::new(500.0, 0.0, 1.5));
         let mut d = DynEnts::new(Arc::new(vec![near, far]));
-        let j = Jitter {
-            origin: Vec3::ZERO,
-            inner: 0.0,
-            outer: 100.0,
-            min: 1.0,
-            max: 1.0,
-        };
-        // The floor as a brush too, which the can's box meets: the jitter
-        // pushes on the box's contacts (cod4-world.md 13.8).
-        let slab = [
-            (Vec3::Z, 0.0),
-            (-Vec3::Z, 16.0),
-            (Vec3::X, 1000.0),
-            (-Vec3::X, 1000.0),
-            (Vec3::Y, 1000.0),
-            (-Vec3::Y, 1000.0),
-        ];
-        let mut ground = |_: Vec3, _: Vec3, _: u32| vec![Solid::brush(&slab).unwrap()];
+        let j = JitterRegion::new([0.0; 3], 0.0, 100.0, 1.0, 1.0);
+        let mut rand = MsvcRand::default();
         d.jitter(j, 0);
         assert!(d.ents[0].body.is_some(), "a body for the near can");
         assert!(d.ents[1].body.is_none(), "none past the box");
-        d.advance_in(17, &mut floor, &mut ground);
-        // Each contact of a 1-unit mass under the region takes about
-        // (1 - 1/200^3) * 1000 / 17 straight up, the falloff 0.9 at 10 of
-        // 100: the can leaves the floor.
-        let b = d.ents[0].body.as_ref().unwrap();
-        assert!(b.vel.z > 50.0, "{}", b.vel);
-        assert!(b.jitter.is_empty(), "the region lasts one step");
+        d.advance(17, &floor(), &mut rand);
+        // Each floor contact of a 1-unit mass takes about
+        // (1 - 1/200^3) 1000 / 17 straight up, the falloff 0.9 at 10 of
+        // 100, as a force at 17 ms: the can leaves the floor.
+        let v = body(&d, 0).lvel;
+        assert!(v[2] > 50.0, "{v:?}");
+        assert!(d.pw.jitter.is_empty(), "the region lasts one step");
+        assert_ne!(rand, MsvcRand::default(), "the push drew on the stream");
         // An outer radius of 0 does nothing.
-        let mut d = DynEnts::new(Arc::new(vec![can(Vec3::new(10.0, 0.0, 2.2))]));
-        d.jitter(Jitter { outer: 0.0, ..j }, 0);
+        let mut d = DynEnts::new(Arc::new(vec![can(Vec3::new(10.0, 0.0, 1.5))]));
+        d.jitter(JitterRegion { outer: 0.0, ..j }, 0);
         assert_eq!(d.awake(), 0);
         // Without the region the can only settles.
-        let mut d = DynEnts::new(Arc::new(vec![can(Vec3::new(10.0, 0.0, 2.2))]));
+        let mut d = DynEnts::new(Arc::new(vec![can(Vec3::new(10.0, 0.0, 1.5))]));
         d.make_body(0, 0);
-        d.advance_in(17, &mut floor, &mut ground);
-        assert!(d.ents[0].body.as_ref().unwrap().vel.z <= 0.0);
+        d.advance(17, &floor(), &mut MsvcRand::default());
+        assert!(body(&d, 0).lvel[2] < 25.0, "{:?}", body(&d, 0).lvel);
     }
 
     #[test]
     fn a_body_that_comes_to_rest_is_dropped_where_it_lies() {
-        let mut d = DynEnts::new(Arc::new(vec![can(Vec3::Z * 2.2)]));
+        let mut d = DynEnts::new(Arc::new(vec![can(Vec3::Z * 2.0)]));
         d.dvars.explode_spin_scale = 0.0;
         let mut e = blast(200.0, 0.0);
-        e.origin = Vec3::new(-30.0, 0.0, 2.2);
+        e.origin = Vec3::new(-30.0, 0.0, 2.0);
         d.explode(&e, [0, 0], 0);
-        // A floor at z 0.
-        let mut floor = |a: Vec3, b: Vec3, _r: f32, _m: u32| {
-            let skin = 0.125;
-            if a.z <= 0.0 {
-                return Sweep {
-                    fraction: 0.0,
-                    normal: Vec3::Z,
-                    startsolid: true,
-                };
-            }
-            let f = if b.z < skin && b.z < a.z {
-                ((a.z - skin) / (a.z - b.z)).clamp(0.0, 1.0)
-            } else {
-                1.0
-            };
-            Sweep {
-                fraction: f,
-                normal: Vec3::Z,
-                startsolid: false,
-            }
-        };
+        let (clip, mut rand) = (floor(), MsvcRand::default());
         let mut t = 0;
         while d.awake() > 0 && t < 10_000 {
             t += 16;
-            d.advance(t, &mut floor);
+            d.advance(t, &clip, &mut rand);
         }
         assert_eq!(d.awake(), 0, "awake at {t}");
+        assert_eq!(d.pw.bodies(), 0);
         let e = &d.ents[0];
         assert!(e.origin.x > 10.0, "{}", e.origin);
-        assert!((e.origin.z - 2.1).abs() < 0.5, "{}", e.origin);
+        // `phys_csl` lets it sink about a unit.
+        assert!((0.8..2.0).contains(&e.origin.z), "{}", e.origin);
         assert!(e.drawn && e.live);
     }
 }
