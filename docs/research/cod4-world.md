@@ -2103,8 +2103,10 @@ with `objdump`; `vcod_cod4::dynent` is vcod's.
   and 0x5a6d50 runs the world to the time is INFERRED (3.6's names).
   World 0's `msecStep` follows 3.6's rule, 17 to 67 ms by its bodies
   awake (cod4-gsc.md 3.6).
-  vcod's `DynEnts::advance_in` steps world 0's bodies together on its
-  clock (`physics::WorldClock`).
+  vcod's `DynEnts::advance` does the same in that order: the pose
+  (`PhysWorld::pose`), the drop, then world 0 run to the drawn time
+  (`PhysWorld::run_to_time`, cod4-gsc.md 3.6.7). The relink is not
+  ported: the walks read the pose directly.
 
 vcod: `dynent::defs` reads list 0 through the map zone and `common_mp`;
 `Cod4World::dynents` holds them; `Cod4Session::dynents` is the state,
@@ -2259,20 +2261,25 @@ nothing. VERIFIED (13.1's census).
   `cod4_live_fast_restart_puts_the_dynents_back`).
 - Not ported: the rest of `CG_MapRestart` (0x44b350); vcod resets only
   the dynamic entities on `n` and `B`. INFERRED (the code).
-- The body is cod4-gsc.md 3.6's solver, not ODE, at a fixed 17 ms step.
-  mp_crash's pots stand inside an item clip brush (contents 0x400) over
-  their table; every point of theirs starts solid, so the solver met
-  nothing and they fell through the map. A body now passes the world
-  contents but solid its def's centre of mass lies in: 9 of mp_crash's
-  516 pass some, and no centre lies in solid. vcod's. VERIFIED
-  (`dynent_census`, ours).
-- A body's boxes meet the world's brushes and triangles as a launched
-  part's do (cod4-gsc.md 3.6.1), under the same mask as its points
-  (`DynEnts::advance_in`). vcod's.
+- The body is world 0 of the ODE port (cod4-gsc.md 3.6.3 to 3.6.7):
+  `DynEntCl_CreatePhysObj`'s body and collision
+  (`PhysWorld::create_from`), the blast's `Phys_ObjAddForce` and the
+  round's `Phys_ObjBulletImpact` at world 0's `msecStep`, the jitter's
+  region (`PhysWorld::add_jitter`), every geom meeting the world under
+  0x2806c91, and the impact sounds. VERIFIED (the code against 13.2 to
+  13.4, 13.8).
+- mp_crash's pots stand inside an item clip brush (contents 0x400, in
+  0x2806c91) over their table. vcod's old solver met nothing from inside
+  it, so they fell through the map, and it let a body pass the contents
+  its def's centre lay in. That rule is gone: retail has none. On the
+  port the 9 props whose centre starts in clip, each jolted alone,
+  settle within 10 s, none more than 64 units down
+  (`dynent_census::mp_crashs_props_started_in_clip_wake_and_settle`).
+  VERIFIED (the run, ours). Where retail leaves them is not captured.
 - Ported since: the walk's legs as 13.4 gives them (the first only on a
   contact, then each entry the walk plays, `cod4_fx::BulletHit::dyn_legs`),
   the swing (13.9, `DynEnts::melee`) and `physicsJitter` (13.8,
-  `DynEnts::jitter`, `physics::Body`'s contact pushes) on the client and
+  `DynEnts::jitter`, world 0's contact pass) on the client and
   its builtin on vcod-server. VERIFIED (the code against 13.4, 13.8 and
   13.9; `dynent::tests`, `cod4_fx::tests::the_penetration_walk_holds_on_mp_crash`,
   `hardpoint_tests::physics_launch_and_the_explosion_sphere_go_out`).
@@ -2332,16 +2339,12 @@ nothing. VERIFIED (13.1's census).
   such factor when the step is `msecStep` long. VERIFIED (the code; the x
   and y the double 0 at 0x70adf0 times it). The SP call above lifts a light prop 26 to 53
   units/s per contact at 17 ms. INFERRED (the formula).
-- vcod: `DynEnts::jitter` makes the bodies and hands each body the region
-  for its next step; `physics::Body` pushes in its contact pass, on each
-  contact a geom keeps (after 0x5a2320's cut on five or more) with a
-  normal z of 0.7 or more, by the formula, its random draws off a seed of
-  vcod's, `msecStep` the world's, the force spent over the step it is
-  collided in (cod4-gsc.md 3.6, 3.6.1). The contacts
-  are those vcod's box and cylinder colliders give, ODE's through the
-  game's collider on 1.7; a brush with sides, which has no collider in
-  vcod, pushes on its points. vcod's. `physicsJitter` on vcod-server
-  sends retail's words. VERIFIED (the tests above).
+- vcod: `DynEnts::jitter` makes the bodies and hands world 0 the region
+  (`PhysWorld::add_jitter`, 0x5a7730's wake included); world 0's contact
+  pass pushes as 0x5a23e0 does (`collide::Jitter`, cod4-gsc.md 3.6.7),
+  its draws off the session's CRT stream (`Cod4Session::crt_rand`).
+  `physicsJitter` on vcod-server sends retail's words. VERIFIED (the
+  code; `dynent::tests`, `part_edges::a_crate_flat_on_the_floor_takes_a_jitter_at_its_kept_contacts`).
 
 ### 13.9 The knife's swing
 

@@ -205,7 +205,7 @@ impl Cod4Session {
         let render_time = time;
         // World 1 steps to the drawn time before the parts are placed.
         if let Some(w) = &self.world {
-            self.physics.advance(w, render_time);
+            self.physics.advance(w, render_time, &mut self.crt_rand);
         }
         let mut entities = Vec::new();
         for e in &new.entities {
@@ -670,9 +670,7 @@ impl Cod4Session {
         // World 0 steps to the drawn time (`DynEntCl_ProcessEntities`).
         let mut dynents = Vec::new();
         if let (Some(d), Some(w)) = (&mut self.dynents, &self.world) {
-            let mut trace = vcod_cod4::physics::clip_trace_masked(&w.clip);
-            let mut solids = vcod_cod4::physics::clip_solids_masked(&w.clip);
-            d.advance_in(render_time, &mut trace, &mut solids);
+            d.advance(render_time, &*w.clip, &mut self.crt_rand);
             dynents.extend(
                 d.ents
                     .iter()

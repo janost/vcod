@@ -281,6 +281,19 @@ impl Cod4Players {
         })
     }
 
+    /// The bodies world 2 holds.
+    pub fn ragdoll_bodies(&self) -> usize {
+        self.ragdolls.as_ref().map_or(0, |(_, r)| r.body_count())
+    }
+
+    /// The bodies worlds 0 and 1 hold, which world 2's share of the one
+    /// body pool counts.
+    pub fn set_ragdoll_others(&mut self, n: usize) {
+        if let Some((_, r)) = &mut self.ragdolls {
+            r.set_others(n);
+        }
+    }
+
     /// `Ragdoll_Update` once a frame, before the bodies pose: the pool made
     /// for the level's def and clip map (anew when either changes) and run
     /// `frametime_ms` on. With no world or `ragdoll_enable` off every slot

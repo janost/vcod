@@ -72,15 +72,6 @@ pub struct StaticModel {
     pub surfs: Arc<Vec<XModelCollSurf>>,
 }
 
-/// The world's solids near a box ([`ClipMap::world_solids`]).
-#[derive(Clone, Debug, Default)]
-pub struct WorldSolids {
-    /// Each brush's clip planes, `normal . p <= dist` inside.
-    pub brushes: Vec<Vec<(Vec3, f32)>>,
-    /// Triangles, their front `(c - a) x (b - a)`.
-    pub tris: Vec<[Vec3; 3]>,
-}
-
 /// The world's clip map: model 0 in [`world`](Self::world), the
 /// submodels after it, the static models beside.
 #[derive(Clone, Debug)]
@@ -203,110 +194,6 @@ impl ClipMap {
             .iter()
             .map(|&b| self.brush_planes(b as usize))
             .collect()
-    }
-
-    /// What the fx world's world collider (iw3mp.exe 0x5a8110) gathers for
-    /// a geom whose box is `lo..hi`: the leaves the box touches, of each
-    /// the brushes under `mask` whose bounds meet the box, as their clip
-    /// planes (axial first, `normal . p <= dist` inside), and the
-    /// triangles of the AABB tree leaves the box meets, each once
-    /// (cod4-gsc.md 3.6.1).
-    pub fn world_solids(&self, lo: Vec3, hi: Vec3, mask: u32) -> WorldSolids {
-        let w = &self.world;
-        let meets = |a: Vec3, b: Vec3| (0..3).all(|k| a[k] <= hi[k] && lo[k] <= b[k]);
-        let mut brushes: Vec<u16> = Vec::new();
-        let mut tris: Vec<usize> = Vec::new();
-        for l in w.box_leafs(lo, hi) {
-            let leaf = w.leafs[l];
-            if leaf.brush_contents & mask != 0
-                && leaf.brush_node != 0
-                && meets(leaf.mins, leaf.maxs)
-            {
-                let mut stack = vec![leaf.brush_node as usize];
-                while let Some(n) = stack.pop() {
-                    let node = w.brush_nodes[n];
-                    if node.contents() & mask == 0 {
-                        continue;
-                    }
-                    match node {
-                        BrushNode::Leaf { first, count, .. } => {
-                            brushes.extend(
-                                w.leaf_brush_list[first as usize..][..count as usize]
-                                    .iter()
-                                    .filter(|&&b| {
-                                        let b = &w.brushes[b as usize];
-                                        b.contents & mask != 0 && meets(b.mins, b.maxs)
-                                    }),
-                            );
-                        }
-                        BrushNode::Split {
-                            axis,
-                            dist,
-                            straddlers,
-                            children,
-                            ..
-                        } => {
-                            if straddlers {
-                                stack.push(n + 1);
-                            }
-                            let k = axis as usize;
-                            if lo[k] <= dist {
-                                stack.push(n + children[1] as usize);
-                            }
-                            if dist <= hi[k] {
-                                stack.push(n + children[0] as usize);
-                            }
-                        }
-                    }
-                }
-            }
-            let Some(m) = &w.indexed else { continue };
-            if leaf.terrain_contents & mask == 0 {
-                continue;
-            }
-            let first = leaf.first_aabb as usize;
-            for root in first..first + leaf.aabb_count as usize {
-                let material = w.aabbs[root].material as usize;
-                if w.materials
-                    .get(material)
-                    .is_none_or(|&(_, c)| c & mask == 0)
-                {
-                    continue;
-                }
-                let mut stack = vec![root];
-                while let Some(t) = stack.pop() {
-                    let node = w.aabbs[t];
-                    if !meets(node.origin - node.half_size, node.origin + node.half_size) {
-                        continue;
-                    }
-                    if node.child_count > 0 {
-                        let first = node.child_or_partition as usize;
-                        stack.extend(first..first + usize::from(node.child_count));
-                        continue;
-                    }
-                    let p = w.partitions[node.child_or_partition as usize];
-                    let first = p.first_tri as usize;
-                    tris.extend(
-                        (first..first + usize::from(p.tri_count)).filter(|&i| i < m.tris.len()),
-                    );
-                }
-            }
-        }
-        brushes.sort_unstable();
-        brushes.dedup();
-        tris.sort_unstable();
-        tris.dedup();
-        let indexed = w.indexed.as_ref();
-        WorldSolids {
-            brushes: brushes
-                .iter()
-                .map(|&b| self.brush_planes(b as usize))
-                .collect(),
-            tris: tris
-                .iter()
-                .filter_map(|&i| indexed.map(|m| m.tris[i].map(|v| m.verts[usize::from(v)])))
-                .collect(),
-        }
     }
 
     /// Brush `b`'s clip planes `(normal, dist)`, the six axial ones first.

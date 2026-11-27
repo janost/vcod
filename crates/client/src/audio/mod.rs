@@ -783,6 +783,12 @@ impl AudioSystem {
         }
     }
 
+    /// Whether the zones' table holds `alias`, whatever the map: what
+    /// CoD4's impact sound handles look up (cod4-gsc.md 3.6.7).
+    pub fn has_alias(&self, alias: &str) -> bool {
+        self.aliases_all.get(alias).is_some()
+    }
+
     pub fn set_listener(
         &mut self,
         pos: Vec3,

@@ -287,10 +287,6 @@ pub struct Sweep {
     pub startsolid: bool,
 }
 
-/// A sweep of a sphere of the given radius from the first point to the
-/// second through the world (a zero radius is a point).
-pub type Trace<'a> = dyn FnMut(Vec3, Vec3, f32) -> Sweep + 'a;
-
 /// One blast's push on the ragdolls: an `EV_*_EXPLODE` or a script
 /// `physicsExplosion*` (cod4-player-anims.md 10.1).
 #[derive(Clone, Copy, Debug, PartialEq)]

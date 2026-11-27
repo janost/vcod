@@ -7,7 +7,7 @@
 
 use glam::Vec3;
 use vcod_cod4::dynent::{Broken, DynEnts, Struck};
-use vcod_cod4::physics::Jitter;
+use vcod_cod4::ode::collide::JitterRegion;
 
 use super::cod4::{ET_PLAYER, Fired, ent_f32, ent_u32, weapon_name};
 use super::cod4_predict::Cod4World;
@@ -104,13 +104,8 @@ pub fn on_fired(
                         .as_ref()
                         .map_or(0.0, |e| ent_f32(e, &format!("lerp.u.anonymous.data[{k}]")))
                 };
-                let j = Jitter {
-                    origin: f.origin,
-                    inner: word(0),
-                    outer: f.parm as f32,
-                    min: word(1),
-                    max: word(2),
-                };
+                let j =
+                    JitterRegion::new(f.origin.into(), word(0), f.parm as f32, word(1), word(2));
                 d.jitter(j, now);
             }
             _ => {}

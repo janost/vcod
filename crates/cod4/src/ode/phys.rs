@@ -230,6 +230,53 @@ impl PhysWorld {
         }
     }
 
+    /// The bodies the world holds, which count against the others'
+    /// [`MAX_BODIES`].
+    pub fn bodies(&self) -> usize {
+        self.world.bodies().len()
+    }
+
+    /// Whether the body sleeps (ODE's disabled bit).
+    pub fn asleep(&self, id: BodyId) -> bool {
+        self.world.body(id).flags & DISABLED != 0
+    }
+
+    /// The clock at `now` with nothing owed. Retail runs every world each
+    /// frame from the map's load; an owner that starts later starts here.
+    pub fn set_time(&mut self, now: i32) {
+        let c = &mut self.clock;
+        (c.last, c.now, c.frac) = (now, now, 1.0);
+    }
+
+    /// `Phys_ObjGetInterpolatedState` (0x5a6ec0) as the draw takes it: the
+    /// model's origin and turn lerped by `timeNowLerpFrac` from where the
+    /// last frame's steps began to the body now, the origins straight and
+    /// the quaternions normalized, as `ragdoll::pool`'s state 4 reads it.
+    pub fn pose(&self, id: BodyId) -> Option<(Vec3, glam::Quat)> {
+        let o = self.obj(id)?;
+        let b = self.world.body(id);
+        let a = axes_of(&b.r);
+        let o0 = Vec3::from(crate::ragdoll::iw::offset(o.prev.0, &o.prev.1, o.offset));
+        let o1 = Vec3::from(crate::ragdoll::iw::offset(b.pos, &a, o.offset));
+        let quat = |m: &M3| {
+            glam::Quat::from_mat3(&glam::Mat3::from_cols(
+                m[0].into(),
+                m[1].into(),
+                m[2].into(),
+            ))
+        };
+        let (q0, mut q1) = (quat(&o.prev.1), quat(&a));
+        if q0.dot(q1) < 0.0 {
+            q1 = -q1;
+        }
+        let f = self.clock.frac;
+        let q = glam::Quat::from_vec4(
+            glam::Vec4::from(q0) + (glam::Vec4::from(q1) - glam::Vec4::from(q0)) * f,
+        )
+        .normalize();
+        Some((o0 + (o1 - o0) * f, q))
+    }
+
     pub fn obj(&self, id: BodyId) -> Option<&PhysObj> {
         self.objs.get(id.0 as usize)?.as_ref()
     }
@@ -600,7 +647,7 @@ pub(crate) fn fmax(a: f32, b: f32) -> f32 {
 
 /// 0x4076d0: `v` over its stored length (by 1 when that is not over 0),
 /// and the length.
-pub(crate) fn normalize(v: V3) -> (V3, f32) {
+pub fn normalize(v: V3) -> (V3, f32) {
     let l2 = ((w(v[0]) * w(v[0]) + w(v[1]) * w(v[1])) + w(v[2]) * w(v[2])) as f32;
     let l = w(l2).sqrt() as f32;
     let d = if -l >= 0.0 { 1.0 } else { l };

@@ -21,7 +21,6 @@ pub mod materials;
 pub mod menuexp;
 pub mod net;
 pub mod ode;
-pub mod physics;
 pub mod pmove;
 pub mod primarylight;
 pub mod ragdoll;

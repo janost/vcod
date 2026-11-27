@@ -103,10 +103,9 @@ CoD4 1.7's formats and wire.
   3.6.4), `ode/phys.rs` the frame glue per world
   (stepping, drag, the after-frame sweep, the pushes, 10.7.1), and
   worlds 0 and 1's geoms (`ode/geom.rs`) and body creation off a model
-  and preset (`ode/obj.rs`, cod4-gsc.md 3.6.3). World 2 (the ragdolls)
-  runs on it; worlds 0 and 1 still run on `physics.rs`.
-- `physics.rs`: a `physicsLaunch`ed part's rigid body (its preset, shape and
-  the solver `play::cod4_physics` runs on it).
+  and preset (`ode/obj.rs`, cod4-gsc.md 3.6.3). All three worlds run on
+  it: world 0 the dynamic entities (`dynent.rs`), world 1 the launched
+  parts (`play::cod4_physics`), world 2 the ragdolls.
 - `collision/`: the clip map from a clipMap_t; `pieces.rs` the world
   collider's walk and a brush's faces and windings.
 - `net/`: the 1.7 wire.
