@@ -22,7 +22,7 @@ fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
 
 #[test]
 fn notice_lists_every_ported_file() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = PathBuf::from(vcod_common::manifest_dir!()).join("../..");
     let mut files = Vec::new();
     rs_files(&root.join("crates"), &mut files);
     let headed: BTreeSet<String> = files

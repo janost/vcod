@@ -154,7 +154,7 @@ fn cod2_avidemo_writes_a_silent_tga_a_frame_on_the_demo_clock() {
     r.load_world(&vcod_cod2::world::from_bytes(&world).unwrap(), &fs)
         .unwrap();
     r.set_gamma(1.0, 0);
-    let demo = Path::new(env!("CARGO_MANIFEST_DIR"))
+    let demo = Path::new(vcod_common::manifest_dir!())
         .join("../cod2/tests/fixtures/demos/mp_toujane-retail.dm_1");
     let mut s =
         crate::play::cod2::Cod2Session::play_demo(std::fs::read(demo).unwrap(), false).unwrap();

@@ -9,10 +9,8 @@ use std::collections::BTreeMap;
 
 use super::*;
 
-const FIXTURE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../cod4/tests/fixtures/net/handshake-1.7.txt"
-);
+static FIXTURE: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/../cod4/tests/fixtures/net/handshake-1.7.txt");
 
 /// Slots where ours and the capture differ, each with why. None of the
 /// compared slots does.
@@ -40,7 +38,7 @@ fn compared() -> impl Iterator<Item = usize> {
 /// The capture's gamestate, defaults filled in.
 fn retail() -> vcod_cod4::net::parse::Gamestate {
     use vcod_cod4::net::capture::{self, Session};
-    let text = std::fs::read_to_string(FIXTURE).unwrap();
+    let text = std::fs::read_to_string(&FIXTURE).unwrap();
     let mut s = Session::new();
     for l in capture::parse(&text).unwrap() {
         s.feed(&l).unwrap();

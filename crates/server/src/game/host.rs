@@ -3888,7 +3888,7 @@ mod tests {
                 }
             }
         }
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let root = std::path::Path::new(vcod_common::manifest_dir!()).join("src");
         let mut files = Vec::new();
         walk(&root, &mut files);
         let accessors: Vec<String> = ["cod2", "cod4"]

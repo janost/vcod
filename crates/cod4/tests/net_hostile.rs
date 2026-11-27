@@ -11,7 +11,8 @@ use vcod_cod4::net::reliable::{Inbound, Packet, StatsMsg};
 use vcod_cod4::net::wire::Dialect;
 use vcod_common::testing::fuzz;
 
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/net");
+static FIXTURES: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/tests/fixtures/net");
 
 /// A capture's server messages (sequence and plain block) and client
 /// messages (plain ops and usercmd key), in order.

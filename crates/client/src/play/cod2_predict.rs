@@ -666,7 +666,7 @@ mod tests {
     fn fixtures(sub: &str) -> String {
         format!(
             "{}/../cod2/tests/fixtures/{sub}",
-            env!("CARGO_MANIFEST_DIR")
+            vcod_common::manifest_dir!()
         )
     }
 

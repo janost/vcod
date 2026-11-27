@@ -22,10 +22,8 @@ use vcod_cod2::pmove::PlayerState;
 use super::cod2_combat_ab::{parse, weapon_from_wire, word};
 use crate::game::cod2::Cod2Level;
 
-const FIXTURES: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../cod2/tests/fixtures/antilag"
-);
+static FIXTURES: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/../cod2/tests/fixtures/antilag");
 
 /// How far the rewound origin may sit from retail's: `vtos`' six digits on
 /// a coordinate near 2000.
@@ -372,7 +370,7 @@ fn retail_rewinds_and_bones_match_vcods_under_gdb() {
         let mut wrong = rounds_off(&rounds, &[]);
         let dump = std::fs::read_to_string(format!(
             "{}/../cod2/tests/fixtures/trace/{name}.txt",
-            env!("CARGO_MANIFEST_DIR")
+            vcod_common::manifest_dir!()
         ))
         .unwrap();
         let retail = dumped_bones(&dump);

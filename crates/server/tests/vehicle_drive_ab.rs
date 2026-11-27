@@ -209,7 +209,7 @@ fn load(fixture: &str, map: &str, vehicletype: &str, near: Vec3) -> Option<Case>
     let fs = vcod_common::testing::uo_fs()?;
     let path = format!(
         "{}/tests/fixtures/playerstate/{fixture}",
-        env!("CARGO_MANIFEST_DIR")
+        vcod_common::manifest_dir!()
     );
     let text = std::fs::read_to_string(&path).unwrap();
     let (snaps, cmds) = parse(&text);

@@ -48,7 +48,7 @@ fn who(name: &str) -> usize {
 fn retail(fixture: &str) -> Retail {
     let path = format!(
         "{}/tests/fixtures/votes/{fixture}",
-        env!("CARGO_MANIFEST_DIR")
+        vcod_common::manifest_dir!()
     );
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
     let mut r = Retail {

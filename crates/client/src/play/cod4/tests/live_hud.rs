@@ -380,10 +380,8 @@ fn cod4_live_uav_hardpoint_shows_on_the_dpad_and_pings_the_enemy() {
 /// (`iw3mp.exe` 0x429880, cod4-hud.md 15.9).
 #[test]
 fn cod4_live_compass_flashes_a_pinged_friend_and_keeps_him_when_he_falls() {
-    const GSC: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../cod4/tests/fixtures/gsc/compass_friend"
-    );
+    static GSC: vcod_common::manifest::ManifestPath =
+        vcod_common::manifest_const!("/../cod4/tests/fixtures/gsc/compass_friend");
     const PATH: &str = "maps/mp/mp_crash_fx";
     #[derive(Debug, Default)]
     struct Seen {
@@ -400,7 +398,7 @@ fn cod4_live_compass_flashes_a_pinged_friend_and_keeps_him_when_he_falls() {
     let out = live_war_pair_on(
         ["allies", "allies"],
         ["assault_mp,0", "assault_mp,0"],
-        Some(GSC),
+        Some(&GSC),
         move |f| {
             let arrow = f.hud.texture_of("compassping_friendly_mp")?;
             let chat = f.hud.texture_of("objective_friendly_chat")?;
@@ -478,12 +476,10 @@ fn cod4_live_compass_flashes_a_pinged_friend_and_keeps_him_when_he_falls() {
 /// until Tab asked for the board (cod4-hud.md 23).
 #[test]
 fn cod4_live_a_kill_moves_the_team_scores_without_the_board() {
-    const GSC: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../cod4/tests/fixtures/gsc/killcam"
-    );
+    static GSC: vcod_common::manifest::ManifestPath =
+        vcod_common::manifest_const!("/../cod4/tests/fixtures/gsc/killcam");
     let mut sent = None;
-    let Some(out) = live_war_pair_in(["assault_mp,0", "assault_mp,0"], Some(GSC), move |f| {
+    let Some(out) = live_war_pair_in(["assault_mp,0", "assault_mp,0"], Some(&GSC), move |f| {
         if !f.both || f.level < 9000 {
             return None;
         }
@@ -514,15 +510,13 @@ fn cod4_live_a_kill_moves_the_team_scores_without_the_board() {
 /// it in the middle of the map on every death (cod4-hud.md 16.4).
 #[test]
 fn cod4_live_a_teammates_death_icon_sits_over_his_corpse() {
-    const GSC: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../cod4/tests/fixtures/gsc/compass_friend"
-    );
+    static GSC: vcod_common::manifest::ManifestPath =
+        vcod_common::manifest_const!("/../cod4/tests/fixtures/gsc/compass_friend");
     let mut died: Option<(i32, Vec3)> = None;
     let Some(out) = live_war_pair_on(
         ["allies", "allies"],
         ["assault_mp,0", "assault_mp,0"],
-        Some(GSC),
+        Some(&GSC),
         move |f| {
             let t = f.level;
             if !f.both || t < 4000 {

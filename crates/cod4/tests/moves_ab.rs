@@ -49,7 +49,8 @@ use vcod_cod4::zone::Zone;
 use vcod_common::animtree::PlayerAnims;
 use vcod_common::tracetape::Tape;
 
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/net");
+static FIXTURES: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/tests/fixtures/net");
 
 /// The captures: (name, file, map, from this server time, armed).
 /// [`ANIMATED`] names the ones replayed with the anim script.
@@ -1007,7 +1008,8 @@ fn cod4_fire_rate_ab() {
     assert_eq!(rof.len(), 2, "{rof:?}");
 }
 
-const TAPE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/tapes");
+static TAPE_DIR: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/tests/fixtures/tapes");
 
 /// The captures replayed off trace tapes (docs/dev/testing.md, "Trace
 /// tapes"): the unarmed walk script. The fly's tape is 165k traces, most of
@@ -1070,7 +1072,7 @@ fn record_cod4_tapes() {
     .unwrap()
     .assets;
     pmove::mantle::install(&[&common]).expect("the mantle clips");
-    std::fs::create_dir_all(TAPE_DIR).unwrap();
+    std::fs::create_dir_all(&TAPE_DIR).unwrap();
     for &name in TAPED {
         let &(_, file, map, _, _) = CAPTURES.iter().find(|c| c.0 == name).unwrap();
         let cap = read(file);

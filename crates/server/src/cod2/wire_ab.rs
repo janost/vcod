@@ -618,7 +618,7 @@ const GAMETYPES: &[(&str, &str, &str, u64, Run)] = &[
 
 #[test]
 fn gametypes_wire_matches_retail() {
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/cod2-wire");
+    let dir = vcod_common::manifest_path!("/tests/fixtures/cod2-wire");
     for &(map, tag, gametype, seed, run) in GAMETYPES {
         let read = |side: &str| std::fs::read(format!("{dir}/{map}-{tag}-{side}.bin")).unwrap();
         check(

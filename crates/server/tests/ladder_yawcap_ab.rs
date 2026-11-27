@@ -302,7 +302,7 @@ fn a_climber_looking_away_is_capped_where_retail_caps_him() {
         });
         let path = format!(
             "{}/tests/fixtures/playerstate/{name}",
-            env!("CARGO_MANIFEST_DIR")
+            vcod_common::manifest_dir!()
         );
         let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
         check(&replay(

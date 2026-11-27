@@ -1735,8 +1735,7 @@ mod tests {
         let Some(fs) = vcod_common::testing::game_fs_11() else {
             return;
         };
-        let capture = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
+        let capture = std::fs::read_to_string(vcod_common::manifest_path!(
             "/tests/fixtures/configstrings/mp_pavlov-dm.txt"
         ))
         .expect("the committed retail capture");

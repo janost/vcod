@@ -520,7 +520,7 @@ fn retail_moves_replay_on_vcod_pmove() {
         let (c, mode, row) = (p.next()?, p.next()?, p.next()?.parse().ok()?);
         (c == name && (mode == "resync") == resync).then_some((resync, row))
     };
-    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+    let root = vcod_common::manifest_path!("/tests/fixtures");
     let mut worlds: BTreeMap<String, CollisionWorld> = BTreeMap::new();
     let rules = Rules {
         mantle_anims: pmove::mantle::anims(&fs),

@@ -354,8 +354,7 @@ mod tests {
         let Some(fs) = vcod_common::testing::game_fs_11() else {
             return;
         };
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
+        let path = vcod_common::manifest_path!(
             "/tests/fixtures/playerstate/mp_carentan-tdm-hit-target.txt"
         );
         let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path}: {e}"));

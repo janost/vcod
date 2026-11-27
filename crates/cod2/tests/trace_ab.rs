@@ -296,7 +296,7 @@ fn clip_map_traces_match_retail() {
     };
     let report = std::env::var_os("TRACE_AB_REPORT").is_some();
     let mut off = Vec::new();
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/traces");
+    let dir = vcod_common::manifest_path!("/tests/fixtures/traces");
     let mut files: Vec<_> = std::fs::read_dir(dir)
         .unwrap()
         .map(|e| e.unwrap().path())

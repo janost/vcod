@@ -59,7 +59,7 @@ fn retail_anims_replay_on_vcod_pmove() {
     let report = std::env::var_os("ANIM_REPORT").is_some();
     let table = AnimTable::load(&fs).unwrap();
     let weapon = field_index(&PLAYER_STATE_FIELDS, "weapon");
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/moves");
+    let dir = vcod_common::manifest_path!("/tests/fixtures/moves");
     let mut worlds: BTreeMap<String, CollisionWorld> = BTreeMap::new();
     let mut unexplained = Vec::new();
     let rules = Rules {

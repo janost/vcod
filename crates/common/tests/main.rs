@@ -10,6 +10,7 @@ mod env_vars_documented;
 mod evidence_labels;
 mod gunskel_ab;
 mod ignored_tests_named;
+mod manifest_dir;
 mod notice_ports;
 mod shader_corpus;
 mod skel11_ab;
@@ -20,7 +21,7 @@ mod trbase_census;
 /// A test file left out of the list above would never build or run.
 #[test]
 fn every_test_file_is_a_module() {
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests");
+    let dir = vcod_common::manifest_path!("/tests");
     let main = std::fs::read_to_string(format!("{dir}/main.rs")).unwrap();
     for entry in std::fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();

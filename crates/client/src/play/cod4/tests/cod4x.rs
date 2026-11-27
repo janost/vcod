@@ -248,7 +248,7 @@ fn run_in_capture(test: &str, sets: &str, prepare: impl FnOnce(&std::path::Path)
     assert!(vcod_cod4::testing::cod4_install().is_some(), "set COD4_DIR");
     let tmp = tempfile::tempdir().unwrap();
     let out = std::env::var("COD4X_OUT").map_or_else(|_| tmp.path().to_path_buf(), Into::into);
-    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tools/cod4x_capture.sh");
+    let script = vcod_common::manifest_path!("/../../tools/cod4x_capture.sh");
     let name = format!("{}::{test}", module_path!());
     let name = name.split_once("::").unwrap().1;
     let exe = std::env::current_exe().unwrap();

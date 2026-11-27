@@ -595,7 +595,7 @@ pub(super) fn write_pickup_fixture(
     }
     pickup_phase_blocks(&mut out, pk);
     let path = write_fixture_file(
-        ITEMS_FIXTURE_DIR,
+        &ITEMS_FIXTURE_DIR,
         &tagged_name(&format!("{map}-dm-pickup"), tag),
         &out,
         overwrite,

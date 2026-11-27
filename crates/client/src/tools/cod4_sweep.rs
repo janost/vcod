@@ -454,7 +454,7 @@ fn run(game: &dyn Game, opts: Opts, default_gametypes: &[&str], out_dir: &str) {
     let out = std::env::var_os("VCOD_SWEEP_OUT")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            Path::new(env!("CARGO_MANIFEST_DIR"))
+            Path::new(vcod_common::manifest_dir!())
                 .join("../../tmp")
                 .join(out_dir)
         });

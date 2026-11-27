@@ -9,10 +9,8 @@ use super::hit::EV_BULLET_HIT_LARGE;
 use super::*;
 
 /// Where the turret capture lives.
-const TURRET_FIXTURE_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../server/tests/fixtures/turret"
-);
+static TURRET_FIXTURE_DIR: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/../server/tests/fixtures/turret");
 
 /// The capture's gun: the carentan turret nearest this spot.
 const TURRET_XY: [f32; 2] = [1712.0, 1830.0];
@@ -820,7 +818,7 @@ pub(super) fn write_turret_fixture(
     }
     turret_phase_blocks(&mut out, tp);
     let path = write_fixture_file(
-        TURRET_FIXTURE_DIR,
+        &TURRET_FIXTURE_DIR,
         &tagged_name(&format!("{map}-dm-turret"), tag),
         &out,
         overwrite,

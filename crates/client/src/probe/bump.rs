@@ -806,7 +806,7 @@ pub(super) fn write_bump_fixture(
     };
     // The tag goes before the role here, not after it as in every other mode's name.
     let path = write_fixture_file(
-        PLAYERSTATE_FIXTURE_DIR,
+        &PLAYERSTATE_FIXTURE_DIR,
         &format!("{map}-dm-bump-{role}.txt"),
         &out,
         overwrite,

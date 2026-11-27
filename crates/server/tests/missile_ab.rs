@@ -262,7 +262,7 @@ fn a_thrown_grenade_flies_bounces_and_explodes_like_retail() {
     let (map, gametype) = ("mp_carentan", "tdm");
     let path = format!(
         "{}/tests/fixtures/playerstate/{map}-{gametype}-grenade.txt",
-        env!("CARGO_MANIFEST_DIR")
+        vcod_common::manifest_dir!()
     );
     let text = std::fs::read_to_string(&path).unwrap();
     let header = common::grenade_header(&text).expect("the capture's `# grenade` header line");

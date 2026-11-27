@@ -22,7 +22,8 @@ use vcod_cod4::testing::cod4_install;
 use vcod_cod4::walk::{WalkOptions, walk};
 use vcod_cod4::zone::Zone;
 
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/phys");
+static FIXTURES: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/tests/fixtures/phys");
 
 fn hex(w: &str) -> u32 {
     u32::from_str_radix(w, 16).expect("hex word")

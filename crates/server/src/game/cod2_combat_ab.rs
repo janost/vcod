@@ -37,7 +37,8 @@ use vcod_cod2::pmove::PlayerState;
 
 use crate::game::cod2::Cod2Level;
 
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../cod2/tests/fixtures/combat");
+static FIXTURES: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/../cod2/tests/fixtures/combat");
 
 /// The captures, each a shooter's `<name>.txt` and its target's
 /// `<name>-b.txt`: kar98k rounds at the head, torso and legs at 220 units,

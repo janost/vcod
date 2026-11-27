@@ -759,7 +759,7 @@ struct ViewTolerance {
 fn check(map: &str, gametype: &str, cmd_ms: u32) {
     let path = format!(
         "{}/tests/fixtures/playerstate/{map}-{gametype}-slope-{cmd_ms}ms.txt",
-        env!("CARGO_MANIFEST_DIR")
+        vcod_common::manifest_dir!()
     );
     check_path(map, gametype, &path, &SLOPE, None);
 }
@@ -862,7 +862,7 @@ fn the_mover_lands_where_retail_does_on_mp_carentan_grades_at_25_ms() {
 fn check_prone(spot: &str, until: Option<i32>) {
     let path = format!(
         "{}/tests/fixtures/playerstate/mp_carentan-dm-slope-8ms-prone-{spot}.txt",
-        env!("CARGO_MANIFEST_DIR")
+        vcod_common::manifest_dir!()
     );
     check_path("mp_carentan", "dm", &path, &PRONE, until);
 }

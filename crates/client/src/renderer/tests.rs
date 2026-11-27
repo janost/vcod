@@ -1506,7 +1506,7 @@ fn wgsl_modules_validate() {
             .unwrap_or_else(|e| panic!("{name} at {samples}x: {}", e.emit_to_string(&src)));
         }
     }
-    let mut dirs = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+    let mut dirs = vec![std::path::Path::new(vcod_common::manifest_dir!()).join("src")];
     let mut files = 0;
     while let Some(dir) = dirs.pop() {
         for e in std::fs::read_dir(&dir).unwrap() {

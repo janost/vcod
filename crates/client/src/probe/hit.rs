@@ -1535,7 +1535,7 @@ fn write_hit_fixture(
     out.push_str(body);
 
     let path = write_fixture_file(
-        PLAYERSTATE_FIXTURE_DIR,
+        &PLAYERSTATE_FIXTURE_DIR,
         &tagged_name(&format!("{map}-{gametype}-{role}"), tag),
         &out,
         overwrite,

@@ -259,10 +259,7 @@ mod tests {
     /// and the 2 s ease to `mp_crash` when the prematch ends.
     #[test]
     fn the_prematch_capture_names_the_fog_and_both_sets() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../cod4/tests/fixtures/net/play-1.7-prematch.txt"
-        );
+        let path = vcod_common::manifest_path!("/../cod4/tests/fixtures/net/play-1.7-prematch.txt");
         let text = std::fs::read_to_string(path).unwrap();
         let mut s = crate::play::cod4::Cod4Session::open_capture(&text).unwrap();
         let mut l = Cod4Look::new(sets());

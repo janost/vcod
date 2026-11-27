@@ -4,7 +4,8 @@
 
 use std::collections::BTreeSet;
 
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/phys");
+static FIXTURES: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/tests/fixtures/phys");
 
 /// What one dump holds, as its README's lines give it.
 #[derive(Debug, Default)]
@@ -65,7 +66,7 @@ fn parse(text: &str) -> Dump {
 
 #[test]
 fn the_phys_captures_parse_from_the_map_loads_seed() {
-    let mut names: Vec<_> = std::fs::read_dir(FIXTURES)
+    let mut names: Vec<_> = std::fs::read_dir(&FIXTURES)
         .expect("fixtures/phys")
         .map(|e| e.unwrap().file_name().into_string().unwrap())
         .filter(|n| n.ends_with(".txt"))

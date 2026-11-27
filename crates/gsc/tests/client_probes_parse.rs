@@ -3,10 +3,7 @@
 
 #[test]
 fn every_client_probe_compiles() {
-    let dir = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/semantics/client-probes"
-    );
+    let dir = vcod_common::manifest_path!("/tests/fixtures/semantics/client-probes");
     let mut n = 0;
     for entry in std::fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();
