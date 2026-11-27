@@ -314,6 +314,17 @@ python3 -I tools/re/cod4_ragdoll_summary.py tmp/ragdoll.txt [another dump]
   out during the map load (`EXE_TIMEDOUT`, back at the menu); the rerun
   with `+set sv_timeout 600 +set cl_timeout 600 +set cl_connectTimeout
   600` before `+devmap` went through.
+- `RAGDOLL_SKEL=1` also logs the corpse's DObj (its models' bone names),
+  its entity at the build and its whole skeleton after each frame's
+  last pose, from the frame its ragdoll is made (`cod4-player-anims.md`
+  10.7.2). Add `+set scr_player_forcerespawn 0` before `+devmap`: with
+  the default 1 the player respawned 2 s after the kill, the view left
+  the corpse and the renderer stopped posing it, so the last pose of
+  each later frame was the ragdoll's own partial one (30 bones of 116).
+  The skeleton breakpoints arm once the corpse's DObj is known, as every
+  DObj's pose stops at them. The first run, with them armed from the
+  start, timed its loopback connection out during the map load; the
+  rerun armed them late and added `+set sv_connectTimeout 600`.
 - The format and the committed takes: `crates/cod4/tests/fixtures/README.md`.
 
 ### Worlds 0 and 1 from the first push to rest
