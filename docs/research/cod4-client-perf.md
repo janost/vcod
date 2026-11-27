@@ -1161,7 +1161,10 @@ What changed:
 2. The cull is kept while the eye, the view and the LOD ramp hold bit for
    bit (`Renderer::cull`'s inputs): a held view walks no cells.
 3. A corpse whose ragdoll runs or sleeps no longer poses and skins the
-   death anim under it (`Cod4Players::posed`) and keeps no tags.
+   death anim under it (`Cod4Players::posed`) and keeps no tags. Since
+   2026-11-27 it poses the death anim again, unskinned, for the bones the
+   ragdoll does not set (cod4-player-anims.md 10.7.2); that cost is not
+   measured here.
 
 Lavapipe (640 x 372, one sample, mp_crossfire): held view `finish` 0.54
 -> 0.45 ms (405 of 405 world draws bundled, three runs), `cull` 0.22 ->

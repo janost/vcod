@@ -980,11 +980,18 @@ otherwise.
 
 - Inline: `cod4-gsc.md` 9 and 9.4 (the use key, the linked player's frame,
   `linkTo` on a tag).
-- A ragdoll's joints are built in the model's base pose, before the
-  bodies are placed at the snapshot, so their limits are the base pose's;
-  and the build's 15-times friction never reaches a step, state 4's
-  update resets it first: kept for the first step, it puts the bodies 60
-  times further off retail's capture (`cod4-player-anims.md` 10.7).
+- A ragdoll's joints are built in the model's base pose under the
+  corpse's entity, before the bodies are placed at the snapshot, so their
+  limits are the base pose's; and the build's 15-times friction never
+  reaches a step, state 4's update resets it first: kept for the first
+  step, it puts the bodies 60 times further off retail's capture
+  (`cod4-player-anims.md` 10.7). Built at the origin, the first step
+  lands 13 times further off (10.7.2).
+- The bones a ragdoll does not set take the death anim's locals of the
+  frame under the ragdoll's, and the anim plays on after the build: feed
+  the corpse's pose every frame. Fed only until the slot simulated, a
+  foot was drawn 27 degrees off retail's once the anim ended
+  (`cod4-player-anims.md` 10.7.2).
 
 ### CoD4 combat and items
 
