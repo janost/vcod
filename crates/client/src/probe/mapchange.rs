@@ -10,10 +10,8 @@ use vcod_common::net::flags::PM_INTERMISSION;
 
 /// Directory the map-cycle captures land in. They pin what the wire does
 /// across a map change and a round restart, which no playerstate fixture holds.
-const NETCHAN_FIXTURE_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../server/tests/fixtures/netchan"
-);
+static NETCHAN_FIXTURE_DIR: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/../server/tests/fixtures/netchan");
 
 /// One `!trace` line: the playerstate fields a map end and a round restart
 /// move, plus the weapon the `pers[]` carry is measured through.
@@ -203,7 +201,7 @@ pub(super) fn write_mapchange_fixture(
     let gametype = serverinfo_key(configstrings, "g_gametype");
     let out = mapchange_text(role, gametype, join, probe, map);
     let path = write_fixture_file(
-        NETCHAN_FIXTURE_DIR,
+        &NETCHAN_FIXTURE_DIR,
         &tagged_name(&format!("{map}-{gametype}-{role}"), tag),
         &out,
         overwrite,

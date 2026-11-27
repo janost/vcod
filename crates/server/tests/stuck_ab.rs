@@ -93,7 +93,7 @@ fn seen(kv: &BTreeMap<&str, &str>) -> Seen {
 fn fixture(name: &str) -> String {
     let path = format!(
         "{}/tests/fixtures/playerstate/{name}",
-        env!("CARGO_MANIFEST_DIR")
+        vcod_common::manifest_dir!()
     );
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"))
 }

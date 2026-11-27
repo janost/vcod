@@ -60,7 +60,7 @@ impl Trace {
 }
 
 fn read(path: &str) -> String {
-    let path = format!("{}/{path}", env!("CARGO_MANIFEST_DIR"));
+    let path = format!("{}/{path}", vcod_common::manifest_dir!());
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"))
 }
 

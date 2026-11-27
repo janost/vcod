@@ -22,6 +22,7 @@ pub mod laps;
 pub mod leafwalk;
 pub mod libm;
 pub mod localize;
+pub mod manifest;
 pub mod mapworld;
 pub mod material;
 pub mod menu;

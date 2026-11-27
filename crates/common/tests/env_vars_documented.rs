@@ -35,7 +35,7 @@ fn quoted_names(dir: &Path, out: &mut std::collections::BTreeSet<String>) {
 
 #[test]
 fn every_env_var_is_in_running_md() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = Path::new(vcod_common::manifest_dir!()).join("../..");
     let mut names = std::collections::BTreeSet::new();
     quoted_names(&root.join("crates"), &mut names);
     assert!(names.contains("VCOD_NETSIM"), "the scan found {names:?}");

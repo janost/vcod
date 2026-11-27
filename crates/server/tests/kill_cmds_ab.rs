@@ -58,7 +58,7 @@ fn field<'a>(line: &'a str, key: &str) -> &'a str {
 
 /// Every kill of the capture, each with the first dead `!trace` after it.
 fn retail(path: &str, anims: &PlayerAnims) -> Vec<Death> {
-    let full = format!("{}/tests/fixtures/{path}", env!("CARGO_MANIFEST_DIR"));
+    let full = format!("{}/tests/fixtures/{path}", vcod_common::manifest_dir!());
     let text = std::fs::read_to_string(&full).unwrap_or_else(|e| panic!("{full}: {e}"));
     let traces: Vec<&str> = text.lines().filter(|l| l.starts_with("!trace ")).collect();
     text.lines()

@@ -480,10 +480,8 @@ mod tests {
         let Some(install) = vcod_cod4::testing::cod4_install() else {
             return;
         };
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../cod4/tests/fixtures/net/play-1.7-hardpoint.txt"
-        );
+        let path =
+            vcod_common::manifest_path!("/../cod4/tests/fixtures/net/play-1.7-hardpoint.txt");
         let mut s = Cod4Session::open_capture(&std::fs::read_to_string(path).unwrap()).unwrap();
         let map = s.map_name().unwrap();
         let mut loaded = None;

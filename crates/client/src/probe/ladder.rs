@@ -570,7 +570,7 @@ pub(super) fn write_ladder_fixture(
         out.push('\n');
     }
     let path = write_fixture_file(
-        PLAYERSTATE_FIXTURE_DIR,
+        &PLAYERSTATE_FIXTURE_DIR,
         &tagged_name(&format!("{map}-dm-ladder"), tag),
         &out,
         overwrite,
@@ -627,7 +627,7 @@ pub(super) fn write_weapsel_fixture(
         out.push('\n');
     }
     let path = write_fixture_file(
-        PLAYERSTATE_FIXTURE_DIR,
+        &PLAYERSTATE_FIXTURE_DIR,
         &tagged_name(&format!("{map}-dm-weapsel"), tag),
         &out,
         overwrite,

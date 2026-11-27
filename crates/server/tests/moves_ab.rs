@@ -41,7 +41,8 @@ use vcod_common::tracetape::Tape;
 use crate::common::tapes;
 use vcod_common::weapon::WeaponDef;
 
-const FIXTURE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/playerstate");
+static FIXTURE_DIR: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/tests/fixtures/playerstate");
 
 /// Retail's configstring 7 on mp_carentan dm; 1.5b sends the same list
 /// (docs/research/cod15-protocol-diff.md, section 7).

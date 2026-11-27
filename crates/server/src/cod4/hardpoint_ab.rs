@@ -35,10 +35,8 @@ use crate::game::cod4::vehicle::{ET_HELICOPTER, ET_PLANE};
 const SEED: u32 = 1_936_999_990;
 
 /// The probe gsc's directory, read over the zones' scripts.
-const GSC: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../cod4/tests/fixtures/gsc/hardpoint_flight"
-);
+static GSC: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/../cod4/tests/fixtures/gsc/hardpoint_flight");
 
 /// The fields of a plane or helicopter the comparison reads.
 const FIELDS: &[&str] = &[
@@ -246,7 +244,7 @@ fn hardpoint_flights_match_retail() {
         return;
     };
     let r = side(&retail("hardpoint"));
-    let (o, aborts) = ours(&install, &r, GSC, SEED);
+    let (o, aborts) = ours(&install, &r, &GSC, SEED);
     assert!(aborts.is_empty(), "{aborts:?}");
     let report = std::env::var_os("HARDPOINT_AB_REPORT").is_some();
     let (missing, unexplained) = compare(&tracks(&r), &tracks(&o), report);
@@ -255,10 +253,8 @@ fn hardpoint_flights_match_retail() {
 }
 
 /// The idle probe gsc (`heli_idle`), read over the zones' scripts.
-const IDLE_GSC: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../cod4/tests/fixtures/gsc/heli_idle"
-);
+static IDLE_GSC: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/../cod4/tests/fixtures/gsc/heli_idle");
 
 /// `cod4_hardpoint_ab`'s idle capture (`play-1.7-heli-idle.txt`): retail
 /// 1.7 under `+set fs_game mods/vcodidle +devmap mp_crash`, `war`, sv_pure
@@ -279,7 +275,7 @@ fn helicopter_idle_matches_retail() {
         return;
     };
     let r = side(&retail("heli-idle"));
-    let (o, aborts) = ours(&install, &r, IDLE_GSC, SEED);
+    let (o, aborts) = ours(&install, &r, &IDLE_GSC, SEED);
     assert!(aborts.is_empty(), "{aborts:?}");
     let report = std::env::var_os("HARDPOINT_AB_REPORT").is_some();
     let (rt, ot) = (tracks(&r), tracks(&o));
@@ -294,10 +290,8 @@ fn helicopter_idle_matches_retail() {
 }
 
 /// The yaw probe gsc (`heli_yaw`), read over the zones' scripts.
-const YAW_GSC: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../cod4/tests/fixtures/gsc/heli_yaw"
-);
+static YAW_GSC: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/../cod4/tests/fixtures/gsc/heli_yaw");
 
 /// `cod4_hardpoint_ab`'s yaw capture (`play-1.7-heli-yaw.txt`): retail 1.7
 /// under gdb (the run `flight`'s `yaw-gdb.txt` records), `+set fs_game
@@ -315,7 +309,7 @@ fn helicopter_yaw_matches_retail() {
         return;
     };
     let r = side(&retail("heli-yaw"));
-    let (o, aborts) = ours(&install, &r, YAW_GSC, SEED);
+    let (o, aborts) = ours(&install, &r, &YAW_GSC, SEED);
     assert!(aborts.is_empty(), "{aborts:?}");
     let report = std::env::var_os("HARDPOINT_AB_REPORT").is_some();
     let (rt, ot) = (tracks(&r), tracks(&o));
@@ -330,10 +324,8 @@ fn helicopter_yaw_matches_retail() {
 }
 
 /// The collision probe gsc (`heli_collide`), read over the zones' scripts.
-const COLLIDE_GSC: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../cod4/tests/fixtures/gsc/heli_collide"
-);
+static COLLIDE_GSC: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/../cod4/tests/fixtures/gsc/heli_collide");
 
 /// A capture's `PROBE` lines (the probe gsc's `iPrintLn`s): the words and
 /// the numbers of each, the time since the spawn first.
@@ -377,7 +369,7 @@ fn helicopter_collision_and_pose_match_retail() {
         return;
     };
     let r = side(&retail("heli-collide"));
-    let (o, aborts) = ours(&install, &r, COLLIDE_GSC, SEED);
+    let (o, aborts) = ours(&install, &r, &COLLIDE_GSC, SEED);
     assert!(aborts.is_empty(), "{aborts:?}");
     let (rl, ol) = (probe_lines(&r), probe_lines(&o));
     assert_eq!(rl.len(), 8, "{rl:?}");

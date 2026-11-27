@@ -499,8 +499,8 @@ pub(crate) mod tests {
         assert!(!off, "{got:?} != {want:?}");
     }
 
-    pub(super) const FIXTURES: &str =
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../cod4/tests/fixtures/net");
+    pub(super) static FIXTURES: vcod_common::manifest::ManifestPath =
+        vcod_common::manifest_const!("/../cod4/tests/fixtures/net");
 
     /// The capture replayed; `build` gets every built frame's quads.
     pub(super) fn replay(

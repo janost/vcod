@@ -701,7 +701,7 @@ mod tests {
         let fixture = |tag: &str| {
             let path = format!(
                 "{}/tests/fixtures/items/mp_carentan-dm-fragcount-{tag}.txt",
-                env!("CARGO_MANIFEST_DIR")
+                vcod_common::manifest_dir!()
             );
             let text = std::fs::read_to_string(path).unwrap();
             let seen: std::collections::BTreeSet<i32> = text

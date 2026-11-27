@@ -333,7 +333,7 @@ fn fixture_bodies_build_word_for_word() {
     for (file, map_name, pins) in takes {
         let text = std::fs::read_to_string(format!(
             "{}/tests/fixtures/phys/{file}",
-            env!("CARGO_MANIFEST_DIR")
+            vcod_common::manifest_dir!()
         ))
         .unwrap();
         let (world, bodies) = captured(&text);

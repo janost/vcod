@@ -17,8 +17,8 @@ use vcod_common::net::netchan::{Netchan, scramble_client_ops};
 
 use super::*;
 
-pub(super) const FIXTURES: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../cod4/tests/fixtures/net");
+pub(super) static FIXTURES: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/../cod4/tests/fixtures/net");
 
 /// What one client read: the gamestate, its server commands by sequence
 /// (each once, as the client executes it), and its snapshots.

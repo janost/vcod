@@ -22,10 +22,8 @@ use super::cod2_antilag_ab::{DumpedTrace, bones_off, dumped_traces};
 use super::cod2_combat_ab::{parse, weapon_from_wire, word};
 use crate::game::cod2::Cod2Level;
 
-const FIXTURES: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../cod2/tests/fixtures/hitpose"
-);
+static FIXTURES: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/../cod2/tests/fixtures/hitpose");
 
 /// The rounds the replay still places off retail's, by frame time, each
 /// with its section of cod2-combat.md.
@@ -217,8 +215,7 @@ fn retail_rounds_strike_vcods_posed_body() {
     };
     let fs = Rc::new(fs);
     let report = std::env::var_os("HITPOSE_REPORT").is_some();
-    let dump = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
+    let dump = std::fs::read_to_string(vcod_common::manifest_path!(
         "/../cod2/tests/fixtures/trace/poses.txt"
     ))
     .unwrap();
@@ -296,7 +293,7 @@ fn retail_bones_follow_a_knocked_body() {
     };
     let fs = Rc::new(fs);
     let report = std::env::var_os("HITPOSE_REPORT").is_some();
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../cod2/tests/fixtures/combat");
+    let dir = vcod_common::manifest_path!("/../cod2/tests/fixtures/combat");
     let read = |n: &str| std::fs::read_to_string(format!("{dir}/{n}.txt")).unwrap();
     let shooter = parse(&read("hit-tags"));
     let target = parse(&read("hit-tags-b"));

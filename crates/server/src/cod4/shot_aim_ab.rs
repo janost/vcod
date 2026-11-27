@@ -149,7 +149,7 @@ fn ours(install: &vcod_cod4::install::Install, run: &Run) -> (Vec<String>, Vec<S
     sv.set_cvar("sv_cheats", "1");
     sv.pin_game_seed(run.seed);
     sv.set_script_overrides(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        std::path::Path::new(vcod_common::manifest_dir!())
             .join("../cod4/tests/fixtures/gsc")
             .join(run.gsc),
     );
@@ -238,7 +238,7 @@ fn rounds_match(run: &Run) {
     };
     let path = format!(
         "{}/../cod4/tests/fixtures/net/play-1.7-{}-hits.txt",
-        env!("CARGO_MANIFEST_DIR"),
+        vcod_common::manifest_dir!(),
         run.name
     );
     let text = std::fs::read_to_string(path).unwrap();
@@ -322,7 +322,7 @@ fn lines_match(run: &Run) {
     };
     let path = format!(
         "{}/../cod4/tests/fixtures/net/play-1.7-{}-hits.txt",
-        env!("CARGO_MANIFEST_DIR"),
+        vcod_common::manifest_dir!(),
         run.name
     );
     let text = std::fs::read_to_string(path).unwrap();

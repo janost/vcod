@@ -28,10 +28,8 @@ use vcod_cod2::pmove::PlayerState;
 use super::cod2::Cod2Level;
 use super::cod2_combat_ab::{Roster, Snap, parse, weapon_from_wire, word};
 
-const FIXTURES: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../cod2/tests/fixtures/killcam"
-);
+static FIXTURES: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/../cod2/tests/fixtures/killcam");
 
 /// What the replay still gets wrong: (check, count, why).
 const GAPS: &[(&str, usize, &str)] = &[];

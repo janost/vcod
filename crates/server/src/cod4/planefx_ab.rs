@@ -23,10 +23,8 @@ use crate::game::cod4::vehicle::ET_PLANE;
 /// Past the probe's suicide (49000) and its respawn (51000).
 const RUN_MS: i32 = 52_000;
 
-const GSC: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../cod4/tests/fixtures/gsc/plane_fx"
-);
+static GSC: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/../cod4/tests/fixtures/gsc/plane_fx");
 
 fn word(e: &EntityState, name: &str) -> u32 {
     EntityState::table(e.etype())
@@ -100,7 +98,7 @@ fn ours(install: &vcod_cod4::install::Install, r: &Side) -> (Side, Vec<String>) 
             sv.set_cvar(k, v);
         }
     }
-    sv.set_script_overrides(GSC.into());
+    sv.set_script_overrides(std::path::PathBuf::from(&*GSC));
     sv.load(Some(install)).unwrap();
     let spawn = r
         .snaps

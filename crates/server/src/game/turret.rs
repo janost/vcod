@@ -1351,8 +1351,7 @@ mod tests {
         let world = crate::world::World::from_bsp(&bsp, None);
         let gun = Vec3::new(1712.0, 1830.0, 8.0);
         let turret = (gun, vcod_common::turretpose::angles_quat([0.0, 229.0, 0.0]));
-        let text = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
+        let text = std::fs::read_to_string(vcod_common::manifest_path!(
             "/tests/fixtures/turret/mp_carentan-dm-turret.txt"
         ))
         .unwrap();
@@ -1436,8 +1435,7 @@ mod tests {
         let world = crate::world::World::from_bsp(&bsp, None);
         let gun = Vec3::new(1712.0, 1830.0, 8.0);
         let turret = (gun, vcod_common::turretpose::angles_quat([0.0, 229.0, 0.0]));
-        let text = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
+        let text = std::fs::read_to_string(vcod_common::manifest_path!(
             "/tests/fixtures/turret/mp_carentan-dm-turret-uo.txt"
         ))
         .unwrap();

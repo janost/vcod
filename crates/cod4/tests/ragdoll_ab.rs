@@ -15,7 +15,8 @@ use vcod_cod4::ragdoll::{self, Dvars, RagdollDef, Ragdolls, Record, State, iw};
 use vcod_cod4::testing::cod4_install;
 use vcod_common::skeleton::Skeleton;
 
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/ragdoll");
+static FIXTURES: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/tests/fixtures/ragdoll");
 /// Asleep on step 79 (cod4-player-anims.md 10.5).
 const SLEPT: &str = "kill-mp_crash-1.7.txt";
 /// Awake to `ragdoll_max_life`, with the bone lines (10.7).

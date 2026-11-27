@@ -9,7 +9,8 @@ use vcod_cod4::net::reliable::{self, StatsMsg};
 use vcod_cod4::net::wire::Dialect;
 use vcod_common::net::Msec;
 
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/net");
+static FIXTURES: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/tests/fixtures/net");
 
 /// A capture walked both ways. Each server message must end exactly at its
 /// block's last byte and re-encode to its block byte for byte, each client

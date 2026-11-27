@@ -2946,7 +2946,8 @@ mod saw_tests {
 mod new_map_tests {
     use super::*;
 
-    const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../cod4/tests/fixtures/net");
+    static FIXTURES: vcod_common::manifest::ManifestPath =
+        vcod_common::manifest_const!("/../cod4/tests/fixtures/net");
 
     /// A map change keeps no renderer handle, menu load, camera turn or
     /// view weapon tags of the last map, and takes the new map's parts and

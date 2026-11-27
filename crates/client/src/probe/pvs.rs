@@ -103,10 +103,8 @@ struct PvsStation {
 }
 
 /// Directory `crates/server/tests/entities_ab.rs` reads its fixtures from.
-const ENTITIES_FIXTURE_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../server/tests/fixtures/entities"
-);
+static ENTITIES_FIXTURE_DIR: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/../server/tests/fixtures/entities");
 
 /// Writes the walked route as `<map>-<gametype>.txt`: one `[sample]` per
 /// station, carrying where the probe stood and every entity the server had
@@ -165,14 +163,14 @@ sample of a set\n"
 
     let name = tagged_name(&format!("{map}-{gametype}"), tag);
     let existing =
-        std::fs::read_to_string(fixture_path(ENTITIES_FIXTURE_DIR, &name)?).unwrap_or_default();
+        std::fs::read_to_string(fixture_path(&ENTITIES_FIXTURE_DIR, &name)?).unwrap_or_default();
     let (body, taken, kept, sets) = merge_entity_samples(&existing, &probe.stations);
     let mut out = head;
     out.push_str(&body);
 
     // Each run's samples join the file's: it is this mode's append target,
     // so an existing file is no reason to refuse.
-    let path = write_fixture_file(ENTITIES_FIXTURE_DIR, &name, &out, true)?;
+    let path = write_fixture_file(&ENTITIES_FIXTURE_DIR, &name, &out, true)?;
     println!(
         "entities: {} stations this run, {} samples in the file ({} read, {} dropped as \
          repeats), {} distinct entity sets -> {path}",

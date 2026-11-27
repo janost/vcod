@@ -20,7 +20,7 @@ fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     let name = args.next().unwrap_or_else(|| "mp_crash".into());
     let out = args.next().map(PathBuf::from).unwrap_or_else(|| {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("../../tmp/cod4-obj/{name}"))
+        PathBuf::from(vcod_common::manifest_dir!()).join(format!("../../tmp/cod4-obj/{name}"))
     });
     let install = cod4_install().context("COD4_DIR is not a CoD4 install")?;
     let (map, walked) = Map::load(&install, "english", &name)?;

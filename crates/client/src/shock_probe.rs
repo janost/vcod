@@ -175,10 +175,7 @@ impl ShockProbe {
             out.push_str(l);
             out.push('\n');
         }
-        let dir = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../server/tests/fixtures/shellshock"
-        );
+        let dir = vcod_common::manifest_path!("/../server/tests/fixtures/shellshock");
         let path = crate::probe::write_fixture_file(
             dir,
             &crate::probe::tagged_name(&format!("{map}-dm-shock-client"), tag),

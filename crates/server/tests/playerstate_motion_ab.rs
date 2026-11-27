@@ -427,7 +427,7 @@ fn check(map: &str, gametype: &str) {
     };
     let path = format!(
         "{}/tests/fixtures/playerstate/{map}-{gametype}-motion.txt",
-        env!("CARGO_MANIFEST_DIR")
+        vcod_common::manifest_dir!()
     );
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
     let poses = parse_fixture(&text);
@@ -506,7 +506,7 @@ fn check_anims(map: &str, gametype: &str) {
     };
     let path = format!(
         "{}/tests/fixtures/playerstate/{map}-{gametype}-motion.txt",
-        env!("CARGO_MANIFEST_DIR")
+        vcod_common::manifest_dir!()
     );
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
     let poses = parse_fixture(&text);
@@ -580,7 +580,7 @@ fn check_anim_restarts(map: &str, gametype: &str) {
     };
     let path = format!(
         "{}/tests/fixtures/playerstate/{map}-{gametype}-motion.txt",
-        env!("CARGO_MANIFEST_DIR")
+        vcod_common::manifest_dir!()
     );
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
     let poses = parse_fixture(&text);

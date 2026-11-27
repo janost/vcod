@@ -33,7 +33,7 @@ fn unescape(s: &str) -> String {
 }
 
 fn retail() -> Retail {
-    let path = format!("{}/tests/fixtures/{FIXTURE}", env!("CARGO_MANIFEST_DIR"));
+    let path = format!("{}/tests/fixtures/{FIXTURE}", vcod_common::manifest_dir!());
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
     let mut r = Retail {
         says: Vec::new(),

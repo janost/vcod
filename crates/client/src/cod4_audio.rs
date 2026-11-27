@@ -903,10 +903,8 @@ mod tests {
         let Some(install) = vcod_cod4::testing::cod4_install() else {
             return;
         };
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../cod4/tests/fixtures/net/play-1.7-kill-target.txt"
-        );
+        let path =
+            vcod_common::manifest_path!("/../cod4/tests/fixtures/net/play-1.7-kill-target.txt");
         let mut s =
             crate::play::cod4::Cod4Session::open_capture(&std::fs::read_to_string(path).unwrap())
                 .unwrap();
@@ -1283,11 +1281,7 @@ mod tests {
         sv.set_cvar("scr_game_playerwaittime", "1");
         sv.set_cvar("scr_game_matchstarttime", "1");
         sv.set_script_overrides(
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../cod4/tests/fixtures/gsc/loop_stop"
-            )
-            .into(),
+            vcod_common::manifest_path!("/../cod4/tests/fixtures/gsc/loop_stop").into(),
         );
         sv.load(Some(&install)).unwrap();
         let Some(frames) = run_held(&mut sv, move |addr| hear_loops(&root, addr), |_, _, _| true)
@@ -1351,11 +1345,7 @@ mod tests {
         sv.set_cvar("scr_game_playerwaittime", "1");
         sv.set_cvar("scr_game_matchstarttime", "1");
         sv.set_script_overrides(
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../cod4/tests/fixtures/gsc/sound_turn"
-            )
-            .into(),
+            vcod_common::manifest_path!("/../cod4/tests/fixtures/gsc/sound_turn").into(),
         );
         sv.load(Some(&install)).unwrap();
         let Some(frames) = run_held(&mut sv, move |addr| hear_turn(&root, addr), |_, _, _| true)

@@ -9,10 +9,8 @@ use vcod_cod4::net::capture;
 use vcod_cod4::net::conn::{AUTH_REFUSAL, Conn, Join, Refused};
 use vcod_cod4::net::reliable::{BARE_ACK, Packet};
 
-const FIXTURE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/tests/fixtures/net/auth-x21.txt"
-);
+static FIXTURE: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/tests/fixtures/net/auth-x21.txt");
 
 /// Each datagram's tap tag and bytes.
 type Datagrams = Vec<(String, Vec<u8>)>;
@@ -21,7 +19,7 @@ type Datagrams = Vec<(String, Vec<u8>)>;
 /// fixture's replies, then sends the rest of its server lines at their
 /// times past the `connectResponse`.
 fn replay_server() -> SocketAddr {
-    let text = std::fs::read_to_string(FIXTURE).unwrap();
+    let text = std::fs::read_to_string(&FIXTURE).unwrap();
     let s2c: Vec<capture::Line> = capture::parse(&text)
         .unwrap()
         .into_iter()

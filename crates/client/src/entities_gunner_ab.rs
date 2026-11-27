@@ -20,7 +20,7 @@ mod common;
 fn capture(name: &str) -> String {
     std::fs::read_to_string(format!(
         "{}/../server/tests/fixtures/ownline/{name}",
-        env!("CARGO_MANIFEST_DIR")
+        vcod_common::manifest_dir!()
     ))
     .expect("the capture")
 }
@@ -62,7 +62,7 @@ fn drawn(fs: Pk3Fs, name: &str, cvars: &[(&str, &str)]) -> Vec<Drawn> {
     sv.set_protocol(proto);
     let src = std::fs::read_to_string(format!(
         "{}/../gsc/tests/fixtures/semantics/client-probes/{probe}.gsc",
-        env!("CARGO_MANIFEST_DIR")
+        vcod_common::manifest_dir!()
     ))
     .expect("the probe");
     sv.overlay_script(&format!("maps/mp/gametypes/{probe}"), &src);

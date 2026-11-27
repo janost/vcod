@@ -633,12 +633,7 @@ pub fn cod2_map_census() {
     }
     vcod_cod2::model::register();
     let out = std::env::var_os("VCOD_CENSUS_OUT").map_or_else(
-        || {
-            PathBuf::from(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../tmp/cod2-map-census"
-            ))
-        },
+        || PathBuf::from(vcod_common::manifest_path!("/../../tmp/cod2-map-census")),
         PathBuf::from,
     );
     std::fs::create_dir_all(&out).unwrap();

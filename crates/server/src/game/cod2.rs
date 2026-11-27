@@ -1960,8 +1960,7 @@ mod tests {
         let Some(fs) = vcod_common::testing::cod2_fs() else {
             return;
         };
-        let gsc = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
+        let gsc = std::fs::read_to_string(vcod_common::manifest_path!(
             "/../cod2/tests/fixtures/turret/probe_turret.gsc"
         ))
         .unwrap();
@@ -2042,8 +2041,7 @@ mod tests {
         let Some(fs) = vcod_common::testing::cod2_fs() else {
             return;
         };
-        let gsc = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
+        let gsc = std::fs::read_to_string(vcod_common::manifest_path!(
             "/../cod2/tests/fixtures/moves/probe_moves.gsc"
         ))
         .unwrap();
@@ -2154,8 +2152,7 @@ mod tests {
         let Some(fs) = vcod_common::testing::cod2_fs() else {
             return;
         };
-        let gsc = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
+        let gsc = std::fs::read_to_string(vcod_common::manifest_path!(
             "/../cod2/tests/fixtures/moves/probe_moves.gsc"
         ))
         .unwrap();

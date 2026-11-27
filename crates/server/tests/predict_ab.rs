@@ -958,7 +958,7 @@ fn capture_side_by_side(
 ) -> Result<(), String> {
     let text = std::fs::read_to_string(format!(
         "{}/tests/fixtures/playerstate/{file}",
-        env!("CARGO_MANIFEST_DIR")
+        vcod_common::manifest_dir!()
     ))
     .unwrap();
     // The 1.5 captures predate the header; 1.5b sends 1.1's list.
@@ -1139,7 +1139,7 @@ fn retail_state_rows(
 ) {
     let text = std::fs::read_to_string(format!(
         "{}/tests/fixtures/playerstate/{file}",
-        env!("CARGO_MANIFEST_DIR")
+        vcod_common::manifest_dir!()
     ))
     .unwrap();
     let cs7 = text
@@ -1657,7 +1657,7 @@ const REPLAY_GAPS: &[(&str, i32)] = &[
 /// ([`Delta::relocated`]). Each capture's weapons are its own `# cs7`
 /// header's, or mp_carentan's 1.1 list where it has none.
 fn replay_retail_runs(p: &Cod1Wire, fs: &vcod_common::pk3::Pk3Fs, server: &str, min_runs: usize) {
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/playerstate");
+    let dir = vcod_common::manifest_path!("/tests/fixtures/playerstate");
     let mut runs: Vec<(String, String)> = std::fs::read_dir(dir)
         .expect("the fixture directory")
         .map(|e| e.unwrap().path())

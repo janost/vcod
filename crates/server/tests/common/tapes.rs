@@ -5,7 +5,8 @@ use std::collections::BTreeSet;
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::weapon::WeaponDef;
 
-pub const TAPE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/tapes");
+pub static TAPE_DIR: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/tests/fixtures/tapes");
 
 /// The tape of capture `file` (`<capture>.tape`).
 pub fn tape_path(file: &str) -> String {

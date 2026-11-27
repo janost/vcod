@@ -36,10 +36,8 @@ use crate::audio::cues::{self, CueCtx};
 use crate::fx::registry::{self, ResolveCtx, Resolved};
 use crate::hud::player::{DamageFeedback, DamageIndicators};
 
-const SLOPE_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../server/tests/fixtures/playerstate"
-);
+static SLOPE_DIR: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/../server/tests/fixtures/playerstate");
 
 /// What a replay played.
 #[derive(Default, Debug)]

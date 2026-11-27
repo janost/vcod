@@ -297,7 +297,7 @@ pub fn bsp_replacing_models(bsp: &[u8], blocks: &str) -> Vec<u8> {
 
 /// A committed capture under this crate's `tests/fixtures/`, by relative path.
 pub fn fixture(rel: &str) -> Vec<u8> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let path = PathBuf::from(crate::manifest_dir!())
         .join("tests/fixtures")
         .join(rel);
     std::fs::read(&path).unwrap_or_else(|e| panic!("fixture {}: {e}", path.display()))

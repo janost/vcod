@@ -18,10 +18,8 @@ use vcod_cod4::testing::cod4_install;
 use vcod_cod4::walk::{WalkOptions, walk};
 use vcod_cod4::zone::Zone;
 
-const TAKE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/tests/fixtures/phys/car-mp_backlot-1.7.txt"
-);
+static TAKE: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/tests/fixtures/phys/car-mp_backlot-1.7.txt");
 /// The take's brush parts by body id (phys_create's pins).
 const PARTS: [(u32, &str); 3] = [
     (5, "vehicle_80s_sedan1_silv_door_rb"),
@@ -177,7 +175,7 @@ fn the_car_takes_brush_geoms_collide_as_retail() {
         .iter()
         .map(|&(id, name)| (id, brush_of(&zones, name)))
         .collect();
-    let (steps, offsets) = steps(&std::fs::read_to_string(TAKE).unwrap());
+    let (steps, offsets) = steps(&std::fs::read_to_string(&TAKE).unwrap());
     assert_eq!(offsets.keys().copied().collect::<Vec<_>>(), [5, 6, 9]);
     let (mut raw_ok, mut raw_exact, mut cut_ok, mut cut_exact, mut contacts) = (0, 0, 0, 0, 0);
     let (mut met_tris, mut tri_contacts) = (0, 0);

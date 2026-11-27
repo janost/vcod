@@ -148,7 +148,7 @@ impl Pin {
 }
 
 fn fixture(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    PathBuf::from(vcod_common::manifest_dir!())
         .join("tests/fixtures/pins")
         .join(format!("{name}.txt"))
 }
