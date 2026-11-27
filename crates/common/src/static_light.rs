@@ -5,6 +5,7 @@
 //! docs/research/cod11-light-grid-and-leaf-lights.md.
 
 use crate::bsp;
+use crate::clipmap::SURF_SKY;
 
 use crate::collision::CollisionWorld;
 use crate::mapworld;
@@ -27,7 +28,6 @@ const MAX_ENT_LIGHTS: usize = 8;
 /// `r_minEntLightIntensity` default.
 const MIN_ENT_LIGHT_INTENSITY: f32 = 0.02;
 const LUMA: Vec3 = Vec3::new(0.299, 0.587, 0.114);
-const SURF_SKY: u32 = 0x4;
 /// The mask every light-visibility trace runs with.
 const VIS_MASK: u32 = 0x2001;
 /// Mask bit set when any sky ray of the sample got out.

@@ -4,6 +4,7 @@
 //! docs/research/coduo-diff.md 19, "Client-traced rounds").
 
 use glam::Vec3;
+use vcod_common::clipmap::SURF_SKY;
 use vcod_common::collision::sound_material;
 use vcod_common::weapon::WeaponDef;
 
@@ -30,8 +31,6 @@ const ALTFIRE_TURN: [f32; 2] = [5.0, 2.0];
 const ATTEMPTS: usize = 8;
 /// Entity numbers below this are players, whose hits the server reports.
 const MAX_CLIENTS: u32 = 64;
-/// A surface that takes no impact (`surfaceFlags` 0x4, the sky).
-const SURF_SKY: u32 = 0x4;
 
 /// The tag the coaxial gun fires from, which aims off the view.
 pub const TAG_ALTFIRE: &str = "tag_altfire";
