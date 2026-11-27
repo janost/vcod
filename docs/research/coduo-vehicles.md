@@ -2871,7 +2871,7 @@ hull".
   at `0x3006b7a8`) (VERIFIED decompile and file bytes). 1.1's (0x2b7f8)
   sets them outright.
 
-  The targets also differ from 1.1's (INFERRED (decompile), constants
+  The targets also differ from 1.1's (INFERRED (decompile); constants
   VERIFIED file bytes, the same in both modules):
 
   | Target | 1.5 and UO | 1.1 |
