@@ -1305,7 +1305,9 @@ The ragdoll's world steps them (10.7).
   0x5a2a34) and its group under 0x1000 contacts (0x5a2a43); past either
   the pass prints `Maximum number of ODE physics contact points
   exceeded.` (0x6f7300) and returns. VERIFIED (the instructions). The
-  jitter (0x5a23e0) is not ported. Under `phys_noIslands` (0xcc54410,
+  jitter (0x5a23e0) is ported for worlds 0 and 1 (cod4-gsc.md 3.6.7);
+  world 2 keeps no region, as 0x5a7730 fills world 0's list alone
+  (cod4-gsc.md 3.6). Under `phys_noIslands` (0xcc54410,
   default 0) the pass makes body pairs another way, not ported.
   VERIFIED (the registration at 0x5a3799).
 - **Self collision** (0x5bd9c0, `selfcol`). For each ragdoll of the pool

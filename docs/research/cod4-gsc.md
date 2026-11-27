@@ -1682,11 +1682,8 @@ What 1.7 collides a part against:
   sleeps on the idle step that takes its time left under 0. VERIFIED
   (the instructions, 0x5b9c0a..0x5b9c49).
 
-vcod ran its own impulse solver here until the switch to the ODE port
-(3.6.3 to 3.6.7): 26 swept points a box, face clipping, ten impulse
-passes, extra edge passes beyond 1.7's colliders. The port has 1.7's
-colliders, contact pass and step, and its notes went with it. What the
-tests measure on the port:
+The port has 1.7's colliders, contact pass and step (3.6.3 to 3.6.7).
+What the tests measure on it:
 
 - `cod4::part_edges` drops mp_backlot's sedan hood (its brush geom) and
   left front door (its bounds box) in world 1, and one def of each
@@ -1700,8 +1697,9 @@ tests measure on the port:
   world solid a quarter unit in, 387 had some under a unit in, 56 under
   two, 52 under four and 134 deeper or along a thin geom's middle (a
   barrel shard, the hood, over a step's edge). Whether retail's sink as
-  far at an edge is not captured; the old solver's "no solid a quarter
-  unit inside" is gone. VERIFIED (the run, ours).
+  far at an edge is not captured; the thin ones are likely the box's
+  narrow pass, whose contacts are not ported (3.6.8). VERIFIED (the run,
+  ours); the cause is INFERRED.
 - `parts_dropped_together_step_at_world_ones_msec_step`: the 36 drops in
   one world 1 step 17 ms first, then 28 while all fly (`msec_step` of 36
   awake), back to 17 as they sleep, by 3.9 s. VERIFIED (the run, ours).
@@ -2160,8 +2158,8 @@ VERIFIED (the run).
 The brush's loader keeps each face's neighbours (the axial runs at
 +0x34 and +0x40, a side's at +8 and +0xa, into the edges at +0x30) and
 each side's own inline plane (`PhysBrush::side_planes`); the plane
-array at +0x4c read empty for the sedan's brushes, so `PhysBrush::planes`,
-which the old impulse solver read, stays as it was. VERIFIED (the run).
+array at +0x4c read empty for the sedan's brushes, so the colliders do
+not read `PhysBrush::planes`. VERIFIED (the run).
 
 `phys_brush_ab::the_car_takes_brush_geoms_collide_as_retail` feeds the
 port the car take's pose of each brush body (the hood, 9, and the two
@@ -2680,12 +2678,46 @@ sweep, as the `body` lines are):
   jitter's push, the handle fallbacks and the pool. No take holds a
   jitter. VERIFIED (the tests, ours).
 
-Not ported, no take reaching them: the triangle cull 0x596c70 (3.6.4,
-3.6.6), the cylinder's edge and corner arms (3.6.6, on the instructions
-alone), the box's narrow pass's contacts (3.6.5), class 11, and body
-against body (`phys_collUseEntities`). World 0 dropping a body once it
-sleeps is the dynamic entities' code (`DynEnts::advance`, cod4-world.md
-13.2).
+#### 3.6.8 What runs on the port, and what does not
+
+Running (`vcod_cod4::ode`, `fx_phys`, `play::cod4_physics`):
+
+- Three worlds on one layer: 0 the dynamic entities (`DynEnts::advance`,
+  cod4-world.md 13.2), 1 the launched parts (3.6) and the effects'
+  physics models (cod4-effects.md 9.1.1), 2 the ragdolls
+  (`cod4-player-anims.md` 10.7).
+- Worlds 0 and 1: every geom class of 3.6.1 but 11, brush (3.6.4), box
+  (3.6.5) and cylinder with its transform (3.6.6), against the clip map
+  under 0x2806c91; the contact pass, its jitter and the sleep rule; the
+  clock, `msecStep` and the 512-body pool shared by the worlds
+  (3.6.7); the pushes of a launch, a blast, a round and a
+  `physicsJitter`.
+- The impact sounds (3.6.7), 32 a frame at most, world 1's then
+  world 0's.
+- Matched on four retail takes (3.6.2): the round, the frag, the car and
+  the watermelon, step for step, the watermelon also spawned through the
+  FX path.
+
+Not ported, no take reaching them:
+
+- The triangle sphere cull 0x596c70 (3.6.4, 3.6.6); the car take matches
+  without it.
+- The cylinder's edge and corner arms (3.6.6, on the instructions alone).
+- The box's narrow pass's contacts (3.6.5). Thin boxes sinking up to 4
+  units and more at step edges are likely this (3.6.1). INFERRED.
+- Class 11 (brush dynamic entities are left out) and body against body
+  (`phys_collUseEntities`, `phys_interBodyCollision`, 0 by default).
+- Looping physics elements of an effect, chained effects' bodies (made
+  one frame late), and a spawn's nonzero angles, cylinder frames and
+  0x40 / 0x80 origins, which no take checks (cod4-effects.md 9.1.1).
+- `CG_MapRestart` resets worlds 0 and 1 and the dynamic entities, not the
+  ragdolls (cod4-world.md 13.7).
+
+Unchecked: the shipment frag's last body sleeps at 22.1 s on the port,
+which no retail capture has timed. VERIFIED (the run, ours).
+
+World 0 dropping a body once it sleeps is the dynamic entities' code
+(`DynEnts::advance`, cod4-world.md 13.2).
 
 ## 4. The load
 

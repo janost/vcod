@@ -372,14 +372,9 @@ instructions) at the addresses they name, or carry their own label:
   runs under control word 0x1b3f, rounding up), stored truncated
   (0x4a4b9d..0x4a4bb2).
 - Flags 0x8000000 on a model element (type 5 at `+0xb0`): the spawn
-  makes a physics body for it (0x4a2838, 0x4a1ff0) at the frame's origin
-  plus the element's offset in its axes, turned by the spawn angles at 0
-  ms, spinning at `angularVelocity` times 1000 (the double at 0x70af28)
-  at body `+0x140`, in world 1 (0x5a4fb0 with edi 1), its collision off
-  the model (0x5a5710), the body's id at element `+0x18`. The draw then
-  takes the body's position and orientation (0x498340: 0x5a6ec0 in world
-  1 under the critical section at 0xcc12038) in place of the frame's.
-  Freeing the element destroys the body (0x4a2909..0x4a291d, 0x5a58c0).
+  makes a physics body for it in world 1 (0x4a2838, 0x4a1ff0), and the
+  draw takes the body's position and orientation in place of the frame's
+  (0x498340); 9.1.1 has both.
 
 Over `common_mp` and every MP map zone, 127 distinct effects' model
 elements: 73 under run bits 0x80 (52 of them colliding and turning, the
@@ -504,6 +499,13 @@ visual the model 3.6.3 pinned, and the run passing 3.6.7's rule to step
 27, then within 2.5e-4 units. VERIFIED (the run, ours). The angles at
 0 ms are zero in that element, so 0x4a62f0's turn and the non-sphere
 frames rest on the instructions alone.
+
+Not ported, no take reaching them: looping physics elements (a looping
+element with the flag spawns no body), a body for a chained effect's
+element in the frame it spawns (it comes one frame late), the frame axes
+off 0x561100 (the port builds them with `glam`), and a spawn's nonzero
+angles, cylinder frames and 0x40 / 0x80 origins. The rest of what the
+worlds leave out is cod4-gsc.md 3.6.8.
 
 ## 10. The weapon's tags
 

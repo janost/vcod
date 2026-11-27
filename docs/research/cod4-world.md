@@ -2259,8 +2259,9 @@ nothing. VERIFIED (13.1's census).
   gamestate. VERIFIED (the code against the above; `dynent::tests`,
   `dynent_census`, `cod4_live_a_frag_flings_the_maps_clutter_and_breaks_a_plate`,
   `cod4_live_fast_restart_puts_the_dynents_back`).
-- Not ported: the rest of `CG_MapRestart` (0x44b350); vcod resets only
-  the dynamic entities on `n` and `B`. INFERRED (the code).
+- Not ported: the rest of `CG_MapRestart` (0x44b350); vcod resets the
+  dynamic entities and worlds 0 and 1 on `n` and `B` (`restart_dynents`),
+  not the ragdolls (cod4-gsc.md 3.6.8). INFERRED (the code).
 - The body is world 0 of the ODE port (cod4-gsc.md 3.6.3 to 3.6.7):
   `DynEntCl_CreatePhysObj`'s body and collision
   (`PhysWorld::create_from`), the blast's `Phys_ObjAddForce` and the
@@ -2269,10 +2270,8 @@ nothing. VERIFIED (13.1's census).
   0x2806c91, and the impact sounds. VERIFIED (the code against 13.2 to
   13.4, 13.8).
 - mp_crash's pots stand inside an item clip brush (contents 0x400, in
-  0x2806c91) over their table. vcod's old solver met nothing from inside
-  it, so they fell through the map, and it let a body pass the contents
-  its def's centre lay in. That rule is gone: retail has none. On the
-  port the 9 props whose centre starts in clip, each jolted alone,
+  0x2806c91) over their table; retail passes no contents by a def's
+  centre. On the port the 9 props whose centre starts in clip, each jolted alone,
   settle within 10 s, none more than 64 units down
   (`dynent_census::mp_crashs_props_started_in_clip_wake_and_settle`).
   VERIFIED (the run, ours). Where retail leaves them is not captured.

@@ -63,7 +63,8 @@ Ranked by how much a player notices.
   right, but tails drew half 1.7's length; tails now run `2 * size[1]`,
   and model elements load out of the zones and draw at the visual
   state's scale (cod4-effects.md 9), on 1.7's axes (9.1). Their
-  physics body (flag 0x8000000) is still vcod's own path.
+  physics body (flag 0x8000000) was vcod's own path; it is world 1's
+  (above, cod4-effects.md 9.1.1).
 
 - A playerstate sent without origin (bit 0) kept the base's origin and
   velocity. It now takes them, the view, `bobCycle` and `movementDir`
