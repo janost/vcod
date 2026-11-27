@@ -1790,8 +1790,9 @@ impl ClientSim {
         }
     }
 
-    /// Picks this frame's animation from the state the moves just produced.
-    /// Called once per frame after the moves. Off the ground nothing is
+    /// Picks the animation from the state a cmd's move just produced.
+    /// Called after each cmd's move, as retail's `PM_Footsteps` runs
+    /// inside each `PmoveSingle` (combat doc 1.14). Off the ground nothing is
     /// selected at all. The usercmd reaches the selection only through two
     /// latches, `pm_flags` 0x40 in pmove and the `strafing` condition here
     /// ([`Self::footsteps_movetype_of`]). Each weapon event carries the
@@ -1799,7 +1800,7 @@ impl ClientSim {
     ///
     /// A spectator animates nothing; it is sent to nobody and its own
     /// playerstate carries zeros in the capture.
-    /// `hold_ms` is the clock the anim timers run on, the newest cmd's
+    /// `hold_ms` is the clock the anim timers run on, the cmd's
     /// `serverTime`, and each event carries the `serverTime` of the cmd
     /// that raised it: retail sets and runs down `torsoTimer` and
     /// `legsTimer` inside each cmd's pmove (`BG_PlayAnim`, 1.1d 0x3c338).

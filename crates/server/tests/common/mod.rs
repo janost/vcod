@@ -919,6 +919,8 @@ pub struct Trace {
     pub weaponstate: i32,
     pub weap_anim: i32,
     pub torso_anim: i32,
+    /// `None` on a capture taken before the trace carried the column.
+    pub legs_anim: Option<i32>,
     pub event_sequence: i32,
     pub events: [i32; 4],
     /// `eventParms[i]`; `None` on a capture whose trace lines carry no such
@@ -1095,6 +1097,7 @@ pub fn parse_fixture(text: &str, default_weapon: u8) -> Vec<Step> {
                 weaponstate: i("weaponstate"),
                 weap_anim: i("weapAnim"),
                 torso_anim: i("torsoAnim"),
+                legs_anim: m.get("legsAnim").map(|v| v.parse().unwrap()),
                 event_sequence: i("eventSequence"),
                 events: [
                     i("events[0]"),

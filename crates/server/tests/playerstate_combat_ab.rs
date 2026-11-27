@@ -52,7 +52,7 @@ struct Gap {
     map: &'static str,
     kind: &'static str,
     label: &'static str,
-    /// `weapAnim`, `torsoAnim`, `weaponstate`, `weaponDelay`, `transients`
+    /// `weapAnim`, `torsoAnim`, `legsAnim`, `weaponstate`, `weaponDelay`, `transients`
     /// (the sight fraction and the spread counter together) or `viewangles`.
     /// The last two are separate channels so a gap on one cannot hide a
     /// regression in the other behind a self-clean assert that only knows
@@ -206,6 +206,7 @@ fn trace_of(p: &Cod1Wire, s: &Sample, ms: i64) -> Trace {
         weaponstate: ps.field_i32(p, "weaponstate"),
         weap_anim: ps.field_i32(p, "weapAnim"),
         torso_anim: ps.field_i32(p, "torsoAnim"),
+        legs_anim: Some(ps.field_i32(p, "legsAnim")),
         event_sequence: ps.field_i32(p, "eventSequence"),
         events: [ev(0), ev(1), ev(2), ev(3)],
         event_parms: Some([
@@ -289,6 +290,21 @@ fn view_misses(retail: &[Trace], ours: &[Trace]) -> Vec<String> {
                 "at {}ms retail viewangles {rv:?}, ours {ov:?}",
                 r.ms
             ));
+        }
+    }
+    bad
+}
+
+/// Every retail sample's `legsAnim` against ours of the same frame, the
+/// restart toggle included: the replay runs retail's cmds, so a land or a
+/// throw restarts the legs on the same sample on both sides.
+fn legs_misses(retail: &[Trace], ours: &[Trace]) -> Vec<String> {
+    let mut bad = Vec::new();
+    for r in retail {
+        let Some(rl) = r.legs_anim else { continue };
+        let ol = ours.iter().find(|o| o.ms == r.ms).and_then(|o| o.legs_anim);
+        if ol != Some(rl) {
+            bad.push(format!("at {}ms retail legsAnim {rl}, ours {ol:?}", r.ms));
         }
     }
     bad
@@ -543,6 +559,23 @@ fn check_on(
                 view_bad.len(),
                 step.trace.len(),
                 view_bad.join("\n    ")
+            )),
+            None => {}
+        }
+        let legs_bad = legs_misses(&step.trace, ours);
+        match gapped(map, kind, &step.label, "legsAnim") {
+            Some(why) => assert!(
+                !legs_bad.is_empty(),
+                "{map} {kind} {}: the legs match now; drop the KNOWN_GAPS \
+                 entry ({why})",
+                step.label
+            ),
+            None if !legs_bad.is_empty() => bad.push(format!(
+                "{}: {} of {} samples off\n    {}",
+                step.label,
+                legs_bad.len(),
+                step.trace.len(),
+                legs_bad.join("\n    ")
             )),
             None => {}
         }
