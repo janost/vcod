@@ -361,6 +361,16 @@ def on_sound():
     log("sound %d %08x %s" % (st["steps"] + 1, u32(reg("esp")), words(reg("esi"), 3)))
 
 
+def on_fxbody():
+    # 0x4a1ff0 entry, an FX model element's body: ecx the effect, then the
+    # element's def, its seed and the element; the effect's +0x12 seed,
+    # +0x20 start and the frames at +0x28 and +0x44 (quaternion, origin)
+    eff, sp = reg("ecx"), reg("esp")
+    edef, seed = u32(sp + 4), u32(sp + 8)
+    index = (edef - u32(u32(eff) + 0x1C)) // 0xFC
+    log("fxbody elem %d seed %d | effect %s" % (index, seed, words(eff, 0x60 // 4)))
+
+
 def on_round():
     # DynEntCl_EntityImpactEvent 0x48e0f0: a round's leg walked the dynents
     log("# frame %d round leg" % st["frame"])
@@ -395,6 +405,8 @@ B(0x4FFCE0, on_frame)
 for a in CREATORS:
     B(a, on_made)
 B(0x48E0F0, on_round)
+if WORLD == 1:
+    B(0x4A1FF0, on_fxbody)
 B(0x5A6D50, on_run_to_time)
 B(0x5A6E69, on_step)
 B(0x5A5F9E, on_collide)

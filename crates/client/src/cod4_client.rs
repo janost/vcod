@@ -1262,22 +1262,25 @@ impl Cod4Client {
         let mut physics = std::mem::take(&mut self.session.physics);
         let tags = std::mem::take(&mut self.weapon_tags);
         self.sound_and_fx_with(cx, fired, now_ms, &mut dynents, &mut physics, &tags);
-        self.play_fx_bodies(cx, &mut physics);
+        self.play_fx_bodies(cx.fx, &mut physics);
+        if let Some(w) = self.session.world() {
+            physics.run_loops(w, self.render_time);
+        }
         self.play_impacts(cx, &mut dynents, &mut physics);
         self.session.dynents = dynents;
         self.session.physics = physics;
         self.weapon_tags = tags;
     }
 
-    /// The effects played since the last frame with physics model
-    /// elements: those made as world 1 bodies at the drawn time
+    /// The effects with physics model elements played since the last
+    /// call: those made as world 1 bodies at the drawn time
     /// (`Cod4Physics::play_fx`), off the CRT's one `rand()` stream.
     fn play_fx_bodies(
         &mut self,
-        cx: &mut ClientFrame,
+        fx: &mut crate::fx::sim::FxSystem,
         physics: &mut crate::play::cod4_physics::Cod4Physics,
     ) {
-        let plays = cx.fx.take_phys_plays();
+        let plays = fx.take_phys_plays();
         let Some(w) = self.session.world().cloned() else {
             return;
         };
@@ -1287,13 +1290,21 @@ impl Cod4Client {
                 continue;
             };
             let (pos, axis) = p.at.frame();
-            let frame = vcod_cod4::fx_phys::EffectFrame {
-                origin: pos.into(),
-                axes: axis.map(Into::into),
-            };
+            let frame = vcod_cod4::fx_phys::EffectFrame::of_axis(pos.into(), &axis.map(Into::into));
             let rand = &mut self.session.crt_rand;
             physics.play_fx(&w, effect, &frame, self.render_time, rand);
         }
+    }
+
+    /// The effects the frame's FX step started through a chain (an
+    /// element's impact, death or emitted effect) made as bodies in this
+    /// frame, as `FX_SpawnEffect` makes them inside the element update
+    /// that raised them (0x4a3f7d, 0x4a4694, 0x4a36e9; cod4-effects.md
+    /// 9.1.1.1). Run after `FxSystem::spawn_chained`.
+    pub(crate) fn play_chained_fx_bodies(&mut self, fx: &mut crate::fx::sim::FxSystem) {
+        let mut physics = std::mem::take(&mut self.session.physics);
+        self.play_fx_bodies(fx, &mut physics);
+        self.session.physics = physics;
     }
 
     /// Each world's bodies counted against the others' share of the one

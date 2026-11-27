@@ -266,9 +266,10 @@ CoD2 effect path:
   trails on `tag_fx`. Effect model elements (debris) draw the zones'
   xmodels at their visual scale, turning as 1.7 turns them. An element
   with its own physics body (a watermelon's chunks, a paper box's, a
-  cluster bomb's) flies as a body on the same physics as the launched
-  parts, spawned where 1.7 spawns it, and its body goes when its life
-  ends ([cod4-effects.md](../research/cod4-effects.md) 9.1.1).
+  cluster bomb's, the splinters of a frag on wood) flies as a body on
+  the same physics as the launched parts, spawned where 1.7 spawns it,
+  looping ones on their interval, and its body goes when its life ends
+  ([cod4-effects.md](../research/cod4-effects.md) 9.1.1).
 - Looping effects for their whole life: `spawnFx`, `playLoopedFx` and
   the map's createfx ambience (mp_crash's fires start settled). Each
   element spawns inside its `spawnRange` and fades over its distances.
