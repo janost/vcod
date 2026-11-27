@@ -138,17 +138,19 @@ The weapon byte is the client's own pick
   models without their `hidePart` parts, so a damaged car draws intact or
   cracked glass, never both (cod4-client-view.md 15).
 - A `physicsLaunch`ed part (a blown-up car's doors, hood, bumpers,
-  mirrors and wheels) flies off its launch on this client, as 1.7's does,
+  mirrors and wheels) flies off its launch on this client on the ODE
+  port, 1.7's physics, matched step for step on retail captures: it
   bounces by its physics preset on its model's shape (brush, boxes or
-  cylinders, else its bounds), comes to rest on the world, and a later
-  blast leaves it be and a round knocks it on, as on 1.7; one first
-  seen more than a second after its launch stays where it stood, as on
-  1.7 ([cod4-gsc.md](../research/cod4-gsc.md) 3.6).
+  cylinders, else its bounds), plays its impact sounds, comes to rest on
+  the world, and a later blast leaves it be and a round knocks it on, as
+  on 1.7; one first seen more than a second after its launch stays where
+  it stood, as on 1.7 ([cod4-gsc.md](../research/cod4-gsc.md) 3.6).
 - The map's props, its dynamic entities (mp_crash's 516 bottles, cans,
   cinder blocks, crates, tyres and plates), draw where the map puts
   them. A grenade's, a rocket's or a script's blast, every round this
   client draws (each leg of a piercing one), a knife's swing and a
-  script's `physicsJitter` knock them about and they settle again; plates,
+  script's `physicsJitter` knock them about on the same physics, with
+  their impact sounds, and they settle again; plates,
   televisions, watermelons and paper boxes break, into their effect
   where they have one. Each client runs its own, as on 1.7, and a map
   restart sets them back ([cod4-world.md](../research/cod4-world.md) 13).
@@ -498,17 +500,14 @@ Ranked by how much a player notices. The research-side lists are
    and custom classes are safe, and no use here. Create a Class opens at
    rank 3 and edits classes as 1.7 does
    ([cod4-front-end.md](../research/cod4-front-end.md) 4).
-3. **Physics debris on vcod's solver.** A `physicsLaunch`ed part (a
-   car's door or hood) flies, lands and settles under vcod's own contact
-   solver, not ODE, so its path and spin differ in detail. A blast does
-   not push it, as on 1.7; a round does. A map's props (bottles, crates,
-   tyres, televisions) fly the same way, so they land elsewhere than on
-   1.7, and a `physicsJitter` lifts a prop flat on the floor harder.
-   Ragdolls run on the ODE port, so corpses fall as on 1.7 to within a
-   fraction of a unit over their first second
+3. **Effect debris off the physics.** Launched parts, props and
+   ragdolls run on the ODE port, as on 1.7, but an effect's physics
+   models (a watermelon's chunks, a cluster bomb's) move on vcod's own
+   path, not as bodies. Each client still runs its own props, so two
+   clients see them land apart, as on 1.7
    ([cod4-gsc.md](../research/cod4-gsc.md) 3.6,
    [cod4-world.md](../research/cod4-world.md) 13,
-   [cod4-player-anims.md](../research/cod4-player-anims.md) 10.7).
+   [cod4-effects.md](../research/cod4-effects.md) 9.1).
 4. **Stereo only.** A 5.1 or 7.1 device gets the stereo mix on its front
    pair ([cod4-sound.md](../research/cod4-sound.md) 5). 139 alias rows
    whose curve no zone holds fall off straight.
