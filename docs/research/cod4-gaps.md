@@ -14,12 +14,9 @@ kept at the end. Sizes: S under an hour, M a few hours, L a day or more.
 
 Ranked by how much a player notices.
 
-- Rigid-body physics is vcod's solver, not ODE: a body's boxes meet the
-  world's brushes and triangles by face clipping and vcod's edge
-  contacts, its cylinders by 1.7's separating axes with vcod's points per
-  feature, not ODE's own box colliders; a brush with sides meets the
-  world on its points alone, and every geom keeps vcod's points beside
-  its collider (cod4-gsc.md 3.6, 3.6.1). M.
+- Physics FX models (cluster bombs, breakables, the watermelon's
+  chunks) draw as plain effect elements, not world 1 bodies
+  (cod4-effects.md 9.1). M.
 - Ragdolls run on the ODE port as 1.7 runs them, gated on two retail
   captures to within a fraction of a unit (cod4-player-anims.md 10.7);
   the base pose they are built in is the model's, not under the corpse's
@@ -53,6 +50,11 @@ Ranked by how much a player notices.
 
 ## 3. Closed
 
+- Launched parts and dynamic entities ran on vcod's own impulse solver,
+  with no impact sounds. Worlds 0 and 1 now run on the ODE port, 1.7's
+  geoms, colliders, contact pass and step, matched step for step on four
+  retail takes, and their impact sounds play; the solver and its mp_crash
+  pot rule are gone (cod4-gsc.md 3.6, 3.6.7; cod4-world.md 13.7).
 - Effect model elements did not draw, and whether CoD4's effect sizes
   are radii was open. They are (`iw3mp.exe` 0x496ef0), so sprites were
   right, but tails drew half 1.7's length; tails now run `2 * size[1]`,

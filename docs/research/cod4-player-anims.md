@@ -1658,10 +1658,10 @@ hook and calls `PhysWorld::run_to_time` for world 2.
   `L` is not 0 (0x5a5d21) `den + (L L m / 2) / (u . I u)` with `u . I u`
   stored; `J = cl m scale / den` stored, `J dir` stored, to 0x5a5900 at
   the moved point. VERIFIED (0x5a5a20..0x5a5db4). `phys::obj_bullet_impact`
-  ports it. Nothing calls it yet: worlds 0 and 1 still run on
-  `vcod_cod4::physics`. vcod's.
-- **0x5a2320's cut** moved with it: `physics.rs` and the capsule's near
-  callback both call `ode::collide::reduce`. vcod's.
+  ports it; worlds 0 and 1 call it since they moved onto the port
+  (cod4-gsc.md 3.6). vcod's.
+- **0x5a2320's cut** moved with it into `ode::collide::reduce`, which the
+  near callback calls for every world. vcod's.
 - **Gates**: `ragdoll_ab` (unchanged), and the unit tests
   `ode::tests::each_worlds_msec_step_follows_its_awake_count`,
   `the_drag_arm_is_worlds_zero_and_ones_and_the_damping_world_twos`,

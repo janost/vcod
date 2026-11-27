@@ -73,7 +73,9 @@ pub struct Cod4World {
     pub model_coll: HashMap<String, Arc<Vec<XModelCollSurf>>>,
     /// Each xmodel with a physics preset by lower-case name: what a
     /// `physicsLaunch`ed part flies as (`play::cod4_physics`).
-    pub parts: HashMap<String, Arc<vcod_cod4::physics::PartModel>>,
+    pub parts: HashMap<String, Arc<vcod_cod4::ode::obj::PhysModel>>,
+    /// The impact sound rows' alias prefixes (`ode::obj::Presets`).
+    pub impact_prefixes: Vec<String>,
     /// The map's dynamic entities' defs (`vcod_cod4::dynent`).
     pub dynents: Arc<Vec<vcod_cod4::dynent::DynDef>>,
     /// The mantle clips out of these zones, which prediction mantles along.
@@ -135,6 +137,7 @@ impl Cod4World {
             }
         }
         let all: Vec<&Assets> = std::iter::once(map).chain(zones.iter().copied()).collect();
+        let presets = vcod_cod4::ode::obj::Presets::of(&all);
         Ok(Cod4World {
             clip,
             weapons,
@@ -144,7 +147,8 @@ impl Cod4World {
             kicks,
             ragdoll: None,
             model_coll,
-            parts: vcod_cod4::physics::part_models(&all),
+            parts: vcod_cod4::ode::obj::part_models(&all, &presets),
+            impact_prefixes: presets.prefixes,
             dynents: Arc::new(vcod_cod4::dynent::defs(map, zones)),
             mantle,
         })

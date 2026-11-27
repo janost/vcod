@@ -115,10 +115,11 @@ pub(crate) struct Cod4Client {
     /// The bodies' tags and `turret_tags` together, as the last draw left
     /// them: where the others' shots flash and leave from.
     weapon_tags: HashMap<u32, WeaponTags>,
-    /// msvcrt `rand()`'s state for the gunner's view jitter.
-    jitter_rand: vcod_common::rng::MsvcRand,
     /// The zones' script menus went to the session.
     menus_loaded: bool,
+    /// The impact sound handles by slot, for the world (by its address)
+    /// they were looked up for.
+    impact_aliases: Option<(usize, Vec<Option<String>>)>,
     /// The fog and vision set its configstrings name.
     look: crate::cod4_look::Cod4Look,
     /// The drawn snapshot's shellshock (`play::cod4_shock`): its latches,
@@ -302,8 +303,8 @@ impl Cod4Client {
             view_tags: None,
             turret_tags: HashMap::new(),
             weapon_tags: HashMap::new(),
-            jitter_rand: Default::default(),
             menus_loaded: false,
+            impact_aliases: None,
             look,
             shock: Default::default(),
             shock_kick: [0.0, 0.0],
@@ -662,6 +663,7 @@ impl Cod4Client {
         prof.next(Stage::Scene);
         self.session.third_person =
             crate::play::cod4_third_person::Dvars::read(|n| cx.shell.cvar(n).map(str::to_string));
+        self.share_body_pool();
         let scene = self.session.scene();
         let Some(scene) = scene else {
             prof.next(Stage::Events);
@@ -1250,14 +1252,67 @@ impl Cod4Client {
     /// The fired events' sounds and effects, the map's ambient, and the
     /// zones' tables handed to the audio and fx systems on the first call.
     fn sound_and_fx(&mut self, cx: &mut ClientFrame, fired: &[Fired], now_ms: i32) {
+        self.share_body_pool();
         // Out of the session while its gamestate is read.
         let mut dynents = self.session.dynents.take();
         let mut physics = std::mem::take(&mut self.session.physics);
         let tags = std::mem::take(&mut self.weapon_tags);
         self.sound_and_fx_with(cx, fired, now_ms, &mut dynents, &mut physics, &tags);
+        self.play_impacts(cx, &mut dynents, &mut physics);
         self.session.dynents = dynents;
         self.session.physics = physics;
         self.weapon_tags = tags;
+    }
+
+    /// Each world's bodies counted against the others' share of the one
+    /// pool of 512 (0x5b6aa0): worlds 0 and 1 the session's, 2 the
+    /// corpses'.
+    fn share_body_pool(&mut self) {
+        let w0 = self.session.dynents.as_ref().map_or(0, |d| d.pw.bodies());
+        let w1 = self.session.physics.pw.bodies();
+        let w2 = self.players.ragdoll_bodies();
+        if let Some(d) = &mut self.session.dynents {
+            d.pw.others = w1 + w2;
+        }
+        self.session.physics.pw.others = w0 + w2;
+        self.players.set_ragdoll_others(w0 + w1);
+    }
+
+    /// The impact sounds worlds 1 and 0 played since the last frame, in
+    /// retail's stepping order (0x5fa373, then 0x5fa38d): each slot's
+    /// alias (`ode::obj::impact_aliases` over the zones' table) at its
+    /// point, at most [`IMPACT_QUEUE`] a frame.
+    fn play_impacts(
+        &mut self,
+        cx: &mut ClientFrame,
+        dynents: &mut Option<vcod_cod4::dynent::DynEnts>,
+        physics: &mut crate::play::cod4_physics::Cod4Physics,
+    ) {
+        let mut impacts = std::mem::take(&mut physics.impacts);
+        if let Some(d) = dynents {
+            impacts.append(&mut d.impacts);
+        }
+        if impacts.is_empty() || self.sounds.is_none() {
+            return;
+        }
+        let Some(w) = self.session.world() else {
+            return;
+        };
+        let key = std::sync::Arc::as_ptr(w) as usize;
+        if self.impact_aliases.as_ref().is_none_or(|(k, _)| *k != key) {
+            let a =
+                vcod_cod4::ode::obj::impact_aliases(&w.impact_prefixes, |n| cx.audio.has_alias(n));
+            self.impact_aliases = Some((key, a));
+        }
+        let Some((_, aliases)) = &self.impact_aliases else {
+            return;
+        };
+        for i in impacts.iter().take(IMPACT_QUEUE) {
+            if let Some(Some(alias)) = aliases.get(i.slot) {
+                let pos = glam::Vec3::from(i.pos);
+                cx.audio.play(cx.fs, cod4_audio::impact_cue(alias, pos));
+            }
+        }
     }
 
     fn sound_and_fx_with(
@@ -1366,7 +1421,7 @@ impl Cod4Client {
         let bullet_force = dynents
             .as_ref()
             .filter(|d| d.dvars.active)
-            .map(|d| (d.dvars.bullet_force, d.clock.step_ms));
+            .map(|d| (d.dvars.bullet_force, d.msec_step()));
         let mut parts_struck = Vec::new();
         for (i, hit) in hits.iter().enumerate() {
             for h in hit {
@@ -1662,7 +1717,7 @@ impl Cod4Client {
             return [0.0; 2];
         };
         let mut crandom = || {
-            let r = self.jitter_rand.unit();
+            let r = self.session.crt_rand.unit();
             2.0 * (r - 0.5)
         };
         let p = j[0] * crandom();
@@ -2333,6 +2388,10 @@ fn upload(r: &mut Renderer, fs: &vcod_common::pk3::Pk3Fs, m: &Model) -> Option<M
     }
     h
 }
+
+/// The impact sounds 0x5c8db0 queues between two of 0x5c6020's plays
+/// (`cmp eax,0x20` at 0x5c8dc0): one past them is dropped.
+const IMPACT_QUEUE: usize = 32;
 
 const BOX: &str = "<box>";
 

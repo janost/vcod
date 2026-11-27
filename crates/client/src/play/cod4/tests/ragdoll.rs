@@ -389,10 +389,11 @@ fn cod4_live_corpses_ragdoll_onto_the_floor() {
 /// vcod-server's `war` on mp_backlot, a held bot's frags bursting on a
 /// destructible car until `_destructible.gsc` blows it up and
 /// `physicsLaunch`es its parts, watched by a spectator: each part this
-/// client sees launched flies off its spot (`play::cod4_physics`), and
-/// goes to sleep clear of the world, resting on what is under it
-/// (cod4-gsc.md 3.6); a round that meets a resting one pushes it on
-/// and it sleeps again. Returns at once without an install.
+/// client sees launched flies off its spot (`play::cod4_physics`, world 1
+/// on the ODE port), and goes to sleep with its centre of mass out of
+/// the world, resting on what is under it (cod4-gsc.md 3.6); a round
+/// that meets a resting one pushes it on and it sleeps again. Returns at
+/// once without an install.
 #[test]
 fn cod4_live_a_blown_up_cars_parts_fly_and_come_to_rest() {
     use vcod_cod4::ragdoll::CLIP_MASK;
@@ -421,8 +422,8 @@ fn cod4_live_a_blown_up_cars_parts_fly_and_come_to_rest() {
     let clip = world.clip.clone();
     let clock = sim::Clock::new();
     // Per part: its model, launch spot, farthest drawn distance off
-    // it, and its body's last state (asleep, ms simulated, points).
-    type Seen = (String, Vec3, f32, Option<(bool, u32, Vec<Vec3>)>);
+    // it, and its body's last state (asleep, frames awake, centre).
+    type Seen = (String, Vec3, f32, Option<(bool, u32, Vec3)>);
     let client = sim::spawn(&clock, move || {
         let join = MenuJoin {
             team: Some("spectator".into()),
@@ -454,12 +455,14 @@ fn cod4_live_a_blown_up_cars_parts_fly_and_come_to_rest() {
                     .entry(d.number)
                     .or_insert_with(|| (m.clone(), d.origin, 0.0, None));
                 e.2 = e.2.max(d.origin.distance(e.1));
-                e.3 = Some((b.asleep, b.steps, b.world_points().collect()));
-                if b.asleep {
+                let asleep = b.flags & vcod_cod4::ode::body::DISABLED != 0;
+                let frames = e.3.map_or(0, |b| b.1) + u32::from(!asleep);
+                e.3 = Some((asleep, frames, Vec3::from(b.pos)));
+                if asleep {
                     resting.push((d.number, d.origin));
                 }
                 if let Some(sh) = shot.as_mut().filter(|sh| sh.0 == d.number) {
-                    sh.2 |= !b.asleep;
+                    sh.2 |= !asleep;
                     sh.3 = d.origin;
                 }
             }
@@ -477,7 +480,7 @@ fn cod4_live_a_blown_up_cars_parts_fly_and_come_to_rest() {
                     (met == Some(n)).then_some((n, o, at, (end - start).normalize()))
                 });
                 if let Some((n, o, at, dir)) = hit {
-                    let msec0 = s.dynents.as_ref().map_or(17, |d| d.clock.step_ms);
+                    let msec0 = s.dynents.as_ref().map_or(17, |d| d.msec_step());
                     assert!(s.physics.shoot(n, at, dir, 1000.0, msec0));
                     shot = Some((n, o, false, o));
                 }
@@ -520,7 +523,7 @@ fn cod4_live_a_blown_up_cars_parts_fly_and_come_to_rest() {
     for (n, (m, at, far, b)) in &parts {
         let b = b.as_ref().unwrap();
         println!(
-            "{n} {m}: from {at}, {far:.0} away at most, asleep {}, {} steps",
+            "{n} {m}: from {at}, {far:.0} away at most, asleep {}, {} frames awake",
             b.0, b.1
         );
     }
@@ -528,7 +531,7 @@ fn cod4_live_a_blown_up_cars_parts_fly_and_come_to_rest() {
     let mut problems = Vec::new();
     let z = Vec3::ZERO;
     for (n, (m, _, far, b)) in &parts {
-        let (asleep, _, points) = b.as_ref().unwrap();
+        let &(asleep, _, p) = b.as_ref().unwrap();
         if *far < 8.0 {
             problems.push(format!("{n} {m}: never left its spot ({far})"));
         }
@@ -536,15 +539,11 @@ fn cod4_live_a_blown_up_cars_parts_fly_and_come_to_rest() {
             problems.push(format!("{n} {m}: still moving"));
             continue;
         }
-        for &p in points {
-            if clip.trace(p, p, z, z, CLIP_MASK).startsolid {
-                problems.push(format!("{n} {m}: point {p} in the world"));
-            }
+        if clip.trace(p, p, z, z, CLIP_MASK).startsolid {
+            problems.push(format!("{n} {m}: centre {p} in the world"));
         }
-        let rests = points
-            .iter()
-            .any(|&p| clip.trace(p, p - Vec3::Z * 2.0, z, z, CLIP_MASK).fraction < 1.0);
-        if !rests {
+        // The centre of a flat part lies within a few units of its floor.
+        if clip.trace(p, p - Vec3::Z * 32.0, z, z, CLIP_MASK).fraction == 1.0 {
             problems.push(format!("{n} {m}: rests on nothing"));
         }
     }

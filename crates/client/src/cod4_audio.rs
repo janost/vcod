@@ -36,6 +36,20 @@ pub fn swing_cue(pos: Vec3) -> Cue {
     }
 }
 
+/// A physics body's impact (cod4-gsc.md 3.6.7): 0x5c8db0 queues the
+/// handle and the contacts' mean point, and 0x5c6020 plays each on the
+/// world entity there (0x3fe pushed into 0x5c38a0).
+pub fn impact_cue(alias: &str, pos: Vec3) -> Cue {
+    Cue {
+        alias: alias.into(),
+        source: Source::Entity {
+            num: ENTITYNUM_WORLD,
+            pos,
+        },
+        delay_s: 0.0,
+    }
+}
+
 /// The weapon fields the event arms read, by weapon name.
 #[derive(Clone, Debug, Default)]
 pub struct WeaponAv {

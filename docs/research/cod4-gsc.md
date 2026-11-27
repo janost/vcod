@@ -1373,92 +1373,40 @@ VERIFIED (the registrations). Then:
   spreads the impulse over (0x5a5900) while world 1 steps the body.
   INFERRED (the two reads of 0x71e798).
 
-vcod (`vcod_cod4::physics`, `play::cod4_physics`):
+vcod (`play::cod4_physics`, world 1 of `ode::phys`):
 
 - Ported: the 1000 ms rule, the refusal without a preset, a brush model
-  and `eFlags` 0x20 left out, the shape (brushes, boxes and cylinders,
-  else the bounds box), the mass centre, the push with its up bias, spin scale and
-  formula, gravity, the clock (two steps at most, the lerp), the drag,
-  the per-body sleep on the squared speeds, the contact friction and
-  bounce, the world-only collision under 0x2806c91, no push from a
-  blast, and a round's push (`Cod4Physics::shoot`, off the first
-  contact's entity, `cod4_fx::BulletHit::entity`) at `dynEnt_bulletForce`
-  and the part's `bulletForceScale`, with the impact played again there.
-  VERIFIED (the code against the above). Each world steps its bodies
-  together on one clock (`WorldClock`: world 1's in
-  `play::cod4_physics::Cod4Physics::advance`, world 0's in
-  `DynEnts::advance_in`) at the `msecStep` the count awake after each step
-  picks (`physics::msec_step`). A push (`Body::push`) is a force at the
-  named world's `msecStep`, spent with gravity in the body's next step
-  and zeroed: the launch at world 1's, a round on a part
-  (`Cod4Physics::shoot`) and a round or a blast on a dynamic entity at
-  world 0's (`DynEnts::clock`), a jitter over the step it is collided in.
+  and `eFlags` 0x20 left out, a new launch or model destroying the old
+  body, `CG_CreatePhysicsObject`'s body (`PhysWorld::create_from`: 3.6.3's
+  `Phys_ObjCreate` and collision) and its push (`phys::obj_bullet_impact`
+  at world 1's `msecStep`), the drawn pose at the interpolated state
+  (`PhysWorld::pose`), no push from a blast, and a round's push
+  (`Cod4Physics::shoot`, off the first contact's entity,
+  `cod4_fx::BulletHit::entity`) at `dynEnt_bulletForce`, the part's
+  `bulletForceScale` and world 0's `msecStep`, with the impact played
+  again there. World 1 steps through `PhysWorld::run_to_time` at the
+  drawn time each frame: the dynamics 3.6.7 matched against retail's
+  takes. World 1 is made anew with world 0 where `Phys_Init` runs
+  (0x43fbe7, and `CG_MapRestart` at 0x44b3e2: `restart_dynents`).
   VERIFIED (the code against the above).
-- In place of ODE: one impulse solver per body. Each box's (and an
-  axial brush's) 8 corners, 12 edge midpoints and 6 face centres, a
-  brush with sides' corners (where three of its planes meet), and 16
-  points round each cylinder sweep the clip map as points along their
-  velocity over the step; the kernels' 0.125 skin is the contact layer; a
-  corner already in the world is traced out from the centre and pushed
-  out at `phys_contact_erp` up to `phys_mcv`; an approach faster than 0.1
-  bounces by the preset, from the corner where the step found it; ten
-  passes of sequential impulses with Coulomb friction (the preset's times
-  `phys_frictionScale`); after a frame's steps the centre takes 1.7's
-  post-step sweep (3.6.1). Each box geom also meets the brushes and triangles round
-  it as a box, by face clipping, and each cylinder geom as a cylinder, by
-  1.7's separating axes (3.6.1), so a world edge between its points meets
-  its face. vcod's.
-- Why the 26 points and the cut speed: with the hood's brush in place
-  of its bounds box, the hood in the live gate below came down with its
-  low corners on two floors 18 units apart and a 39-degree clip map
-  surface (normal (-0.12, -0.61, 0.78)) between them through its
-  centre. Each step the centre's move was cut to nothing
-  while its speed (about 55 units/s along the ramp) stayed, so it never
-  slept (1739 steps in 30 s). With the edge and face points the box
-  meets the ramp. vcod then cut the centre's speed with its move; that
-  guard is gone for 1.7's post-step sweep (3.6.1), which leaves the speed
-  but zeroes both speeds on a stop under a fraction of 0.001, and a
-  centre held that way sleeps under it
-  (`a_box_held_on_its_centre_by_a_ridge_comes_to_rest`, on the box's 8
-  corners alone). VERIFIED (the runs, ours).
-- Tests: `physics::tests` (free fall at `phys_gravity`, the push formula,
-  a 0.8 bounce, a launched door that lands and sleeps, a fast part thrown
-  into a corner staying out of all three planes, a tilted box settling
-  flat, the clock, a model's geoms and brushes, a box held on its
-  centre by a ridge, a box across a kerb's edge on its corners alone, a
-  cylinder on a floor on its side and upright and against a kerb's edge,
-  the post-step sweep and its once a frame, a pinched body's facing
-  contacts and its drop of those it leaves, 0x5a2320's cut, the contact
-  pass per geom and its walk's order, `msecStep` and the world clock, a
-  push as a force over its body's next step),
-  `cod4::part_edges` (3.6.1) and the live
-  `cod4_live_a_blown_up_cars_parts_fly_and_come_to_rest`: vcod-server's
-  `war` on mp_backlot, a held bot's frags bursting on the first
-  destructible until `_destructible.gsc` blows the sedan up; its 9
-  launched parts (both mirrors, both bumpers, both right doors, two wheels
-  and the hood) flew 14 to 154 units off their spots and went to sleep
-  within 1.6 to 2.1 s (92 to 120 steps), every point clear of the world
-  and resting on it, the same on three runs; at 22 s a round slanting
-  down onto the first resting part the client's round trace meets
-  (`cod4_fx::first_contact` through `shot_solids`, the left mirror)
-  pushes it 4.6 units on (one run), and it sleeps again. With the wheels
-  as cylinders and the post-step sweep, the parts flew 13 to 167 units
-  and slept within 1.3 to 2.2 s (79 to 127 steps), and the round pushed
-  the left mirror 7.4 units on (one run). With the pinched body's
-  contact pass (3.6.1) they flew 17 to 167 units and slept within 85 to
-  126 steps, and the round pushed the left mirror 7.4 units on (one
-  run). With the pass per geom, 0x5a2320's cut, the world's `msecStep`
-  and the sweep once a frame they flew 14 to 164 units and slept within
-  84 to 170 steps (the shot left mirror's 173 count those after the
-  round), and the round pushed it 7.4 units on (one run). With each push
-  a force over the body's next step at its named world's `msecStep` they
-  flew 14 to 175 units and slept within 84 to 122 steps (the shot left
-  mirror's 178 count those after the round), and the round pushed it 4.0
-  units on (one run). VERIFIED (the tests, ours). How a part looks in flight and at rest is pending a
-  human's look.
-- The ragdoll (`cod4-player-anims.md` 10) keeps its point solver. This
-  body could carry it once the bones are rigid capsules held by joint
-  constraints, which it lacks. INFERRED (vcod's design).
+- `Cod4Physics::advance` lends world 1 the session's one CRT `rand`
+  stream (`Cod4Session::crt_rand`, which the gunner's view jitter draws
+  on too) and the client counts each world's bodies against the others'
+  share of the 512 (`share_body_pool`). That the cgame, the dynamic
+  entities' frame and world 1 draw on one thread's stream is INFERRED
+  (`rand` 0x670622 reads `_getptd()` +0x14, a per-thread state; the
+  threads that step the worlds are not read).
+- The impact sounds (3.6.7) of worlds 1 and 0 play in that order each
+  frame, at most 32 (0x5c8db0 queues a handle and the mean point while
+  its count at 0xcc96348 is under 0x20, `cmp eax,0x20` at 0x5c8dc0), each
+  on the world entity at its point (0x5c6020 drains the queue into
+  0x5c38a0 with 0x3fe pushed, 0x5c608e). VERIFIED (the instructions).
+  The handles are `obj::impact_aliases` over the zones' alias table
+  (`AudioSystem::has_alias`); that 0x5c38a0 plays an alias is INFERRED.
+- Tests: `cod4::part_edges` and the live
+  `cod4_live_a_blown_up_cars_parts_fly_and_come_to_rest` (3.6.1).
+- The ragdoll (`cod4-player-anims.md` 10) runs on world 2 of the same
+  layer.
 
 #### 3.6.1 The world collider
 
@@ -1734,208 +1682,35 @@ What 1.7 collides a part against:
   sleeps on the idle step that takes its time left under 0. VERIFIED
   (the instructions, 0x5b9c0a..0x5b9c49).
 
-vcod (`ClipMap::world_solids`, `physics::box_contacts`,
-`physics::cylinder_contacts`, `Body::sweep`):
+vcod ran its own impulse solver here until the switch to the ODE port
+(3.6.3 to 3.6.7): 26 swept points a box, face clipping, ten impulse
+passes, extra edge passes beyond 1.7's colliders. The port has 1.7's
+colliders, contact pass and step, and its notes went with it. What the
+tests measure on the port:
 
-- The gathering is 0x5a8110's: the leaves the box grown by the step's
-  reach touches (`box_leafs`), their brushes and AABB tree triangles
-  under the mask, each once. vcod's reach: the most any of the box's
-  corners travels in the step, plus the 0.125 skin.
-- Each box geom of a part or a dynamic entity (`Shape::boxes`: the
-  bounds box, a `physGeoms` box, a brush no side cuts) meets each brush
-  as 0x59a610 does: the least deep of the brush's faces and the box's
-  three axes is the reference, and the other's face most against it is
-  clipped to it; each clipped point within the reach is a contact. The
-  box's face clipped to a brush face is the one whose normal is most
-  against it. vcod's.
-- The narrow pass: a box with a side under `phys_narrowObjMaxLength`
-  (`Dvars::narrow_max_length`, 4) also takes as references the brush's
-  other faces its centre lies in front of whose windings its six faces
-  leave something of, as 0x59aabe..0x59ac8a's loop picks them (the
-  axial sides by the centre against the brush's bounds, the others by
-  the plane). VERIFIED (the compares); the reference's clip is vcod's
-  (above). `a_narrow_box_over_a_brushs_edge_takes_its_other_faces`.
-- Past 1.7's colliders: each brush edge that runs more than the skin
-  into the box pushes it out along the box face nearest the point, at
-  the clipped edge's ends and middle, but for the edges of the face the
-  reference pair took, which its clip already meets (with them a resting
-  sedan bumper in the live gate below slept with a point in the floor). Neither face reference holds a
-  ledge's edge across a box's face: mp_crash's red toolbox slept on a
-  ledge's edge half a unit into it without this. A triangle's three
-  edges take the same pass: with the post-step sweep, mp_crash's
-  `me_picture4` and `me_picture7` dropped turned 90 degrees onto a mesh
-  stair at (135, 2383, 236) took its nosing through the frame in the step
-  they met it, and the sweep's stop under 0.001 froze them 4 units in.
-  vcod's.
-- A triangle is always the reference and is met from its front. It is
-  skipped once the box's centre is behind it, unless it is a floor's
-  (normal z at least 0.7) and the centre lies off its edges, as over a
-  step's corner: a picture frame tipped across a mesh stair's tread
-  slept 4 units into the step without it. A box face as reference would
-  catch the seams between a mesh's triangles, and a back triangle that
-  is not a floor's would push a box onto a handrail's tube (a sedan door
-  on mp_backlot did). vcod's. Not ported: 0x5b1620's own tests.
-- Each cylinder geom of a part or a dynamic entity (`Shape::cylinders`,
-  a `physGeoms` type 4, its axis the orientation's first row) meets each
-  brush as 0x5a1330 and each triangle as 0x5a17c0 do
-  (`physics::cylinder_contacts`): the faces' depths, the reference, the
-  narrow pass, and on each polygon 0x5a0f70's gate and 0x59fc90's axes in
-  order with their 0.02, 1e-5 and 1.0 and the 0.9 between its two face
-  arms, the overlap and the separation within the step's reach. vcod's:
-  the axes turned against the plane's normal; an edge's axis recorded
-  only with the centre outside that edge; the upright cap as 8 points
-  round its rim clipped to the polygon; a rim-against-corner axis's
-  contact at the corner, as a corner's; each contact's point on the
-  cylinder. Past 1.7's colliders, a brush's edges but the reference
-  face's that run more than the skin into the cylinder push it out along
-  its cap or side nearest the point, as the box's edge pass does: a stock
-  junk tire tipped onto one of mp_crash's steps slept with the step's
-  edge a unit into its cap without it. The pass runs only on a brush
-  whose reference face 0x5a0f70's gate passes: the live gate's wheels
-  start with their centres on their car clip's floor face, inside the
-  clip, and took its edges as contacts that ate their launch. The 16
-  points round each cylinder still sweep as the box's do.
-- The sweep after a frame's steps is 0x5a6930's (`Body::sweep`, from
-  `Body::end_frame`), in place of the centre guard vcod had (3.6): from
-  where the frame began, its size off the body's last geom
-  (`Shape::sweep_half`), its gate on a move or the state, its point or
-  box, the point's back-off, the stop and the zeroing under 0.001, the
-  state it writes. vcod's. `the_post_step_sweep_runs_once_a_frame`: a
-  centre at 100 units/s whose first of two 17 ms steps ends where the
-  sweep stops it keeps its speed when swept once over the frame, and
-  loses it all when swept each step, as vcod had it.
-- The contact pass (`Body::contact_pass`, `physics::pinch`,
-  `physics::unwedge`, `physics::reduce`) runs per geom, as the near
-  callback does: a geom with no contact stores 2; five or more go
-  through 0x5a2320's cut as above; then 0x5a2280's 1, and on a body in
-  state 1 0x5a25d0's pick between facing contacts (its point the body's
-  position), the walk's skip of the moved-in contact, and 0x5a2760's
-  drop of each contact whose point leaves it, the velocity the one
-  before the step's gravity, a still point's taken as (1, 0, 0); then
-  the jitter on each contact kept. The geoms go in 0x5aa100's order,
-  below. vcod's: a geom's
-  contacts here are those its box or cylinder collider gives in the
-  0.125 skin or inside, ODE's overlaps, or, for a brush with sides,
-  which has no collider here, its points'. A box's or cylinder's points
-  and the contacts met further on within the step's travel stay out of
-  the pass and are kept: with a box's points in the cut, 78 of the edge
-  drops in `cod4::part_edges` below failed, most with a point left in
-  the world. VERIFIED (the run, ours). The points found in the solver's
-  second pass take the drop alone.
-- The walk's order. 0x5aa100 walks the space's list from its head (space
-  +0x50) along each geom's +0x20 (0x5aa10f..0x5aa139). A geom is built
-  by 0x5a9790 (each `physGeoms` entry in its order, 0x5a5710's loop to
-  0x5a57bb, through 0x5a4ab0's creators, e.g. 0x5a8d50, into 0x5a9970),
-  which adds it to the world's space (0xcc546e8 by world, 0x5a4bbc) at
-  the head (0x5a9f00, the space's add) and to the body's list at its
-  head (body +0x1c, the next at geom +0x14, 0x5a982e..0x5a9839). The
-  space's `dirty` (0x5a9f80, the space vtable 0x6f8200's seventh slot)
-  moves a geom to the head; `dGeomMoved` (0x5a9cc0, and inlined) calls it
-  on a geom whose dirty flag (geom +8 & 1) is clear and sets it. Each
-  step's space collide (0x5aa070, called at 0x5a65d8) first runs
-  `cleanGeoms` (0x5aa010), which clears the flag from the head on. After
-  each step 0x5a6640 walks each body not disabled and, through the
-  body's list, moves each of its geoms (0x5a668f..0x5a66d7). ODE's own
-  body step (0x5b8380) moves none. VERIFIED (disassembly). So on a body's
-  first step the walk meets its geoms last made first, as they went in,
-  and on every step after first made first, the body's list walked last
-  made first and each put at the head in turn; a body asleep is not
-  moved and keeps that order. INFERRED (the code above; nothing found
-  cleaning the flags between a body's making and its first step). Under
-  the default dvars nothing cleans them at all, so the walk keeps the
-  made order on every step (3.6.7).
-  `Body::contact_pass` walks them so; a walk by the steps taken. vcod's.
-  `the_contact_pass_pinches_on_one_geoms_facing_contacts_only`: of a
-  geom pinched between two walls and a geom on a floor the body rises
-  off, the floor's contact stays on the first step and is dropped on a
-  later one. VERIFIED (the test, ours).
-- The push as a force: `a_push_is_a_force_over_the_next_step_of_its_body_world`
-  (a push at 17 spent 25 / 17 over a 25 ms step and not again; one at 28
-  spun 17 / 28 over a 17 ms step), and in `cod4::part_edges`
-  `a_round_on_a_flying_part_is_a_force_at_world_zeros_msec_step`: the 36
-  parts below in flight, world 1 at 28 ms, a round on the hood naming
-  world 0's 17 moves it 1.647 times what the same round naming world 1
-  does (28 / 17). As one whole impulse each moved it the same. VERIFIED
-  (the runs, ours).
-- The sleep is ODE's rule above on the step's end speeds, `idle` the
-  time under both, which is 1.7's rule too: 1.7 zeroes the idle steps
-  (0x5a2d83, above). vcod's: idle on a speed strictly under the
-  threshold where ODE takes at most it.
-- The contacts go into the impulse solver with the points'. vcod's.
-- Measured: `cod4::part_edges` drops mp_backlot's sedan hood (its brush
-  geom, a box) and left front door (its bounds box) from 24 units over
-  six steps' edges (two level floors 8 apart, 6 to 18 high, with room
-  over them, near the `mp_tdm_spawn`s), across, along and at 45 degrees,
-  tipped 30 degrees: on the points alone 30 of the 36 drops slept with
-  world solid at least a quarter unit inside the box (most of them 4
-  units, through the hood's middle); with the boxes none, each asleep
-  within 3.5 s (4.6 s with the post-step sweep). Its second row drops one
-  def of each of mp_crash's 16 dynamic entity models with a box on six of
-  mp_crash's steps the same way: on the points alone 167 of the 288 drops
-  slept with world solid inside the box, the picture frames and crates
-  mostly 4 units; with the boxes none (each asleep within 4.7 s with the
-  sweep). Its third row drops one def of each of the 30 dynamic entity
-  models of every `mp_` zone whose shape has a cylinder (bottles, cans,
-  pails, pots, pans, plates, tires, hub caps, fruit, a propane tank, a
-  hookah) on mp_crash's six steps, out to 30 s: on the 16 points alone
-  480 of the 540 drops slept with world solid inside the cylinder, 361 of
-  them 4 units; with the cylinders none, 537 asleep (533 within 10 s) and
-  3 still rolling down a slope at 30 s, their speed their spin times
-  their radius. VERIFIED (the runs, ours).
-- Those 3 against the sleep rule (`com_bottle4` and both mangoes, turned
-  45 and rolled -30): at 30 s the bottle's angular speed squared was 11.2
-  and the mangoes' 1.49, over `phys_autoDisableAngular` squared (1), their
-  linear speed 9 and 2.8, so ODE's rule keeps them awake too. Each was
-  slowing under `phys_dragAngular`, and all three slept by 34.2 s (33.4,
-  34.2, 34.2), 256 and 190 units off. The row now runs every drop to
-  60 s and passes none on its roll: all 540 sleep, 515 within 10 s,
-  with the pinched body's filter below and without it. The box rows
-  sleep within 4.6 s (the parts) and 4.7 s (the props) with it.
-  VERIFIED (the runs, ours).
-- A wedged body: `pictures_wedged_between_two_walls_lose_one_walls_contacts`
-  stands two 16-thick slabs on mp_crash's floor at its first open
-  `mp_tdm_spawn` (207, 2291, 236), 0.9 of a picture frame's length apart,
-  and lays each of `me_picture4` to `10` flat across them 40 over the
-  floor, tipped until it fits with a unit to spare and turning at 2, 4 or
-  8 rad/s to lie flatter. Each comes down to lean between the walls with
-  one end on the floor. Pinched on 45 to 640 of its 72 to 663 steps, it
-  keeps the first wall's contacts and loses the other's, and all 18 slept
-  (within 1.2 to 11.3 s) with that end 0.02 to 0.20 units into the far
-  wall and none into the near one, the floor at most 0.17 in. Without the
-  filter all 18 slept within 1.3 s with no point in either wall. With the
-  pass per geom and 0x5a2320's cut (below) they are pinched on 45 to 51
-  of 71 to 75 steps and slept within 1.2 to 1.3 s, 0.15 to 0.18 into the
-  far wall, none into the near one, the floor at most 0.05 in.
-  VERIFIED (the runs, ours). That a wedged body on 1.7 slips into the far
-  wall the same way is INFERRED (the rule above; no retail client runs
-  here). How it looks is pending a human's look.
-- The contact pass per geom: `two_geom_pictures_wedged_between_two_walls_are_never_pinched`
-  cuts each of those frames across its length into two box geoms, one
-  at each wall, its mass as it was. Neither geom's contacts face each
-  other, so none of the 18 is pinched, and each slept within 1.3 s with
-  no point in either wall and the floor at most 0.07 in. Run as one
-  body's pass, as vcod had it, the frames were pinched on 20 to 51 of
-  their steps and slid 0.15 to 0.18 into the far wall (the first eight
-  runs read). VERIFIED (the runs, ours).
-- The cut and the jitter on its contacts:
-  `a_crate_flat_on_the_floor_takes_a_jitter_at_three_corners` lays
-  mp_crash's `me_plastic_crate1` to rest on that floor and wakes it
-  under one region whose least and most push are equal, so each kept
-  contact with a normal z of 0.7 or more lifts it by the same speed. The
-  box meets the four floor brushes under it in 16 contacts; 0x5a2320's
-  cut keeps three, the face's corners but the one at its most x and
-  least y, and the lift, read against the same step with no region,
-  comes to 3.1 pushes. On the box's points, as vcod had it, it read 8.9;
-  on all 16, uncut, 12.3. VERIFIED (the runs, ours). That retail's
-  colliders give that floor's four brushes the same 16 is INFERRED
-  (0x59a610's clips above).
-- `msecStep`: `parts_dropped_together_step_at_world_ones_msec_step`
-  drops the 36 parts of the first row at once in one world 1 at 16 ms
-  frames: its first step is 17 ms, then 28 (36 awake) until they sleep,
-  and all 36 slept within 2.4 s (115 steps) clear of the steps. With
-  the pass per geom, the cut and the sweep once a frame, the three edge
-  rows still pass: the parts slept within 2.3 s, and all 828 prop drops
-  within the 60 s. VERIFIED (the runs, ours).
+- `cod4::part_edges` drops mp_backlot's sedan hood (its brush geom) and
+  left front door (its bounds box) in world 1, and one def of each
+  mp_crash dynamic entity model and of each stock cylinder prop in world
+  0, edge first across six step edges near the spawns at three turns
+  each: every body sleeps within 60 s (the slowest, a bottle off
+  mp_crash's stairs, at 36.6 s), its centre of mass out of the world and
+  over a floor. Props dropped on mp_crash's stairs at (158, 1789, 224)
+  roll down them. A resting geom sinks into what it meets: of the 1022
+  drops (point traces through each geom shrunk by 0.25 to 4) 393 had no
+  world solid a quarter unit in, 387 had some under a unit in, 56 under
+  two, 52 under four and 134 deeper or along a thin geom's middle (a
+  barrel shard, the hood, over a step's edge). Whether retail's sink as
+  far at an edge is not captured; the old solver's "no solid a quarter
+  unit inside" is gone. VERIFIED (the run, ours).
+- `parts_dropped_together_step_at_world_ones_msec_step`: the 36 drops in
+  one world 1 step 17 ms first, then 28 while all fly (`msec_step` of 36
+  awake), back to 17 as they sleep, by 3.9 s. VERIFIED (the run, ours).
+- `a_round_on_a_flying_part_is_a_force_at_world_zeros_msec_step`: a round
+  at world 0's 17 moves a flying part 28 / 17 as far as the same round
+  at world 1's 28. VERIFIED (the run, ours).
+- `a_crate_flat_on_the_floor_takes_a_jitter_at_its_kept_contacts`: the
+  crate at rest on mp_crash's floor takes one region's push on 4
+  contacts (3.94 of the lift each one gives). VERIFIED (the run, ours).
 
 #### 3.6.2 Worlds 0 and 1 on 1.7, captured
 
@@ -2386,7 +2161,7 @@ The brush's loader keeps each face's neighbours (the axial runs at
 +0x34 and +0x40, a side's at +8 and +0xa, into the edges at +0x30) and
 each side's own inline plane (`PhysBrush::side_planes`); the plane
 array at +0x4c read empty for the sedan's brushes, so `PhysBrush::planes`,
-which the impulse solver reads, stays as it was. VERIFIED (the run).
+which the old impulse solver read, stays as it was. VERIFIED (the run).
 
 `phys_brush_ab::the_car_takes_brush_geoms_collide_as_retail` feeds the
 port the car take's pose of each brush body (the hood, 9, and the two
@@ -2905,9 +2680,10 @@ sweep, as the `body` lines are):
 
 Not ported, no take reaching them: the triangle cull 0x596c70 (3.6.4,
 3.6.6), the cylinder's edge and corner arms (3.6.6, on the instructions
-alone), the box's narrow pass's contacts (3.6.5), class 11, body against
-body (`phys_collUseEntities`), and world 0 dropping a body once it
-sleeps (13.2's, the dynamic entities' code).
+alone), the box's narrow pass's contacts (3.6.5), class 11, and body
+against body (`phys_collUseEntities`). World 0 dropping a body once it
+sleeps is the dynamic entities' code (`DynEnts::advance`, cod4-world.md
+13.2).
 
 ## 4. The load
 
