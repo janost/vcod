@@ -556,7 +556,11 @@ impl Missile {
         from: Vec3,
         to: Vec3,
     ) -> MissileHit {
-        let travel = to - from;
+        let arith = if self.kept() {
+            vcod_common::patch::Arith::Kept
+        } else {
+            vcod_common::patch::Arith::Stored
+        };
         // Script models and UO's vehicles: the move trace is locational
         // under the clipmask 0x2802091 (`fire_grenade`, `fire_rocket`),
         // which meets a script model's 0x2080 and a vehicle's 0xa00000, and
@@ -580,7 +584,7 @@ impl Missile {
             }
             if let Some((f, n, flags)) = m.clip(from, to, MISSILE_MODEL_MASK, hit.tr.fraction) {
                 hit.tr.fraction = f;
-                hit.tr.endpos = from + travel * f;
+                hit.tr.endpos = crate::game::combat::trace_point(from, to, f, arith);
                 hit.tr.normal = n;
                 hit.tr.surface_flags = flags;
                 hit.model = Some(m.id.0);
@@ -602,11 +606,6 @@ impl Missile {
             bones,
         ) {
             hit.tr.fraction = h.fraction;
-            let arith = if self.kept() {
-                vcod_common::patch::Arith::Kept
-            } else {
-                vcod_common::patch::Arith::Stored
-            };
             hit.tr.endpos = crate::game::combat::trace_point(from, to, h.fraction, arith);
             hit.tr.normal = h.normal;
             hit.tr.surface_flags = 0;
