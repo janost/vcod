@@ -18,7 +18,7 @@ use crate::bytecode::{Function, Op};
 use crate::heap::ArrayKey;
 use crate::value::{FuncRef, Value, format_number};
 
-use super::profile::{NumberEq, SwitchOther};
+use super::profile::{NumberEq, SWITCH_INDEX_MAX, SwitchOther};
 use super::sched::ThreadId;
 use super::{Cx, ErrorKind, Host, QueuedSpawn, ScriptError, Target, Vm};
 
@@ -1616,6 +1616,13 @@ impl Vm {
                 Op::SwitchKey(_) => {
                     let v = pop!();
                     let key = match v {
+                        Value::Int(n)
+                            if self
+                                .switch_index_min
+                                .is_some_and(|min| !(min..=SWITCH_INDEX_MAX).contains(&n)) =>
+                        {
+                            fail!(ErrorKind::Custom(format!("switch index {n} out of range")))
+                        }
                         Value::Int(_) | Value::String(_) => {
                             self.switch_key = v;
                             v
@@ -2452,6 +2459,50 @@ sw(v)
             (VmProfile::COD1_UO, "nonenonetwo"),
             (VmProfile::COD2, "defaultdefaulttwo"),
             (VmProfile::COD4, "defaultdefaulttwo"),
+        ] {
+            assert_eq!(run_as(&src, &p, true).as_deref(), Ok(want), "{p:?}");
+        }
+    }
+
+    /// An int key outside `min..=0x7fffff` is `switch index %d out of range`,
+    /// the same error and the same recovery as a float key; 1.5b checks
+    /// nothing (`probe_switch_range_hi`, `probe_switch_range_lo`).
+    #[test]
+    fn an_int_key_has_a_range() {
+        for (p, min) in [
+            (VmProfile::COD1, -0x7e_0000),
+            (VmProfile::COD1_UO, -0x7e_0000),
+            (VmProfile::COD2, -0x7e_0002),
+            (VmProfile::COD4, -0x7e_8000),
+        ] {
+            for ok in [min, 0x7f_ffff] {
+                let src = format!("main() {{ return sw({ok}); }}{SW}");
+                assert_eq!(
+                    run_as(&src, &p, false).as_deref(),
+                    Ok("default"),
+                    "{p:?} {ok}"
+                );
+            }
+            for bad in [min - 1, 0x80_0000] {
+                let src = format!("main() {{ return sw({bad}); }}{SW}");
+                assert_eq!(
+                    run_as(&src, &p, false),
+                    Err(ErrorKind::Custom(format!(
+                        "switch index {bad} out of range"
+                    ))),
+                    "{p:?}"
+                );
+            }
+        }
+        let src = format!("main() {{ return sw(8388608); }}{SW}");
+        assert_eq!(
+            run_as(&src, &VmProfile::COD1_15, false).as_deref(),
+            Ok("default")
+        );
+        let src = format!("main() {{ return sw(8388608) + sw(2); }}{SW}");
+        for (p, want) in [
+            (VmProfile::COD1, "nonetwo"),
+            (VmProfile::COD2, "defaulttwo"),
         ] {
             assert_eq!(run_as(&src, &p, true).as_deref(), Ok(want), "{p:?}");
         }

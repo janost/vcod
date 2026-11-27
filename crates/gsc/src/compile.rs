@@ -614,7 +614,22 @@ impl<'a> Compiler<'a> {
         self.emit(Op::StoreLocal(tmp));
 
         let mut case_sites = Vec::with_capacity(arms.len());
+        // A repeated label, `default` counting as one, is `duplicate case
+        // expression`; `1` and `"1"` differ, `"a"` and `"A"` too.
+        let mut seen: Vec<&Expr> = Vec::new();
+        let mut seen_default = false;
         for arm in arms {
+            let repeated = match &arm.label {
+                ArmLabel::Default => std::mem::replace(&mut seen_default, true),
+                ArmLabel::Case(label) => {
+                    let again = seen.contains(&label);
+                    seen.push(label);
+                    again
+                }
+            };
+            if repeated {
+                return Err(self.err("duplicate case expression"));
+            }
             if let ArmLabel::Case(label) = &arm.label {
                 // A literal only: `case -1:` and `case 1.5:` are refused
                 // (cod11-gsc-object-model.md 9.3.1).
@@ -1454,6 +1469,24 @@ mod tests {
             assert_eq!(cod2_err(&src), "case expression must be an int or string");
         }
         compile(r#"m(x) { switch (x) { case 0: case "a": break; } }"#);
+    }
+
+    /// A repeated `case` label, `default` included, is refused; `1` and
+    /// `"1"` are two labels (`probe_switch_dup_int`, `probe_switch_mixed`).
+    #[test]
+    fn a_repeated_case_label_is_refused() {
+        for arms in [
+            "case 1: break; case 1: break;",
+            "case \"a\": break; case \"a\": break;",
+            "default: break; case 1: break; default: break;",
+        ] {
+            let src = format!("m(x) {{ switch (x) {{ {arms} }} }}");
+            let ast = crate::parse::parse_file(&src).unwrap();
+            let e = compile_file(&ast, "test/script", &mut Interner::default()).unwrap_err();
+            assert_eq!(e.msg, "duplicate case expression", "{arms}");
+            assert_eq!(cod2_err(&src), "duplicate case expression");
+        }
+        compile(r#"m(x) { switch (x) { case 1: case "1": case "A": case "a": default: break; } }"#);
     }
 
     #[test]

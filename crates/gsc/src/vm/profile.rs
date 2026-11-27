@@ -60,7 +60,14 @@ pub struct VmProfile {
     pub nan_ne: bool,
     /// A `switch` on a float, a vector or undefined ([`super::Vm::set_switch_other`]).
     pub switch_other: SwitchOther,
+    /// The lowest int a `switch` takes; the highest is [`SWITCH_INDEX_MAX`].
+    /// An int outside raises `switch index %d out of range`, and then goes as
+    /// [`Self::switch_other`] does. `None`: no check (1.5b).
+    pub switch_index_min: Option<i32>,
 }
+
+/// The highest int key a `switch` takes on every build that checks.
+pub const SWITCH_INDEX_MAX: i32 = 0x7f_ffff;
 
 impl VmProfile {
     /// CoD 1.1.
@@ -76,6 +83,7 @@ impl VmProfile {
         number_eq: NumberEq::Kept,
         nan_ne: false,
         switch_other: SwitchOther::ErrorSkips,
+        switch_index_min: Some(-0x7e_0000),
     };
 
     /// CoD 1.5: 1.1's rules but for its bracket read on a struct, its `==`
@@ -84,6 +92,7 @@ impl VmProfile {
         struct_index_reads_undefined: true,
         number_eq: NumberEq::Stored,
         switch_other: SwitchOther::LastKey,
+        switch_index_min: None,
         ..VmProfile::COD1
     };
 
@@ -106,6 +115,7 @@ impl VmProfile {
         number_eq: NumberEq::Stored,
         nan_ne: true,
         switch_other: SwitchOther::ErrorNoMatch,
+        switch_index_min: Some(-0x7e_0002),
     };
 
     /// CoD4 1.7: CoD2's rules until a retail probe says otherwise
@@ -115,6 +125,7 @@ impl VmProfile {
         dialect: Dialect::Cod4,
         frame_waits: true,
         endons_end_with_call: true,
+        switch_index_min: Some(-0x7e_8000),
         ..VmProfile::COD2
     };
 }
@@ -132,5 +143,6 @@ impl super::Vm {
         self.set_number_eq(p.number_eq);
         self.set_nan_ne(p.nan_ne);
         self.set_switch_other(p.switch_other);
+        self.set_switch_index_min(p.switch_index_min);
     }
 }
