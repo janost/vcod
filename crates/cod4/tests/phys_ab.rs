@@ -1,5 +1,5 @@
 //! `phys_ab`: retail 1.7's worlds 0 and 1 against `vcod_cod4::ode::phys`
-//! on the four takes of `fixtures/phys/` (cod4-gsc.md 3.6.2): each take's
+//! on the takes of `fixtures/phys/` (cod4-gsc.md 3.6.2, 3.6.9): each take's
 //! bodies built from their models (3.6.3) and set to the capture's start
 //! words, the world's seed and clock the capture's, stepped frame by frame
 //! as retail stepped them over the map's clip map, and compared step by
@@ -170,6 +170,18 @@ struct Case {
 fn cases() -> Vec<Case> {
     let sedan = |p: &str| format!("vehicle_80s_sedan1_silv_{p}");
     let chunk = |n: u32| format!("fx_watermelonchunk_0{n}");
+    let frag: Vec<String> = [
+        "me_plastic_crate1",
+        "com_bottle1",
+        "com_soup_can",
+        "com_barrel_shard4",
+        "com_barrel_shard3",
+        "me_plastic_crate2",
+        "com_junktire",
+        "com_junktire2",
+    ]
+    .map(String::from)
+    .to_vec();
     vec![
         Case {
             file: "round-mp_crash-1.7.txt",
@@ -179,18 +191,12 @@ fn cases() -> Vec<Case> {
         Case {
             file: "frag-mp_crash-1.7.txt",
             map: "mp_crash",
-            models: [
-                "me_plastic_crate1",
-                "com_bottle1",
-                "com_soup_can",
-                "com_barrel_shard4",
-                "com_barrel_shard3",
-                "me_plastic_crate2",
-                "com_junktire",
-                "com_junktire2",
-            ]
-            .map(String::from)
-            .to_vec(),
+            models: frag.clone(),
+        },
+        Case {
+            file: "shards-mp_crash-1.7.txt",
+            map: "mp_crash",
+            models: frag.clone(),
         },
         Case {
             file: "car-mp_backlot-1.7.txt",
@@ -404,7 +410,9 @@ fn worst(diffs: &[Diff]) -> Diff {
 /// retail handle and one handle per alias, within 0.01 of retail's point.
 /// Measured: the round, frag and car takes equal to the bit on every step;
 /// the watermelon's to step 27, then within 2.5e-4 (its body 4's sweep on
-/// step 27, cod4-gsc.md 3.6.5 and 3.6.7).
+/// step 27, cod4-gsc.md 3.6.5 and 3.6.7); the shards' to step 32, then
+/// within 0.11 and 2.8 degrees, every sleep on retail's step, the seed
+/// parting after step 35 ([`SEED_AFTER_SWEEP`]).
 #[test]
 fn the_phys_takes_against_the_port() {
     let Some(install) = cod4_install() else {
@@ -464,6 +472,11 @@ fn the_phys_takes_against_the_port() {
     }
 }
 
+/// Takes whose seed may part after a step: there 0x5a6930's sweep puts a
+/// thin box a z ulp off retail's (cod4-gsc.md 3.6.9), so a later step
+/// draws on another contact count.
+const SEED_AFTER_SWEEP: &[(&str, usize)] = &[("shards-mp_crash-1.7.txt", 33)];
+
 /// The gate's rule over a run of take `f` (see the test above).
 fn check(f: &str, r: &Run) {
     let w = worst(&r.diffs);
@@ -479,7 +492,12 @@ fn check(f: &str, r: &Run) {
         "{f}: {:?}",
         r.asleep
     );
-    assert_eq!(r.seed_parts, None, "{f}: the seed");
+    let ulp = SEED_AFTER_SWEEP.iter().find(|(file, _)| *file == f);
+    match (r.seed_parts, ulp) {
+        (None, _) => {}
+        (Some(k), Some(&(_, step))) => assert!(k > step, "{f}: the seed parts after {k}"),
+        (Some(k), None) => panic!("{f}: the seed parts after step {k}"),
+    }
     assert!(r.msec_parts.is_empty(), "{f}: msecStep {:?}", r.msec_parts);
     assert!(r.sounds_part.is_empty(), "{f}: sounds {:?}", r.sounds_part);
     let names: Vec<_> = r.handles.values().collect();
@@ -620,7 +638,11 @@ fn the_watermelon_spawned_through_the_fx_path() {
     eprintln!("best seed {best}: {}", off(best));
     eprintln!("watermelon: effect seed plus start time {found:?}");
     assert_eq!(found.len(), 1, "one seed spawns the take's positions");
-    let pins = &cases()[3].models;
+    let pins = &cases()
+        .into_iter()
+        .find(|c| c.file.starts_with("watermelon"))
+        .unwrap()
+        .models;
     let mut pw = PhysWorld::new(WorldId::Fx);
     let dv = PhysDvars::default();
     let mut ids = Vec::new();
@@ -657,4 +679,138 @@ fn the_watermelon_spawned_through_the_fx_path() {
         worst(&r.diffs)
     );
     check("watermelon (FX path)", &r);
+}
+
+/// Each body's model in a world 0 take: the dynamic entity whose origin is
+/// the body's position plus its offset (userdata +0) turned by its
+/// rotation, within 0.05.
+fn dynent_models(t: &Take, defs: &[vcod_cod4::dynent::DynDef]) -> Vec<String> {
+    t.news
+        .iter()
+        .map(|n| {
+            let fl = |label: &str| -> Vec<f32> {
+                n.parts[label].iter().map(|&x| f32::from_bits(x)).collect()
+            };
+            let (pos, r) = (fl("pos"), fl("R"));
+            let off: Vec<f32> = n.user[..3].iter().map(|&x| f32::from_bits(x)).collect();
+            let origin = Vec3::from(std::array::from_fn::<f32, 3, _>(|i| {
+                pos[i] + (0..3).map(|j| r[4 * i + j] * off[j]).sum::<f32>()
+            }));
+            let d = defs
+                .iter()
+                .filter(|d| d.body.is_some())
+                .min_by(|a, b| {
+                    a.origin
+                        .distance(origin)
+                        .total_cmp(&b.origin.distance(origin))
+                })
+                .unwrap();
+            assert!(
+                d.origin.distance(origin) < 0.05,
+                "body {}: {origin} {}",
+                n.id,
+                d.origin
+            );
+            d.model.clone()
+        })
+        .collect()
+}
+
+/// The mp_shipment frag (`fixtures/phys/`, cod4-gsc.md 3.6.9): eleven
+/// bottles and fruit flung off the floor by one blast, the last asleep on
+/// retail's step 1212 (20.6 s). Stepped past the take until the port's
+/// last body sleeps too: every body sleeps within 15 steps of retail's
+/// step and rests within 0.5 units and 15 degrees of retail's pose, every
+/// `msecStep` is retail's and the seed holds past step 250. Measured: 9
+/// of 11 on retail's step, the last on step 1218, at most 0.45 units and
+/// 12 degrees off; the seed parts after step 281.
+#[test]
+fn the_shipment_frag_against_the_port() {
+    let Some(install) = cod4_install() else {
+        return;
+    };
+    let startup: Vec<Assets> = STARTUP.iter().map(|n| walked(&install, n)).collect();
+    let z = Zone::open_path(&install.zone("english", "mp_shipment")).unwrap();
+    let map = walk(z, WalkOptions { keep_bulk: true }).unwrap().assets;
+    let (_, mw) = vcod_cod4::map::Map::load(&install, "english", "mp_shipment").unwrap();
+    let clip = ClipMap::from_assets(&mw.assets).unwrap();
+    let refs: Vec<&Assets> = startup.iter().collect();
+    let defs = vcod_cod4::dynent::defs(&map, &refs);
+    let text = std::fs::read_to_string(format!("{FIXTURES}/frag-mp_shipment-1.7.txt")).unwrap();
+    let t = parse(&text);
+    let names = dynent_models(&t, &defs);
+    eprintln!("shipment models {names:?}");
+    let zones: Vec<&Assets> = std::iter::once(&map).chain(startup.iter()).collect();
+    let models: Vec<_> = names
+        .iter()
+        .map(|n| {
+            zones
+                .iter()
+                .find_map(|z| z.xmodels.iter().find(|m| &m.name == n))
+                .expect("model")
+        })
+        .collect();
+    let (mut pw, ids) = build(&t, &models);
+    let r = run(&t, &mut pw, &ids, &clip, &[]);
+    let w = worst(&r.diffs);
+    let first_inexact = r.diffs.iter().position(|d| !d.exact).map(|k| k + 1);
+    eprintln!(
+        "shipment: {} steps, worst {w:?}, first inexact step {first_inexact:?}; seed parts after {:?}; \
+         asleep (ours, retail's) {:?}; msec parts {:?}",
+        r.diffs.len(),
+        r.seed_parts,
+        r.asleep,
+        r.msec_parts
+    );
+    // On past the take until the port's last body sleeps too, at 17 ms
+    // frames as the take's.
+    let mut to = t.steps.last().unwrap().to;
+    let mut extra = 0;
+    let awake = |pw: &PhysWorld| ids.iter().filter(|&&id| !pw.asleep(id)).count();
+    let dv = PhysDvars::default();
+    let contact = collide::Dvars::default();
+    let mut slept = r.asleep.clone();
+    while awake(&pw) > 0 && extra < 3600 {
+        to += 17;
+        extra += 1;
+        pw.run_to_time(to, &dv, &contact, &clip, &mut |_| {});
+        for (i, &id) in ids.iter().enumerate() {
+            if pw.asleep(id) {
+                slept
+                    .get_mut(&(i as u32 + 1))
+                    .unwrap()
+                    .0
+                    .get_or_insert(t.steps.len() + extra);
+            }
+        }
+    }
+    for (i, &id) in ids.iter().enumerate() {
+        let n = i as u32 + 1;
+        let (ours, theirs) = slept[&n];
+        let (ours, theirs) = (ours.expect("the port's body sleeps"), theirs.unwrap());
+        let rest = t.steps[theirs - 1].bodies[&n];
+        let b = pw.world.body(id);
+        let (off, turn) = (
+            Vec3::from(b.pos).distance(Vec3::from(rest.pos)),
+            turn_deg(b.q, rest.q),
+        );
+        eprintln!(
+            "  body {n} {}: asleep on step {ours}, retail's {theirs}; at rest {off} off, {turn} degrees",
+            names[i]
+        );
+        assert!(
+            ours.abs_diff(theirs) <= 15,
+            "body {n}: asleep on {ours}, retail's {theirs}"
+        );
+        assert!(
+            off <= 0.5 && turn <= 15.0,
+            "body {n}: at rest {off} off, {turn} degrees"
+        );
+    }
+    assert!(r.msec_parts.is_empty(), "msecStep {:?}", r.msec_parts);
+    assert!(
+        r.seed_parts.is_none_or(|k| k > 250),
+        "the seed parts after {:?}",
+        r.seed_parts
+    );
 }

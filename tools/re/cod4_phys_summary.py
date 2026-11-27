@@ -4,9 +4,10 @@ crates/cod4/tests/fixtures/phys/README.md's): the seed at the first body,
 each body's creator, mass and geoms, the step count and msecStep sequence,
 when each body slept or went, and the contact, push and sound counts. With
 --trim, also writes the dump cut one step past the last step with a body
-awake, or after step N with --steps N.
+awake, or after step N with --steps N; --every K keeps a body's line only
+on every Kth step, its first step and the step it first reads asleep.
 
-  python3 -I tools/re/cod4_phys_summary.py DUMP [--trim OUT [--steps N]]
+  python3 -I tools/re/cod4_phys_summary.py DUMP [--trim OUT [--steps N] [--every K]]
 """
 import math
 import struct
@@ -114,9 +115,11 @@ def summary(path):
     return d
 
 
-def trim(path, out, keep=None):
+def trim(path, out, keep=None, every=1):
     d = parse(path)
     keep = keep or last_awake(d) + 1
+    marks = {(b["sleep"], i) for i, b in d["bodies"].items()}
+    first = {}
     with open(out, "w") as o:
         step = 0
         for line in open(path):
@@ -127,6 +130,10 @@ def trim(path, out, keep=None):
                 break
             if step > keep or (step == keep and w and w[0] in ("collide", "cut", "c", "sound", "push")):
                 continue
+            if w and w[0] == "body" and every > 1:
+                i = int(w[1])
+                if first.setdefault(i, step) != step and step % every and (step, i) not in marks:
+                    continue
             o.write(line)
         o.write("end\n")
     print("trimmed to step %d: %s" % (keep, out))
@@ -136,4 +143,5 @@ if __name__ == "__main__":
     a = sys.argv[1:]
     summary(a[0])
     if "--trim" in a:
-        trim(a[0], a[a.index("--trim") + 1], int(a[a.index("--steps") + 1]) if "--steps" in a else None)
+        trim(a[0], a[a.index("--trim") + 1], int(a[a.index("--steps") + 1]) if "--steps" in a else None,
+             int(a[a.index("--every") + 1]) if "--every" in a else 1)

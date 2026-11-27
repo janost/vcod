@@ -256,12 +256,24 @@ fn our_pullback(step: &[Sample]) -> Option<i32> {
 
 #[test]
 fn a_thrown_grenade_flies_bounces_and_explodes_like_retail() {
+    check("grenade");
+}
+
+/// The take whose `throw_down` frag lands by the thrower and knocks him
+/// down (`mp_carentan-tdm-grenade-knock.txt`, cod11-combat.md 1.14).
+#[test]
+fn a_grenade_by_its_thrower_flies_and_explodes_like_retail() {
+    check("grenade-knock");
+}
+
+/// The flights of `mp_carentan-tdm-<kind>.txt` against ours.
+fn check(kind: &str) {
     let Some(fs) = vcod_common::testing::game_fs_11() else {
         return;
     };
     let (map, gametype) = ("mp_carentan", "tdm");
     let path = format!(
-        "{}/tests/fixtures/playerstate/{map}-{gametype}-grenade.txt",
+        "{}/tests/fixtures/playerstate/{map}-{gametype}-{kind}.txt",
         vcod_common::manifest_dir!()
     );
     let text = std::fs::read_to_string(&path).unwrap();
