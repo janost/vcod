@@ -91,6 +91,7 @@ mod vehicle_probe;
 mod video;
 mod viewmodel;
 mod voice;
+mod voice_meter;
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{CommandFactory, FromArgMatches, Parser};

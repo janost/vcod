@@ -42,10 +42,11 @@ use crate::hud::hudelem::format_g;
 /// `ui_zfeather` copy sets as the page closes; the aspect ratio
 /// (`vid_restart`), the texture page's picmip dvars (`r_applyPicmip`) and
 /// its anisotropy (`r_texFilterAnisoMin`, live), and `ragdoll_enable`.
-/// The voice page's record level slider, `winvoice_mic_reclevel`.
+/// The voice page's record level slider, `winvoice_mic_reclevel`, and the
+/// meter's scaler, `winvoice_mic_scaler`.
 /// Create a Class's class names, `customclass1`..`5`, which its rename
 /// field sets.
-const VCOD_CVARS: [(&str, &str); 39] = [
+const VCOD_CVARS: [(&str, &str); 40] = [
     ("customclass1", "customclass1"),
     ("customclass2", "customclass2"),
     ("customclass3", "customclass3"),
@@ -85,6 +86,7 @@ const VCOD_CVARS: [(&str, &str); 39] = [
     ("r_texFilterAnisoMin", "r_texfilteranisomin"),
     ("ragdoll_enable", "ragdoll_enable"),
     ("winvoice_mic_reclevel", "winvoice_mic_reclevel"),
+    ("winvoice_mic_scaler", "winvoice_mic_scaler"),
 ];
 
 /// The graphics pages' `ui_r_*` copies whose dvar vcod has

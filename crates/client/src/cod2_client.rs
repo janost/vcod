@@ -183,6 +183,7 @@ impl Cod2Client {
             quality,
             cx.shell,
             cx.audio,
+            None,
         );
         s.transmit_voice();
         self.hud.voice = cod2_hud::VoiceShown {
