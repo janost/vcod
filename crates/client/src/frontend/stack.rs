@@ -896,7 +896,7 @@ mod tests {
     /// A retail `--save-configstrings` capture, one `<index> <value>` line
     /// per slot, as a gamestate's table.
     fn capture_configstrings(name: &str) -> Vec<String> {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        let path = std::path::Path::new(vcod_common::manifest_dir!())
             .join("../server/tests/fixtures/configstrings")
             .join(name);
         let text = std::fs::read_to_string(&path).unwrap();

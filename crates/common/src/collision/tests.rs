@@ -2072,8 +2072,7 @@ fn patch_seams_clip_as_each_retail_build() {
     let world =
         CollisionWorld::with_statics(&bsp, &crate::props::static_models(&fs, &bsp.entities));
     world.unlink_script_brushes(&bsp.entities, "dm");
-    let text = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
+    let text = std::fs::read_to_string(crate::manifest_path!(
         "/tests/fixtures/patch/mp_carentan-seams.txt"
     ))
     .unwrap();
@@ -2175,7 +2174,7 @@ fn a_patch_stops_traces_from_its_front_only() {
     };
     let text = std::fs::read_to_string(format!(
         "{}/tests/fixtures/patch/patchside-uo.txt",
-        env!("CARGO_MANIFEST_DIR")
+        crate::manifest_dir!()
     ))
     .unwrap();
     let bsp = crate::bsp::parse(&fs.read("maps/mp/mp_streets.bsp").unwrap()).unwrap();
@@ -2294,7 +2293,7 @@ fn unlisted_lump_24_on_stock_1_1_maps() {
 fn check_leaf_fixture(fs: &crate::pk3::Pk3Fs, gametype: Option<&str>, file: &str) -> usize {
     let text = std::fs::read_to_string(format!(
         "{}/tests/fixtures/patch/{file}",
-        env!("CARGO_MANIFEST_DIR")
+        crate::manifest_dir!()
     ))
     .unwrap();
     let mut worlds = std::collections::HashMap::new();

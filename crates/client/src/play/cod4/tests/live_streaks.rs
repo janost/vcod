@@ -342,10 +342,8 @@ struct Streak {
 #[test]
 fn cod4_live_killcam_draws_no_interrupt_and_the_use_key_skips_it() {
     use crate::play::input::Action;
-    const GSC: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../cod4/tests/fixtures/gsc/killcam"
-    );
+    static GSC: vcod_common::manifest::ManifestPath =
+        vcod_common::manifest_const!("/../cod4/tests/fixtures/gsc/killcam");
     #[derive(Debug, Default)]
     struct Kc {
         sent: bool,
@@ -356,7 +354,7 @@ fn cod4_live_killcam_draws_no_interrupt_and_the_use_key_skips_it() {
         end: Option<i32>,
     }
     let mut kc = Kc::default();
-    let out = live_war_pair_in(["assault_mp,0", "assault_mp,0"], Some(GSC), move |f| {
+    let out = live_war_pair_in(["assault_mp,0", "assault_mp,0"], Some(&GSC), move |f| {
         if f.both && f.level > 9000 && !kc.sent {
             f.tx.send((0, "maps/mp/mp_crash_fx", "killedBy", "enemy"))
                 .ok();
@@ -401,13 +399,11 @@ fn cod4_live_killcam_draws_no_interrupt_and_the_use_key_skips_it() {
 /// capture's bar). Our fill grows with it, never full from the start.
 #[test]
 fn cod4_live_progress_bar_fills_over_its_scale_time() {
-    const GSC: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../cod4/tests/fixtures/gsc/killcam"
-    );
+    static GSC: vcod_common::manifest::ManifestPath =
+        vcod_common::manifest_const!("/../cod4/tests/fixtures/gsc/killcam");
     let mut sent: Option<i32> = None;
     let mut widths: Vec<(i32, f32)> = Vec::new();
-    let out = live_war_pair_in(["assault_mp,0", "assault_mp,0"], Some(GSC), move |f| {
+    let out = live_war_pair_in(["assault_mp,0", "assault_mp,0"], Some(&GSC), move |f| {
         if f.both && f.level > 9000 && sent.is_none() {
             f.tx.send((0, "maps/mp/mp_crash_fx", "progressBar", ""))
                 .ok();
@@ -446,13 +442,11 @@ fn cod4_live_progress_bar_fills_over_its_scale_time() {
 /// compass draws the `kind` vehicle as ours (cod4-hud.md 15).
 fn streak_run(kills: u32, weapon: &'static str, kind: &'static str) -> Option<Streak> {
     use crate::play::input::Action;
-    const GSC: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../cod4/tests/fixtures/gsc/streak_kill"
-    );
+    static GSC: vcod_common::manifest::ManifestPath =
+        vcod_common::manifest_const!("/../cod4/tests/fixtures/gsc/streak_kill");
     let t0 = clk_now();
     let mut seen = Streak::default();
-    let out = live_war_pair_in(["assault_mp,0", "assault_mp,0"], Some(GSC), move |f| {
+    let out = live_war_pair_in(["assault_mp,0", "assault_mp,0"], Some(&GSC), move |f| {
         let icon = f
             .hud
             .dpad_icon(weapon)
@@ -531,10 +525,8 @@ struct Earn {
 /// local sounds come back beside.
 fn airstrike_twice() -> Option<(Vec<Earn>, std::collections::BTreeSet<String>, Vec<String>)> {
     use crate::play::input::Action;
-    const GSC: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../cod4/tests/fixtures/gsc/streak_kill"
-    );
+    static GSC: vcod_common::manifest::ManifestPath =
+        vcod_common::manifest_const!("/../cod4/tests/fixtures/gsc/streak_kill");
     #[derive(Clone, Copy, Debug, PartialEq)]
     enum Phase {
         Kill,
@@ -555,7 +547,7 @@ fn airstrike_twice() -> Option<(Vec<Earn>, std::collections::BTreeSet<String>, V
     let mut under = false;
     // A seed whose strike lands on him both times.
     const SRAND: &str = "1";
-    let out = live_war_pair_in(["assault_mp,0", "assault_mp,0"], Some(GSC), move |f| {
+    let out = live_war_pair_in(["assault_mp,0", "assault_mp,0"], Some(&GSC), move |f| {
         let t = since(t0);
         let icon = f
             .hud
@@ -776,13 +768,11 @@ struct OneLife {
 #[test]
 fn cod4_live_airstrike_then_helicopter_in_one_life() {
     use crate::play::input::Action;
-    const GSC: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../cod4/tests/fixtures/gsc/streak_kill"
-    );
+    static GSC: vcod_common::manifest::ManifestPath =
+        vcod_common::manifest_const!("/../cod4/tests/fixtures/gsc/streak_kill");
     let t0 = clk_now();
     let mut seen = OneLife::default();
-    let out = live_war_pair_in(["assault_mp,0", "assault_mp,0"], Some(GSC), move |f| {
+    let out = live_war_pair_in(["assault_mp,0", "assault_mp,0"], Some(&GSC), move |f| {
         let icon = |w: &str| {
             let tex = f.hud.dpad_icon(w).and_then(|m| f.hud.texture_of(&m));
             tex.is_some_and(|t| f.quads.iter().any(|q| q.texture == t))

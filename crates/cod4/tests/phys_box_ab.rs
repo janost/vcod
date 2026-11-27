@@ -15,7 +15,8 @@ use vcod_cod4::ode::rotation::q_to_r;
 use vcod_cod4::ragdoll::CLIP_MASK;
 use vcod_cod4::testing::cod4_install;
 
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/phys");
+static FIXTURES: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/tests/fixtures/phys");
 
 fn hex(w: &str) -> u32 {
     u32::from_str_radix(w, 16).expect("hex word")

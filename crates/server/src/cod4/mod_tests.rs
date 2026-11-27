@@ -12,10 +12,8 @@ use super::*;
 use vcod_cod4::net::capture;
 use vcod_common::net::connectionless::info_pairs;
 
-const FIXTURE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../cod4/tests/fixtures/net/handshake-1.7-mod.txt"
-);
+static FIXTURE: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/../cod4/tests/fixtures/net/handshake-1.7-mod.txt");
 
 fn pairs(s: &str) -> Vec<(String, String)> {
     info_pairs(s)
@@ -51,7 +49,7 @@ fn modwarfare_boots_its_own_scripts_and_names_the_mod_as_retail() {
     // set its class limits.
     assert_eq!(level.rt.host.cvars.get("class_assault_limit"), "64");
 
-    let lines = capture::parse(&std::fs::read_to_string(FIXTURE).unwrap()).unwrap();
+    let lines = capture::parse(&std::fs::read_to_string(&FIXTURE).unwrap()).unwrap();
     let mut s = capture::Session::new();
     for l in lines.iter().filter(|l| l.dir != "auth") {
         let _ = s.feed(l);

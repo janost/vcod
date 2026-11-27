@@ -41,7 +41,7 @@ pub(super) fn finish_probe(
     );
     if let Some(gs_bytes) = client.captured_gamestate() {
         let path = if save_fixture {
-            tagged(FIXTURE_PATH)
+            tagged(&FIXTURE_PATH)
         } else {
             SCRATCH_PATH.to_string()
         };
@@ -53,7 +53,7 @@ pub(super) fn finish_probe(
         return Ok(());
     }
     let path = if save_fixture || save_snapshots {
-        tagged(SNAP_FIXTURE_PATH)
+        tagged(&SNAP_FIXTURE_PATH)
     } else {
         SNAP_SCRATCH_PATH.to_string()
     };
@@ -71,10 +71,8 @@ pub(super) fn finish_probe(
 
 /// Directory `crates/server/tests/configstrings_ab.rs` reads its fixtures
 /// from.
-const CONFIGSTRINGS_FIXTURE_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../server/tests/fixtures/configstrings"
-);
+static CONFIGSTRINGS_FIXTURE_DIR: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/../server/tests/fixtures/configstrings");
 
 /// Writes the non-empty configstring table to
 /// `<map>-<gametype>.txt`. The map, gametype, client count and pureness come
@@ -87,7 +85,7 @@ pub(super) fn write_configstrings_fixture(
     let key = |k: &str| serverinfo_key(configstrings, k);
     let (out, written) = configstrings_text(configstrings);
     let path = write_fixture_file(
-        CONFIGSTRINGS_FIXTURE_DIR,
+        &CONFIGSTRINGS_FIXTURE_DIR,
         &tagged_name(&format!("{}-{}", key("mapname"), key("g_gametype")), tag),
         &out,
         overwrite,
@@ -133,10 +131,8 @@ fn configstrings_text(configstrings: &[String]) -> (String, usize) {
 }
 
 /// Directory `crates/server/tests/playerstate_ab.rs` reads its fixtures from.
-pub(super) const PLAYERSTATE_FIXTURE_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../server/tests/fixtures/playerstate"
-);
+pub(super) static PLAYERSTATE_FIXTURE_DIR: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/../server/tests/fixtures/playerstate");
 
 /// Writes a text fixture as `dir/name`, the write every `--save-*` mode's fixture takes: refuses
 /// a name that leaves `dir`, creates `dir` and refuses to replace a file without
@@ -318,10 +314,8 @@ pub(super) fn write_phase_blocks<P: FixturePhase>(
 }
 
 /// Where `--save-scripted` writes.
-const GAMETYPES_FIXTURE_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../server/tests/fixtures/gametypes"
-);
+static GAMETYPES_FIXTURE_DIR: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/../server/tests/fixtures/gametypes");
 
 /// Writes the scripted gametype capture to
 /// `<map>-<gametype>-<role>.txt`, the gametype as the stock name the gsc
@@ -374,7 +368,7 @@ pub(super) fn write_scripted_fixture(
         out.push('\n');
     }
     let path = write_fixture_file(
-        GAMETYPES_FIXTURE_DIR,
+        &GAMETYPES_FIXTURE_DIR,
         &tagged_name(&format!("{map}-{gametype}-{role}"), tag),
         &out,
         overwrite,
@@ -446,7 +440,7 @@ pub(super) fn write_playerstate_fixture(
     }
 
     let path = write_fixture_file(
-        PLAYERSTATE_FIXTURE_DIR,
+        &PLAYERSTATE_FIXTURE_DIR,
         &tagged_name(&format!("{map}-{gametype}"), tag),
         &out,
         overwrite,
@@ -464,16 +458,12 @@ pub(super) fn write_playerstate_fixture(
 }
 
 /// Where the mover and link fixtures live.
-pub(super) const MOVERS_FIXTURE_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../server/tests/fixtures/movers"
-);
+pub(super) static MOVERS_FIXTURE_DIR: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/../server/tests/fixtures/movers");
 
 /// Where the item fixtures live, one per capture.
-pub(super) const ITEMS_FIXTURE_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../server/tests/fixtures/items"
-);
+pub(super) static ITEMS_FIXTURE_DIR: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/../server/tests/fixtures/items");
 
 #[cfg(test)]
 mod tests {
@@ -505,7 +495,7 @@ mod tests {
     /// The committed fixtures under `crates/server/tests/fixtures`, with their paths.
     fn committed_fixtures() -> Vec<(std::path::PathBuf, String)> {
         let root =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../server/tests/fixtures");
+            std::path::Path::new(vcod_common::manifest_dir!()).join("../server/tests/fixtures");
         let mut dirs = vec![root];
         let mut out = Vec::new();
         while let Some(d) = dirs.pop() {

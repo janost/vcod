@@ -12,11 +12,9 @@ use crate::play::cod4::scene::model_cs;
 /// sprite (cod4-hud.md 16.3).
 #[test]
 fn cod4_live_offscreen_waypoint_sits_on_the_edge_with_its_pointer() {
-    const GSC: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../cod4/tests/fixtures/gsc/offscreen_waypoint"
-    );
-    let out = live_war_pair_in(["assault_mp,0", "assault_mp,0"], Some(GSC), |f| {
+    static GSC: vcod_common::manifest::ManifestPath =
+        vcod_common::manifest_const!("/../cod4/tests/fixtures/gsc/offscreen_waypoint");
+    let out = live_war_pair_in(["assault_mp,0", "assault_mp,0"], Some(&GSC), |f| {
         let icon = f
             .hud
             .texture_of("waypoint_targetneutral")
@@ -169,7 +167,7 @@ fn cod4_live_names_over_heads_fade_by_team() {
         live_war_pair_on(
             teams,
             ["assault_mp,0", "assault_mp,0"],
-            Some(GSC),
+            Some(&GSC),
             move |f| {
                 let t = since(t0);
                 if f.level < 3000 || !f.both {
@@ -277,10 +275,8 @@ fn cod4_live_names_over_heads_fade_by_team() {
             },
         )
     };
-    const GSC: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../cod4/tests/fixtures/gsc/streak_kill"
-    );
+    static GSC: vcod_common::manifest::ManifestPath =
+        vcod_common::manifest_const!("/../cod4/tests/fixtures/gsc/streak_kill");
     for teams in [["allies", "axis"], ["allies", "allies"]] {
         let enemy = teams[0] != teams[1];
         let Some(log) = run(teams) else {
@@ -401,17 +397,15 @@ fn cod4_live_dynamic_crosshair_follows_the_raised_gun() {
 /// Blue Tiger materials and the RPG's rocket (cod4-client-view.md 4.7).
 #[test]
 fn cod4_live_a_given_camo_and_the_rocket_reach_the_view_weapon() {
-    const GSC: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../cod4/tests/fixtures/gsc/killcam"
-    );
+    static GSC: vcod_common::manifest::ManifestPath =
+        vcod_common::manifest_const!("/../cod4/tests/fixtures/gsc/killcam");
     let root = vcod_cod4::testing::cod4_install().map(|i| i.root().to_path_buf());
     let mut view = crate::cod4_viewmodel::Cod4View::default();
     let mut bodies = None;
     let mut asked = 0;
     // The AK-47's `weaponmodels` slot and gun materials once drawn.
     let mut ak: Option<(u8, Vec<String>)> = None;
-    let out = live_war_pair_in(["assault_mp,0", "assault_mp,0"], Some(GSC), move |f| {
+    let out = live_war_pair_in(["assault_mp,0", "assault_mp,0"], Some(&GSC), move |f| {
         let v = *f.view;
         if !f.both || f.level < 3000 || v.weapon == 0 {
             return None;
@@ -469,14 +463,12 @@ fn cod4_live_a_given_camo_and_the_rocket_reach_the_view_weapon() {
 #[test]
 fn cod4_live_another_players_gun_draws_his_camo() {
     use crate::play::cod4_players::Cod4Players;
-    const GSC: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../cod4/tests/fixtures/gsc/killcam"
-    );
+    static GSC: vcod_common::manifest::ManifestPath =
+        vcod_common::manifest_const!("/../cod4/tests/fixtures/gsc/killcam");
     let root = vcod_cod4::testing::cod4_install().map(|i| i.root().to_path_buf());
     let mut bodies = None;
     let mut asked = 0;
-    let out = live_war_pair_in(["assault_mp,0", "assault_mp,0"], Some(GSC), move |f| {
+    let out = live_war_pair_in(["assault_mp,0", "assault_mp,0"], Some(&GSC), move |f| {
         if !f.both || f.level < 3000 {
             return None;
         }
@@ -535,14 +527,12 @@ fn cod4_live_another_players_gun_draws_his_camo() {
 /// (cod4-client-view.md 4.7).
 #[test]
 fn cod4_live_a_dropped_camo_gun_draws_its_camo() {
-    const GSC: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../cod4/tests/fixtures/gsc/killcam"
-    );
+    static GSC: vcod_common::manifest::ManifestPath =
+        vcod_common::manifest_const!("/../cod4/tests/fixtures/gsc/killcam");
     let root = vcod_cod4::testing::cod4_install().map(|i| i.root().to_path_buf());
     let mut bodies = None;
     let mut asked = 0;
-    let out = live_war_pair_in(["assault_mp,0", "assault_mp,0"], Some(GSC), move |f| {
+    let out = live_war_pair_in(["assault_mp,0", "assault_mp,0"], Some(&GSC), move |f| {
         if !f.both || f.level < 3000 {
             return None;
         }

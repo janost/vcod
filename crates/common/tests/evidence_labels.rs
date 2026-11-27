@@ -51,7 +51,7 @@ use std::path::PathBuf;
 /// Every `docs/research/*.md`, sorted, then `docs/protocol-1.1.md`, read from
 /// the repo the crate sits in.
 fn research_docs() -> Vec<(String, String)> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/research");
+    let dir = PathBuf::from(vcod_common::manifest_dir!()).join("../../docs/research");
     let mut docs: Vec<(String, String)> = std::fs::read_dir(&dir)
         .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
         .map(|e| e.expect("dir entry").path())

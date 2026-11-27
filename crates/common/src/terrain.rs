@@ -1128,7 +1128,7 @@ mod tests {
             ("pointarm-1.1.txt", Arith::Kept),
             ("pointarm-1.5.txt", Arith::Stored),
         ] {
-            let path = format!("{}/tests/fixtures/patch/{file}", env!("CARGO_MANIFEST_DIR"));
+            let path = format!("{}/tests/fixtures/patch/{file}", crate::manifest_dir!());
             let text = std::fs::read_to_string(&path).unwrap();
             let (mut pass, mut fail) = (0, 0);
             for line in text.lines().filter(|l| !l.starts_with('#')) {

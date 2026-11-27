@@ -219,7 +219,7 @@ fn run(install: &vcod_cod4::install::Install, pair: &Pair, hook: &mut Hook) -> R
     sv.pin_game_seed(pair.seed);
     if let Some(gsc) = pair.gsc {
         sv.set_script_overrides(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            std::path::Path::new(vcod_common::manifest_dir!())
                 .join("../cod4/tests/fixtures/gsc")
                 .join(gsc),
         );

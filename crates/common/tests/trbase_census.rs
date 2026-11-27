@@ -16,7 +16,7 @@ const ET_VEHICLE_UO: i32 = 12;
 
 #[test]
 fn only_players_and_temp_entities_go_out_in_whole_units() {
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/net");
+    let dir = vcod_common::manifest_path!("/tests/fixtures/net");
     // (version, eType) -> (whole, fractional) entity states.
     let mut by: BTreeMap<(&str, i32), (usize, usize)> = BTreeMap::new();
     let mut files = 0;

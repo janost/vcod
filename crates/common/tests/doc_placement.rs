@@ -143,7 +143,7 @@ fn rust_files() -> Vec<PathBuf> {
             }
         }
     }
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    let root = PathBuf::from(vcod_common::manifest_dir!()).join("..");
     let mut files = Vec::new();
     walk(&root, &mut files);
     files.sort();
@@ -338,7 +338,7 @@ fn hits(src: &str) -> Vec<Hit> {
 
 #[test]
 fn no_doc_comment_sits_on_the_wrong_item() {
-    let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    let crates = PathBuf::from(vcod_common::manifest_dir!()).join("..");
     let mut seen = vec![false; ALLOWED.len()];
     let mut bad = Vec::new();
     for path in rust_files() {

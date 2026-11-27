@@ -36,7 +36,8 @@ struct Fixture {
     second: bool,
 }
 
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../cod2/tests/fixtures/turret");
+static FIXTURES: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/../cod2/tests/fixtures/turret");
 
 const MG42: Fixture = Fixture {
     name: "carentan-mg42",

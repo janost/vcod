@@ -12,7 +12,8 @@ use vcod_cod2::net::oob;
 
 use super::*;
 
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/cod2");
+static FIXTURES: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/tests/fixtures/cod2");
 
 fn fixture(name: &str) -> Vec<(String, Vec<String>)> {
     let text = std::fs::read_to_string(format!("{FIXTURES}/{name}")).unwrap();

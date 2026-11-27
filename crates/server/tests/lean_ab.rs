@@ -141,7 +141,7 @@ fn a_leaning_scoped_shot_leaves_from_retails_muzzle() {
     let (map, gametype) = ("mp_carentan", "tdm");
     let path = format!(
         "{}/tests/fixtures/playerstate/{map}-{gametype}-lean.txt",
-        env!("CARGO_MANIFEST_DIR")
+        vcod_common::manifest_dir!()
     );
     let text = std::fs::read_to_string(&path).unwrap();
     let weapon = common::header_value(&text, "weapon", &path).to_string();
@@ -227,7 +227,7 @@ fn the_lean_ramps_and_settles_like_retail() {
     let (map, gametype) = ("mp_carentan", "tdm");
     let path = format!(
         "{}/tests/fixtures/playerstate/{map}-{gametype}-lean.txt",
-        env!("CARGO_MANIFEST_DIR")
+        vcod_common::manifest_dir!()
     );
     let text = std::fs::read_to_string(&path).unwrap();
     let weapon = common::header_value(&text, "weapon", &path).to_string();

@@ -72,7 +72,7 @@ fn named(doc: &str, file: &Path, name: &str) -> bool {
 
 #[test]
 fn every_ignored_test_is_named_in_testing_md_with_a_reason() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = Path::new(vcod_common::manifest_dir!()).join("../..");
     let doc = std::fs::read_to_string(root.join("docs/dev/testing.md")).unwrap();
     let mut files = Vec::new();
     rust_files(&root.join("crates"), &mut files);

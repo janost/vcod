@@ -25,7 +25,7 @@ fn rust_files() -> Vec<PathBuf> {
             }
         }
     }
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    let root = PathBuf::from(vcod_common::manifest_dir!()).join("..");
     let mut files = Vec::new();
     walk(&root, &mut files);
     files.sort();
@@ -137,7 +137,7 @@ fn dashed(comment: &str) -> bool {
 
 #[test]
 fn no_comment_uses_a_dash_as_punctuation() {
-    let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    let crates = PathBuf::from(vcod_common::manifest_dir!()).join("..");
     let mut hits = Vec::new();
     for path in rust_files() {
         let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));

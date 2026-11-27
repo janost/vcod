@@ -648,7 +648,7 @@ mod tests {
         ignore = "retail's words match glibc's sinf and cosf; other libms miss some by an ulp"
     )]
     fn every_think_matches_retail_word_for_word() {
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../cod4/tests/fixtures/heli/");
+        let dir = vcod_common::manifest_path!("/../cod4/tests/fixtures/heli/");
         let mut off = Vec::new();
         for (file, want) in [("think-gdb.txt", (2, 604)), ("yaw-gdb.txt", (1, 802))] {
             let text = std::fs::read_to_string(format!("{dir}{file}")).unwrap();

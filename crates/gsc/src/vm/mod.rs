@@ -816,6 +816,8 @@ pub struct Vm {
     nan_ne: bool,
     /// A `switch` on another type than an int or a string.
     switch_other: SwitchOther,
+    /// The lowest int key a `switch` takes (`VmProfile::switch_index_min`).
+    switch_index_min: Option<i32>,
     /// The thread step's last `switch` key, `Undefined` before one
     /// ([`SwitchOther::LastKey`]).
     switch_key: Value,
@@ -947,6 +949,7 @@ impl Vm {
             number_eq: NumberEq::Kept,
             nan_ne: false,
             switch_other: SwitchOther::ErrorSkips,
+            switch_index_min: Some(-0x7e_0000),
             switch_key: Value::Undefined,
             size_atom,
             threads: Vec::new(),
@@ -1019,6 +1022,12 @@ impl Vm {
     /// (VERIFIED live, `probe_switch`, cod11-gsc-object-model.md 9.3.1).
     pub fn set_switch_other(&mut self, rule: SwitchOther) {
         self.switch_other = rule;
+    }
+
+    /// The int range a `switch` key may take: `min..=SWITCH_INDEX_MAX`, or
+    /// unchecked on `None` (VERIFIED, cod11-gsc-object-model.md 9.3.1).
+    pub fn set_switch_index_min(&mut self, min: Option<i32>) {
+        self.switch_index_min = min;
     }
 
     /// CoD2's notify wake order: the waiter whose `waittill` parked last

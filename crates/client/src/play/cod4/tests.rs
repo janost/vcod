@@ -107,7 +107,8 @@ fn the_crosshair_scan_names_the_client_it_meets() {
     assert_eq!(s.friendly, None);
 }
 
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../cod4/tests/fixtures/net");
+static FIXTURES: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/../cod4/tests/fixtures/net");
 
 /// What the events of a capture play (`cod4_audio`, `cod4_fx`).
 #[derive(Default, Debug)]

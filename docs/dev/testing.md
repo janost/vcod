@@ -73,6 +73,13 @@ builds leave them out:
   with no pak test run: `cod1,cod11` at 1.1, `cod1,uo` at UO, plus `cod2`
   and `cod4` when those are set. An unknown name panics.
 
+A test finds its crate's files through `vcod_common::manifest_dir!()`,
+`manifest_path!("/tests/...")` or `manifest_const!` (a `static`), never
+`env!("CARGO_MANIFEST_DIR")`: that is frozen at compile time, and a worktree
+seeded with another checkout's `target/` would read the seed's docs and
+fixtures. `crates/common/tests/manifest_dir.rs` fails on a bare use;
+`tmp/mg/rewrite-manifest-dir.py <root>` converts new ones.
+
 Pick the fixture helper by what the test asserts:
 
 - Reads paks at all: `vcod_common::testing::game_fs()`. `None` without

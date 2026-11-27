@@ -60,15 +60,11 @@ use watch::{CS_SOUNDS_COUNT, ProbeWatch, sound_cs_alias};
 
 /// Committed fixtures are absolute (the common crate's parser tests read
 /// them); scratch paths are cwd-relative.
-const FIXTURE_PATH: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../common/tests/fixtures/net/gamestate.bin"
-);
+static FIXTURE_PATH: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/../common/tests/fixtures/net/gamestate.bin");
 const SCRATCH_PATH: &str = "tmp/gamestate.bin";
-const SNAP_FIXTURE_PATH: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../common/tests/fixtures/net/snapshots.bin"
-);
+static SNAP_FIXTURE_PATH: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/../common/tests/fixtures/net/snapshots.bin");
 const SNAP_SCRATCH_PATH: &str = "tmp/snapshots.bin";
 /// How many snapshot-bearing messages to capture before a fixture run stops.
 const SNAP_CAPTURE_TARGET: usize = 24;
@@ -2268,7 +2264,7 @@ pub fn probe(
                 client.configstrings(),
                 &join.team,
                 &join.weapon,
-                MOVERS_FIXTURE_DIR,
+                &MOVERS_FIXTURE_DIR,
                 tag.as_deref(),
                 overwrite,
             )?;
@@ -2665,7 +2661,7 @@ pub fn probe(
             client.configstrings(),
             &join.team,
             &join.weapon,
-            MOVERS_FIXTURE_DIR,
+            &MOVERS_FIXTURE_DIR,
             tag.as_deref(),
             overwrite,
         )?;

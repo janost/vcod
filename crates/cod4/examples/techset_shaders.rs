@@ -18,7 +18,7 @@ fn main() -> Result<()> {
     let map = args.next().unwrap_or_else(|| "mp_crash".into());
     let want = args.next().unwrap_or_else(|| "wc_l_sm_r0c0".into());
     let out = args.next().map(PathBuf::from).unwrap_or_else(|| {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tmp/cod4-shaders")
+        PathBuf::from(vcod_common::manifest_dir!()).join("../../tmp/cod4-shaders")
     });
     let install = cod4_install().context("COD4_DIR is not a CoD4 install")?;
     let zone = Zone::open_path(&install.zone("english", &map))?;

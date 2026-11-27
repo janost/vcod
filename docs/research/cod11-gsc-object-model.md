@@ -914,8 +914,45 @@ an 80-bit one does not, so 1.1d's difference is not a double.
   the Windows binaries, the live runs on the Linux servers.
 - An int key passes a range check too, `switch index %d out of range`
   past it: -0x7e0000..0x7fffff on 1.1, 1.5 and UO (1.1 `CoDMP.exe`
-  0x479af2..0x479b00), -0x7e0002..0x7fffff on CoD2 (0x807c104),
-  -0x7e8000..0x7fffff on CoD4 (0x8152158). VERIFIED (the instructions).
+  0x479af2..0x479b00; `cod_lnxded` 1.1d 0x80a6770..0x80a679e, the string at
+  0x80d7fb3), -0x7e0002..0x7fffff on CoD2 (the test at 0x807c104, the
+  caller 0x8081e65..0x8081e98, the string at 0x8145273),
+  -0x7e8000..0x7fffff on CoD4 (the test at 0x8152158, called from
+  0x8163e6e, the string at 0x822cb18). VERIFIED (the instructions).
+  VERIFIED, live (`probe_switch_range_hi`, `probe_switch_range_lo`,
+  2026-11-27, 1.1d, UO 1.51b and `cod2_lnxded` 1.3): the last key in range
+  runs `default` and the next is fatal, `switch index 8388608 out of range`
+  and `switch index -8257537 out of range` on 1.1d and UO (-0x7e0001),
+  `-8257539` on CoD2 (-0x7e0003). CoD4 was not run (no committed runner):
+  its bound is read from 0x8152158, its error path is INFERRED to be CoD2's.
+  The range error takes the same exit as `cannot switch on float`: below
+  `developer 1` 1.1d and UO skip the switch (no case, no `default`) and
+  CoD2 runs `default` (VERIFIED, live, the same probes at `developer 0`,
+  main past a `wait`). `Op::SwitchKey` checks it per
+  `VmProfile::switch_index_min`.
+- 1.5b has no range error either, and no error of any kind: its handler
+  (`cod_lnxded` 1.5b 0x80ac974..0x80aca20, the type test 0x80ac994..0x80ac9a0)
+  calls the engine's script error function (0x80af49e) for the range
+  string (0x80e2513, at 0x80ac9ce) and the type string (0x80e2530, at
+  0x80aca0c). That function stores the message pointer (0x830ad60), calls
+  0x80a98ae and returns: the two console lines `WARNING: Server should
+  have crashed here!` and `WARNING: Look for console commands player might
+  be exploiting!` (0x80e1f20, 0x80e1f60), the message itself never
+  printed, no error state, no `Com_Error`, at any `developer`. VERIFIED
+  (the instructions; the console of `probe_switch_range_hi` on 1.5b, and
+  the same two lines in cod11-gametypes-re-bel.md 7.3 and cod11-movers.md 16.5,
+  from other script errors). Control then falls through to 0x80ac9e2, the
+  string arm. For a float, a vector or undefined that arm reads the
+  function's local key (0x80ac9ec, `[ebp-0x30]`), still holding the last
+  switch's: the `LastKey` rule below, so vcod's 1.5 float rule stands.
+  For an out-of-range int the arm takes the low 16 bits as a string index
+  and calls 0x80a40a6 (VERIFIED, the instructions). That is the string
+  refcount release (INFERRED, by shape). The probe's server then ran at
+  100% CPU, and the thread and every other thread never ran again
+  (VERIFIED, live, 10 s, with a second thread that logs after a `wait`).
+  INFERRED: a release of an unused string index loops. vcod does not
+  copy that: 1.5 has no range check (`switch_index_min: None`) and the
+  key matches no case, so `default` runs.
 - A key of another type (a float, a vector, undefined), each cell VERIFIED
   live (`probe_switch` and scratch probes at `developer 0`, 2026-11-27):
 
@@ -932,10 +969,11 @@ an 80-bit one does not, so 1.1d's difference is not a double.
   float, a vector and undefined each ran `case 2:`, while a thread
   spawned with `thread`, or resumed after a `wait`, ran `default` on a
   float though its spawner's last key matched (VERIFIED, live, a scratch
-  probe). INFERRED: the key is a `VM_Execute` local, kept from the last
-  switch when the type test fails, and 1.5b's Linux server skips the
-  error that its Windows handler raises (the same gap as the bracket read
-  in cod11-gsc-language.md, "Why: the compiler types the bare globals").
+  probe). VERIFIED (the instructions, above): the key is a `VM_Execute`
+  local, kept from the last switch when the type test fails, and the Linux
+  1.5b's script error function only prints the two `WARNING` lines where
+  the Windows handler's raises (the same gap as the bracket read in
+  cod11-gsc-language.md, "Why: the compiler types the bare globals").
 - A `case` label is an int or string literal: `case 1.5:` and `case -1:`
   are the compile error `case expression must be an int or string` on
   all five builds (VERIFIED, live, `probe_switch_case_float`,
@@ -944,6 +982,19 @@ an 80-bit one does not, so 1.1d's difference is not a double.
   1.5 0x471693..0x4716ad, UO 0x47e951..0x47e96b, `cod4_lnxded`
   0x814a093..0x814a0ae (kinds 7 and 0xb, 0x822aba4); `cod2_lnxded`
   pushes the string at 0x8073f83. VERIFIED (the instructions).
+- A repeated label is the compile error `duplicate case expression`, on
+  `default:` too, and the label is the one reported; `case 1:` beside
+  `case "1":`, and `case "a":` beside `case "A":`, are two labels and
+  compile (VERIFIED, live, `probe_switch_dup_int`, `probe_switch_dup_str`,
+  `probe_switch_dup_default`, `probe_switch_dup_case`, `probe_switch_mixed`
+  on 1.1d, 1.5b, UO 1.51b and `cod2_lnxded` 1.3, 2026-11-27, the console
+  naming the second label). The string is in the compiler of `cod_lnxded`
+  1.1d (0x80d6e0e, pushed at 0x809874b), 1.5b (0x80e130e, 0x809f9de), UO
+  (0x80e724e, 0x80a09d6), `cod2_lnxded` (0x81440a0, 0x8074606) and
+  `cod4_lnxded` (0x822ae35, 0x814a05f). VERIFIED (the instructions); CoD4
+  was not run. No stock script has a repeated label: a scan of the 644
+  CoD2 scripts' 2214 labels, and the 1.1, UO and CoD4 compile tests,
+  found none. vcod refuses it in `compile_switch`.
 - NaN: a NaN difference (a NaN operand, or two like infinities) is
   unordered, and every build's `==` reads it unequal. 1.1d's, 1.5b's and
   UO's `!=` is its own ordered `|a - b| >= T`, false on it; CoD2's and

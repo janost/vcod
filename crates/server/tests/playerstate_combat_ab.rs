@@ -312,7 +312,7 @@ fn check_on(
 ) {
     let path = format!(
         "{}/tests/fixtures/playerstate/{map}-{gametype}-{kind}.txt",
-        env!("CARGO_MANIFEST_DIR")
+        vcod_common::manifest_dir!()
     );
     let text = std::fs::read_to_string(&path).unwrap();
     // The gametype is the fixture's, not a default: the grenade capture was

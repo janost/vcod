@@ -836,7 +836,7 @@ pub(super) fn write_sd_fixture(
     }
 
     let path = write_fixture_file(
-        PLAYERSTATE_FIXTURE_DIR,
+        &PLAYERSTATE_FIXTURE_DIR,
         &tagged_name(&format!("{map}-sd-{role}"), tag),
         &out,
         overwrite,

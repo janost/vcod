@@ -34,10 +34,8 @@ use vcod_server::Server;
 
 const MAP: &str = "mp_carentan";
 const PROBE_PATH: &str = "maps/mp/gametypes/probe_turret";
-const PROBE_SRC: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../gsc/tests/fixtures/semantics/client-probes/probe_turret.gsc"
-);
+static PROBE_SRC: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/../gsc/tests/fixtures/semantics/client-probes/probe_turret.gsc");
 /// The spot the probe script places its clients around (its own comment).
 const GUN_NEAR: [f32; 2] = [1712.0, 1830.0];
 
@@ -229,7 +227,7 @@ fn build_on(
     let mut now = Instant::now();
     let mut sv = Server::new(common::cfg(MAP, "probe_turret"), now);
     sv.set_protocol(p);
-    sv.overlay_script(PROBE_PATH, &read(PROBE_SRC));
+    sv.overlay_script(PROBE_PATH, &read(&PROBE_SRC));
     sv.set_cvar("probe_teleport", "1");
     // Only logs: every hit's point and direction to the last bit.
     sv.set_cvar("probe_hitlog", "1");
@@ -861,10 +859,8 @@ fn pose_hit(rig: &Rig, t: i32) -> Option<[f32; 3]> {
 
 /// `mp_carentan-dm-pitch-ease.txt`: retail's turret rounds against a body
 /// flipping its view pitch 0 / 85 every 400 ms (combat doc 16.3).
-const PITCH_EASE_FIXTURE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/tests/fixtures/turret/mp_carentan-dm-pitch-ease.txt"
-);
+static PITCH_EASE_FIXTURE: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/tests/fixtures/turret/mp_carentan-dm-pitch-ease.txt");
 /// The retail gunner's settled view in that capture, wire shorts.
 const PITCH_EASE_VIEW: [f32; 2] = [214.0, 41527.0];
 /// Frames past a flip a row covers: the first eased frame and the next five.
@@ -877,7 +873,7 @@ type EaseRow = (f32, Vec<Option<f32>>);
 
 /// The fixture's rows for `run` (`slot0` or `slot1`).
 fn retail_ease_rows(run: &str) -> Vec<EaseRow> {
-    let text = read(PITCH_EASE_FIXTURE);
+    let text = read(&PITCH_EASE_FIXTURE);
     let mut hits: BTreeMap<i32, f32> = BTreeMap::new();
     let mut flips: Vec<(i32, f32)> = Vec::new();
     let mut inside = false;
@@ -1463,28 +1459,19 @@ fn the_first_locked_snapshot_is_already_placed() {
 // Where the capture logs each snapshot's `commandTime` (`ct=`), a cmd pairs
 // with the first snapshot whose `ct=` reached its stamp instead ([`frame_of`]).
 
-const FIXTURE_FULL: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/tests/fixtures/turret/mp_carentan-dm-turret-full.txt"
-);
-const FIXTURE_VICTIM: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/tests/fixtures/turret/mp_carentan-dm-turret-victim-ct.txt"
-);
-const FIXTURE_VICTIM_SCRIPT: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
+static FIXTURE_FULL: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/tests/fixtures/turret/mp_carentan-dm-turret-full.txt");
+static FIXTURE_VICTIM: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/tests/fixtures/turret/mp_carentan-dm-turret-victim-ct.txt");
+static FIXTURE_VICTIM_SCRIPT: vcod_common::manifest::ManifestPath = vcod_common::manifest_const!(
     "/tests/fixtures/turret/mp_carentan-dm-turret-victim-ct-script.txt"
 );
 /// The 2026-10-19 run of the same recipe, from before `ct=`: its gunner
 /// stood where the strafe's step reads parm 142 (turrets doc 13.3).
-const FIXTURE_VICTIM_19: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/tests/fixtures/turret/mp_carentan-dm-turret-victim.txt"
-);
-const FIXTURE_VICTIM_19_SCRIPT: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/tests/fixtures/turret/mp_carentan-dm-turret-victim-script.txt"
-);
+static FIXTURE_VICTIM_19: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/tests/fixtures/turret/mp_carentan-dm-turret-victim.txt");
+static FIXTURE_VICTIM_19_SCRIPT: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/tests/fixtures/turret/mp_carentan-dm-turret-victim-script.txt");
 /// When in a frame the target's cmds go out: the net probe sends one every
 /// 16 ms of its own clock, three a frame.
 const TARGET_CMD_MS: [u64; 3] = [16, 33, FRAME_MS as u64];
@@ -2178,8 +2165,8 @@ fn the_victim_capture_matches_retail_on_mp_carentan() {
     if vcod_common::testing::game_fs_11().is_none() {
         return;
     }
-    let cap = parse(&read(FIXTURE_VICTIM));
-    let place = place_ms(read(FIXTURE_VICTIM_SCRIPT).lines(), 0).expect("retail's PROBE place");
+    let cap = parse(&read(&FIXTURE_VICTIM));
+    let place = place_ms(read(&FIXTURE_VICTIM_SCRIPT).lines(), 0).expect("retail's PROBE place");
     let Some(mut rig) = rig_aligned(
         &cap,
         &vcod_common::testing::game_fs_11,
@@ -2195,14 +2182,10 @@ fn the_victim_capture_matches_retail_on_mp_carentan() {
     finish(diff(&cap, &ours, &fs), &[]);
 }
 
-const FIXTURE_LINKMG: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/tests/fixtures/turret/mp_carentan-dm-turret-linkmg.txt"
-);
-const FIXTURE_LINKMG_SCRIPT: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/tests/fixtures/turret/mp_carentan-dm-turret-linkmg-script.txt"
-);
+static FIXTURE_LINKMG: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/tests/fixtures/turret/mp_carentan-dm-turret-linkmg.txt");
+static FIXTURE_LINKMG_SCRIPT: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/tests/fixtures/turret/mp_carentan-dm-turret-linkmg-script.txt");
 
 /// The victim recipe with the gun linked to a script_origin that rises and
 /// turns under the gunner through the yaw sweep and back through the pitch
@@ -2215,9 +2198,9 @@ fn the_linked_gun_capture_matches_retail_on_mp_carentan() {
     if vcod_common::testing::game_fs_11().is_none() {
         return;
     }
-    let mut cap = parse(&read(FIXTURE_LINKMG));
+    let mut cap = parse(&read(&FIXTURE_LINKMG));
     cap.cvars = &[("probe_linkmg", "11700")];
-    let place = place_ms(read(FIXTURE_LINKMG_SCRIPT).lines(), 0).expect("retail's PROBE place");
+    let place = place_ms(read(&FIXTURE_LINKMG_SCRIPT).lines(), 0).expect("retail's PROBE place");
     let Some(mut rig) = rig_aligned(
         &cap,
         &vcod_common::testing::game_fs_11,
@@ -2249,9 +2232,9 @@ fn the_142_step_off_the_sandbags_matches_retail() {
     if vcod_common::testing::game_fs_11().is_none() {
         return;
     }
-    let cap = parse(&read(FIXTURE_VICTIM_19));
+    let cap = parse(&read(&FIXTURE_VICTIM_19));
     assert!(cap.traces.iter().all(|(_, s)| s.ct.is_none()));
-    let place = place_ms(read(FIXTURE_VICTIM_19_SCRIPT).lines(), 0).expect("retail's PROBE place");
+    let place = place_ms(read(&FIXTURE_VICTIM_19_SCRIPT).lines(), 0).expect("retail's PROBE place");
     let Some(mut rig) = rig_aligned(
         &cap,
         &vcod_common::testing::game_fs_11,
@@ -2293,7 +2276,7 @@ fn spawn_gate(
     let path = |half: &str| {
         format!(
             "{}/tests/fixtures/turret/mp_carentan-dm-turret-{tag}{half}.txt",
-            env!("CARGO_MANIFEST_DIR")
+            vcod_common::manifest_dir!()
         )
     };
     let cap = Capture {
@@ -2393,7 +2376,7 @@ fn hit_replay(
     let path = |half: &str| {
         format!(
             "{}/tests/fixtures/turret/mp_carentan-dm-turret-{tag}{half}.txt",
-            env!("CARGO_MANIFEST_DIR")
+            vcod_common::manifest_dir!()
         )
     };
     let script = read(&path("-script"));
@@ -2679,7 +2662,7 @@ fn gungrid_gate(
     let path = |half: &str| {
         format!(
             "{}/tests/fixtures/turret/mp_carentan-dm-turret-{tag}{half}.txt",
-            env!("CARGO_MANIFEST_DIR")
+            vcod_common::manifest_dir!()
         )
     };
     let script = read(&path("-script"));
@@ -3141,7 +3124,7 @@ fn the_1_5_and_uo_barrels_follow_the_clamped_view() {
     ] {
         let text = read(&format!(
             "{}/tests/fixtures/turret/{file}",
-            env!("CARGO_MANIFEST_DIR")
+            vcod_common::manifest_dir!()
         ));
         let cap = parse(&text);
         let gun_angles: [f32; 3] = text
@@ -3411,7 +3394,7 @@ fn the_fall_off_the_sandbags_matches_retail_to_the_bit() {
     let Some(fs) = vcod_common::testing::game_fs_11() else {
         return;
     };
-    let text = read(FIXTURE_FULL);
+    let text = read(&FIXTURE_FULL);
     let exact: BTreeMap<i32, String> = text
         .lines()
         .filter(|l| l.starts_with("!trace "))

@@ -395,7 +395,7 @@ fn strip_comment(l: &str) -> &str {
 
 #[test]
 fn every_doc_citation_resolves() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = Path::new(vcod_common::manifest_dir!()).join("../..");
     let mut doc_paths = docs(&root);
     doc_paths.push(root.join("AGENTS.md"));
     let mut by_name: HashMap<String, Vec<Doc>> = HashMap::new();
@@ -461,7 +461,7 @@ fn every_doc_citation_resolves() {
 
 #[test]
 fn no_doc_numbers_two_sections_alike() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = Path::new(vcod_common::manifest_dir!()).join("../..");
     let mut bad = Vec::new();
     for p in docs(&root) {
         let doc = index(&std::fs::read_to_string(&p).unwrap());

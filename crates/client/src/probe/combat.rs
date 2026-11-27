@@ -1669,7 +1669,7 @@ leanf={:.4} commandTime={}\n",
     // `--capture-tag` keeps a capture taken with another weapon beside the
     // committed one rather than on top of it.
     let path = write_fixture_file(
-        PLAYERSTATE_FIXTURE_DIR,
+        &PLAYERSTATE_FIXTURE_DIR,
         &tagged_name(&format!("{map}-{gametype}-{}", combat.kind), tag),
         &out,
         overwrite,

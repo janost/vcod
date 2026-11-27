@@ -333,7 +333,7 @@ fn load() -> Option<(CollisionWorld, vcod_server::weapons::WeaponTable)> {
 fn fixture(name: &str) -> Vec<Line> {
     let path = format!(
         "{}/tests/fixtures/playerstate/{name}",
-        env!("CARGO_MANIFEST_DIR")
+        vcod_common::manifest_dir!()
     );
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
     parse_fixture(&text)

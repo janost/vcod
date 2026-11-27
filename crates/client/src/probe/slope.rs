@@ -581,7 +581,7 @@ pub(super) fn write_slope_fixture(
         out.push('\n');
     }
     let path = write_fixture_file(
-        PLAYERSTATE_FIXTURE_DIR,
+        &PLAYERSTATE_FIXTURE_DIR,
         &tagged_name(&format!("{map}-{gametype}-slope-{cmd_ms}ms"), tag),
         &out,
         overwrite,

@@ -14,10 +14,8 @@ const GAPS: &[(&str, &str)] = &[(
     "the challenge is a rand() draw: only the prefix and the number's form compare",
 )];
 
-const FIXTURE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../cod4/tests/fixtures/net/handshake-1.7.txt"
-);
+static FIXTURE: vcod_common::manifest::ManifestPath =
+    vcod_common::manifest_const!("/../cod4/tests/fixtures/net/handshake-1.7.txt");
 
 fn oob(d: &[u8]) -> Option<&[u8]> {
     d.strip_prefix(&[0xff; 4])
@@ -25,7 +23,7 @@ fn oob(d: &[u8]) -> Option<&[u8]> {
 
 #[test]
 fn oob_replies_match_retail_byte_for_byte() {
-    let lines = capture::parse(&std::fs::read_to_string(FIXTURE).unwrap()).unwrap();
+    let lines = capture::parse(&std::fs::read_to_string(&FIXTURE).unwrap()).unwrap();
     let mut server = Cod4Server::new(test_cfg("mp_crash", "war"), 1);
     server.load(None).unwrap();
     let from: SocketAddr = "127.0.0.1:4660".parse().unwrap();
@@ -91,7 +89,7 @@ fn oob_replies_match_retail_byte_for_byte() {
 
 /// The retail gamestate of `handshake-1.7.txt`.
 fn retail_gamestate() -> Gamestate {
-    let lines = capture::parse(&std::fs::read_to_string(FIXTURE).unwrap()).unwrap();
+    let lines = capture::parse(&std::fs::read_to_string(&FIXTURE).unwrap()).unwrap();
     let mut s = capture::Session::new();
     for l in &lines {
         s.feed(l).unwrap();
