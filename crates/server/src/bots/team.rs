@@ -69,8 +69,8 @@ pub fn round_shift(team: i32, round: u32) -> usize {
 /// A playing bot's slot, team and the edges of its path ahead.
 pub type TeamPath = (usize, i32, Vec<(u32, u32)>);
 
-/// An S&D attacker's part in its team's push on the round's one site
-/// (bot-objectives.md 9.1).
+/// An S&D or `re` attacker's part in its team's push on the round's
+/// objective (bot-objectives.md 9.1, 9.1.1).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Squad {
     /// Plans with the plain crowd cost and leaves within [`START_HOLD`].
