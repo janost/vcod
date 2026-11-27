@@ -5545,7 +5545,7 @@ PENDING, by eye on a retail client: the shooter's own muzzle flash and fire
 sound, the damage direction indicator, and a kill by another player seen from
 the victim's side.
 
-### 9.4 What is not modelled at all
+### 9.4 What vcod does not model, and what it models
 
 - `EV_CROUCH_PAIN` (188): `EV_PAIN` is raised whatever the stance.
 - The direct-hit `MOD_GRENADE` arm of a thrown grenade (13.1), which a stock
@@ -5554,7 +5554,7 @@ the victim's side.
 - `pm_flags 0x400`, and the `pm_time` and `eFlags 0xC000` arms the sight
   fraction shares with the rest of `PM_Weapon`.
 
-Modelled since this list was first written, with their sections: the view
+Modelled, with their sections: the view
 kick of 6's step 6 (`ClientSim`'s `DamageKick`, played out by the aim block,
 15), the water mask and splash of 12.1 (`missile.rs`), melee and grenades
 (1.10, 2.5, 1.11, 11 to 14, measured in 9.5), 14.1's falloff, `CanDamage`'s
