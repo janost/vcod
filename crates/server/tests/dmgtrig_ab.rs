@@ -671,3 +671,48 @@ fn a_round_on_a_world_copys_wall_matches_retail_uo() {
     };
     assert_eq!(wall_run(fs), RETAIL_SPAWNED_WALL);
 }
+
+/// `client-probes/probe_dmguse.gsc` on retail 1.1d, 1.5b and UO, no client,
+/// mp_carentan with three submodels made `trigger_damage`s by
+/// `fixtures/triggers/mp_carentan-dmguse.ent`. `useBy` activates with
+/// `accumulate + 1` as the damage: after a 100 blast the use clears
+/// `threshold` 101 and puts `health` back, not 102; the count comes off no
+/// `health`; `useBy`'s own `"trigger"` is notified on every use
+/// (cod11-combat.md 14.8.2). Runs on whichever install `COD_DIR` names.
+#[test]
+fn use_by_on_trigger_damage_counts_accumulate_plus_one_like_retail() {
+    let Some(mut fs) = vcod_common::testing::game_fs() else {
+        return;
+    };
+    let path = fs.resolve_map("mp_carentan").expect("mp_carentan");
+    let bytes = fs.read(&path).unwrap();
+    fs.overlay(
+        &path,
+        vcod_common::testing::bsp_replacing_models(
+            &bytes,
+            include_str!("fixtures/triggers/mp_carentan-dmguse.ent"),
+        ),
+    );
+    let proto = vcod_server::server::install_protocol(&fs);
+    let src =
+        std::fs::read_to_string("../gsc/tests/fixtures/semantics/client-probes/probe_dmguse.gsc")
+            .expect("the probe");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(proto),
+        script: Some(&src),
+        ..common::Boot::new("mp_carentan", "probe_dmguse")
+    }
+    .start(std::rc::Rc::new(fs));
+    common::run_alone(&mut sv, &mut now, 11000);
+    let ours: Vec<&str> = sv
+        .script_log()
+        .iter()
+        .map(|l| l.trim())
+        .filter(|l| l.starts_with("PROBE"))
+        .collect();
+    let retail: Vec<&str> = include_str!("fixtures/triggers/mp_carentan-dmguse.txt")
+        .lines()
+        .filter(|l| l.starts_with("PROBE"))
+        .collect();
+    assert_eq!(ours, retail);
+}

@@ -607,6 +607,15 @@ fn the_grenade_and_melee_channels_match_retail_on_mp_carentan() {
     check("mp_carentan", "tdm", "grenade");
 }
 
+/// The grenade script from the spawn at (1200, 1760, 144) facing 90, where
+/// `throw_down`'s frag lands by the thrower: its blast charges him 94 into
+/// `aimSpreadScale` and its knockback reads the pistol land clause's
+/// `legsAnim` 100 for one sample (cod11-combat.md 1.14, 14.3).
+#[test]
+fn the_grenade_channels_match_retail_with_the_thrower_knocked_down() {
+    check("mp_carentan", "tdm", "grenade-knock");
+}
+
 /// 1.5b's carbine under the same combat script (`--save-combat
 /// --capture-tag 15` beside `COD_VERSION=1.5 tools/run_server.sh
 /// mp_carentan`, cod15-protocol-diff.md), replayed on a protocol 6 server.

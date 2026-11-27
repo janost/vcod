@@ -1270,7 +1270,10 @@ select is `weaponclass pistol AND grenade`, whose body is
 event puts its anim on the legs and leaves the torso alone, so the rule above
 is the throw's and not every `both` clause's; the single sample is the
 `duration 5`. VERIFIED: the later takes' thrower takes no damage (no 187 `EV_PAIN`, `damageEvent` 0 to the end) and the step
-holds no land sample.
+holds no land sample. VERIFIED, the 2026-11-27 retake from the first
+capture's spot and yaw (`mp_carentan-tdm-grenade-knock.txt`): the sample
+after the pain frame reads `legsAnim` 100 between two of 634 again, with
+`groundEntityNum` 1023 and `torsoAnim` 512 across all three.
 
 INFERRED, and unmeasured: vcod applies the throw's rule to the rest of the
 event clauses, so it also reaches `fireweapon`'s pistol-ADS clause and
@@ -6606,14 +6609,20 @@ run is not retail's; the fixture logs no cmd angles to tell which input
 moved it. VERIFIED, vcod measurement against the grenade part retaken the
 same way (`mp_carentan-scriptmodel-grenade-cmds.txt`, the target a
 `--probe-fall` client, the thrower's `SPAWNED` line kept), replayed on
-both clients' stamps with the times plumbing the prone gate uses: of 158
-missile snapshots all but 17 match retail's to the bit. The first frag's
-strike on the barrel (snapshots 1 and 2) reads z 11.350475 against
-11.350476, one float step, and the next contact re-bases it exactly; the
-second frag leaves the target's posed bones 0.025 off retail's (snapshot
-84 on), the idle clip's pose the 0.1 gate already names. Open: the script
-model clip's last bit on 1.1d and the target's idle pose; `scriptmodel_ab`
-keeps the grenade part at its 0.1.
+both clients' stamps with the times plumbing the prone gate uses
+(`scriptmodel_ab::a_frag_bounces_off_a_script_model_and_a_players_bones_like_retail`,
+2026-11-27, the thrower joined on the capture's `PROBE rphase` frame):
+`trType` and ground match on all 158 missile snapshots, and every base but
+76 to the bit. The first frag's strike on the barrel (its snapshots 1 and
+2) reads z 11.350475 against 11.350476, one float step, and the next
+contact re-bases it exactly; the second frag leaves the target's posed
+bones up to 0.0155 off retail's (its snapshots 5 to 78, the strike on and
+everything after it), the idle clip's pose the 0.1 gate already names.
+vcod measurement: `SV_Trace`'s end point computed at 64 bits
+(`x87::F80`) instead of `f64` leaves the barrel's z where it was, so the
+step is the script model clip's own. Open: the script model clip's last
+bit on 1.1d and the target's idle pose; the gate's `GRENADE_GAPS` names
+both.
 
 vcod: the move trace (`game::missile`) runs `combat::trace_bodies_faced`
 on every live body but the owner's while it passes, with the bone trace's
@@ -7812,7 +7821,12 @@ number a third time. VERIFIED: its `throw_down` pain frame reads
 5 adds `damage * 100 / maxHealth` there, so retail charged 94, which is what
 the falloff gives at the 78 units the replay measured between the blast and
 the thrower. VERIFIED: the later takes' thrower takes no damage, so they
-carry no such frame.
+carry no such frame. VERIFIED, live (retail 1.1d, 2026-11-27,
+`playerstate/mp_carentan-tdm-grenade-knock.txt`, the first capture's spawn
+and yaw 90 forced by the recipe in its header): `throw_down`'s pain frame
+(260400) reads `aimSpreadScale` 94.00 again, its ring `EV_PAIN` (187);
+ours reads 94.00 on the same sample
+(`playerstate_combat_ab::the_grenade_channels_match_retail_with_the_thrower_knocked_down`).
 
 ### 14.4 What stops a blast, measured
 
@@ -8933,8 +8947,8 @@ it leaves (-1853.50, 3240.49, 37.16) where retail's left (-1853.47,
 3244.39, 34.04), the same along x, 3.9 apart along the view's right and
 3.1 in z with the thrower at (-1862, 3232, -13.6) pitched 46.9 (VERIFIED,
 the capture's `VEH missile` lines against ours'; INFERRED: UO's walk bob
-off a `bobCycle` the probe's per-frame `setOrigin` hold leaves apart); and the `use` arm's `accumulate + 1` count
-(14.8.2).
+off a `bobCycle` the probe's per-frame `setOrigin` hold leaves apart).
+The `use` arm's count was captured on 2026-11-27 (14.8.2).
 
 The `wait` arm's `crandom` draws off the level's glibc `rand()`, the
 stream every other game draw takes (`G_TriggerDamage`'s call at
@@ -9002,6 +9016,23 @@ full health. Mod -1 skips `G_Trigger` (0x65136). INFERRED (not captured): no sto
 map's `trigger_damage` sets `accumulate` or `threshold`, and a script's
 `spawn` sets neither.
 
+VERIFIED, live (`client-probes/probe_dmguse.gsc` on retail 1.1d, 1.5b and
+UO 1.51b, 2026-11-27, no client, all three logging the same lines,
+`fixtures/triggers/mp_carentan-dmguse.txt`): mp_carentan with submodels
+`*3`, `*4` and `*7` made `trigger_damage`s by
+`fixtures/triggers/mp_carentan-dmguse.ent`, each `accumulate` 100, with
+`threshold` 101, 102 and none. A 100 blast on the first two takes `health`
+to 31900 and is refused at the threshold. A `useBy` then puts the 101 one
+back to 32000 (activated) and leaves the 102 one at 31900, so the use's
+damage is `accumulate + 1`, compared against `threshold`. On the third a
+50 blast leaves 31950, two `useBy`s leave it there (refused at the
+accumulate gate; the count comes off no `health`), and a second 50 blast
+activates it. Every `useBy` notifies `"trigger"` with its user on the
+spot, refused or not: the builtin's own notify, not `G_Trigger`'s. INFERRED:
+so 1.5b's and UO's `Use_trigger_damage` pass the same count.
+`dmgtrig_ab::use_by_on_trigger_damage_counts_accumulate_plus_one_like_retail`
+holds the lines on vcod.
+
 #### 14.8.3 A tank shell's walk
 
 VERIFIED, a gdb breakpoint on retail UO's `G_CheckHitTriggerDamage`
@@ -9015,7 +9046,12 @@ panzerschreck shell's walk (14.8) with the turret weapon's damage.
 INFERRED, 14.8's table: mp_foy's belltower (spawnflags 115) refuses no mod
 5, so a tank shell whose contact lies inside `*44` fires it as the
 panzerschreck's did; not captured on mp_foy, which needs a seated driver
-with a line of fire to the belfry. vcod: the same walk off the UO missile
+with a line of fire to the belfry. VERIFIED, mp_foy's entity lump: the
+nearest tank `script_vehicle` (a Panzer IV at (-2012, 2662, 124)) stands
+4866 units off the belltower trigger's origin (495, -1508, 468), the
+nearest Sherman (-1398, -7399, 232) 6188; and an unseated `fireTurret`
+spawns no shell (`mp_kharkov-shell-fuse-uo.txt`, `PROBE idlefire 2050
+rockets 0 0`), so no clientless probe fires one at the tower. vcod: the same walk off the UO missile
 impact (`cod1_frame`, `x.shell_damage`, `x.direct_mod`); a debug print on
 `vehicle_shell_ab`'s replay read the same attacker, damage, mod and
 contact to 2e-6.

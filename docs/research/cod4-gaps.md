@@ -14,11 +14,6 @@ kept at the end. Sizes: S under an hour, M a few hours, L a day or more.
 
 Ranked by how much a player notices.
 
-- Ragdolls run on the ODE port as 1.7 runs them, gated on two retail
-  captures to within a fraction of a unit (cod4-player-anims.md 10.7);
-  the base pose they are built in is the model's, not under the corpse's
-  entity, and the bones the ragdoll does not set keep the death anim's
-  last locals. L.
 - Multichannel output: kira mixes stereo, so a 5.1 or 7.1 device gets
   the stereo mix on its front pair (cod4-sound.md 4.2, 5). The 139 alias
   rows whose curve no walked zone holds fall off straight. L.
@@ -45,6 +40,14 @@ Ranked by how much a player notices.
 
 ## 3. Closed
 
+- Ragdolls were gated built at the origin, not under the corpse's
+  entity, and drew the bones they do not set with the build frame's
+  locals. The gate builds the max-life take under its entity (the first
+  step 1.5e-5 units off retail's, the masses bit for bit), and the
+  client feeds the corpse's death anim every frame, so those bones take
+  its locals under the ragdoll's as 1.7's `DObjCalcSkel` puts them,
+  within 2e-5 degrees of a retail take's every drawn frame
+  (cod4-player-anims.md 10.7, 10.7.2).
 - Physics FX models (cluster bombs, breakables, the watermelon's
   chunks) drew as plain effect elements. They now spawn as world 1
   bodies off `fx_randomTable`, as 1.7's 0x4a1ff0 spawns them, draw at
