@@ -55,7 +55,7 @@ an even seed count). Off means:
 | `AWARE=` | 8 | `test_bot_aware` | sees all round, fights the nearest enemy in sight, pays full reaction and error on every switch, ignores hits from out of sight |
 | `FOOTWORK=` | 9 | `test_bot_footwork` | stands still on its sights, never backs off, never lies down |
 | `WARY=` | 10 | `test_bot_wary` | peeks from a spot the one way, peeks on through the 3 s hold, walks onto a lost enemy's spot until it forgets it |
-| `SQUAD=` | `bot-objectives.md` 9.1 | `test_bot_squad` | no route noise, no walk behind a teammate, no hold at a round's start, every S&D attacker in the main group |
+| `SQUAD=` | `bot-objectives.md` 9.1 | `test_bot_squad` | no route noise, no walk behind a teammate, no hold at a round's start, every S&D and `re` attacker in the main group |
 | `AIM=` | 18 | `test_bot_human_aim` | the aim before section 18: straight turns, an error resampled every 4-8 ticks, every sway and kick taken back at once |
 | `TACTICS=` | `bot-objectives.md` 13 | `test_bot_tactics` | guards hold the first spot inside their ring, takers of a zone or radio its one stand; CoD2 and CoD4 routes pay no crowd cost |
 | `CONVERGE=` | `bot-objectives.md` 13 | `test_bot_converge` | S&D defenders keep their own site while the other is under attack |
