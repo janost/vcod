@@ -202,6 +202,17 @@ impl Ragdolls {
         }
     }
 
+    /// The bodies world 2 holds.
+    pub fn body_count(&self) -> usize {
+        self.pw.bodies()
+    }
+
+    /// The bodies worlds 0 and 1 hold, which the one pool of
+    /// [`crate::ode::phys::MAX_BODIES`] counts.
+    pub fn set_others(&mut self, n: usize) {
+        self.pw.others = n;
+    }
+
     fn slot(&self, id: SlotId) -> Option<&Slot> {
         (self.generations[id.index] == id.generation).then(|| &self.slots[id.index])
     }

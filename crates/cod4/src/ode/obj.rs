@@ -2,8 +2,8 @@
 //! 3.6.3): `Phys_ObjCreate` (0x5a4fb0) into 0x5a4d90, the part build
 //! 0x5a4ab0 with its mass centre move 0x5a47c0, `Phys_ObjSetCollisionFromXModel`
 //! (0x5a5710) and its box and cylinder helpers, the dynamic entities'
-//! collision (0x490240), and the impact sound row a preset carries
-//! (0x43dfb0).
+//! collision (0x490240), the impact sound row a preset carries
+//! (0x43dfb0), and the presets and models the client builds bodies from.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -14,6 +14,7 @@ use super::mass::Mass;
 use super::math::{M3, V3};
 use super::phys::{PhysObj, PhysWorld, WorldId, axes_of};
 use super::world::{BodyId, PhysDvars};
+use crate::assets::Assets;
 use crate::assets::model::{PhysBrush, PhysGeomList, XModel};
 use crate::ragdoll::iw;
 
@@ -47,6 +48,114 @@ impl ObjPreset {
             cylinder: *raw.get(0x28)? != 0,
         })
     }
+}
+
+/// A loaded `PhysPreset` as the cgame holds it: what `Phys_ObjCreate`
+/// reads, and the pushes' scales `bulletForceScale` (+0x14) and
+/// `explosiveForceScale` (+0x18).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Preset {
+    pub obj: ObjPreset,
+    pub bullet_force_scale: f32,
+    pub explosive_force_scale: f32,
+}
+
+/// The presets the client holds, by lower-case name, and the impact sound
+/// rows' prefixes ([`impact_sound_rows`]).
+#[derive(Clone, Debug, Default)]
+pub struct Presets {
+    pub by_name: HashMap<String, Preset>,
+    pub prefixes: Vec<String>,
+}
+
+impl Presets {
+    /// The presets of `zones`, highest priority first, the first zone
+    /// holding one winning; the rows registered in load order, the lowest
+    /// priority zone first. A stub (`,name`) is the asset another zone
+    /// holds. A preset past the registered 50 takes row -1, which plays
+    /// nothing.
+    pub fn of(zones: &[&Assets]) -> Presets {
+        fn held<'a>(z: &&'a Assets) -> Vec<&'a crate::assets::misc::PhysPreset> {
+            z.phys_presets
+                .iter()
+                .filter(|p| !p.name.starts_with(','))
+                .collect()
+        }
+        let loaded: Vec<_> = zones.iter().rev().flat_map(held).collect();
+        let rows = impact_sound_rows(
+            loaded
+                .iter()
+                .map(|p| (p.name.as_str(), p.snd_alias_prefix.as_deref())),
+        );
+        let mut by_name = HashMap::new();
+        for p in zones.iter().flat_map(held) {
+            let name = p.name.to_ascii_lowercase();
+            let row = rows.by_preset.get(&name).copied().unwrap_or(-1);
+            let f = |o: usize| {
+                p.raw
+                    .get(o..o + 4)
+                    .map_or(0.0, |b| f32::from_le_bytes(b.try_into().unwrap()))
+            };
+            if let Some(obj) = ObjPreset::from_raw(&p.raw, row) {
+                by_name.entry(name).or_insert(Preset {
+                    obj,
+                    bullet_force_scale: f(0x14),
+                    explosive_force_scale: f(0x18),
+                });
+            }
+        }
+        Presets {
+            by_name,
+            prefixes: rows.prefixes,
+        }
+    }
+
+    pub fn get(&self, name: &str) -> Option<&Preset> {
+        self.by_name
+            .get(&name.trim_start_matches(',').to_ascii_lowercase())
+    }
+}
+
+/// What a body is built from: its xmodel's bounds and `physGeoms` (the
+/// rest of the model left out) and the preset.
+#[derive(Clone, Debug)]
+pub struct PhysModel {
+    pub model: XModel,
+    pub preset: Preset,
+}
+
+impl PhysModel {
+    pub fn new(m: &XModel, preset: Preset) -> PhysModel {
+        PhysModel {
+            model: XModel {
+                name: m.name.clone(),
+                mins: m.mins,
+                maxs: m.maxs,
+                phys_geoms: m.phys_geoms.clone(),
+                ..XModel::default()
+            },
+            preset,
+        }
+    }
+}
+
+/// Every xmodel of `zones` (highest priority first) whose own preset
+/// (`XModel` +0xd4) `presets` holds, by lower-case name, the first zone
+/// naming one winning: what `CG_CreatePhysicsObject` builds a launched
+/// part from (cod4-gsc.md 3.6).
+pub fn part_models(zones: &[&Assets], presets: &Presets) -> HashMap<String, Arc<PhysModel>> {
+    let mut out = HashMap::new();
+    for z in zones {
+        for m in &z.xmodels {
+            let Some(p) = m.phys_preset else { continue };
+            let Some(preset) = presets.get(&z.phys_presets[p.index()].name) else {
+                continue;
+            };
+            out.entry(m.name.to_ascii_lowercase())
+                .or_insert_with(|| Arc::new(PhysModel::new(m, *preset)));
+        }
+    }
+    out
 }
 
 /// The block 0x5a4ab0 builds a body's mass and one geom from: the part
@@ -144,6 +253,26 @@ impl PhysWorld {
         self.add_part(id, preset.mass, &sphere, [-0.0; 3]);
         if let Some(o) = self.obj_mut(id) {
             o.prev.0 = pos;
+        }
+        Some(id)
+    }
+
+    /// `Phys_ObjCreate` at `pos` turned by `axes`, at rest, with `m`'s
+    /// collision: a launched part's ([`Self::set_collision_from_xmodel`])
+    /// or, `dynent`, a dynamic entity's ([`Self::dynent_collision`]).
+    pub fn create_from(
+        &mut self,
+        m: &PhysModel,
+        pos: V3,
+        axes: &M3,
+        dynent: bool,
+        dv: &PhysDvars,
+    ) -> Option<BodyId> {
+        let id = self.obj_create(pos, axes, [0.0; 3], &m.preset.obj, dv)?;
+        if dynent {
+            self.dynent_collision(id, &m.model, m.preset.obj.cylinder);
+        } else {
+            self.set_collision_from_xmodel(id, &m.model);
         }
         Some(id)
     }
