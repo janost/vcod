@@ -1022,10 +1022,9 @@ unforced jump drawing before the hold test. `trigger_multiple`'s touch
 and `use` arm `multi_wait` with its draw when `nextthink` is 0; vcod reads
 no `random` key, so the delay is `wait` alone (no stock map sets one).
 
-Left open: the draws run in vcod's frame order, not retail's per-cmd
-order (an event's pick is taken in `update_anims` after the frame's
-moves; retail's inside each cmd's pmove, ahead of that cmd's spread).
-`gunrandom` keeps vcod's positive unit draw where 1.1d multiplies by
+An event's pick is taken in `update_anims` right after its cmd's move,
+ahead of that cmd's spread, as retail's is inside the cmd's pmove (combat
+doc 1.14). Left open: `gunrandom` keeps vcod's positive unit draw where 1.1d multiplies by
 `-2^-31` (combat doc 2.2), 1.5b's and UO's sign unread. `G_RunFrame`
 draws vcod does not model, if any, are not checked against a Linux
 module's call list.

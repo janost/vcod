@@ -1275,6 +1275,24 @@ capture's spot and yaw (`mp_carentan-tdm-grenade-knock.txt`): the sample
 after the pain frame reads `legsAnim` 100 between two of 634 again, with
 `groundEntityNum` 1023 and `torsoAnim` 512 across all three.
 
+**The selection runs once per cmd.** VERIFIED (the instructions), 1.1d
+`game.mp.i386.so` `PmoveSingle` (0x33dfc): the arm that runs
+`PM_LadderMove` (0x3430b) calls `PM_Weapon` at 0x34331 and the continuous
+selection (`PM_Footsteps` here, 0x322c8, cod11-sound-system.md 9a) at
+0x34336, so each cmd selects off the weapon its own `PM_Weapon` left.
+VERIFIED (the instructions), the other order on the other two builds:
+1.5b calls 0x24ae8 at 0x28889 and `PM_Weapon` at 0x2888e, UO 0x297e4 at
+0x2e04e and `PM_Weapon` at 0x2e053. INFERRED: those are their walking arms.
+VERIFIED, live (`mp_carentan-tdm-grenade.txt`, `throw_down`): the throw's
+`legsAnim` 575 holds through the 1579 ms sample and the next, 1627, reads
+634, index 122 (no weapon in hand) with the toggle where 575 had it, two
+flips; the knock take samples the flip between them, 120 (the frag's idle)
+at 1617 and 634 at 1650. vcod measurement, the same cmds replayed: the
+throw's hold (the clip's 966 ms) runs out on an earlier cmd of the 1627
+snapshot than the frag's `fireTime` takes the weapon away, so a selection
+once per server frame read 122 there, one flip. INFERRED: retail's 634 is
+the same two cmds.
+
 INFERRED, and unmeasured: vcod applies the throw's rule to the rest of the
 event clauses, so it also reaches `fireweapon`'s pistol-ADS clause and
 `jump`'s two run clauses. No capture covers either.
@@ -1283,10 +1301,14 @@ event clauses, so it also reaches `fireweapon`'s pistol-ADS clause and
 `melee_check` and `melee_finish`, with the two-arm `pickup` and the short
 `putaway` branch beside them, and `spectate.rs::play_event` for the two
 paragraphs above it, whose landing branch clears the torso of the selection
-before it plays it. `crates/server/tests/playerstate_combat_ab.rs`'s
+before it plays it. `ClientSim::update_anims` runs after each cmd's move
+(`cod1_think.rs`, `client_think`) in 1.1d's order on all three builds; the
+1.5b and UO order is not modelled, and no capture separates them. `crates/server/tests/playerstate_combat_ab.rs`'s
 `the_grenade_and_melee_channels_match_retail_on_mp_carentan` replays the
 whole capture, from the spot the capture's own header
 records: where a blast lands, and so who it hurts, is the map's business.
+Every capture's `legsAnim` is compared sample for sample, the toggle
+included (`legs_misses`).
 
 ## 2. `Bullet_Fire_Extended`: spread, the trace, and what a bullet does
 
