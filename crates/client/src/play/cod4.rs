@@ -540,8 +540,10 @@ impl Cod4Session {
 
     /// `DynEntCl_InitEntities` (iw3mp.exe 0x48d000, from `CG_Init` and
     /// `CG_MapRestart` 0x44b3eb): every dynamic entity back at its def's
-    /// pose and health.
+    /// pose and health, after `Phys_Init` (0x43fbe7, 0x44b3e2) made worlds
+    /// 0 and 1 anew.
     pub fn restart_dynents(&mut self) {
+        self.physics = Default::default();
         self.dynents = self
             .world
             .as_ref()

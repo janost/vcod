@@ -1386,7 +1386,9 @@ vcod (`play::cod4_physics`, world 1 of `ode::phys`):
   `bulletForceScale` and world 0's `msecStep`, with the impact played
   again there. World 1 steps through `PhysWorld::run_to_time` at the
   drawn time each frame: the dynamics 3.6.7 matched against retail's
-  takes. VERIFIED (the code against the above).
+  takes. World 1 is made anew with world 0 where `Phys_Init` runs
+  (0x43fbe7, and `CG_MapRestart` at 0x44b3e2: `restart_dynents`).
+  VERIFIED (the code against the above).
 - `Cod4Physics::advance` lends world 1 the session's one CRT `rand`
   stream (`Cod4Session::crt_rand`, which the gunner's view jitter draws
   on too) and the client counts each world's bodies against the others'
