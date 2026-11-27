@@ -1,6 +1,6 @@
 //! Prints each bone of the zone's xmodels whose name contains a filter:
-//! its name, hit location (`partClassification`) and `XBoneInfo` (bounds,
-//! offset, radius squared).
+//! its name, parent (-1 a root), hit location (`partClassification`) and
+//! `XBoneInfo` (bounds, offset, radius squared).
 //!
 //!     cargo run -p vcod-cod4 --example bone_dump -- ZONE.ff FILTER
 
@@ -25,13 +25,18 @@ fn main() -> Result<()> {
         for (i, &n) in x.bone_names.iter().enumerate() {
             let name = vcod_cod4::anim::script_string(a, n);
             let class = x.part_classification.get(i).copied().unwrap_or(0);
+            let root = x.num_root_bones as usize;
+            let parent = i
+                .checked_sub(root)
+                .and_then(|k| x.parent_list.get(k))
+                .map_or(-1, |&d| i as i32 - d as i32);
             let Some(b) = x.bone_info.get(0x28 * i..0x28 * i + 0x28) else {
-                println!("  {i:3} {name} class {class}");
+                println!("  {i:3} {name} parent {parent} class {class}");
                 continue;
             };
             let v: Vec<f32> = (0..10).map(|k| f(b, 4 * k)).collect();
             println!(
-                "  {i:3} {name:<24} class {class:2} min {:?} max {:?} off {:?} r2 {}",
+                "  {i:3} {name:<24} parent {parent:3} class {class:2} min {:?} max {:?} off {:?} r2 {}",
                 &v[0..3],
                 &v[3..6],
                 &v[6..9],

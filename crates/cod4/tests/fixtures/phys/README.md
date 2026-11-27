@@ -17,7 +17,8 @@ Every take ran under `tools/cod4_wine/run.sh` with
 
 and the driver's defaults (class `specops_mp,0`, `god`, the action at
 frame 700, contacts on steps 1-40), and was cut by
-`python3 -I tools/re/cod4_phys_summary.py DUMP --trim OUT [--steps N]`.
+`python3 -I tools/re/cod4_phys_summary.py DUMP --trim OUT [--steps N]
+[--every K]`.
 
 | File | Map | World | `PHYS_*` | Scenario |
 |---|---|---|---|---|
@@ -26,6 +27,8 @@ frame 700, contacts on steps 1-40), and was cut by
 | `car-mp_backlot-1.7.txt` | mp_backlot | 1 | `SCENARIO=burst FIRE=120 POS="466.4 -425.4 128.1 169" PITCH=15 QUIET=600 STEPS=2500 CONTACTS_FROM=launch` | 120 frames of MP5 fire into the side of the first sedan, `vehicle_80s_sedan1_silv` at (368.2, -406.3, 68), until `_destructible.gsc` blows it and launches its parts |
 | `watermelon-mp_bog-1.7.txt` | mp_bog | 1 | `SCENARIO=round POS="3624.6 -32.2 52 0" PITCH=10` | one round into the watermelon `me_fruit_watermelon_round` at (3672.6, -32.2, 43.5); its `props/watermelon` effect's chunks. Cut at step 170 (`--steps 170`): one chunk was still rolling at 4 u/s and 2.2 rad/s at step 600, where the take stopped |
 | `copypaper-mp_broadcast-1.7.txt` | mp_broadcast | 1 | `SCENARIO=burst FIRE=120 POS="-201.2 240.9 60 90" PITCH=41 CONTACTS_FROM=fxmodel`, the four timeouts at 1800 | MP5 fire into the copy paper box `com_copypaper_box` at (-201.2, 300.9, 0) (health 200) until it breaks; its `props/copypaper_box_exp` effect's lid and open box (elements 4 and 5, run bits 0x40). The rounds push the box about first, so where it breaks varies by run: one run of 60 frames never broke it |
+| `shards-mp_crash-1.7.txt` | mp_crash | 0 | the frag's, with `CONTACTS=1-200 CONTACT_IDS="4 5" PLACE="4=W;5=W"` | the frag take's throw (2026-11-27); its two barrel shards (bodies 4 and 5) put 24 units over mp_crash's step edge at (308, -1458, 101.9) before their first step, at rest, turned as `part_edges`' 45 degree drop there (`W` the 19 words of the `# place` lines). Cut at step 110 (`--steps 110`): the can slept on step 462, the bottle not by step 600 |
+| `frag-mp_shipment-1.7.txt` | mp_shipment | 0 | `SCENARIO=frag POS="-576 -672 256.125 90" PITCH=85 CONTACTS=0-0 STEPS=2400` | a frag dropped at the feet beside the bottles and fruit on mp_shipment's floor (2026-11-27). Body lines every tenth step and on each body's first and first asleep step (`--every 10`) |
 
 The summary of each, as `cod4_phys_summary.py` reads it:
 
@@ -36,6 +39,8 @@ The summary of each, as `cod4_phys_summary.py` reads it:
 | car | 9 launched: four bounds boxes 6 (1), two doors 25 and one part 6 as brushes (12), two tyres 18 (6 over 13) | 132 | 17 | 89 to 132 | 360 calls, 1017 contacts, at most 24 | 37 |
 | watermelon | 6 FX models, 1 each (1) | 170 (cut) | 17 | 95 to 165, one never | 240 calls, 682 contacts, at most 12 | 6 |
 | copypaper | 2 FX models, 1 each (1) | 97 | 17 | 76 and 97 | 80 calls, 186 contacts, at most 8 | 1 |
+| shards | the frag's eight | 110 (cut) | 17 | 78 to 108, the bottle and the can past the cut | the shards' alone, steps 1-200: 168 calls, 911 contacts, at most 12 | 16 |
+| shipment | 11 dynents: five bottles and a can 0.1, five fruit 0.5 (6 over 13) | 1212 | 17 | 103 to 1212 | none dumped | 0 |
 
 ## Lines
 
@@ -44,8 +49,10 @@ the game's, seconds and radians. Body ids count up from 1 in the order the
 dump first met each body.
 
 - `# ...`: the driver's header, the console commands it sent (`# frame F
-  time T: CMD`, `T` the dumped world's clock), `# pitch P` and `# frame F
-  round leg` (a round reached `DynEntCl_EntityImpactEvent`, 0x48e0f0).
+  time T: CMD`, `T` the dumped world's clock), `# pitch P`, `# frame F
+  round leg` (a round reached `DynEntCl_EntityImpactEvent`, 0x48e0f0) and
+  `# place ID W0..W18` (body ID put at pos, q and R before its `new`
+  line, its velocities and accumulators zeroed, `PHYS_PLACE`).
 - `made ID ADDR CREATOR`: a body of this world from `Phys_ObjCreate`
   (0x5a4fb0), by its call's return address: `launch` 0x434d4e, `dynent`
   0x48dcc8, `jitter` 0x48ed9f, `pieces` 0x490fda, `fxmodel` 0x4a21be.

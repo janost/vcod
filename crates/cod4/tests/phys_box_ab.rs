@@ -1,8 +1,8 @@
 //! The box collider (`ode::collide::boxes`, cod4-gsc.md 3.6.5) against
 //! retail 1.7's `dCollide` in the world 0 and 1 captures
-//! (`fixtures/phys/`, 3.6.2): every class 1 geom's collide fed the body's
-//! captured pose gives the capture's contacts, and 0x5a2320's cut of them
-//! the contact pass's input. `COD4_DIR` unset passes vacuously.
+//! (`fixtures/phys/`, 3.6.2, 3.6.9): every class 1 geom's collide fed the
+//! body's captured pose gives the capture's contacts, and 0x5a2320's cut
+//! of them the contact pass's input. `COD4_DIR` unset passes vacuously.
 
 use std::collections::HashMap;
 
@@ -207,6 +207,9 @@ struct Tally {
     raw_exact: usize,
     cut_seen: usize,
     cut_ok: usize,
+    /// Contacts the narrow pass added: the count less the same box's with
+    /// its narrow flag off.
+    narrow: usize,
 }
 
 fn print(tag: &str, port: &[ContactGeom], cap: &[[u32; 12]]) {
@@ -239,6 +242,8 @@ fn run(name: &str, clip: &ClipMap) -> Tally {
         t.collides += 1;
         let b = BoxGeom::new(c.pos, &c.r, c.sides, c.pos, NARROW_MAX_LENGTH);
         let raw = collide_world(clip, &b, CLIP_MASK, MAX_CONTACTS);
+        let wide = BoxGeom { narrow: false, ..b };
+        t.narrow += raw.len() - collide_world(clip, &wide, CLIP_MASK, MAX_CONTACTS).len();
         let ok = match list_diff(&raw, &c.raw) {
             Some((d, exact)) if d <= TOL => {
                 t.raw_ok += 1;
@@ -291,10 +296,11 @@ fn box_contacts_match_retails_collides() {
         return;
     };
     let mut maps: HashMap<&str, ClipMap> = HashMap::new();
-    let mut exact = (0, 0);
+    let (mut exact, mut narrow) = ((0, 0), 0);
     for (file, map) in [
         ("round-mp_crash-1.7.txt", "mp_crash"),
         ("frag-mp_crash-1.7.txt", "mp_crash"),
+        ("shards-mp_crash-1.7.txt", "mp_crash"),
         ("car-mp_backlot-1.7.txt", "mp_backlot"),
         ("watermelon-mp_bog-1.7.txt", "mp_bog"),
     ] {
@@ -304,7 +310,14 @@ fn box_contacts_match_retails_collides() {
         });
         let t = run(file, clip);
         exact = (exact.0 + t.raw_exact, exact.1 + t.collides);
+        narrow += t.narrow;
     }
-    println!("{} of {} collides equal to the bit", exact.0, exact.1);
-    assert!(exact.0 + 2 >= exact.1, "{exact:?}");
+    println!(
+        "{} of {} collides equal to the bit; the narrow pass added {narrow} contacts",
+        exact.0, exact.1
+    );
+    // The watermelon's step 28 and its neighbour, the shards' steps 33 and
+    // 34: each an ulp of the sweep's position (3.6.5, 3.6.9).
+    assert!(exact.0 + 4 >= exact.1, "{exact:?}");
+    assert!(narrow > 0, "no take reached the narrow pass");
 }

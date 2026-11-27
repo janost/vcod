@@ -627,7 +627,7 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   VERIFIED (ours, the commit history).
 - `play::cod4_players` takes a slot the first frame a corpse reads a
   ragdoll type with `ragdoll_enable` on and feeds it the death anim's
-  pose until it simulates (10.7). The Options page's Ragdoll row sets
+  pose every frame (10.7, 10.7.2). The Options page's Ragdoll row sets
   `ragdoll_enable` (cod4-front-end.md 9).
 - Live: `cod4_live_corpses_ragdoll_onto_the_floor` (vcod-server `war`
   on mp_crash, a spectator posing through `Cod4Players`, 40 s on the
@@ -1425,7 +1425,7 @@ position-based solver of 10 and 10.2 on 2026-11-26. Labels per claim.
   lerp (def bone +0x38) is read by none of it. VERIFIED (0x5bc860..). vcod
   takes the base pose off the rig's first model (its `baseMat`
   normalized on load) under the entity's origin and turn as drawn: equal
-  but for rounding. INFERRED.
+  but for rounding. INFERRED. Whose entity: 10.7.2.
 - **The joints** (0x5bcb30, def order), built in the base pose before the
   placement: body 1 the joint's bone's, body 2 its parent's (def bone
   +0x44); the anchor `pos1 + R1 (-L/2, 0, 0)`, the bone's root (0x5a4740);
@@ -1500,15 +1500,15 @@ position-based solver of 10 and 10.2 on 2026-11-26. Labels per claim.
   0..1), or the base pose at once past 400 units. VERIFIED (the
   instructions, 0x5bc050..0x5bc111 for the bones read). That the ease
   compounds, reading back last frame's output, is INFERRED (0x4352e0's
-  skeleton). The DObj write (0x5bb580) sets those bones; that the rest
-  follow their parents with the anim's locals is INFERRED. vcod draws
-  the rest with the locals of the last pose fed, and lerps the
-  quaternions in `glam`. vcod's.
+  skeleton). The DObj write (0x5bb580) sets those bones, and the rest
+  take the anim's locals of the frame under their parents (10.7.2).
+  VERIFIED (the instructions, the capture). vcod draws the rest with the
+  locals fed that frame, and lerps the quaternions in `glam`. vcod's.
 - **The glue.** `play::cod4_players` keeps one pool per def and clip map
   (a map load starts a new world 2, the seed back at 0x89abcdef), steps
   it once a frame before the bodies pose, feeds a corpse's death anim
-  pose while its slot waits, snapshots or builds, and draws the slot's
-  pose once it simulates or holds. Its update runs before the frame's
+  pose every frame, and draws the slot's pose once it simulates or
+  holds (10.7.2). Its update runs before the frame's
   poses, so a slot snapshots the pose fed the frame before: a frame
   later than 1.7's, as far apart. vcod's.
 
@@ -1516,27 +1516,32 @@ position-based solver of 10 and 10.2 on 2026-11-26. Labels per claim.
 map, the base pose of `body_mp_usmc_assault`, whose def bone lengths
 every MP body shares). Two takes (10.5): `kill-mp_crash-1.7.txt`, which
 slept, and `kill-mp_crash-1.7-maxlife.txt`, which ran to
-`ragdoll_max_life` and carries the bone lines. VERIFIED (the runs, ours):
+`ragdoll_max_life` and carries the bone lines, the entity at the build
+and the skeleton (10.7.2); it is built under its entity on its own body
+and head, the slept take at the origin. VERIFIED (the runs, ours):
 
 | | slept | max life |
 |---|---|---|
 | asleep / idle, step | 79 / 80, retail's | none / 266, retail's |
-| seed retail's through step | 15 | 189 |
-| worst body, first step | 2e-4 units | 2e-4 |
-| worst body | 0.20 units, 4.1 deg | 0.012 to step 165; 0.33, 7.9 after |
+| seed retail's through step | 15 | 195 |
+| worst body, first step | 2e-4 units | 1.5e-5 (2e-4 at the origin) |
+| worst body | 0.20 units, 4.1 deg | 0.015 to step 165; 0.31, 7.4 after |
 | flags (sleep bit, timer) | retail's every step | retail's every step |
-| rest root z | 239.075 (239.064) | 240.628 (240.652) |
-| rest centres' spread | 33.16 x 48.04 x 3.37 (33.20 x 48.09 x 3.36) | 42.51 x 34.27 x 5.28 (42.56 x 34.23 x 5.28) |
+| rest root z | 239.075 (239.064) | 240.715 (240.652) |
+| rest centres' spread | 33.16 x 48.04 x 3.37 (33.20 x 48.09 x 3.36) | 42.58 x 34.09 x 5.41 (42.56 x 34.23 x 5.28) |
 
 - Each run starts from the take's start bits. The build off the max-life
-  take's snapshots lands within 3 float steps of retail's position, 11 of
-  its quaternion, 9e-4 u/s and 5e-5 rad/s of its velocities, and 1e-5 of
-  its mass (`the_build_off_retails_snapshots`). The dump's latest
+  take's snapshots lands within 1 float step of retail's position, 11 of
+  its quaternion, 9e-4 u/s and 5e-5 rad/s of its velocities, and on its
+  mass bit for bit; built at the origin, 3 float steps and 1e-5 of the
+  mass (`the_build_off_retails_snapshots`, 10.7.2). The dump's latest
   snapshot is read after state 4 saved its pose over it, so it carries
   that rounding. VERIFIED (the run, the dump's order).
-- Where it parts: from the first step by about 2e-4 units, through the
-  joints' anchors and turns at rest, built in a base pose rounded off the
-  model rather than under the corpse's entity. INFERRED. The parting
+- Where it parts: from the first step by about 2e-4 units built at the
+  origin, through the joints' anchors and turns at rest, built in a base
+  pose rounded off the model rather than under the corpse's entity; the
+  max-life take built under its entity parts by 1.5e-5 (10.7.2).
+  VERIFIED (the runs). The parting
   grows with each contact the two make differently: on the slept take
   the seed parts after step 15 and the bodies' speeds by 1.7 u/s on step
   16, where a step's contact rows first differ in number (the reorder
@@ -1670,6 +1675,90 @@ hook and calls `PhysWorld::run_to_time` for world 2.
   `a_push_lands_as_a_force_over_one_step_at_its_point` and
   `a_bullet_through_the_centre_pushes_without_spin`. VERIFIED (the runs,
   ours).
+
+### 10.7.2 The base pose under the entity, and the bones the ragdoll does not set
+
+Read off iw3mp.exe 1.7 with `objdump` and measured on a retake of the
+max-life take, `crates/cod4/tests/fixtures/ragdoll/kill-mp_crash-1.7-maxlife.txt`
+(`RAGDOLL_SKEL=1`, docs/dev/retail.md, "A ragdoll from spawn to rest"):
+an opfor rifleman (`body_mp_arab_regular_assault`, 54 bones, and
+`head_mp_arab_regular_suren`, 62), killed as in 10.5, built on frame 584
+and idle at `ragdoll_max_life` on frame 848. Every world 2 word of the
+retake, its 3738 `world`, `start`, `bone`, `step`, `slot` and `body`
+lines, repeats the 2026-11-26 take's but for the clocks. VERIFIED (the
+two dumps).
+
+- **Whose base pose.** 0x5bc860 takes the slot's pose holder through
+  0x5ba030: the slot's own (+0x10) when it has one, else
+  `0x84f2d8 + 0x1dc * entnum` (+0x8), the corpse's entity. 0x5bbe10
+  turns its angles (+0x28) into axes (0x5635c0), and 0x5bbd50 puts the
+  model's base pose of the bone (0x57f480) under those axes and its
+  origin (+0x1c), 0x5bc901..0x5bc930. VERIFIED (the instructions). The
+  take's `ent` line, read at 0x5bc930: origin (232, 2285, 236), angles 0.
+  VERIFIED (the capture). Built there the port's bodies are 1.5e-5 units
+  off retail's after the first step and 0.0015 through step 50, and the
+  build's masses are retail's bit for bit; built at the origin, as the
+  gate built it before, 2e-4, 0.0041 and 1e-5 of the mass. The first
+  step's parting of 10.7 was the base pose's place. VERIFIED (the runs,
+  ours: `ragdoll_ab::the_max_life_capture_against_the_port`,
+  `the_build_off_retails_snapshots`). The client builds under the entity
+  as drawn; the gate under the take's `ent`, and the slept take, which
+  has none, at the origin.
+- **The entity follows the root.** `CG_CalcEntityLerpPositions`'s tail
+  (0x4350fb..0x43511a) calls 0x434fa0 when `ragdoll_enable` (0xcc789f8,
+  registered with the name at 0x6f8464, 0x5ba36b) is on and `pos.trType`
+  reads 9 to 11. 0x434fa0 makes the slot when the pose holds none
+  (0x434f20, `Ragdoll_CreateRagdollForDObj` at 0x434f7f, the handle into
+  +0x10 or, for the killcam's, +0x14) and then 0x5ba060 copies, from slot
+  state 3 on, the latest snapshot's first bone's position (`j_mainroot`)
+  into the entity's origin (+0x1c). VERIFIED (the instructions). The
+  root bones of model 0 take that origin and the entity's axes
+  (0x4468b0, from 0x446d40: 0x446914..0x446a2b). VERIFIED (the
+  instructions). In the take `tag_origin` sits on `j_mainroot` every
+  drawn frame after the build. VERIFIED (the capture). vcod's root bones
+  keep the entity's origin; nothing is skinned to `tag_origin`. INFERRED.
+- **Each drawn frame's pose** (0x4352e0): 0x57de10, the controllers
+  (0x446d40), then 0x580190. The controllers end with the ragdoll's DObj
+  write (0x5bb580, called at 0x446de5 when the pose's +0xc is set and a
+  handle is): from slot state 3, each def bone's and base lerp bone's
+  latest snapshot pose, its position less the vector at 0x797648, each
+  marked in the DObj's bits at +0x14 and +0x34 (0x5bb633..0x5bb718,
+  0x5bb740..0x5bb82e). 0x580190 then runs `DObjCalcAnim` (0x5875f0) and,
+  model by model, `DObjCalcSkel` (0x57fbd0) on the bones not yet in
+  +0x34 (0x58019f..0x580325): every other bone is the anim's local this
+  frame under its parent as posed, a ragdoll bone or not. VERIFIED (the
+  instructions; 11 for the mask `DObjCalcAnim` reads). The DObj's bones
+  are its models' `boneNames` in order, model by model (0x57f2b0).
+  VERIFIED (the instructions, the take's `models` line). Nothing on the
+  corpse's draw (0x445510, its anim call at 0x445586) reads the ragdoll
+  state, so the death anim plays on under it. INFERRED (no branch on it
+  in 0x445510..0x445633).
+- **The take.** The skeleton after each drawn frame's last pose (the
+  renderer's call at 0x642a35): the bones the slot does not set move
+  under their parents for 20 frames after the build, `j_ball_ri` 26.8
+  degrees, `j_coatfront_ri` 8.9, `j_wristtwist_le` 6.2,
+  `torso_stabilizer` 6.0, and none moves from frame 605 to the end: the
+  death anim ended under the ragdoll 340 ms after its build. This death
+  anim keys the fingers still. VERIFIED (the capture). On an earlier take
+  the player respawned on frame 607 (`scr_player_forcerespawn` 1) and
+  the renderer stopped posing the corpse once the view left it; the
+  committed take sets it to 0. VERIFIED (the captures).
+- **vcod** (2026-11-27). `play::cod4_players` feeds the corpse's death
+  anim pose every frame, not only until the slot simulates, and
+  `Ragdolls::feed` sets each bone the slot does not set under the slot's
+  pose with the fed locals at once, so the frame's anim is the frame's
+  draw. Until then the client froze those bones at the build's locals:
+  `j_ball_ri` would be drawn 26.8 degrees off retail's once its anim
+  ended. The pose is the anim's only; its skins stay undrawn
+  (cod4-client-perf.md 31). vcod's.
+- **Gates.** `ragdoll_ab::the_unset_bones_take_the_frames_locals_under_the_ragdoll`
+  builds the take under its entity, steps it as retail stepped it, feeds
+  each drawn frame's skeleton as the DObj and holds every unset bone
+  under its parent within 1e-3 units and 1e-3 degrees of retail's that
+  frame (measured 1.2e-4, 2e-5); it also holds retail's 20 frames and
+  26.8 degrees. `ragdoll::tests::pool::an_unset_bone_takes_the_locals_fed_that_frame`
+  holds the feed's at once. VERIFIED (the runs, ours). How a corpse's
+  feet, coat, hands and head look as it falls is pending a human's look.
 
 ## 11. The anim sampler
 

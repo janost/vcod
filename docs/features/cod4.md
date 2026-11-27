@@ -514,8 +514,10 @@ Ranked by how much a player notices. The research-side lists are
 5. **Small menus.** Single Player's Yes does nothing (this is a
    multiplayer client). Of the `winvoice_*` voice settings the record
    level scales the captured voice (1.7 sets the Windows mixer) and the
-   scaler applies as 1.7's; the playback mute and `voice.wav` do nothing
-   ([cod4-voice.md](../research/cod4-voice.md) 4). The
+   scaler applies as 1.7's; the playback mute (the mixer's speaker monitor, which vcod
+   does not play) does nothing; `voice.wav` and the record level meter work
+   as 1.7's, the file in the base directory
+   ([cod4-voice.md](../research/cod4-voice.md) 4.1). The
    CD key menu keeps a verified key until vcod quits, where 1.7 writes
    the registry.
 6. **Server-side differences.** vcod-server never asks the authorize
