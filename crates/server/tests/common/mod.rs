@@ -2650,7 +2650,7 @@ pub fn direct_replay(
     weapon: &str,
     text: &str,
 ) -> Vec<String> {
-    direct_replay_run(fs, proto, map, probe, weapon, text, false).0
+    direct_replay_run(fs, proto, map, probe, weapon, text, DirectSpawn::Pick).0
 }
 
 /// Every snapshot the client took, by server time: its entities.
@@ -2671,7 +2671,35 @@ pub fn direct_replay_frames(
     weapon: &str,
     text: &str,
 ) -> (Vec<String>, SnapEntities) {
-    direct_replay_run(fs, proto, map, probe, weapon, text, true)
+    direct_replay_run(fs, proto, map, probe, weapon, text, DirectSpawn::Pin)
+}
+
+/// [`direct_replay`] with ours' client handed the capture's `SPAWNED`
+/// velocity after his spawn frame, and every snapshot the client took: a
+/// spawn the script moves in that frame keeps the landing velocity the
+/// cmds run at the spawn point left (cod11-combat.md 2.1.1.1), and a hold
+/// that never lands him carries it to the throw (14.8).
+pub fn direct_replay_spawned(
+    fs: fn() -> Option<vcod_common::pk3::Pk3Fs>,
+    proto: &'static vcod_common::net::protocol::Cod1Wire,
+    map: &str,
+    probe: &str,
+    weapon: &str,
+    text: &str,
+) -> (Vec<String>, SnapEntities) {
+    direct_replay_run(fs, proto, map, probe, weapon, text, DirectSpawn::Velocity)
+}
+
+/// How [`direct_replay_run`] sets ours' client down against the capture's
+/// `SPAWNED` line.
+#[derive(Clone, Copy, PartialEq)]
+enum DirectSpawn {
+    /// The gametype's own pick.
+    Pick,
+    /// The spawn point nearest its origin.
+    Pin,
+    /// The gametype's pick, then its velocity after the spawn frame.
+    Velocity,
 }
 
 fn direct_replay_run(
@@ -2681,11 +2709,21 @@ fn direct_replay_run(
     probe: &str,
     weapon: &str,
     text: &str,
-    pin: bool,
+    spawn: DirectSpawn,
 ) -> (Vec<String>, SnapEntities) {
     let first = cmds_ran(text, "")[0].0;
-    let run =
-        |late_ms| direct_replay_once(fs().unwrap(), proto, map, probe, weapon, text, late_ms, pin);
+    let run = |late_ms| {
+        direct_replay_once(
+            fs().unwrap(),
+            proto,
+            map,
+            probe,
+            weapon,
+            text,
+            late_ms,
+            spawn,
+        )
+    };
     let (lines, snap, frames) = run(0);
     match snap.filter(|&t| t != first) {
         Some(t) => {
@@ -2698,14 +2736,23 @@ fn direct_replay_run(
 
 /// The origin on a capture's `SPAWNED` line.
 fn spawned_origin(text: &str) -> [f32; 3] {
-    let o = text
-        .lines()
-        .filter(|l| l.starts_with("SPAWNED "))
-        .flat_map(str::split_whitespace)
-        .find_map(|t| t.strip_prefix("origin="))
-        .expect("the capture's SPAWNED line");
+    spawned_vec(text, "origin=")
+}
+
+/// The `key` vector of a capture's `SPAWNED` line.
+fn spawned_vec(text: &str, key: &str) -> [f32; 3] {
+    let o = spawned_token(text, key);
     let v: Vec<f32> = o.split(',').map(|x| x.parse().unwrap()).collect();
     [v[0], v[1], v[2]]
+}
+
+/// The `key` token of a capture's `SPAWNED` line, without the key.
+fn spawned_token<'a>(text: &'a str, key: &str) -> &'a str {
+    text.lines()
+        .filter(|l| l.starts_with("SPAWNED "))
+        .flat_map(str::split_whitespace)
+        .find_map(|t| t.strip_prefix(key))
+        .expect("the capture's SPAWNED line")
 }
 
 /// One run of [`direct_replay`], the client joined `late_ms` earlier:
@@ -2718,9 +2765,13 @@ fn direct_replay_once(
     weapon: &str,
     text: &str,
     late_ms: i64,
-    pin: bool,
+    how: DirectSpawn,
 ) -> (Vec<String>, Option<i32>, SnapEntities) {
-    let spawn = pin.then(|| {
+    let mut spawn_vel = (how == DirectSpawn::Velocity).then(|| {
+        let t: i32 = spawned_token(text, "t=").parse().unwrap();
+        (t, spawned_vec(text, "vel="))
+    });
+    let spawn = (how == DirectSpawn::Pin).then(|| {
         let at = spawned_origin(text);
         let d = |p: &[f32; 3]| (0..3).map(|i| (p[i] - at[i]).powi(2)).sum::<f32>();
         spawn_points(&fs, map)
@@ -2778,7 +2829,14 @@ fn direct_replay_once(
         } else if let Some(c) = cl.send_frame(&UserCmd::default()) {
             hold.last = c.server_time;
         }
-        for e in step_at(&mut sv, ADDR, &q, &mut cl, now) {
+        let events = step_at(&mut sv, ADDR, &q, &mut cl, now);
+        if let Some((t, v)) = spawn_vel
+            && sv.game_time_ms() >= t
+        {
+            sv.test_set_client_velocity(0, v);
+            spawn_vel = None;
+        }
+        for e in events {
             if let NetEvent::ServerCommand(tokens) = e {
                 if tokens.first().map(String::as_str) == Some("a") {
                     selected = tokens.get(1).and_then(|w| w.parse().ok());

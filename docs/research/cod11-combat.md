@@ -9014,7 +9014,8 @@ at the same place. VERIFIED, the same probe on retail UO, 2026-11-14:
 the same lines (`a_round_on_a_script_spawned_trigger_damage_matches_retail_uo`).
 
 **Left open** (not captured): a tank shell on the belltower (its walk,
-14.8.3); a grenade blast's charges (a 2026-11-14 UO recapture of
+14.8.3). A grenade blast's charges were open until the 2026-11-28 retake
+below (a 2026-11-14 UO recapture of
 `probe_dmgshot` with the client's cmd times,
 `fixtures/triggers/mp_uo_stanjel-dmgshot-uo.txt`, replayed on them by
 `tests/common`'s `direct_replay`, holds every round and swing line, but
@@ -9041,8 +9042,46 @@ start. On ours' origin and eye, retail's start is the bob at cycle 224
 with amplitude 4.88 (a speed of 697) within 0.02, so the gap fits a
 bob alone (INFERRED, a fit: the capture logs no thrower `bobCycle`,
 velocity or origin to check it against).
-Open: a retake whose client logs its own `bobCycle`, `velocity` and
-`origin` at the throw.
+
+**The throw's bob, measured.** VERIFIED, live (retail UO 1.51b,
+`probe_dmgshot` on mp_uo_stanjel retaken 2026-11-28 under
+`tools/re/gdb_muzzle.py`, fixture
+`fixtures/triggers/mp_uo_stanjel-dmgshot-muzzle-uo.txt`): the stop at
+`CalcMuzzlePoint`'s exit (0x7bc4f) reads the ps off `ent+0x160`
+(0x7b905), the cycle byte at `ps+8` (`BG_GetBobCycle`'s `movzx` at
+0x37b42), the velocity at `ps+0x20` (`BG_GetSpeed` 0x2e314) and the
+origin at `ps+0x14` (0x7b90b). The throw's call (level time 23900,
+`commandTime` 23900) reads `bobCycle` 241, origin (-1853.017, 3247.8862,
+-21.71184), bits 0xc4e7a08b 0x454afe2e 0xc1adb1d9, velocity (500, 885,
+-449), speed 1016.47675, `bg_bobMax` 8, the vertical factor -3.19396806
+and the horizontal -2.40610838, and its muzzle (-1853.017, 3245.48022,
+35.0941925) is the frag's first base to the bit (0xc4e7a08b 0x454ad7af
+0x420c6074 on the client's `VEH missile` line). vcod measurement: both
+factors are the 2.1.1 formulas at cycle 241 with amplitude `0.007 *
+1016.48` = 7.115, under the cap. So the 2026-11-14 fit (cycle 224,
+amplitude 4.88) is wrong: the bob is retail's rule, and its inputs moved.
+VERIFIED, the client's `VEH ps` lines (which log `bobCycle`, velocity
+and the origin's bits since this retake): the hold sets the thrower back
+on his spot every frame and he never lands, so his velocity grows phase
+after phase, (181, 195, -165) at 21400 to (504, 893, -453) at 23950, and
+the cycle byte steps only on the frames the velocity drops (144 to 153
+at 19300, where it falls from (269, 405, -229) to (180, 271, -180)); it
+holds 241 from 21400 to the throw. The spawn leaves him moving (1, 4, 0)
+(the `SPAWNED` line at 9500, the script's `setOrigin` in the spawn's
+frame, 2.1.1.1). vcod measurement: the replay without that velocity
+starts ours at (0, 0, -80), its first cmd (9533) reads (18, 34, -17)
+against retail's (5, 12, -6), its byte runs 51 ahead by 19000 (195
+against 144), and it throws at byte 30, the frag leaving (-1853.035, 3252.633,
+42.561). Handed retail's `SPAWNED` velocity after the spawn frame
+(`common::direct_replay_spawned`), ours throws at byte 241 from retail's
+origin bits and velocity, every frag snapshot sits on retail's base to
+the bit and every `PROBE` line holds, the charges 58 and 27 and the
+landing (-1807, 3420, -65) included
+(`dmgtrig_ab::a_uo_throw_under_the_hold_leaves_from_retails_muzzle`).
+INFERRED: the 2026-11-14 capture logged no spawn velocity, so its 26 and
+(-1809, 3421, -65) against this run's 27 and (-1807, 3420, -65) ride the
+spawn's landing (which spawn point the clock-seeded pick took, 2.1.1.1),
+and the port has no bob defect to fix.
 
 The `wait` arm's `crandom` draws off the level's glibc `rand()`, the
 stream every other game draw takes (`G_TriggerDamage`'s call at
