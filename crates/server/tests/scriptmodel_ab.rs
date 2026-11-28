@@ -946,29 +946,26 @@ fn a_frag_bounces_off_a_script_model_and_a_players_bones_like_retail() {
             "grenade {g} snapshot {s}: {d} off retail's"
         );
     }
+    for (g, from, to, _, why) in GRENADE_GAPS {
+        assert!(
+            off.iter()
+                .any(|(gg, s, _)| gg == g && (from..=to).contains(&s)),
+            "grenade {g} snapshots {from}-{to} match retail now; drop the row ({why})"
+        );
+    }
 }
 
 /// The missile snapshots of [`a_frag_bounces_off_a_script_model_and_a_players_bones_like_retail`]
 /// left off retail's base: (grenade, first snapshot, last snapshot, how far,
 /// why).
-const GRENADE_GAPS: &[(usize, usize, usize, f32, &str)] = &[
-    (
-        0,
-        1,
-        2,
-        1e-6,
-        "the barrel strike's z one float step under retail's, the next contact \
-         re-bases it: the script model clip's last bit on 1.1d (combat doc 12.4)",
-    ),
-    (
-        1,
-        5,
-        78,
-        0.016,
-        "every base from the strike on the target's posed bones on: his idle \
+const GRENADE_GAPS: &[(usize, usize, usize, f32, &str)] = &[(
+    1,
+    5,
+    78,
+    0.016,
+    "every base from the strike on the target's posed bones on: his idle \
          clip's pose (combat doc 12.4)",
-    ),
-];
+)];
 
 /// mp_carentan on UO: the grenade part's barrel with `setContents`
 /// 0x2000000, a body's contents: the frag leaves it at a quarter of the

@@ -248,6 +248,9 @@ impl Cod1Module {
             take,
             &pm,
         );
+        // `PM_Footsteps` runs inside each cmd's `PmoveSingle` (0x34336),
+        // after `PM_Weapon` (0x34331).
+        self.flush_anims(eng, slot, &mut tick.rounds[slot]);
         self.use_press(eng, tick, slot, &cmd);
         self.mirror_cmd(eng, &t);
         for attack in attacks {
