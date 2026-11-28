@@ -1056,6 +1056,10 @@ otherwise.
   creates its device with `D3DCREATE_FPU_PRESERVE` over the CRT's `_PC_53`
   (cod4-player-anims.md 11). A port of the client's arithmetic keeps
   doubles between the binary's stores; its stores are not the server's.
+- A trace the client runs (the physics worlds' after-frame sweep, the
+  ragdolls) goes through `ClipMap::trace_client`: `iw3mp.exe`'s brush and
+  triangle kernels store values `cod4_lnxded`'s keep, and the server's
+  trace put a swept body a z ulp off retail's (cod4-collision.md 2, 3).
 - Inline: `cod4-player-anims.md` 8 and 9 (aim and lean, the corpse's
   models); `cod4-world.md` 9.4, 9.7, 9.9 (lighteners, reflection probes,
   the cell walk); `cod4-effects.md` 2; `cod4-client-perf.md` 18, 20, 23

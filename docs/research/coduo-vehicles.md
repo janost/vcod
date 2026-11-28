@@ -1264,6 +1264,19 @@ that move, alias and snapped origin (`compare_impacts`).
   The 150-ahead prone runs fall about 14 units, inside the bound, and lie
   down on the placement as before.
 
+**The corpse's creep.** Two rows still hold the prone corpse's creep to a
+drift: `prone` (0.1, the 2026-10-17 capture, no `CMDS`) and `prone-team`
+(0.15; ours 0.13 at worst with both clients' cmds replayed on the
+capture's `ct=` frames). In the prone-team capture the Horch's origin is
+135 units on by the first frame that differs (`PROBE a 14800`), and the
+corpse moves 0.14 along y on the frame at +900 (14800), which ran two of
+his cmds (`ct=` 14750:14750 to 14800:14782), and not at all at +1150
+(15050), which ran three (15000:14983 to 15050:15033) (VERIFIED,
+capture). Ours moves 0.04 on the first and 0.06 on the second, and lands
+retail's +900 point at +1050 (VERIFIED, `RUNOVER_REPORT`). So retail's
+creep is not a fixed share per cmd run (INFERRED, those two frames);
+what moves it is unread.
+
 **A strike that kills.** `VEH_PlayerCollision` runs inside the drive
 step's probe loop (0x827ab), on each of the six `vehCheckSolidOffsets`
 probes whose trace meets a body, each probe passing on through it under a

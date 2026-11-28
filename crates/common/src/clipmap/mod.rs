@@ -80,6 +80,22 @@ pub const MASK_SHOT: u32 = 0x280_2831;
 /// no BODY.
 pub const MASK_BLAST: u32 = 0x80_2891;
 
+/// Which binary's float model a trace keeps: what its kernels store to a
+/// float and what stays on the x87 stack.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TraceFloats {
+    /// `cod2_lnxded` 1.3: each value stored.
+    #[default]
+    Cod2,
+    /// `cod4_lnxded` 1.7: the set-up and the brushes keep their values on
+    /// the stack (cod4-collision.md 2).
+    Cod4Server,
+    /// `iw3mp.exe` 1.7, the client: its set-up and brushes store as CoD2's,
+    /// and its capsule against a triangle stores nearly every value
+    /// (cod4-collision.md 2, 3).
+    Cod4Client,
+}
+
 /// What a trace met: `trace_t` without `entityNum` and the hit-part fields,
 /// which the entity clip fills.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -392,7 +408,30 @@ impl ClipMap {
     /// `start` to `end` under `mask`, as the capsule the box makes; a zero
     /// box is a point. `start == end` is a position test.
     pub fn trace(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: u32) -> ClipTrace {
-        self.with_cx(start, end, mins, maxs, mask, |cx, tr| {
+        self.trace_as(self.server_floats(), start, end, mins, maxs, mask)
+    }
+
+    /// The server's float model: CoD4's for a map with indexed triangles.
+    fn server_floats(&self) -> TraceFloats {
+        if self.indexed.is_some() {
+            TraceFloats::Cod4Server
+        } else {
+            TraceFloats::Cod2
+        }
+    }
+
+    /// [`Self::trace`] in `floats`' arithmetic.
+    pub fn trace_as(
+        &self,
+        floats: TraceFloats,
+        start: Vec3,
+        end: Vec3,
+        mins: Vec3,
+        maxs: Vec3,
+        mask: u32,
+    ) -> ClipTrace {
+        let sw = trace::Sweep::new(start, end, mins, maxs, mask, floats);
+        self.with_cx(sw, |cx, tr| {
             if start == end {
                 cx.position_test(tr);
             } else {
@@ -413,7 +452,8 @@ impl ClipMap {
         maxs: Vec3,
         mask: u32,
     ) -> ClipTrace {
-        self.with_cx(start, end, mins, maxs, mask, |cx, tr| {
+        let sw = trace::Sweep::new(start, end, mins, maxs, mask, self.server_floats());
+        self.with_cx(sw, |cx, tr| {
             if start == end {
                 cx.test_in_leaf(*leaf, tr);
             } else {
@@ -425,18 +465,14 @@ impl ClipMap {
     /// One trace over this map with its stamps.
     fn with_cx(
         &self,
-        start: Vec3,
-        end: Vec3,
-        mins: Vec3,
-        maxs: Vec3,
-        mask: u32,
+        sw: trace::Sweep,
         f: impl FnOnce(&mut trace::Cx, &mut ClipTrace),
     ) -> ClipTrace {
         let mut tr = ClipTrace::clear();
         STAMPS.with(|s| {
             let mut stamps = s.borrow_mut();
             stamps.prepare(self);
-            let mut cx = trace::Cx::new(self, &mut stamps, start, end, mins, maxs, mask);
+            let mut cx = trace::Cx::new(self, &mut stamps, sw);
             f(&mut cx, &mut tr);
         });
         tr
