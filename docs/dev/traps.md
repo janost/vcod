@@ -154,6 +154,15 @@ by doc and section. Grep `Trap:` in the subsystem doc you were sent to.
 - A* is resumable under a shared per-tick expansion budget, so a plan can
   take several ticks, and the body may have left the start's floor when it
   lands (`Follower::proved_start`).
+- A plan round still bodies starts off them (`Follower::starts_clear`),
+  but not by a ladder: at mp_ship's crow's nest head the plan through the
+  climber just off the rungs is what makes the bot give way to him
+  (`shun_through`, read by `Follower::stand_aside`), and planned round him
+  the climber was pressed back down the hatch (bot-objectives.md 4.2.3).
+- A point goal that moves on parks the plan and plans again
+  (`RETARGET`). The new plan keeps the progress of the edge the old one
+  was under way on; reset on every replan, a chase never gave up an edge
+  it could not climb (bot-objectives.md 4.2.4).
 - A body on the rungs off the ground sends three to six cmds a tick, bots and
   the graph's walks alike (`nav::tick_times`). The rungs let go 8 under a
   ladder's top, and whether the step-up clears the lip depends on the frame

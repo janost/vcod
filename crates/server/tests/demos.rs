@@ -36,7 +36,11 @@ impl Write for Shared {
 fn setup() -> Option<(vcod_common::pk3::Pk3Fs, &'static Cod1Wire)> {
     match vcod_common::testing::uo_fs() {
         Some(fs) => Some((fs, &PROTOCOL_V22)),
-        None => Some((vcod_common::testing::game_fs()?, &PROTOCOL_V1)),
+        None => {
+            let fs = vcod_common::testing::game_fs()?;
+            let p = vcod_common::net::protocol::install_protocol(&fs);
+            Some((fs, p))
+        }
     }
 }
 

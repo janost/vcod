@@ -106,6 +106,9 @@ pub(crate) struct BotDriver {
     /// take under way ([`ctf::deal_take`]).
     pub(crate) ctf_base: [Option<[f32; 3]>; 2],
     pub(crate) ctf_take: [Option<ctf::Take>; 2],
+    /// Per `re` objective, by its place in the frame, the defender that
+    /// held its goal last tick ([`super::team::goal_holder`]).
+    pub(crate) re_holders: Vec<Option<usize>>,
 }
 
 impl BotDriver {
@@ -135,7 +138,11 @@ impl BotDriver {
             ctf_home: _,
             ctf_base: _,
             ctf_take: _,
+            re_holders,
         } = self;
+        for h in re_holders.iter_mut().filter(|h| **h == Some(slot)) {
+            *h = None;
+        }
         bots.remove(&slot);
         enemies.remove(&slot);
         sidesteps.remove(&slot);

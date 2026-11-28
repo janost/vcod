@@ -648,6 +648,21 @@ the body is what sets `shun_through`, which `stand_aside` reads, so the
 rule takes the give way from a body met at a ladder's head. Left open; a
 rule kept off any ladder's ends would keep the head's give way.
 
+Kept 2026-11-28 with that rule (`Follower::starts_clear`): the start keeps
+off still bodies only while neither the bot nor any body it plans round
+stands within `LADDER_NEAR` (96) across of a ladder's box, between a
+standing height under its foot and one over its head. The crow's nest
+gate passes from all five starts (the bot on the plate at (4977, 36,
+1219), the rungs on the face at x 4975, y 59 to 69), and so does
+`bots::bots_meeting_head_on_at_a_ladder_take_turns`. VERIFIED (the
+gates). `nav::follower::yields::tests::a_plan_round_a_body_does_not_start_under_him`
+holds it on a corridor two nodes wide. Seed 33 stalls 0 with the rule on
+9.1.1's build without the `re` parts, against 40 on master fd4cae5a1.
+VERIFIED (measured, ours, release, `bot_match GAMETYPE=re BOTS=10
+TICKS=6000 MAPS=mp_rocket`). On master 53a030b6f, parts on, seed 33 stalls
+0 with or without it: the parts move the match. VERIFIED (measured). The
+six maps: 9.1.1.
+
 On the tried rule's runs (9.1.1's six maps, seeds 1 to 48):
 
 - mp_rocket seed 46: a defender's goal flips every 15 to 45 ticks
@@ -655,12 +670,62 @@ On the tried rule's runs (9.1.1's six maps, seeds 1 to 48):
   post at (8163, 143, 250), 36 stalled bot-ticks. VERIFIED (the trace).
   INFERRED (the code): `Server::deal` hands `ReView::holds_goal` to the
   defender nearest the goal each tick with no margin, and two about as
-  far off trade it. Left open.
+  far off trade it. Fixed 2026-11-28, below.
 - mp_brecourt seed 10, 166: bot 0 paces (618 to 626, 190 to 229, 33 to
   35) under the edge from (624, 192, 33) to (580, 240, 75), with no body
   near and no shun, and its follower gives no edge up while its point
   goal moves every tick. VERIFIED (the trace). INFERRED: a carrier it
-  chases. Left open.
+  chases. Traced and fixed 2026-11-28: 4.2.4.
+
+The goal's holder, 2026-11-28 (`bots::team::goal_holder`, read by
+`Server::deal` with last tick's holders in `BotDriver::re_holders`): the
+playing defender nearest a carried objective's goal takes the hold, and
+keeps it until another stands `team::HOLD_MARGIN` (512) nearer, or until
+it is down or out of play
+(`bots::team::tests::the_goal_holder_keeps_the_hold_inside_the_margin`).
+Traced first on 9.1.1's build without the `re` parts, the start rule on,
+with a temporary print of the holders and each defender's distance to
+the goal every tick: from tick 3613 to 3837 defenders 5 and 7 stood 6345
+to 6503 from the goal, within 10 of each other on 140 of the 225 ticks
+and never more than 151 apart, and the hold went between them 42 times,
+as often as every other tick. Bot 5 stalled at
+(9783, 5802, 160), 10 stalled bot-ticks. With the margin seed 46 stalls
+0. VERIFIED (the trace; measured, ours, release, `bot_match GAMETYPE=re
+BOTS=10 TICKS=6000 MAPS=mp_rocket`).
+
+### 4.2.4 A chase planned again from its edge's foot, 2026-11-28
+
+4.2.3's mp_brecourt seed 10 came back on 9.1.1's build without the `re`
+parts, with 4.2.3's start rule: 166 stalled bot-ticks, bot 0 at (616 to
+626, 189 to 229, 33 to 35) from about tick 2440. VERIFIED (measured,
+ours, release, `bot_match GAMETYPE=re BOTS=10 TICKS=6000
+MAPS=mp_brecourt STALLS=1`). Traced with a temporary per-tick print of
+the follower's plan, next node, `idle`, `best`, destination and parked
+plan. VERIFIED (the trace):
+
+- The goal is a point running west at about 190 units/s, from (-95, 812)
+  at the follower's tick 2460 to (-2196, 1045) at 2698. INFERRED: a
+  carrier.
+- The plan runs node 894 at (624.1, 192.5, 33.1), node 1893 at (579.9,
+  239.6, 75.1), 42 up, and on. From 894 the bot heads for 1893, runs
+  from (616, 191) to (626, 229) and stops there; its best distance to
+  1893 falls from 104 to 88.
+- Every 16 ticks (the follower's 2463, 2479, ...) the goal's node moves
+  more than `RETARGET` (128) off the plan's destination. The follower
+  parks the plan, under way on 894 to 1893, and plans again from the node
+  nearest the bot, 894: the new plan is 894, 1893 and on, from its first node,
+  with `best` and `idle` reset. The bot walks back to 894 and sets off up
+  the edge afresh. `idle` reaches 3 before the next plan, never
+  `STUCK_TICKS` (40), so the edge is never given up. No body is near and
+  nothing is shunned.
+
+The fix (`Follower::waypoint`): a new plan whose first two nodes are the
+edge the plan parked within `PARK_TICKS` was under way on starts on that
+edge, with that plan's `best` and `idle`
+(`nav::follower::tests::a_plan_for_a_moved_goal_goes_on_along_the_edge_under_way`).
+Seed 10 on the same build with it stalls 0. VERIFIED (measured, ours,
+release). INFERRED: the fix moves every chase, so the match moves from
+the first replan on as well; the six maps: 9.1.1.
 
 ## 5. Behind Enemy Lines (`bel`)
 
@@ -2007,6 +2072,82 @@ branch):
   (measured, the same set): stalled 817, captures 604, pickups 2110,
   with the holds redrawn 804, 604, 2131; with the parts as well 620,
   637, 2147.
+
+Measured again 2026-11-28 on master 53a030b6f, the parts on, with 4.2.3's
+start rule (now kept off ladders), 4.2.3's goal holder margin and
+4.2.4's edge kept, added one at a time, and a control for each end: the
+same build with each bot's start hold drawn off another constant. Same
+set and knobs, `STALLS=1`. VERIFIED (measured, ours, release):
+
+| Build | stalled | captures | pickups | carrier deaths | att W | def W | att share | kills |
+|---|---|---|---|---|---|---|---|---|
+| master 53a030b6f | 691 | 636 | 2143 | 964 | 776 | 544 | 58.8% | 10231 |
+| master, holds redrawn | 609 | 621 | 2155 | 959 | 779 | 548 | 58.7% | 10217 |
+| start rule | 568 | 633 | 2145 | 962 | 782 | 554 | 58.5% | 10261 |
+| start rule, holder margin | 522 | 640 | 2145 | 941 | 774 | 548 | 58.5% | 10243 |
+| all three | 254 | 652 | 2143 | 916 | 787 | 530 | 59.8% | 10241 |
+| all three, holds redrawn | 562 | 623 | 2119 | 944 | 767 | 563 | 57.7% | 10243 |
+
+- VERIFIED (the table): master 53a030b6f reads as 9.1.1's parts row
+  count for count. The stalls fall at each step, but a build and its
+  control stand 82 (master) and 308 (all three) apart; captures, pickups
+  and wins stay inside the controls' spread (captures 15 and 29,
+  attackers' wins 3 and 20).
+- VERIFIED (the runs): all three's 254 are 9 matches: mp_dawnville seed
+  40 (122) at (339 to 463, -16089 to -16019), the spot above where master
+  stalls on seeds 8, 19, 39 and 47, and seed 7 (21) at (93 to 219, -15777
+  to -15714); mp_carentan seeds 6, 11, 28, 33 and 43 (52) round (411 to
+  604, 1543 to 1824, -41 to 8), where 20 of the 30 mp_carentan windows
+  of master and the two controls lie too, and seed 44 (53) at (487 to 545, 3163 to 3236, -24);
+  mp_brecourt seed 22 (6), as master. None on mp_rocket.
+- Kept all three: each takes a traced stall out (4.2.3, 4.2.4) and moves
+  no count past the controls.
+
+The caveat above, settled on seeds 1 to 96 of mp_rocket and mp_brecourt
+(seeds 1 to 48 from the six-map runs, 49 to 96 run for this; matches are
+seeded alone, so a seed reads the same in either run). "Parts off" is the
+same build with `driver::deal_squads` reading the role off `SdView` only,
+as before 9.1.1; master's is master fd4cae5a1. VERIFIED (measured, ours,
+release, same knobs):
+
+| mp_rocket, 96 seeds | stalled | captures | pickups | carrier deaths | att W | def W | att share |
+|---|---|---|---|---|---|---|---|
+| master | 159 | 24 | 282 | 108 | 174 | 79 | 68.8% |
+| master, holds redrawn | 580 | 40 | 302 | 116 | 180 | 73 | 71.1% |
+| master, parts off | 48 | 36 | 302 | 103 | 197 | 63 | 75.8% |
+| all three | 0 | 26 | 293 | 104 | 188 | 68 | 73.4% |
+| all three, holds redrawn | 218 | 24 | 285 | 117 | 178 | 73 | 70.9% |
+| all three, parts off | 526 | 24 | 292 | 106 | 187 | 69 | 73.0% |
+
+| mp_brecourt, 96 seeds | stalled | captures | pickups | carrier deaths | att W | def W | att share |
+|---|---|---|---|---|---|---|---|
+| master | 57 | 150 | 593 | 305 | 291 | 92 | 76.0% |
+| master, holds redrawn | 16 | 170 | 543 | 240 | 279 | 92 | 75.2% |
+| master, parts off | 160 | 155 | 571 | 282 | 281 | 105 | 72.8% |
+| all three | 13 | 147 | 593 | 288 | 281 | 99 | 73.9% |
+| all three, holds redrawn | 16 | 168 | 555 | 256 | 293 | 85 | 77.5% |
+| all three, parts off | 14 | 172 | 555 | 241 | 291 | 77 | 79.1% |
+
+- VERIFIED (the tables): on mp_brecourt the parts' rows read 147 to 170
+  captures and the parts-off rows 155 and 172; the attackers' share 73.9%
+  to 77.5% against 72.8% and 79.1%. Seeds 1 to 48's 69 against 82 and 83
+  was the seeds.
+- VERIFIED (the tables): on mp_rocket the parts-on rows give the
+  attackers 68.8% to 73.4% of rounds, the parts-off rows 75.8% and 73.0%;
+  on all three the two read 188 and 187 wins. INFERRED: with about 255
+  rounds a row one standard error on a difference of two shares is about
+  4 points, so the 5 to 7 point gap on master is inside two of them and
+  on all three there is none. Not settled as a loss; the parts stay.
+- VERIFIED (the runs, `STALLS=1`): all three with the parts off stalls
+  526 on mp_rocket in two matches. Seed 36 (365): bot 6 with no waypoint
+  at (9107, 5908 to 5974, 260 to 308), under bot-navigation.md 3.16's
+  upper floor; not traced. Seed 89 (161), from tick 5540: bot 9,
+  bound for its post on the upper floor at (9121, 6143, 338) with no
+  plan parked, held at (10078 to 10121, 6035 to 6083, 160) by teammate 1
+  standing still at (10075, 6065, 160), 4.2.1's seed 104 corridor; it
+  gives up edges round him and plans round him for 13 s (a temporary
+  per-tick print of the follower, the same build). 4.2.4's rule does not
+  act there. Both left open.
 
 ### 9.2 The retrieval carrier (2026-11-13)
 

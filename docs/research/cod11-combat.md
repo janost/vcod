@@ -1275,6 +1275,24 @@ capture's spot and yaw (`mp_carentan-tdm-grenade-knock.txt`): the sample
 after the pain frame reads `legsAnim` 100 between two of 634 again, with
 `groundEntityNum` 1023 and `torsoAnim` 512 across all three.
 
+**The selection runs once per cmd.** VERIFIED (the instructions), 1.1d
+`game.mp.i386.so` `PmoveSingle` (0x33dfc): the arm that runs
+`PM_LadderMove` (0x3430b) calls `PM_Weapon` at 0x34331 and the continuous
+selection (`PM_Footsteps` here, 0x322c8, cod11-sound-system.md 9a) at
+0x34336, so each cmd selects off the weapon its own `PM_Weapon` left.
+VERIFIED (the instructions), the other order on the other two builds:
+1.5b calls 0x24ae8 at 0x28889 and `PM_Weapon` at 0x2888e, UO 0x297e4 at
+0x2e04e and `PM_Weapon` at 0x2e053. INFERRED: those are their walking arms.
+VERIFIED, live (`mp_carentan-tdm-grenade.txt`, `throw_down`): the throw's
+`legsAnim` 575 holds through the 1579 ms sample and the next, 1627, reads
+634, index 122 (no weapon in hand) with the toggle where 575 had it, two
+flips; the knock take samples the flip between them, 120 (the frag's idle)
+at 1617 and 634 at 1650. vcod measurement, the same cmds replayed: the
+throw's hold (the clip's 966 ms) runs out on an earlier cmd of the 1627
+snapshot than the frag's `fireTime` takes the weapon away, so a selection
+once per server frame read 122 there, one flip. INFERRED: retail's 634 is
+the same two cmds.
+
 INFERRED, and unmeasured: vcod applies the throw's rule to the rest of the
 event clauses, so it also reaches `fireweapon`'s pistol-ADS clause and
 `jump`'s two run clauses. No capture covers either.
@@ -1283,10 +1301,14 @@ event clauses, so it also reaches `fireweapon`'s pistol-ADS clause and
 `melee_check` and `melee_finish`, with the two-arm `pickup` and the short
 `putaway` branch beside them, and `spectate.rs::play_event` for the two
 paragraphs above it, whose landing branch clears the torso of the selection
-before it plays it. `crates/server/tests/playerstate_combat_ab.rs`'s
+before it plays it. `ClientSim::update_anims` runs after each cmd's move
+(`cod1_think.rs`, `client_think`) in 1.1d's order on all three builds; the
+1.5b and UO order is not modelled, and no capture separates them. `crates/server/tests/playerstate_combat_ab.rs`'s
 `the_grenade_and_melee_channels_match_retail_on_mp_carentan` replays the
 whole capture, from the spot the capture's own header
 records: where a blast lands, and so who it hurts, is the map's business.
+Every capture's `legsAnim` is compared sample for sample, the toggle
+included (`legs_misses`).
 
 ## 2. `Bullet_Fire_Extended`: spread, the trace, and what a bullet does
 
@@ -6619,10 +6641,43 @@ contact re-bases it exactly; the second frag leaves the target's posed
 bones up to 0.0155 off retail's (its snapshots 5 to 78, the strike on and
 everything after it), the idle clip's pose the 0.1 gate already names.
 vcod measurement: `SV_Trace`'s end point computed at 64 bits
-(`x87::F80`) instead of `f64` leaves the barrel's z where it was, so the
-step is the script model clip's own. Open: the script model clip's last
-bit on 1.1d and the target's idle pose; the gate's `GRENADE_GAPS` names
-both.
+(`x87::F80`) instead of `f64` leaves the barrel's z where it was.
+
+**The barrel strike's last bit.** VERIFIED (the instructions), 1.1d
+`cod_lnxded`: the triangle test in 0x80c203c (0x80c2200..0x80c235f) takes
+each record's stored plane (`+0x0`, `+0xc`) and edge planes (`+0x10`,
+`+0x20`): `d = p . n - w` for the end and then the start, kept on the
+stack, the start strictly in front (`d > 0`) and the end strictly behind;
+`(d_start - 0.125) / (d_start - d_end)` (0.125 at 0x80db970) kept and
+taken only under the stored fraction; the point at `d_start / (d_start -
+d_end)` kept for the two edge tests against -0.001 and 1.001 (0x80db974,
+0x80db978); on a hit the fraction stored once and the stored normal
+copied. VERIFIED, vcod measurement: that arithmetic in `f64` off
+`xmodel/barrel_black1`'s records gives the strike (triangle 11) the
+fraction ours' clip of the rebuilt vertices gives, 0x3e6ffa69. VERIFIED
+(the instructions): the end point is `SV_ClipMoveToEntity`'s
+(0x8091352..), each `start + (end - start) * fraction` rounded once off
+the stack, after the model clip (`svFlags & 4`, the call at 0x80912cc)
+as after the bone trace (0x80912f0), both joining at 0x80912f5. vcod measurement: ours' missile pass took a model
+hit's end point as `from + travel * f` in floats, z 11.350475; rounded
+once it is retail's 11.350476. `game::missile`'s `full_trace` takes
+`combat::trace_point` for a model hit as for a body, and the first frag
+matches every snapshot to the bit.
+
+**The bounce off the target.** vcod measurement, the same replay: the
+second frag meets the target's bones 0.015 short of retail's along its
+flight (snapshot 5: (1490.4955, 2730.4294, -12.3102) against (1490.5105,
+2730.4446, -12.3088)), and every later base keeps that offset, so the
+struck face's normal is retail's within the print and the contact is not.
+The target has idled on `pb_stand_alert` for 14.55 s, and frag 0's blast
+(`PROBE hit 19900 axis dmg 77`) knocked him off the site: ours holds him
+at (1481.1371, 2721.1372, -23.875). Posing him 50 ms later moves the
+offset to 0.019, 50 to 200 ms earlier to 0.011. INFERRED: the gap is in
+his pose or his knocked origin; the capture logs neither after the blast
+(two `target FALL` lines, the spawn's), so it cannot tell them apart.
+Open: a retake that logs the target's origin each snapshot, or
+`tools/re/gdb_gunner_tree.py` on his anim records at the strike; the
+gate's `GRENADE_GAPS` names it.
 
 vcod: the move trace (`game::missile`) runs `combat::trace_bodies_faced`
 on every live body but the owner's while it passes, with the bone trace's
@@ -8949,6 +9004,24 @@ it leaves (-1853.50, 3240.49, 37.16) where retail's left (-1853.47,
 the capture's `VEH missile` lines against ours'; INFERRED: UO's walk bob
 off a `bobCycle` the probe's per-frame `setOrigin` hold leaves apart).
 The `use` arm's count was captured on 2026-11-27 (14.8.2).
+
+The throw's start carries the bob. VERIFIED (the instructions),
+`game.mp.uo.i386.so`: `FireWeapon` (0x7bd05) calls `CalcMuzzlePoints` at
+0x7bd8f ahead of `weapon_grenadelauncher_fire` (0x7be75), whose
+`fire_grenade` call (0x7b34c) takes `params+0x24`; `CalcMuzzlePoints`
+calls `CalcMuzzlePoint` at 0x7bcfa, which calls `BG_GetBobCycle`
+(0x7baee), `BG_GetSpeed` (0x7bb12), `BG_GetVerticalBobFactor` (0x7bb41)
+and `BG_GetHorizontalBobFactor` (0x7bb83). vcod measurement, the capture
+replayed (`common::direct_replay`): ours' thrower throws at `bobCycle` 199
+moving at (501, 929, -467) under the hold, so the bob's amplitude is
+`0.007 * 1055` = 7.39 (`cg_bobMax` 8): ours' start sits -7.25 along the
+right and -1.26 in z off the bob, and its origin x 0.03 off retail's
+start. On ours' origin and eye, retail's start is the bob at cycle 224
+with amplitude 4.88 (a speed of 697) within 0.02, so the gap fits a
+bob alone (INFERRED, a fit: the capture logs no thrower `bobCycle`,
+velocity or origin to check it against).
+Open: a retake whose client logs its own `bobCycle`, `velocity` and
+`origin` at the throw.
 
 The `wait` arm's `crandom` draws off the level's glibc `rand()`, the
 stream every other game draw takes (`G_TriggerDamage`'s call at

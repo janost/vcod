@@ -56,10 +56,12 @@ struct Step {
     sounds: Vec<(u32, [f32; 3])>,
 }
 
-/// A body's start: the `new` line's parts by label and the `user` words.
+/// A body's start: the `new` line's parts by label and the `user` words,
+/// and the step (from 0) its frame runs first.
 #[derive(Clone, Debug, Default)]
 struct New {
     id: u32,
+    step: usize,
     creator: String,
     flags: u32,
     parts: HashMap<String, Vec<u32>>,
@@ -106,6 +108,7 @@ fn parse(text: &str) -> Take {
                 let parts: Vec<&str> = line.split('|').collect();
                 let mut n = New {
                     id: w[1].parse().unwrap(),
+                    step: t.steps.len(),
                     creator: w[3].to_string(),
                     flags: hex(w[7]),
                     ..New::default()
@@ -352,6 +355,21 @@ fn run(
     clip: &ClipMap,
     aliases: &[Option<String>],
 ) -> Run {
+    run_spawning(t, pw, &mut ids.to_vec(), clip, aliases, &mut |_, _| {
+        Vec::new()
+    })
+}
+
+/// [`run`] with the bodies a frame adds: `spawn` makes those of step `k`
+/// (from 0) before its run, in id order.
+fn run_spawning(
+    t: &Take,
+    pw: &mut PhysWorld,
+    ids: &mut Vec<BodyId>,
+    clip: &ClipMap,
+    aliases: &[Option<String>],
+    spawn: &mut dyn FnMut(usize, &mut PhysWorld) -> Vec<BodyId>,
+) -> Run {
     let dv = PhysDvars::default();
     let contact = collide::Dvars::default();
     let mut out = Run::default();
@@ -359,6 +377,8 @@ fn run(
         out.asleep.insert(n.id, (None, None));
     }
     for (k, step) in t.steps.iter().enumerate() {
+        let made = spawn(k, pw);
+        ids.extend(made);
         let mut seen = Vec::new();
         pw.run_to_time_with(step.to, &dv, &contact, clip, &mut |_| {}, &mut |pw| {
             seen.push((snap(pw, ids), pw.world.seed, pw.clock.msec_step));
@@ -529,6 +549,110 @@ fn start_words(b: &Body) -> Vec<u32> {
     v
 }
 
+/// A map's zone and clip map with the startup zones, as an effect's take
+/// plays on them: the impact sound aliases by row and each model's preset.
+/// Every zone keeps its bulk data: a `common_mp` effect's velocity graph
+/// is bulk.
+struct FxZones {
+    map: Assets,
+    startup: Vec<Assets>,
+    clip: ClipMap,
+    rows: vcod_cod4::ode::obj::SoundRows,
+}
+
+impl FxZones {
+    fn load(install: &vcod_cod4::install::Install, map_name: &str) -> FxZones {
+        let kept = |n: &str| {
+            let z = Zone::open_path(&install.zone("english", n)).unwrap();
+            walk(z, WalkOptions { keep_bulk: true }).unwrap().assets
+        };
+        let startup: Vec<Assets> = STARTUP.iter().map(|n| kept(n)).collect();
+        let map = kept(map_name);
+        let (_, mw) = vcod_cod4::map::Map::load(install, "english", map_name).unwrap();
+        let clip = ClipMap::from_assets(&mw.assets).unwrap();
+        let rows = impact_sound_rows(startup.iter().chain(std::iter::once(&map)).flat_map(|z| {
+            z.phys_presets
+                .iter()
+                .filter(|p| !p.name.starts_with(','))
+                .map(|p| (p.name.as_str(), p.snd_alias_prefix.as_deref()))
+        }));
+        FxZones {
+            map,
+            startup,
+            clip,
+            rows,
+        }
+    }
+
+    /// The map's zone first, then the startup zones.
+    fn zones(&self) -> Vec<&Assets> {
+        std::iter::once(&self.map)
+            .chain(self.startup.iter())
+            .collect()
+    }
+
+    fn aliases(&self) -> Vec<Option<String>> {
+        let sounds: HashSet<&str> = self
+            .zones()
+            .into_iter()
+            .flat_map(|z| z.sounds.iter())
+            .filter(|s| !s.name.starts_with(','))
+            .map(|s| s.name.as_str())
+            .collect();
+        impact_aliases(&self.rows.prefixes, |n| sounds.contains(n))
+    }
+
+    /// Model `name` and its preset, with the sound row the cgame gives it.
+    fn model(&self, name: &str) -> Option<(&vcod_cod4::assets::model::XModel, ObjPreset)> {
+        let zones = self.zones();
+        zones.iter().find_map(|z| {
+            let m = z.xmodels.iter().find(|m| m.name == name)?;
+            let p = &z.phys_presets[m.phys_preset?.index()].name;
+            let p = zones
+                .iter()
+                .find_map(|z| z.phys_presets.iter().find(|q| q.name == *p))?;
+            let row = self
+                .rows
+                .by_preset
+                .get(&p.name.to_ascii_lowercase())
+                .copied();
+            Some((m, ObjPreset::from_raw(&p.raw, row.unwrap_or(-1))?))
+        })
+    }
+
+    /// Effect `name` of the first zone holding it, and that zone.
+    fn effect(&self, name: &str) -> (&Assets, &vcod_cod4::assets::fx::Fx) {
+        self.zones()
+            .into_iter()
+            .find_map(|z| Some((z, z.fx.iter().find(|f| f.name == name)?)))
+            .unwrap()
+    }
+
+    /// The effect each name plays, from the first zone holding it.
+    fn find(&self, n: &str) -> Option<&vcod_cod4::assets::fx::Fx> {
+        self.zones()
+            .into_iter()
+            .find_map(|z| z.fx.iter().find(|f| f.name.eq_ignore_ascii_case(n)))
+    }
+}
+
+/// The effect's frame, seed and start off an `fxbody` line: its +0x28
+/// quaternion and +0x38 origin (0x4a13d9..0x4a13ef), its +0x12 seed and
+/// +0x20 start.
+fn fxbody_effect(l: &FxLine) -> (EffectFrame, u16, i32) {
+    let e = |k: usize| f32::from_bits(l.effect[k]);
+    let frame = EffectFrame::new([e(14), e(15), e(16)], [e(10), e(11), e(12), e(13)]);
+    (frame, (l.effect[4] >> 16) as u16, l.effect[8] as i32)
+}
+
+/// A `new` line's start words: position, quaternion, both velocities.
+fn new_words(n: &New) -> Vec<u32> {
+    ["pos", "q", "lvel", "avel"]
+        .iter()
+        .flat_map(|l| n.parts[*l].clone())
+        .collect()
+}
+
 /// An effect's take spawned through the FX path (cod4-effects.md 9.1.1):
 /// `effect` played at the pose of the map's dynamic entity at `at`, as its
 /// `destroyFx` (0x48deb1..0x48decf), its one-shot physics elements'
@@ -544,39 +668,13 @@ fn fx_take(map_name: &str, effect: &str, at: Vec3, file: &str, pins: &[String]) 
     let Some(install) = cod4_install() else {
         return;
     };
-    let startup: Vec<Assets> = STARTUP.iter().map(|n| walked(&install, n)).collect();
-    let z = Zone::open_path(&install.zone("english", map_name)).unwrap();
-    let map = walk(z, WalkOptions { keep_bulk: true }).unwrap().assets;
-    let (_, mw) = vcod_cod4::map::Map::load(&install, "english", map_name).unwrap();
-    let clip = ClipMap::from_assets(&mw.assets).unwrap();
-    let zones: Vec<&Assets> = std::iter::once(&map).chain(startup.iter()).collect();
-    let rows = impact_sound_rows(startup.iter().chain(std::iter::once(&map)).flat_map(|z| {
-        z.phys_presets
-            .iter()
-            .filter(|p| !p.name.starts_with(','))
-            .map(|p| (p.name.as_str(), p.snd_alias_prefix.as_deref()))
-    }));
-    let sounds: HashSet<&str> = zones
-        .iter()
-        .flat_map(|z| z.sounds.iter())
-        .filter(|s| !s.name.starts_with(','))
-        .map(|s| s.name.as_str())
-        .collect();
-    let aliases = impact_aliases(&rows.prefixes, |n| sounds.contains(n));
-    let model = |name: &str| {
-        zones.iter().find_map(|z| {
-            let m = z.xmodels.iter().find(|m| m.name == name)?;
-            let p = &z.phys_presets[m.phys_preset?.index()].name;
-            let p = zones
-                .iter()
-                .find_map(|z| z.phys_presets.iter().find(|q| q.name == *p))?;
-            let row = rows.by_preset.get(&p.name.to_ascii_lowercase()).copied();
-            Some((m, ObjPreset::from_raw(&p.raw, row.unwrap_or(-1))?))
-        })
-    };
+    let fz = FxZones::load(&install, map_name);
+    let (map, clip) = (&fz.map, &fz.clip);
+    let aliases = fz.aliases();
+    let model = |name: &str| fz.model(name);
     let fx = map.fx.iter().find(|f| f.name == effect).unwrap();
     let find = |n: &str| map.fx.iter().find(|f| f.name.eq_ignore_ascii_case(n));
-    let effect = PhysEffect::of(&map, fx, &find).expect("a physics element");
+    let effect = PhysEffect::of(map, fx, &find).expect("a physics element");
     assert!(!effect.timed_seed, "a rand() seed");
     assert!(effect.elems.iter().all(|e| !e.looping), "one-shot elements");
     let word = |d: &vcod_cod4::assets::world::DynEntityDef, o: usize| {
@@ -595,21 +693,14 @@ fn fx_take(map_name: &str, effect: &str, at: Vec3, file: &str, pins: &[String]) 
     let text = std::fs::read_to_string(format!("{FIXTURES}/{file}")).unwrap();
     let t = parse(&text);
     let (frame, seeds, start) = match t.fx.first() {
-        // the effect's own +0x28 quaternion and +0x38 origin (0x4a13d9..0x4a13ef),
-        // read through 0x561100; its +0x12 seed and +0x20 start
         Some(l) => {
-            let e = |k: usize| f32::from_bits(l.effect[k]);
-            let frame = EffectFrame {
-                origin: [e(14), e(15), e(16)],
-                axes: vcod_cod4::ragdoll::iw::unit_axes([e(10), e(11), e(12), e(13)]),
-            };
-            let seed = (l.effect[4] >> 16) as u16;
+            let (frame, seed, start) = fxbody_effect(l);
             eprintln!(
                 "{file}: the effect at {:?}, the dynamic entity's def at {:?}",
                 frame.origin,
                 [word(20), word(24), word(28)]
             );
-            (frame, vec![seed], l.effect[8] as i32)
+            (frame, vec![seed], start)
         }
         None => {
             // 0x48deb1..0x48decf: the pose's axes off 0x561100 into the effect
@@ -618,16 +709,7 @@ fn fx_take(map_name: &str, effect: &str, at: Vec3, file: &str, pins: &[String]) 
             (frame, (0..479u16).collect(), 0)
         }
     };
-    let captured: Vec<Vec<u32>> = t
-        .news
-        .iter()
-        .map(|n| {
-            ["pos", "q", "lvel", "avel"]
-                .iter()
-                .flat_map(|l| n.parts[*l].clone())
-                .collect()
-        })
-        .collect();
+    let captured: Vec<Vec<u32>> = t.news.iter().map(new_words).collect();
     // 0x4a3220 for each one-shot element in turn, the bodies in that order
     let spawns = |seed: u16| -> Vec<(usize, u16, fx_phys::Spawn)> {
         let mut out = Vec::new();
@@ -706,7 +788,7 @@ fn fx_take(map_name: &str, effect: &str, at: Vec3, file: &str, pins: &[String]) 
     pw.clock.now = first.sim - first.msec;
     pw.clock.last = pw.clock.now;
     pw.clock.msec_step = t.msec_step;
-    let r = run(&t, &mut pw, &ids, &clip, &aliases);
+    let r = run(&t, &mut pw, &ids, clip, &aliases);
     let first_inexact = r.diffs.iter().position(|d| !d.exact).map(|k| k + 1);
     eprintln!(
         "{file} through the FX path: {} steps, worst {:?}, first inexact step {first_inexact:?}",
@@ -752,6 +834,145 @@ fn the_copy_paper_box_spawned_through_the_fx_path() {
         at,
         "copypaper-mp_broadcast-1.7.txt",
         pins,
+    );
+}
+
+/// A looping effect's take through the FX path (cod4-effects.md 9.1.1.1):
+/// `effect`'s one looping physics element spawned off the take's `fxbody`
+/// frame, seed and start, sequence 0 with the effect (0x4a33b0) and then
+/// each frame's update over its last time to the step's `to` (0x4a30e0),
+/// until the update past `msecLoopingLife`, every body in the effect's own
+/// frame (0x4a1ff0 reads +0x28 and +0x44, not 0x4a2d50's lerp). Each
+/// spawn's element and seed equal its `fxbody` line's, each body comes in
+/// retail's frame with its `new` line's start words to the bit, and the
+/// world then passes [`the_phys_takes_against_the_port`]'s rule to the
+/// take's end.
+fn fx_loop_take(map_name: &str, effect: &str, file: &str) {
+    let Some(install) = cod4_install() else {
+        return;
+    };
+    let fz = FxZones::load(&install, map_name);
+    let aliases = fz.aliases();
+    let (zone, fx) = fz.effect(effect);
+    let effect = PhysEffect::of(zone, fx, &|n| fz.find(n)).expect("a physics element");
+    assert!(!effect.timed_seed, "a rand() seed");
+    let [e] = &effect.elems[..] else {
+        panic!("one physics element")
+    };
+    assert!(e.looping, "a looping element");
+    let text = std::fs::read_to_string(format!("{FIXTURES}/{file}")).unwrap();
+    let t = parse(&text);
+    let (frame, seed, start) = fxbody_effect(&t.fx[0]);
+    for l in &t.fx {
+        assert_eq!(fxbody_effect(l), (frame, seed, start), "one effect");
+        assert_eq!(l.effect[10..17], l.effect[17..24], "+0x44 is +0x28: still");
+    }
+    eprintln!(
+        "{file}: the effect at {:?}, axes {:?}, seed {seed}, start {start}",
+        frame.origin, frame.axes
+    );
+    // (step, sequence, spawn time)
+    let mut plan = vec![(0, 0, start)];
+    let mut last = start;
+    for (k, s) in t.steps.iter().enumerate() {
+        if s.to.wrapping_sub(last) <= 0 {
+            continue;
+        }
+        for (sequence, msec) in fx_phys::looping_spawns(&e.def, start, last, s.to) {
+            plan.push((k, sequence, msec));
+        }
+        last = s.to;
+        if s.to.wrapping_sub(start) > effect.looping_life {
+            break;
+        }
+    }
+    let ours: Vec<usize> = plan.iter().map(|p| p.0).collect();
+    let retail: Vec<usize> = t.news.iter().map(|n| n.step).collect();
+    assert_eq!(ours, retail, "the step each body is made before");
+    assert_eq!(t.fx.len(), t.news.len(), "an fxbody line a body");
+    let mut spawns = Vec::new();
+    for (i, &(step, sequence, msec)) in plan.iter().enumerate() {
+        let (begin, s) = fx_phys::elem_seed(&e.def, seed, msec, sequence);
+        assert_eq!(
+            (e.index, s),
+            (t.fx[i].elem, t.fx[i].seed),
+            "body {}'s element and seed",
+            i + 1
+        );
+        let sp = fx_phys::spawn(&e.def, e.models.len(), &frame, s);
+        assert!(begin.wrapping_add(sp.life) > t.steps[step].to, "refused");
+        spawns.push((step, sp));
+    }
+    let names: Vec<&str> = spawns
+        .iter()
+        .map(|(_, s)| e.models[s.visual].as_str())
+        .collect();
+    eprintln!("{file}: models {names:?}");
+    let dv = PhysDvars::default();
+    let mut pw = PhysWorld::new(WorldId::Fx);
+    pw.world.seed = t.seed;
+    let first = &t.steps[0];
+    pw.clock.now = first.sim - first.msec;
+    pw.clock.last = pw.clock.now;
+    pw.clock.msec_step = t.msec_step;
+    let mut made = 0;
+    let mut mismatched = Vec::new();
+    let r = run_spawning(
+        &t,
+        &mut pw,
+        &mut Vec::new(),
+        &fz.clip,
+        &aliases,
+        &mut |k, pw| {
+            let mut out = Vec::new();
+            while made < spawns.len() && spawns[made].0 == k {
+                let s = &spawns[made].1;
+                let (m, preset) = fz.model(&e.models[s.visual]).expect("a preset");
+                let id = pw.fx_body(s, m, &preset, &dv).expect("room");
+                let (ours, theirs) = (start_words(pw.world.body(id)), new_words(&t.news[made]));
+                if ours != theirs {
+                    let fl = |v: &[u32]| v.iter().map(|&x| f32::from_bits(x)).collect::<Vec<_>>();
+                    eprintln!(
+                        "body {}: ours {:?}\n  retail {:?}\n  spawn {s:?}",
+                        made + 1,
+                        fl(&ours),
+                        fl(&theirs)
+                    );
+                    mismatched.push(made + 1);
+                }
+                out.push(id);
+                made += 1;
+            }
+            out
+        },
+    );
+    assert_eq!(made, spawns.len());
+    assert!(
+        mismatched.is_empty(),
+        "bodies whose start words part: {mismatched:?}"
+    );
+    let first_inexact = r.diffs.iter().position(|d| !d.exact).map(|k| k + 1);
+    eprintln!(
+        "{file} through the FX path: {} steps, worst {:?}, first inexact step {first_inexact:?}; \
+         asleep (ours, retail's) {:?}; {} sounds within {}",
+        r.diffs.len(),
+        worst(&r.diffs),
+        r.asleep,
+        r.sounds,
+        r.sound_pos
+    );
+    check(&format!("{file} (FX path)"), &r);
+}
+
+/// A frag on wood: `explosions/grenadeexp_wood`'s element 1, looping every
+/// 5 ms to 30 under run bits 0xc0, a cylinder offset round the effect's
+/// forward and nonzero `spawnAngles` (cod4-effects.md 9.1.1.4).
+#[test]
+fn the_frag_on_wood_spawned_through_the_fx_path() {
+    fx_loop_take(
+        "mp_backlot",
+        "explosions/grenadeexp_wood",
+        "wood-mp_backlot-1.7.txt",
     );
 }
 

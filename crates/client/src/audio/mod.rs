@@ -580,7 +580,10 @@ impl AudioSystem {
     /// New map. Refilters the aliases by loadspec and drops everything keyed
     /// to the old table. With no level up (the front end) the map is `menu`.
     pub fn on_gamestate(&mut self, map: &str) {
-        self.aliases = self.aliases_all.for_map(map);
+        self.aliases = match self.profile.uo {
+            true => self.aliases_all.for_uo_map(map),
+            false => self.aliases_all.for_map(map),
+        };
         self.map = Some(map.to_string());
         self.stop_all();
         self.last_pick.clear();
@@ -960,8 +963,10 @@ impl AudioSystem {
                 }
                 continue;
             }
-            let live = voice.is_some_and(|id| self.table.looping(id).is_some());
-            if !live && let Some(alias) = looped {
+            let live = voice.filter(|&id| self.table.looping(id).is_some());
+            if let (Some(id), Some(alias)) = (live, looped.as_deref()) {
+                self.refresh_loop(id, alias, source);
+            } else if let Some(alias) = looped {
                 let id = self.play(
                     fs,
                     Cue {
@@ -974,6 +979,31 @@ impl AudioSystem {
                     l.voice = id;
                 }
             }
+        }
+    }
+
+    /// United Offensive's looping dedupe (`CoDUOMP.exe` 0x4523c0, through
+    /// syscall 0xc6 from uo cgame 0x3002ca80): the cgame's frame call on a
+    /// loop already playing on the entity re-picks the alias and sets the
+    /// voice's volume to that row's `vol_min`, its pitch to `pitch_min` when
+    /// the row fixes it and not at 1. The position keeps the start's offset
+    /// in the entity's frame (coduo-diff.md 19.1, "MG fire loop").
+    fn refresh_loop(&mut self, id: VoiceId, alias: &str, source: Source) {
+        let cue = Cue {
+            alias: alias.to_string(),
+            source,
+            delay_s: 0.0,
+        };
+        let Some(r) = self.pick_row(&cue, false) else {
+            return;
+        };
+        self.table
+            .set_volume(id, r.vol.0 * self.profile.volume_scale);
+        if r.pitch.0 == r.pitch.1
+            && r.pitch.0 != 1.0
+            && let Some(h) = self.handles.get_mut(&id)
+        {
+            h.set_playback_rate(f64::from(r.pitch.0));
         }
     }
 
@@ -1966,6 +1996,9 @@ impl AudioSystem {
             };
             if let Some(&LoopVoice { id, looping, .. }) = voices.get(&ent) {
                 // Still live, or a non-looping row already played once.
+                if looping && self.profile.uo && self.table.looping(id).is_some() {
+                    self.refresh_loop(id, alias, Source::Entity { num: ent, pos });
+                }
                 if !looping || self.table.looping(id).is_some() {
                     continue;
                 }
@@ -3865,6 +3898,58 @@ mod tests {
             ..shot
         });
         assert!(a.fire_loops.is_empty());
+    }
+
+    /// UO's looping dedupe (0x4523c0): a fire loop starts at a volume drawn
+    /// between the row's bounds, and each later frame's call drops it to
+    /// `vol_min`.
+    #[test]
+    fn a_uo_fire_loop_refreshes_to_its_rows_vol_min() {
+        let mut fs = Pk3Fs::empty();
+        fs.overlay("sound/a.wav", silent_wav(2205));
+        let csv = "name,sequence,file,vol_min,vol_max,pitch_min,pitch_max,dist_min,dist_max,lod_min,lod_max,channel,type,probability,loop,masterslave,loadspec,subtitle\n\
+              weap_mg34_loop,,a.wav,1.25,1.4,0.95,1,10,7800,,,weapon,,,looping\n";
+        let mut a = AudioSystem::new(
+            &fs,
+            AudioOpts {
+                enabled: false,
+                volume: 1.0,
+                rate: 0,
+            },
+        );
+        a.aliases_all = AliasTable::parse_csv(csv, "loop.csv");
+        a.set_protocol(&vcod_common::net::protocol::PROTOCOL_V22);
+        a.on_gamestate("mp_cassino");
+        a.weapon_sounds.insert(
+            4,
+            Some(WeaponSounds {
+                loop_fire: Some("weap_mg34_loop".into()),
+                fire_time_ms: 100.0,
+                ..Default::default()
+            }),
+        );
+        a.fire_loops.insert(
+            3,
+            FireLoop {
+                weapon: 4,
+                left: 1000.0,
+                voice: None,
+            },
+        );
+        let at = HashMap::from([(3, Vec3::X * 100.0)]);
+        let scale = a.profile.volume_scale;
+        let mut drawn = Vec::new();
+        for _ in 0..8 {
+            a.fire_loops.get_mut(&3).unwrap().voice = None;
+            a.step_fire_loops(&fs, 1.0, &at, &HashMap::new());
+            let id = a.fire_loops[&3].voice.unwrap();
+            drawn.push(a.table.volume(id).unwrap() / scale);
+            a.step_fire_loops(&fs, 1.0, &at, &HashMap::new());
+            assert_eq!(a.fire_loops[&3].voice, Some(id), "one voice");
+            assert!((a.table.volume(id).unwrap() / scale - 1.25).abs() < 1e-6);
+            a.stop_voice(id);
+        }
+        assert!(drawn.iter().any(|v| *v > 1.26), "the start draws {drawn:?}");
     }
 
     /// The bazooka capture (`net/snapshots-uo-bazooka.bin`, coduo-diff.md

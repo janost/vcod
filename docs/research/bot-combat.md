@@ -1447,6 +1447,17 @@ ticks on (VERIFIED, measured), the kill assertion kept. Held 500 units
 back it fires at 21 and 400 back at 52; 700 back, and 900 to 1450 back
 unheld, it never does (no ground, or the line blocked).
 
+Held, the struck point is the spread draw's. VERIFIED (measured, a
+temporary log in `vehicle::damage_scale`, 2026-11-28): once the anim
+events' `rand()` picks moved ahead of the cmd's spread (combat doc 1.14,
+map-cycle doc 4.8.1), the same rocket at tick 91 struck at (4781.055,
+-1932.601, 68.936), 23.2 degrees off the back axis, where it had struck
+at (4795.093, -1984.070, 51.197), 2.6 off; the tank lived. VERIFIED,
+`weapons/mp/bazooka_mp` (`pakuo04.pk3`): `adsSpread` 4, `hipSpread*Min`
+5 to 7, `hipSpreadMax` 12. Reseeded with `Server::test_seed_rng` as he is
+set down, seeds 2 and 5 of 1 to 5 strike inside the cone and the tank
+blows up 214 ticks on; the test pins 2 (`ROCKET_SEED`).
+
 ### 11.4 The hand-back
 
 Trap: without the hand-back the turn limit doubled mp_depot's `tdm`

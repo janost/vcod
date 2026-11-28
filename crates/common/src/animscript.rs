@@ -740,8 +740,7 @@ impl AnimState {
     /// The continuous state's choice. A channel an event anim still holds
     /// at `hold_ms` keeps it until the duration runs out. `now_ms` stamps
     /// an anim's phase; `hold_ms` is the clock the timers run on, the
-    /// newest cmd's `serverTime` for a round of cmds, as retail's run down
-    /// in pmove.
+    /// cmd's `serverTime`, as retail's run down in pmove.
     pub fn set(
         &mut self,
         sel: &Selection,

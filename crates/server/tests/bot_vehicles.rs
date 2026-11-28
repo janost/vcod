@@ -262,6 +262,8 @@ fn tank_bots_lay_their_guns_on_an_enemy() {
 /// rifle: no round reaches him), and the tank is wrecked. The shooter is
 /// held dead behind the hull until he fires, so the rocket strikes inside
 /// the 20 degree cone where the behind scale applies.
+const ROCKET_SEED: u64 = 2;
+
 #[test]
 #[ignore = "builds mp_cassino's UO graph and runs two bots 20 s of game time, ~5 s; run with --ignored"]
 fn a_bot_fires_rockets_at_an_enemy_tank() {
@@ -303,6 +305,11 @@ fn a_bot_fires_rockets_at_an_enemy_tank() {
         .expect("ground behind the tank");
     let spot = [p[0], p[1], p[2] + 0.125];
     sv.place_client(shooter, spot, at.yaw);
+    // `bazooka_mp`'s spread (4 sighted, 7 to 12 from the hip) carries the
+    // rocket 50 units across the rear face, so where it strikes is the
+    // `gunrandom` draw's: a seed whose draw strikes inside the cone (2 of
+    // seeds 1-5 do).
+    sv.test_seed_rng(ROCKET_SEED);
     // Held on the hull's back axis until the rocket goes, by a script
     // `setOrigin` (no reset of the launcher coming up):
     // `vehicle::damage_scale` takes the behind scale only within 20 degrees

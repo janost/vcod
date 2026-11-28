@@ -310,6 +310,10 @@ impl Follower {
         nodes.sort_unstable();
         nodes.dedup();
         self.shun = nodes.into();
+        self.shun_still = others
+            .iter()
+            .filter(|o| ahead(o.0))
+            .all(|o| o.1.length() < BODY_HELD_SPEED);
         self.shunned = in_way;
         self.shun_until = self.clock + SHUN_TICKS;
         self.path.clear();
@@ -407,6 +411,40 @@ impl Follower {
                 .iter()
                 .any(|&o| seg_dist_flat(w[0], w[1], o) < 2.0 * vcod_common::pmove::HALF_WIDTH)
         })
+    }
+
+    /// Whether a plan round the bodies [`Self::shun`] keeps off may start
+    /// at node `n` from a body at `here`. Any node while none is kept off,
+    /// one of them moves, or the bot or one of them stands by a ladder;
+    /// else one within a step of `here`'s height, not one they stand over,
+    /// and not one the leg to which comes nearer one of them than two
+    /// half-widths and than `here` stands. The search never keeps off its
+    /// start, and a guard posted on the node nearest a bot it held up was
+    /// planned through again and again (mp_rocket `re` seed 33,
+    /// bot-objectives.md 4.2.3). On mp_ship's crow's nest head the plan
+    /// through the climber just off the rungs is what gives way to him
+    /// ([`Self::stand_aside`]); planned round him, the climber was pressed
+    /// back through the hatch.
+    pub(super) fn starts_clear(&self, g: &NavGraph, here: Vec3, n: u32) -> bool {
+        use vcod_common::pmove::{HALF_WIDTH, HEIGHT_STAND, STEPSIZE};
+        let by_ladder = |p: Vec3| {
+            g.ladder_boxes.iter().any(|b| {
+                box_flat(b, p) < LADDER_NEAR
+                    && p.z > b.0.z - HEIGHT_STAND
+                    && p.z < b.1.z + HEIGHT_STAND
+            })
+        };
+        let to = g.nodes[n as usize];
+        self.shun.is_empty()
+            || !self.shun_still
+            || by_ladder(here)
+            || self.shunned.iter().any(|&o| by_ladder(o))
+            || ((to.z - here.z).abs() < STEPSIZE
+                && self.shun.binary_search(&n).is_err()
+                && self.shunned.iter().all(|&o| {
+                    let now = (o - here).truncate().length();
+                    seg_dist_flat(here, to, o) >= (2.0 * HALF_WIDTH).min(now) - 1.0
+                }))
     }
 
     /// The waypoint the follower handed out this tick, for the bodies
@@ -703,6 +741,57 @@ mod tests {
         );
         assert_eq!(step(&mut f), Some([32.0, 0.0, 0.0]));
         assert_eq!(f.path, [0, 1, 2, 3, 4, 5]);
+    }
+
+    /// A corridor two nodes wide along +x, a guard standing still over node
+    /// 2 and the bot pressed against him nearer node 2 than any other: the
+    /// plan round him starts at node 1 behind the bot, not at the node
+    /// under him or at node 6 past his side, and never takes node 2
+    /// (mp_rocket `re` seed 33, bot-objectives.md 4.2.3).
+    #[test]
+    fn a_plan_round_a_body_does_not_start_under_him() {
+        use crate::bots::Goal;
+        let mut nodes: Vec<Vec3> = (0..4)
+            .map(|i| Vec3::new(i as f32 * 48.0, 0.0, 0.0))
+            .collect();
+        nodes.extend((0..4).map(|i| Vec3::new(i as f32 * 48.0, 45.0, 0.0)));
+        let mut edges: Vec<Vec<u32>> = vec![Vec::new(); 8];
+        let mut link = |a: u32, b: u32| {
+            edges[a as usize].push(b);
+            edges[b as usize].push(a);
+        };
+        for i in 0..3 {
+            link(i, i + 1);
+            link(i + 4, i + 5);
+            link(i, i + 5);
+            link(i + 4, i + 1);
+        }
+        for i in 0..4 {
+            link(i, i + 4);
+        }
+        let g = NavGraph::from_parts(nodes, edges);
+        let w = vcod_common::collision::test_world(&[]);
+        let at = [74.0, -7.0, 0.0];
+        let guard = [(Vec3::new(102.0, 6.0, 0.0), Vec3::ZERO)];
+        let mut f = Follower::default();
+        let step = |f: &mut Follower| {
+            f.waypoint(
+                &g,
+                Some(&w),
+                Goal::To([144.0, 0.0, 0.0]),
+                at,
+                Footing::STANDING,
+                &mut 100,
+                &mut || 0,
+            )
+        };
+        assert!(step(&mut f).is_some());
+        assert_eq!(f.path, [2, 3]);
+        assert!((0..BODY_TICKS).any(|_| f.bodies_in_way(&g, at.into(), Footing::STANDING, &guard)));
+        assert!((0..3).find_map(|_| step(&mut f)).is_some());
+        assert_eq!(f.path.first(), Some(&1), "{:?}", f.path);
+        assert!(!f.path.contains(&2), "{:?}", f.path);
+        assert!(!f.shun_through);
     }
 
     /// Two climbers abreast on the rungs, 30 apart: exactly one gives way,
