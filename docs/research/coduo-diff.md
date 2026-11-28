@@ -1304,11 +1304,37 @@ registered in 0x3002b560 (VERIFIED, strings).
     `es.pos` at the frame's time (0x30005f30) at 0x3004918e. The start
     0x3002ca80 takes the loop's handle (`weapons + 0x128`) in `eax`, the
     origin in `ecx` and `es.number` pushed, every frame time is left.
+  - The frame's call reaches syscall 0xc6, `CoDUOMP.exe` 0x4529f0, which
+    hands 0x452870 the alias as both rows of a blend at 0 (VERIFIED (the
+    instructions), the dispatch at 0x402d9f and the call at 0x452a0a). On
+    a loop already playing on the entity that is the looping dedupe
+    0x4523c0 of section 16's syscall 199: it sets the volume to the row's
+    `vol_min` times 0.8 (0x5b9c20, VERIFIED bytes), the pitch to `pitch_min` when the row
+    fixes it and not at 1, the rate and the 3D position (0x4510d0 on the
+    origin, called at 0x45251c), and the frame stamp, and starts nothing
+    (VERIFIED (the instructions), 0x4523c0..0x4527a4). It writes nothing
+    to a 3D voice's entity offset (`+0x28`, 0x9cc010 in the 0x38-byte
+    record at 0x9cbfe8; its only stores are the stream rows' 0x9ccff8, at
+    0x452776..0x452788) (VERIFIED (the instructions)).
+  - Each frame `S_Update`'s voice pass (0x454530) runs 0x4541d0 on every
+    live 3D voice, which rebuilds its position from that offset in the
+    frame cgame `vmMain` 14 returns for its entity (0x451030, `push 0xe` at
+    0x451043) and sets it (0x4510d0 at 0x454224) (VERIFIED (the
+    instructions)). So the loop stays at its first start's offset in the
+    body's frame and is not restarted; the refresh's own placement holds
+    until the voice pass (INFERRED, Q3's `CL_Frame` order). The start draws
+    the volume between `vol_min` and `vol_max` (0x4527c0); every later
+    frame drops it to `vol_min` (INFERRED, the two paths). On the stock
+    rows that is 1.25 against a start up to 1.4 (`weap_mg42_loop`,
+    `weap_sg43_loop`; VERIFIED, `gmi_mp_vehicles_ge.csv` and its kin).
   - vcod starts the loop and the stop as a `Source::Tag` at that origin
-    (`AudioSystem::fire_loop_source`) and keeps one voice on the entity's
-    frame (`cod11-sound-system.md` 8), where retail restarts the call each
-    frame. The tag barely moves in the body's frame, so the two sit within a
-    few units.
+    (`AudioSystem::fire_loop_source`), keeps one voice on the entity's
+    frame (`cod11-sound-system.md` 8) and refreshes its volume and fixed
+    pitch each frame (`AudioSystem::refresh_loop`); on a UO connection the
+    `loopSound` and `projectileSound` loops, which run through the same
+    0x3002ca80, refresh alike each snapshot. Left out: 0x452870's
+    `dist_max` cull before the refresh, after which the reaper ends the
+    voice until the body comes back in range.
   - A turret's loop rides `es.loopSound` from `turret_think` 0x6bc29; a
     vehicle's MGs ride its sound blend entities (VERIFIED,
     `game.mp.uo.i386.so`).
