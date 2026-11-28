@@ -142,15 +142,20 @@ pub struct EffectFrame {
 }
 
 impl EffectFrame {
-    /// `FX_SpawnEffect`'s frame off the caller's `axis` (rows): kept as
-    /// its `AxisToQuat` (0x562980 at 0x4a13ef, effect +0x28) and read back
-    /// through 0x561100 wherever the spawn turns by it (0x4a5a07, 0x4a5b00,
-    /// 0x4a5da0, 0x4a5dc7).
-    pub fn of_axis(origin: V3, axis: &M3) -> EffectFrame {
+    /// The frame an effect keeps as quaternion `q` (`x y z w`) and
+    /// `origin`, its axes read back through 0x561100 wherever the spawn
+    /// turns by them (0x4a5a07, 0x4a5b00, 0x4a5da0, 0x4a5dc7).
+    pub fn new(origin: V3, q: iw::IwQuat) -> EffectFrame {
         EffectFrame {
             origin,
-            axes: iw::unit_axes(axis_to_quat(axis)),
+            axes: iw::unit_axes(q),
         }
+    }
+
+    /// `FX_SpawnEffect`'s frame off the caller's `axis` (rows): kept as
+    /// its `AxisToQuat` (0x562980 at 0x4a13ef, effect +0x28).
+    pub fn of_axis(origin: V3, axis: &M3) -> EffectFrame {
+        EffectFrame::new(origin, axis_to_quat(axis))
     }
 }
 
