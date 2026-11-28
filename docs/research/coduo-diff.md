@@ -909,7 +909,10 @@ version (`pmove::weapon::cooking`).
   three (VERIFIED). Every stock UO shader script parses without a warning
   (VERIFIED, `cod11-shader-scripts.md` 3).
 - **Effects.** 768 `fx/` and 970 `lofx/` files, the latter a new low-detail
-  tree; vcod's efx parser reads all 1738 (VERIFIED). New: a `CameraShake`
+  tree; vcod's efx parser reads all 1738 (VERIFIED). No string `lofx` is
+  in `CoDUOMP.exe`, `CoDUOSP.exe` or any of the install's cgame, game and
+  ui modules, whose one effect path format is `fx/%s` (cgame 0x30076e04)
+  (VERIFIED, a strings search), so nothing loads the tree (INFERRED). New: a `CameraShake`
   block (82 uses, key `intensity`), emitter keys `rotationAccel`,
   `rotationClamp`, `velocityClamp`, flags `clampRotation`,
   `clampVelocity[XYZ]`, `continualLighting`, spawn flags `oppositeAccel`,
@@ -984,11 +987,22 @@ The shader keyword's flag and its one reader, in `CoDUOMP.exe`:
   `type` value `loaded` appears (17 rows) (VERIFIED). vcod's alias parser
   keys columns by header, so both read without error (VERIFIED).
 - `soundloadspecs/mp/<map>.csv` (12 maps plus `default.csv`) chooses which
-  alias files load per map (VERIFIED, the files). That the engine reads them
-  is INFERRED from the header comment. vcod-server touches the map's spec
-  (or `default.csv`) for its pak list (section 24). The client loads every
-  `soundaliases/*.csv`, which under UO merges SP duplicates into MP alias
-  groups (`panzerIV_idle_low` has 7 rows across files, VERIFIED).
+  alias files load per map (VERIFIED, the files). The cgame's syscall 0xc2
+  (`CoDUOMP.exe` 0x401f30's case) does nothing for the level already
+  loaded; else it strips `maps/mp/` and `.bsp` off the name, lowercases it
+  and reads `soundloadspecs/mp/<map>.csv`, then each file it lists in
+  turn (0x44fab0, 0x437220) and sorts the table (0x437780) (INFERRED
+  (decompile)). The reader 0x437d70 falls back to `default.csv`
+  (0x59764c), errors when neither opens; it takes each line's first token,
+  skips a blank one or one opening with `#`, and lists a name once
+  (0x437ce0's compare) (INFERRED (decompile)). An empty list is a
+  `Com_Error` (0x439cc0) (INFERRED (decompile)). vcod-server touches the
+  map's spec (or `default.csv`) for its pak list (section 24). vcod's
+  client loads every `soundaliases/*.csv`; on a UO connection a level keeps
+  only its spec's files, in the spec's order (`AliasTable::for_uo_map`),
+  so SP duplicates no longer merge into MP alias groups
+  (`panzerIV_idle_low` has 7 rows across files, VERIFIED). The front end
+  keeps every file.
 - **Shells in flight.** The cgame registers a weapon file's
   `projectileSoundBlend1` and `2` (weaponDef +0xf8 and +0xfc, field table
   rows at 0x30084690 and 0x3008469c) through syscall 0xc3 into weaponInfo
@@ -1194,9 +1208,9 @@ The client side: vcod watches and plays on a UO server.
 - **Events, effects, HUD.** Section 19.
 - **Wheel dust** is `coduo-vehicles.md` 15.
 - **Not done.** The wheel suspension of section 9 (0.024 units at most on
-  the stock vehicles, not drawn),
-  `lofx/`, soundloadspecs on the client and the
-  rest of section 19's "Not done". The own gunner's gun and the drawn steer
+  the stock vehicles, not drawn) and the
+  rest of section 19's "Not done". No UO binary reads `lofx/` (section
+  13). The own gunner's gun and the drawn steer
   are `coduo-vehicles.md` 9, a shell's sound blend section 16, the server
   sections 20 to 22.
 - **Playing on foot.** The client predicts under `MoveRules::Uo` and sends

@@ -580,7 +580,10 @@ impl AudioSystem {
     /// New map. Refilters the aliases by loadspec and drops everything keyed
     /// to the old table. With no level up (the front end) the map is `menu`.
     pub fn on_gamestate(&mut self, map: &str) {
-        self.aliases = self.aliases_all.for_map(map);
+        self.aliases = match self.profile.uo {
+            true => self.aliases_all.for_uo_map(map),
+            false => self.aliases_all.for_map(map),
+        };
         self.map = Some(map.to_string());
         self.stop_all();
         self.last_pick.clear();
