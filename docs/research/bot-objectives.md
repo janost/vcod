@@ -2795,7 +2795,8 @@ That gate over odd seeds, vehicles on and off (2026-10-21). VERIFIED
   walk in the same spot. 63 a bot's own frag. INFERRED (the stall lines); not
   traced further.
 - `uo_tdm_games_that_stalled_or_never_sprinted` replays seeds 43, 17, 13, 19,
-  25 and 33 with vehicles and 1 and 31 without.
+  25 and 33 with vehicles and 1 and 31 without. Seed 1 left it on
+  2026-11-28 (bot-navigation.md 3.13).
 - Superseded: with `bot-combat.md` 8's sight cone and target choice alone,
   seeds 1 and 19 pinned bot 0 on the roofs below from its spawn (4938, -1317, 256)
   for 12 s; with the grenade rules (`bot-combat.md` 6.5) and the noise

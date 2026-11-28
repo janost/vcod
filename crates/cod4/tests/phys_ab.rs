@@ -220,6 +220,11 @@ fn cases() -> Vec<Case> {
             models: frag.clone(),
         },
         Case {
+            file: "edges-mp_crash-1.7.txt",
+            map: "mp_crash",
+            models: frag.clone(),
+        },
+        Case {
             file: "car-mp_backlot-1.7.txt",
             map: "mp_backlot",
             models: [
@@ -540,6 +545,20 @@ fn check(f: &str, r: &Run) {
     let distinct: HashSet<_> = names.iter().flat_map(|n| n.iter()).collect();
     assert_eq!(distinct.len(), names.len(), "{f}: one handle an alias");
     assert_eq!(r.sound_pos, 0.0, "{f}: sound point");
+}
+
+/// The edges take's two shards each fell flat onto a terrain ridge of
+/// mp_crash, its centre over the ridge's edge, and the sweep that caught
+/// each (a 0.001 box) ended on the client's edge kernel (0x4eff70). Every
+/// one of the take's 119 hits is retail's to the bit; the server's float
+/// model parts on 3, both edges among them, and the server's edge kernel
+/// in the client's trace on the two edges (cod4-collision.md 3).
+#[test]
+fn the_edges_takes_sweeps_trace_as_retails() {
+    let take = format!("{FIXTURES}/edges-mp_crash-1.7.txt");
+    if let Some(counts) = crate::ragdoll_ab::sweeps_as_retails("mp_crash", &take) {
+        assert_eq!(counts, (119, 119, 3));
+    }
 }
 
 /// The ODE words a body starts with, as a `new` line gives them.

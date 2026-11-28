@@ -1346,9 +1346,18 @@ registered in 0x3002b560 (VERIFIED, strings).
     frame (`cod11-sound-system.md` 8) and refreshes its volume and fixed
     pitch each frame (`AudioSystem::refresh_loop`); on a UO connection the
     `loopSound` and `projectileSound` loops, which run through the same
-    0x3002ca80, refresh alike each snapshot. Left out: 0x452870's
-    `dist_max` cull before the refresh, after which the reaper ends the
-    voice until the body comes back in range.
+    0x3002ca80, refresh alike each snapshot. The cull before the
+    refresh is ported (`refresh_loop`): VERIFIED (the instructions),
+    0x452870..0x452917, on every channel but 1 and 6 to 9 (`[row+0x2c]`),
+    it blends `dist_max` (`[row+0x28]`) at the blend, squares it and the
+    listener's distance to the origin (0x9cbfa8, the call's `eax`), and
+    returns 0 at 0x45298c when `dist_max`² is below the distance² (`fcompp`,
+    `test ah,5`, `jnp`): strict, so a body at exactly `dist_max` is
+    refreshed. A culled call reaches neither 0x4523c0 nor a start, so the
+    frame stamp stays and the reaper ends the voice; the next call that is
+    in range finds no voice and starts one (0x4527c0), which is the owner's
+    restart (INFERRED, the reaper). vcod stops the voice in the refresh
+    and the owner's next frame starts it again.
   - A turret's loop rides `es.loopSound` from `turret_think` 0x6bc29; a
     vehicle's MGs ride its sound blend entities (VERIFIED,
     `game.mp.uo.i386.so`).
@@ -1806,6 +1815,15 @@ ticks (500 ms), so vcod's units a second are twice them.
     instructions)). So all a head changes on screen and for the report is
     the start frame's chunks, which it replaces (INFERRED, the uses
     above).
+  - **Its flight.** The move (0x30025da0) skips the trace only for type 5
+    (`cmp [ebp+0x2c],0x5` at 0x3002603b), so the head traces ahead like a
+    stream chunk and leaves its end and fraction in the shared result
+    0x300a85b8 (VERIFIED (the instructions)). That result reaches another
+    chunk only through 19.3.4's skip, which needs that chunk's look-ahead
+    end within 2 units of the head's and the head's trace a miss. The
+    head is the oldest of its chain and flies at 1404, the chunks after
+    it at 900 (INFERRED, the arithmetic). So the head's flight changes
+    nothing vcod would draw or test, and vcod leaves it out (INFERRED).
   - vcod lays nothing on a stream's first frame and spaces the next
     frame's chunks from that frame's time (`FlameSystem::step`).
 - **The life.** A call's chunk life is `ftol((+0xb8 + 1) * 0.5 * 1666)`
@@ -1882,11 +1900,25 @@ ticks (500 ms), so vcod's units a second are twice them.
   `f = (now - t) / (now - last)`, `t` the chunk's birth and `last` the
   owner's latest chunk's (`+0x48` of 0x300ab790) (VERIFIED (the
   instructions), 0x30024810..0x300248dd and the decompile's loop).
-  - **The spacing.** The first chunk is born at `floor(last + spacing)`
-    ticks, and more than 180 chunks due (0x3007bd48) spread 180 over the
-    gap, the spacing `(now - last) / 180` (0x3007c0f0)
-    (0x30024785..0x300247cf) (VERIFIED (the instructions)). vcod spaces
-    them so and keeps the births in fractions of a ms.
+  - **The spacing.** The first chunk is born at `last + spacing` ticks and
+    each next one `spacing` later, a double that is never rounded. More
+    than 180 chunks due (0x3007bd48) spread 180 over the gap, the spacing
+    `(now - last) / 180` (0x3007c0f0) (0x30024785..0x300247cf; the step at
+    0x3002517d..0x300251f4) (VERIFIED (the instructions)).
+  - **No whole ticks.** The birth `+0x48` takes that double
+    (0x30024c79..0x30024c86), and so does the size's wave as a float
+    (0x30024af9..0x30024b3a). The whole tick, `floor` (0x3005bcd0) and
+    `_ftol` of it in EBX (0x300247c7..0x300247da, 0x300251be..0x300251d9),
+    goes only into the owner's row `+0x8c` and `+0x4c` and, for the view's
+    own stream at most once every 200 ticks, into the chunk's `+0x18` as
+    `tick + life / 10 + rand % (life - life / 4 - life / 10)`
+    (0x30024c20..0x30024c76) (VERIFIED (the instructions)). No operand
+    names row `+0x8c` (0x300ab7dc) by address. In the flame code
+    (0x30023b70..0x300291ff) only the merge reads a chunk's `+0x18`, to
+    copy it (0x300258ef..0x300258fd) (VERIFIED, an operand search). So
+    no chunk is born on a whole tick, and that tick changes nothing drawn
+    or tested (INFERRED, the uses). vcod spaces the chunks so and keeps
+    the births in fractions of a ms.
   - **The angles.** The aim's lerp is `now * (1 - f) + last * f` on each
     axis, with no call to 0x3004be60 or `LerpAngle` (0x3004bd00) in the
     loop, and goes only into the chunk's `+0x100..+0x108` (0x300248e4..
@@ -1915,8 +1947,9 @@ ticks (500 ms), so vcod's units a second are twice them.
   the nozzle's. The velocity share is `owner_velocity`, the own body's off
   the snapshot's `ps.velocity`, and each chunk lerps nozzle, forward, chain
   angles and share as above (`FlameSystem::step`). The move's look-ahead
-  is 19.3.4 and the draw 19.3.5. Left out: the births on whole ticks, and
-  the head's own flight, which nothing draws or tests.
+  is 19.3.4 and the draw 19.3.5. Left out: the head's own flight ("Its
+  flight"). The births on whole ticks an earlier reading listed here do
+  not exist ("No whole ticks").
 
 #### 19.3.3 The trail and its smoke
 
@@ -2127,6 +2160,14 @@ copies keep their parent's (INFERRED, no other store).
   fraction and half a tent of it, `2 frac` up to 0.5 and `2 - 2 frac`
   after (0x300277a9..0x30027819), then becomes the last drawn; drawn or
   skipped, its growth rate `+0x64` is redone (0x30027825).
+- **The cached rate.** Nothing reads `+0x64`. Every operand naming a
+  chunk's `+0x64` in the flame code (0x30023b70..0x300291ff) is a store:
+  0x30023d31, 0x30023d3f, 0x30024ca4, 0x30025300, 0x30025c78, 0x3002782a,
+  0x30027c47, 0x30028448, 0x3002856b and 0x30028ea9. The growth
+  (0x30025c60) calls 0x30023b70 for the rate at 0x30025c73 and multiplies
+  by that result before it stores it (VERIFIED (the instructions)). So a
+  chunk grows at its present rate, as vcod's does, and the cache changes
+  nothing drawn (INFERRED, the uses).
 - **The colour** (0x30026b08..0x30026c4f): a stream chunk and its trail
   are white; a residue's flame greys `min(2 frac, 1) * 255` (0x3007bd64);
   smoke is `g = (1 - 2 max(frac - 0.5, 0)) * 80 + 20` (0x3007bfb0,
@@ -2139,16 +2180,145 @@ copies keep their parent's (INFERRED, no other store).
   GL_ONE_MINUS_SRC_ALPHA` with `rgbGen vertex` and `alphaGen vertex`,
   `flamethrowerFire*` `GL_ONE GL_ONE_MINUS_SRC_COLOR` with `rgbGen
   vertex`) (VERIFIED, `pakuo01.pk3`).
+- **The halving.** 0x300a85f4 and 0x300d977c are the integers (`+0xc`)
+  of the vmCvars 0x300a85e8 and 0x300d9770. `CG_AddFlameChunks`
+  registers them through trap 7 as `r_fullscreen` (0x300775a8) and
+  `r_overbrightbits` (0x30077594), default "1" (0x30077398), flags 0x21,
+  while 0x30134cf4 is 0 and else updates them through trap 8
+  (0x30027d42..0x30027da1) (VERIFIED (the instructions) and strings). The
+  halving shifts the red, green and blue bytes right by one and leaves
+  the alpha (`shr` at 0x30026c76..0x30026c7a) (VERIFIED (the
+  instructions)). `rgbGen vertex` shifts the vertex colour by
+  `overbrightBits` once more in the renderer (the 1.1 renderer's switch,
+  cod11-gamma.md 5), so in full screen the flame lands at a quarter in the
+  framebuffer and shows at half its windowed brightness (INFERRED, UO's
+  renderer taken for 1.1's).
 - **vcod.** `FlameSystem::draw_chains` runs at the end of `step`: a stream
   is a chain by its stream number, newest last in the pool, and every
   other chunk a chain of one. It drops a dead chunk's tail, merges
   (`overlaps`, `merge`), skips (`hidden_behind`) and marks what it draws;
   `quads` draws and `report` tests only those, `colour` gives the
-  colours. Left out: the halving under `r_fullscreen` and
-  `r_overbrightbits`, the cached growth rate (vcod grows each chunk at its
-  present speed's rate), and the sprite add's pull of the view's own
-  chunks toward the eye and the drop of one that struck a ceiling
-  (0x30026a22..0x30026ae5).
+  colours. `colour` halves under `r_fullscreen`. vcod registers no
+  `r_overbrightbits` and its renderer takes the default 1 (cod11-gamma.md
+  4), so `r_fullscreen` alone sets it. The fx pass's `rgbGen vertex`
+  scale by `identityLight` is the renderer's shift. The cached growth
+  rate needs nothing ("The cached rate"). The sprite add is 19.3.6.
+
+#### 19.3.6 The sprite add
+
+0x300268e0 takes a chunk, its life fraction, the chain draw's alpha and 1
+(its only call, at 0x30027819 in 0x300272b0) and lays one quad through
+trap 0x40. Addresses are `uo_cgame_mp_x86.dll`; `cg.refdef.vieworg` is
+0x30487a90 and `viewaxis[0]` 0x30487a9c.
+
+- **The radius** is the size `+0xe4` times 0.5 (0x3007bce8) and the
+  centre the origin `+0xd8` (0x300269b1..0x300269ed) (VERIFIED (the
+  instructions)).
+- **A ceiling.** When the chunk's `+0x118` is not zero and its z is below
+  0, the centre goes `|z| * 20` (0x3007be04) lower (0x300269e1..
+  0x30026a47) (VERIFIED (the instructions)). The look-ahead (19.3.4)
+  stores the face's normal there on a contact whose fraction is under 1
+  and whose normal is not zero, before the allsolid and `SURF_NOIMPACT`
+  tests, so a `SURF_NOIMPACT` face's too (0x300261b0..0x3002621f); the
+  pool zeroes it (0x3002565b..0x30025667) (VERIFIED (the instructions)).
+  The copies (a trail flame, smoke, a residue and its flames) keep it,
+  so a residue left on a ceiling draws its flames lower (INFERRED, the
+  whole-chunk copies).
+- **The pull.** `len` is the distance from the eye to the centre
+  (0x30049700 on `centre - vieworg`). The pull is `-radius`, or `-len -
+  20` once `len` is at most the radius (0x30026a7f..0x30026a98). For a
+  chunk of `cg.snap`'s own client (`+0x38` against `+0xe0`) the centre
+  moves the pull along the unit line from the eye, and the radius scales
+  by `1 + pull / len` (0x30026a9e..0x30026ae5) (VERIFIED (the
+  instructions)). So the view's own chunk covers the same screen nearer
+  the eye, and one inside its radius goes 20 units behind the eye
+  (INFERRED, the arithmetic). The report's test runs before this, on the
+  chunk's own origin (0x3002698c) (VERIFIED (the instructions)).
+- **The floor.** A radius under 0.5 becomes 0.5 (0x30026aef..0x30026b00)
+  (VERIFIED (the instructions)).
+- **The cull.** 0x3004a520 projects the centre onto the line from the eye
+  along `viewaxis[0]`. A projection on the eye, or one whose unit line
+  from the eye points against `viewaxis[0]`, draws nothing
+  (0x30026c88..0x30026d88). Past that, a chunk whose projected depth is
+  under its size counts in 0x300d9880, which `CG_AddFlameChunks` zeroes
+  each frame (0x30027df0); once 51 have counted, a further one draws
+  nothing (0x30026d8e..0x30026dab) (VERIFIED (the instructions)).
+- **The quad.** Its two axes are `AngleVectors` of `vectoangles(
+  viewaxis[0])` with the roll `_ftol(+0x98)` while 0x300851dc is set (1
+  in the file), else the frame's copies of `viewaxis[1]` and `[2]`
+  (0x30026db1..0x30026e25). The corners lie the radius off the centre
+  along each, and each corner's z then rises `min(radius, 72.5) * 0.55 -
+  8.8` (0x3007c214, 0x3007c1b0, 0x3007c210; 0x30027005..0x300270cb). The
+  shader is `+0x30` if set, else frame `clamp(_ftol(floor(frac * 43)),
+  0, 42)` of the fire sprites (0x3007c218, the table 0x300a8508)
+  (0x30026fcc..0x30027130) (VERIFIED (the instructions)).
+- **The count.** `CG_AddFlameChunks` (0x30027d10, its one call at
+  0x3004262e) zeroes 0x300d9880 before its move pass (`mov
+  [0x300d9880],ebp` at 0x30027df0, EBP 0 from 0x30027d47) (VERIFIED (the
+  instructions)). So the count runs per frame across every chain
+  (INFERRED, the caller draws the frame). The depth is `len`, the length of the
+  projection less `vieworg`, which 0x30049700 returns as it normalizes the
+  line (0x30026d41; 0x3004a520 projects onto the unit `viewaxis[0]`).
+  `fcomp [ebp+0xe4]` with `test ah,0x5` / `jp` (0x30026d8e..0x30026d99)
+  counts a chunk only when `len` is below its full size `+0xe4`, strictly:
+  equal or unordered skips the count. The count loads, bumps and stores
+  the counter, then `cmp ecx,0x32` / `jg` on the old value (0x30026d9b..
+  0x30026dab), so the 52nd counted chunk and every later one return at
+  0x30027295 with no quad. The walk goes on: a later chunk not under its
+  size still draws (VERIFIED (the instructions)). The size is the chunk's,
+  not the pulled radius, and the depth the pulled centre's, before the
+  rise (INFERRED, the operands).
+- **The order.** The sprite add's only caller is the chain draw (19.3.5),
+  so its order is the chain walk's: the heads from 0x300d9750 down `+0xc`
+  (0x300290f5..0x30029164), each chain from its newest chunk down `+0x8`.
+  The pool call (0x30025600) puts each new chunk at the front of the heads
+  (0x300256b3..0x300256c3) and, given a parent (a type 0 chunk's ESI, 19.3.2
+  "Its link"), takes the parent out (0x3002567c..0x300256ab); the free
+  (0x300256e0) unlinks a head (0x30025731..0x30025759) (VERIFIED (the
+  instructions)). So the heads run newest chain first, a stream's chain
+  keeping the place its newest chunk took (INFERRED, the links). The move
+  pass walks the pool newest first (0x300ab728 down `+0x0`, 0x30027db5,
+  0x30027e08 and 0x300290c1), and each chunk it lays goes in front of the pool
+  (0x3002562f..0x30025640), unvisited that frame; a chunk's trail steps
+  (0x30027f22..0x30029063) lay a flame (pool call 0x30027f8a, ESI 0 at
+  0x30027f7b) and then its smoke (0x30028cca, ESI 0 at 0x30028cc4), and its
+  own move (0x3002909b) lays its residue (0x3002646b) after them (VERIFIED
+  (the instructions)). So a frame's births are laid by their parents'
+  age, the newest parent's first, and draw in the reverse: the oldest
+  parent's last birth first, a smoke before its flame (INFERRED, the two
+  orders).
+- **A dead head.** The pool call reads the first head and, when its
+  `+0x24` is set, links the new chunk in with a next of 0
+  (0x3002560e..0x3002561e, 0x300256c0) (VERIFIED (the instructions)).
+  The move pass marks a type 0 or 1 chunk dead and leaves it for the chain
+  draw (0x300290b0..0x300290be), so a chunk laid in the move pass after a
+  stream's last chunk died at the front cuts every older chain off the
+  heads: never drawn again, and the dead chunk never freed (INFERRED, the
+  links). That needs the stream's last chunk at the front, nothing laid
+  in the 1166 ms since, and then a birth off an older chunk in the same
+  pass, such as a residue's flame; vcod leaves it out.
+- **The roll.** With the fourth argument 1 the roll is `+0x98` (0x30026994..
+  0x3002699e), `_ftol` (0x3006be3c, 0x300269ac) makes it an integer, and
+  `fild` stores it back as `angles[2]` for 0x3004a200 (0x30026dc8..
+  0x30026de0) (VERIFIED (the instructions)). `_ftol` rounds with `fistp`
+  and takes one off a positive value that rounded up, or adds one to a
+  negative value that rounded down (0x3006be45..0x3006be99), so it
+  truncates toward zero (VERIFIED (the instructions)).
+- **vcod.** `fx::flame::sprite` runs the ceiling drop, the pull, the floor,
+  the cull, the count of 51 and the rise; `FlameSystem::quads` lays the
+  quad at its result, the roll truncated
+  (`the_sprite_add_pulls_the_views_own_chunks_in_and_lowers_one_off_a_ceiling`,
+  `the_sprite_add_draws_51_near_chunks_a_frame_in_the_chain_walks_order`,
+  `the_sprite_turns_by_the_rolls_whole_degrees_toward_zero`).
+  `Chunk::normal` is `+0x118`, set at a contact in `move_chunk`.
+  `FlameSystem::walk` gives the chain walk's order off `Chunk::seq`, the
+  allocation order, and `quads` and `report` go in it. A stream chunk's
+  `seq` is its emission's; `FlameSystem::allocate` hands the move pass's
+  births theirs by their parents' `seq`, newest parent first
+  (`a_frames_births_take_their_place_from_their_parents_age`). A residue
+  carries a `seq` too, and its flames key on it. vcod's move pass still
+  walks the pool oldest first, and its residue flames move in their birth
+  frame. Left out: the dead head's cut.
 
 ### 19.4 HUD
 

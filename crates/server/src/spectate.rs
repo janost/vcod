@@ -2643,6 +2643,13 @@ impl ClientSim {
         self.gun_kick.kick(pitch, yaw);
     }
 
+    /// The gun-kick spring's speeds, which a fire event adds to and the
+    /// next cmd's aim step spends.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn gun_kick_speed(&self) -> [f32; 2] {
+        self.gun_kick.speed
+    }
+
     /// How far the last cmd's shot left off the view it was aimed from,
     /// (pitch, yaw) degrees: the sight sway, the turn lag and the kicks
     /// (combat doc 15). The bots aim it the way a player aims the reticle.

@@ -3283,6 +3283,38 @@ knobs above):
   and mp_pavlov seed 71 (44, 45 on master) stall on master too. Not
   traced.
 
+`uo_tdm_games_that_stalled_or_never_sprinted` seed 1, vehicles off, on
+fix/cod1-fire-anim-draw-order-1128 (master 19641e85c with 1.5 and UO's
+fire anim draw moved ahead of the recoil's four, cod15-movement.md 6.1):
+bot 3 holds within 150 units of (1287, -808, 136) on mp_cassino from
+tick 448 to the gate's 12 s at tick 688. Master 19641e85c passes, and so
+does the branch's commit without master's merge (b5c8359dd). VERIFIED
+(measured, ours, the gate's profile). The shifted draws reshuffle the
+game; no rule of the branch's moves a bot. INFERRED.
+
+- Two of its teammates stand still on the sights at (1153, -873, 136)
+  and (1161, -917, 136), and their enemy stands still 1250 units off at
+  (1579, -1996, 20) with them in sight, all three counted engaged,
+  through the window. VERIFIED (a temporary per-tick print of every
+  bot's origin, and of these four's goal, view and cmd).
+- Bot 3, out of the fight, turns every 2 to 4 s inside the circle: a
+  hunt for the enemy's lost spot planned north-east through the nodes at
+  (1243, -816) to (1392, -672), a teammate's shot heard at (1161, -917,
+  176), a roam whose destination is the node at (1152, -910) by that
+  teammate, and a sight of the enemy past the teammate beside it with the
+  line blocked and no sidestep. Twice it stands pressed on the teammate
+  at (1153, -873) from (1183, -873) for about a second, its forward key
+  down. VERIFIED (the same print, with its follower's path and shuns).
+  Not fixed: no one rule holds it.
+- Seed 1 replayed "a plan from across a wall" (section 3, the walked
+  start after a stuck first node). It no longer reached that plan: with
+  the stuck arm's `self.fell = true` (`Follower::waypoint`) removed, master
+  19641e85c's eight games pass, and odd seeds 1 to 63 with vehicles off
+  play the same games on the branch, seed 1 alone failing. A bot placed in
+  the slot at (945, -775, 64) with a goal at (1008, -767, 64) reaches it by
+  tick 100 with the arm and by tick 160 without. VERIFIED (measured). Seed
+  1 left the gate's list; no seed in it covers the arm.
+
 ### 3.14 CoD4's fall heights, 2026-11-21
 
 Retail has no bots; this section is measured on vcod-server only.

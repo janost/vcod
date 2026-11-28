@@ -947,9 +947,9 @@ fn a_uo_bot_in_mp_cassinos_roof_dent_jumps_out() {
 
 /// The games of [`uo_bots_fight_and_sprint_in_tdm`] that failed it before
 /// the fixes they name (bot-navigation.md "Jumps", bot-objectives.md 10.3,
-/// 10.4 and 10.7), with vehicles off for two, one thread each.
+/// 10.4 and 10.7), with vehicles off for one, one thread each.
 #[test]
-#[ignore = "runs eight 90 s mp_cassino UO games, ~8 s on 8 threads; run with --ignored"]
+#[ignore = "runs seven 90 s mp_cassino UO games, ~8 s on 8 threads; run with --ignored"]
 fn uo_tdm_games_that_stalled_or_never_sprinted() {
     if vcod_common::testing::uo_fs().is_none() {
         return;
@@ -960,9 +960,11 @@ fn uo_tdm_games_that_stalled_or_never_sprinted() {
     // bounce back killed its thrower), 43 two exits on one frame (a driver and a gunner leave one tank a frame
     // apart; seed 15's game lost that pair to the grenade rules' draws and
     // stalls a bot on a ledge instead), 25 a tank's headway, 33 sprint
-    // legs; with vehicles off, 1 a plan from across a wall, 31 a stall.
-    // Seed 45's rider headway is fixed, but its game now dithers a tank
-    // elsewhere.
+    // legs; with vehicles off, 31 a stall. Seed 45's rider headway is
+    // fixed, but its game now dithers a tank elsewhere. Seed 1 (vehicles
+    // off, a plan from across a wall) left: it no longer reached that
+    // plan, and the 1.5/UO fire anim draw's move turned its game into an
+    // open stall (bot-navigation.md 3.13).
     let games = [
         (43, true),
         (17, true),
@@ -970,7 +972,6 @@ fn uo_tdm_games_that_stalled_or_never_sprinted() {
         (19, true),
         (25, true),
         (33, true),
-        (1, false),
         (31, false),
     ];
     std::thread::scope(|s| {

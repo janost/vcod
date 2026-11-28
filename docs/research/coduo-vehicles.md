@@ -1263,7 +1263,7 @@ that move, alias and snapped origin (`compare_impacts`).
   the grade and lies down on the cmd after the landing (INFERRED, off the
   replay). Ours, with the bound ported, lands and slides on retail's
   numbers to the hundredth, (-1032.09, 7763.64, -103.04) then (-1032.00,
-  7763.87, -103.10), and `FIRST_DROP_GAPS` is empty (VERIFIED, the gate).
+  7763.87, -103.10), and the gate compares every first drop exactly (VERIFIED).
   The 150-ahead prone runs fall about 14 units, inside the bound, and lie
   down on the placement as before.
 
