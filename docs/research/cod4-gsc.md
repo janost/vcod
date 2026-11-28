@@ -2772,10 +2772,11 @@ The shards take:
   the difference unrounded (exact for these moves). VERIFIED (the
   instructions).
 - So the sweep takes the client's trace, `ClipMap::trace_client`
-  (`TraceFloats::Cod4Client`: 0x4f4d30's set-up, 0x4f37e0's brushes and
-  0x4f05c0's capsule against the triangles, cod4-collision.md 2, 3), and
-  so do the ragdolls, which sweep through the same `Clip`. VERIFIED (the
-  code, ours).
+  (`TraceFloats::Cod4Client`: 0x4f4d30's set-up, 0x4f37e0's brushes,
+  0x4f05c0's capsule and 0x4efce0's point against the triangles, their
+  edge and corner kernels, the border arm 0x4f1ae0 and the cull 0x4efb10,
+  cod4-collision.md 2, 3), and so do the ragdolls, which sweep through
+  the same `Clip`. VERIFIED (the code, ours).
 
 The shipment take:
 

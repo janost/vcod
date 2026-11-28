@@ -325,6 +325,11 @@ python3 -I tools/re/cod4_ragdoll_summary.py tmp/ragdoll.txt [another dump]
   DObj's pose stops at them. The first run, with them armed from the
   start, timed its loopback connection out during the map load; the
   rerun armed them late and added `+set sv_connectTimeout 600`.
+- `RAGDOLL_TRACES=1` also logs each trace the ragdolls and the physics
+  sweep run while the dump runs, its arguments and the `trace_t` it
+  filled (`trace` lines). A corpse killed standing on the ground sweeps
+  without a hit; `RAGDOLL_POS="207 2291 1500 0"` drops it from 1200 up,
+  and its sweeps meet the ground on steps 87 to 93.
 - The format and the committed takes: `crates/cod4/tests/fixtures/README.md`.
 
 ### Worlds 0 and 1 from the first push to rest

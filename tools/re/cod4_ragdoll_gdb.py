@@ -25,6 +25,10 @@
 #                 made (cod4-player-anims.md 10.7.2); run it with
 #                 +set scr_player_forcerespawn 0, or the view leaves the
 #                 corpse at the respawn and the renderer stops posing it
+#   RAGDOLL_TRACES 1: also each trace the ragdolls and the physics sweep run
+#                 while the dump runs (`trace`: CM_Trace 0x4f4d30 called by
+#                 Ragdoll_BoneTrace 0x5be2e0 or the after-frame sweep at
+#                 0x5a6aea), its arguments and the trace_t it filled
 import os
 import struct
 
@@ -34,6 +38,10 @@ OUT = open(os.environ.get("RAGDOLL_OUT", "ragdoll-gdb.txt"), "w", buffering=1 <<
 POS = os.environ.get("RAGDOLL_POS", "207 2291 296 0")
 MAX_STEPS = int(os.environ.get("RAGDOLL_STEPS", "400"))
 SKEL = os.environ.get("RAGDOLL_SKEL") == "1"
+TRACES = os.environ.get("RAGDOLL_TRACES") == "1"
+# CM_Trace's call sites and their returns: Ragdoll_BoneTrace's three, the
+# after-frame sweep's (0x5a6930)
+TRACE_CALLS = {0x5BE30C: 0x5BE311, 0x5BE33C: 0x5BE341, 0x5BE37C: 0x5BE381, 0x5A6AEA: 0x5A6AEF}
 
 CL_INGAME = 0xC5F8F0  # dvar_t*, bool value at +0xc
 CBUF = 0x1410BD4  # local client 0: data, maxsize, cursize
@@ -238,6 +246,26 @@ def flush_skel():
         st["skel"] = None
 
 
+def on_trace_call():
+    # at the call: [esp] the trace_t, [esp+4] start, [esp+8] end, eax and
+    # [esp+0xc] the box's corners (their order unread), [esp+0x14] the mask
+    if st["done"] or not st["started"]:
+        return
+    esp, pc = reg("esp"), reg("pc")
+    st["trace"] = (pc, u32(esp), "%s | %s | %s | %s | %s" % (
+        words(u32(esp + 4), 3), words(u32(esp + 8), 3), words(reg("eax"), 3),
+        words(u32(esp + 0xC), 3), words(esp + 0x14, 1)))
+
+
+def on_trace_return():
+    # the trace_t's 0x2c bytes: fraction, normal, surface flags, contents,
+    # material, hit ids and the startsolid, allsolid and walkable bytes
+    t = st.pop("trace", None)
+    if t is None or TRACE_CALLS[t[0]] != reg("pc"):
+        return
+    log("trace %x %d | %s | %s" % (t[0], st["steps"], t[2], words(t[1], 11)))
+
+
 def on_build_entity():
     # 0x5bc930, a def bone's base pose under the entity (0x5bbd50): [esp] the
     # entity's origin (cpose +0x1c, its angles at +0x28), [esp+4] its axes
@@ -280,6 +308,10 @@ if SKEL:
     for a in (0x43533D, 0x4592F4, 0x625730, 0x642A35):
         SKEL_BPS.append(B(a, on_skel))
         SKEL_BPS[-1].enabled = False
+if TRACES:
+    for call, ret in TRACE_CALLS.items():
+        B(call, on_trace_call)
+        B(ret, on_trace_return)
 gdb.execute("continue")
 # a stop returned True: the dump is complete. Detached, the client runs on
 # showing the body at rest for run.sh's SHOTS=1 grab.

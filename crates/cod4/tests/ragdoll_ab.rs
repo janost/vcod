@@ -23,6 +23,9 @@ const SLEPT: &str = "kill-mp_crash-1.7.txt";
 /// Awake to `ragdoll_max_life`, with the bone, entity and skeleton lines
 /// (10.7, 10.7.2).
 const MAX_LIFE: &str = "kill-mp_crash-1.7-maxlife.txt";
+/// A corpse dropped from 1200 up, its `trace` lines from step 85 to 95
+/// (cod4-gsc.md 3.6.9).
+const FALL_TRACES: &str = "traces-mp_crash-1.7-fall.txt";
 /// The max-life take's corpse, an opfor rifleman's body and head.
 const MAX_LIFE_MODELS: [&str; 2] = ["body_mp_arab_regular_assault", "head_mp_arab_regular_suren"];
 
@@ -242,6 +245,51 @@ fn the_kill_capture_reads_as_its_summary() {
     assert_eq!(asleep.map(|i| i + 1), Some(79));
     assert_eq!(d.steps[79].state, 5);
     assert!(d.steps[79].bodies.is_empty());
+}
+
+/// The fall take's ragdoll sweeps (0x5a6aea, world 2) replayed through
+/// mp_crash's clip map: each trace's fraction, normal, `startsolid` and
+/// `walkable` (trace_t +0x29, +0x2a) retail's to the bit through the
+/// client's trace, where the server's float model parts on 6 of the 29
+/// hits (measured).
+#[test]
+fn the_ragdoll_sweeps_trace_as_retails() {
+    let Some(install) = cod4_install() else {
+        return;
+    };
+    let (_, walked) = Map::load(&install, "english", "mp_crash").unwrap();
+    let clip = ClipMap::from_assets(&walked.assets).unwrap();
+    let text = std::fs::read_to_string(format!("{FIXTURES}/{FALL_TRACES}")).unwrap();
+    let (mut sweeps, mut hits, mut server_parts) = (0, 0, 0);
+    for line in text.lines().filter(|l| l.starts_with("trace ")) {
+        let p: Vec<&str> = line.split('|').collect();
+        let [start, end, a, b] = [1, 2, 3, 4].map(|k| Vec3::from(floats::<3>(p[k])));
+        let mask = hex(p[5].trim());
+        let w: Vec<u32> = p[6].split_whitespace().map(hex).collect();
+        let theirs = (
+            w[0],
+            [w[1], w[2], w[3]],
+            (w[10] >> 8) & 0xff != 0,
+            (w[10] >> 16) & 0xff != 0,
+        );
+        let read = |t: vcod_common::clipmap::ClipTrace| {
+            (
+                t.fraction.to_bits(),
+                t.normal.to_array().map(f32::to_bits),
+                t.startsolid,
+                t.walkable,
+            )
+        };
+        // the box's two corners (eax and [esp+0xc] at the call), in either order
+        let (mins, maxs) = (a.min(b), a.max(b));
+        let ours = read(clip.trace_client(start, end, mins, maxs, mask));
+        assert_eq!(ours, theirs, "{line}");
+        server_parts += usize::from(read(clip.trace(start, end, mins, maxs, mask)) != theirs);
+        sweeps += 1;
+        hits += usize::from(w[0] != 1f32.to_bits());
+    }
+    eprintln!("{sweeps} sweeps, {hits} hits, {server_parts} parted under the server's model");
+    assert_eq!((sweeps, hits, server_parts), (132, 29, 6));
 }
 
 /// Every MP body model shares the def bones' lengths; the first two
