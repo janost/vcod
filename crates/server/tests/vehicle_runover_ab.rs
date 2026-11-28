@@ -404,10 +404,10 @@ const CREEP: Drift = Drift {
     why: "the probe client's cmd clock in the corpse's creep",
 };
 
-/// Where a prone teammate's victim settles and creeps: with his capture's
-/// cmds, prone press and spawn velocity replayed he lies on retail's spot
-/// to the hundredth, and his corpse creeps up to 0.13 apart under the
-/// jeep, whose driver's cmds no replay sends (coduo-vehicles.md 11.6).
+/// Where a prone teammate's victim settles and creeps: with both clients'
+/// cmds, his prone press and spawn velocity replayed he lies on retail's
+/// spot to the hundredth, and his corpse creeps up to 0.13 apart after the
+/// jeep has passed (coduo-vehicles.md 11.6, "The corpse's creep").
 const LIE_DOWN: Drift = Drift {
     after: -1000,
     within: 0.15,
