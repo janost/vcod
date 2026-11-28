@@ -22,18 +22,18 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 use vcod_common::net::event_ids::EV_SOUND_ALIAS;
-use vcod_common::net::msg::{BUTTON_USE, UserCmd};
+use vcod_common::net::msg::UserCmd;
 use vcod_common::net::protocol::PROTOCOL_V22;
 use vcod_common::net::{NetClient, NetEvent, NetState};
 
 const MAP: &str = "mp_kharkov";
 /// `vehicle_probe.rs` `RAM`, from the driver's placement.
-const SETTLE_MS: i64 = 2000;
-const TAP_MS: i64 = 150;
-const SEATED_MS: i64 = 2000;
-const AHEAD_MS: i64 = 6000;
+const SETTLE_MS: u64 = 2000;
+const TAP_MS: u64 = 150;
+const SEATED_MS: u64 = 2000;
+const AHEAD_MS: u64 = 6000;
 /// `BAIL`: the throttle's time before the exit, which keeps it held.
-const BAIL_MS: i64 = 1000;
+const BAIL_MS: u64 = 1000;
 /// How long after the victim connects ours places him, run alone for
 /// `common::PROBE_JOIN_MS` before: the capture's `PROBE victim` time less
 /// this is how much longer ours runs alone, so both clocks agree and the
@@ -110,22 +110,21 @@ fn ours(
         framed: true,
         ..Default::default()
     };
-    let mut hold = common::ProbeHold::default();
-    // A capture that logged the driver's `CMDS` lines replays them: his cmds
-    // on their times, the use taps on the cmds that carried them, and the
-    // throttle from `SEATED_MS` past the first tap's end, as
-    // `vehicle_probe.rs` holds it.
+    // The driver's `CMDS` lines replay too: his cmds on their times, the use
+    // taps on the cmds that carried them, and the throttle on the cmds his
+    // script clock put in `vehicle_probe.rs`'s drive step.
+    let mut hold = common::ProbeHold {
+        framed: true,
+        times: common::cmds_times(capture, "driver"),
+        ran: common::cmds_ran(capture, "driver"),
+        ..Default::default()
+    };
     let driver_in = common::cmds_inputs(capture, "driver");
-    let replay_driver = !driver_in.is_empty();
-    if replay_driver {
-        hold.framed = true;
-        hold.times = common::cmds_times(capture, "driver");
-        hold.ran = common::cmds_ran(capture, "driver");
-    }
-    let throttle_from = driver_in
-        .windows(2)
-        .find(|w| w[0].1.0 & BUTTON_USE != 0)
-        .map(|w| w[1].0 + SEATED_MS as i32);
+    let driver_ms = common::cmds_script_ms(capture, "driver");
+    assert!(!driver_ms.is_empty(), "the capture's driver CMDS lines");
+    let ahead = SETTLE_MS + TAP_MS + SEATED_MS;
+    let throttle = if bail { BAIL_MS + TAP_MS } else { AHEAD_MS };
+    let throttle = ahead..ahead + throttle;
     victim_hold.times = common::cmds_times(capture, "victim");
     victim_hold.ran = common::cmds_ran(capture, "victim");
     // The velocity the victim's placement kept: it shares his spawn's frame,
@@ -156,18 +155,9 @@ fn ours(
             ));
         }
         let since = placed_at.map(|at| (i - at) * common::FRAME_MS);
-        let ahead = SETTLE_MS + TAP_MS + SEATED_MS;
-        if since.is_some_and(|ms| ms >= ahead + AHEAD_MS) {
+        if since.is_some_and(|ms| ms as u64 >= ahead + AHEAD_MS) {
             break;
         }
-        let tapping = |from: i64| since.is_some_and(|ms| (from..from + TAP_MS).contains(&ms));
-        let throttle = if bail { BAIL_MS + TAP_MS } else { AHEAD_MS };
-        let tap = tapping(SETTLE_MS) || (bail && tapping(ahead + BAIL_MS));
-        hold.forward = if since.is_some_and(|ms| (ahead..ahead + throttle).contains(&ms)) {
-            127
-        } else {
-            0
-        };
         if victim_hold.base.is_none() {
             victim_hold.base = placed_yaw(sv.script_log(), "PROBE victim ").map(|y| [0.0, y, 0.0]);
             if let (Some(_), Some(v)) = (victim_hold.base, spawn_vel) {
@@ -178,33 +168,35 @@ fn ours(
             hold.base = placed_yaw(sv.script_log(), "PROBE place ").map(|y| [10.0, y, 0.0]);
         }
         let clients = [
-            Some((&mut ca, &mut victim_hold, 0, true)),
-            cb.as_mut()
-                .map(|cb| (cb, &mut hold, if tap { BUTTON_USE } else { 0 }, false)),
+            Some((&mut ca, &mut victim_hold, true)),
+            cb.as_mut().map(|cb| (cb, &mut hold, false)),
         ];
-        for (cl, h, buttons, is_victim) in clients.into_iter().flatten() {
+        for (cl, h, is_victim) in clients.into_iter().flatten() {
             if h.base.is_none() || cl.state() != NetState::Active {
                 if let Some(c) = cl.send_frame(&UserCmd::default()) {
                     h.last = c.server_time;
                 }
                 continue;
             }
-            let mut cmds = h.cmds(cl, buttons);
-            // The victim's buttons, prone key and up move as his capture's
-            // `in=` changes set them: he lies down on the cmd retail's
-            // probe client pressed it on, the `PROBE_IN` it answers. The
-            // driver's the same way when his are replayed.
+            let mut cmds = h.cmds(cl, 0);
+            // Both clients' buttons, prone key and up move as their
+            // capture's `in=` changes set them: the victim lies down on the
+            // cmd retail's probe client pressed it on, the `PROBE_IN` it
+            // answers.
             let ins = if is_victim { &victim_in } else { &driver_in };
-            if h.framed {
-                for c in &mut cmds {
-                    let at = ins.partition_point(|(st, _)| *st <= c.server_time);
-                    if let Some(&(_, (b, wb, up))) = at.checked_sub(1).map(|k| &ins[k]) {
-                        (c.buttons, c.wbuttons, c.up) = (b, wb, up);
-                    }
-                    if let (false, Some(from)) = (is_victim, throttle_from) {
-                        let on = (from..from + throttle as i32).contains(&c.server_time);
-                        c.forward = if on { 127 } else { 0 };
-                    }
+            for c in &mut cmds {
+                let at = ins.partition_point(|(st, _)| *st <= c.server_time);
+                if let Some(&(_, (b, wb, up))) = at.checked_sub(1).map(|k| &ins[k]) {
+                    (c.buttons, c.wbuttons, c.up) = (b, wb, up);
+                }
+                if !is_victim {
+                    let at = driver_ms.partition_point(|(st, _)| *st <= c.server_time);
+                    let ms = at.checked_sub(1).map(|k| driver_ms[k].1);
+                    c.forward = if ms.is_some_and(|ms| throttle.contains(&ms)) {
+                        127
+                    } else {
+                        0
+                    };
                 }
             }
             cl.send_cmds(&cmds);
@@ -499,6 +491,27 @@ fn a_prone_player_under_a_jeep_takes_ten_a_cmd() {
 #[test]
 fn a_teammate_s_jeep_makes_a_prone_player_hurt_himself() {
     let text = read("tests/fixtures/vehicles/mp_kharkov-jeep-runover-prone-team-uo.txt");
+    let r = retail(&text);
+    let Some(o) = ours(
+        "prone",
+        "allies",
+        &[("scr_friendlyfire", "0")],
+        false,
+        &text,
+    ) else {
+        return;
+    };
+    compare_first_drop(&r, &o);
+    compare(&r, &o, 1000);
+    compare_impacts(&r, &o);
+}
+
+/// A 2026-11-14 run of the same probe whose driver's drive step opens on a
+/// cmd repeating the last one's `serverTime`: the server skips it, so the throttle first runs on
+/// the next cmd, a frame later (coduo-vehicles.md 11.6.1).
+#[test]
+fn a_teammate_s_jeep_whose_throttle_opens_on_a_repeated_cmd_time() {
+    let text = read("tests/fixtures/vehicles/mp_kharkov-jeep-runover-prone-team-repeat-uo.txt");
     let r = retail(&text);
     let Some(o) = ours(
         "prone",

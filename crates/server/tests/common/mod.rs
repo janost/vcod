@@ -2332,12 +2332,11 @@ pub fn cmds_times(text: &str, who: &str) -> Vec<i32> {
     cmds_run(text, who).into_iter().map(|c| c.0).collect()
 }
 
-/// Each cmd the server runs of a client's `CMDS` lines ([`cmds_run`]) and
-/// the probe's wall clock at its send in microseconds (the `w=` token, the
-/// first absolute and the steps after it), which orders two probes'
-/// packets on one host as the server read them. Empty for a capture that
-/// logs no `w=`.
-pub fn cmds_walls(text: &str, who: &str) -> Vec<(i32, u64)> {
+/// The probe's wall clock at each cmd's send of a client's `CMDS` lines in
+/// microseconds, in the order [`cmds_sent`] gives them (the `w=` token, the
+/// first absolute and the steps after it). Empty for a capture that logs
+/// no `w=`.
+fn sent_walls(text: &str, who: &str) -> Vec<u64> {
     let mut walls = Vec::new();
     for l in text.lines() {
         let Some(rest) = l
@@ -2356,14 +2355,82 @@ pub fn cmds_walls(text: &str, who: &str) -> Vec<(i32, u64)> {
             walls.push(at);
         }
     }
-    let sent = cmds_sent(text, who);
-    assert_eq!(sent.len(), walls.len(), "{who}: a w= per cmd");
+    if !walls.is_empty() {
+        assert_eq!(
+            cmds_sent(text, who).len(),
+            walls.len(),
+            "{who}: a w= per cmd"
+        );
+    }
+    walls
+}
+
+/// Each cmd the server runs of a client's `CMDS` lines ([`cmds_run`]) and
+/// the probe's wall clock at its send in microseconds ([`sent_walls`]),
+/// which orders two probes' packets on one host as the server read them.
+/// Empty for a capture that logs no `w=`.
+pub fn cmds_walls(text: &str, who: &str) -> Vec<(i32, u64)> {
+    let walls = sent_walls(text, who);
     let mut newest = i32::MIN;
     let mut out = Vec::new();
-    for ((t, _), w) in sent.into_iter().zip(walls) {
+    for ((t, _), w) in cmds_sent(text, who).into_iter().zip(walls) {
         if t > newest {
             newest = t;
             out.push((t, w));
+        }
+    }
+    out
+}
+
+/// Each cmd the server runs of a client's `CMDS` lines ([`cmds_run`]) and
+/// its time on the probe's script clock in ms: `vehicle_probe.rs` times its
+/// steps on the wall clock from the first cmd it sends on the `SPAWNED`
+/// snapshot (the `snap=` entry of that time), so a step's first cmd is the
+/// first whose `w=` is that far on. A cmd repeating a `serverTime` never
+/// runs, so a step that opens on one opens on the server a cmd later
+/// (coduo-vehicles.md 11.6.1). Empty without `w=` or `SPAWNED`.
+pub fn cmds_script_ms(text: &str, who: &str) -> Vec<(i32, u64)> {
+    let walls = sent_walls(text, who);
+    let spawned = text
+        .lines()
+        .filter_map(|l| l.strip_prefix(who)?.trim_start().strip_prefix("SPAWNED t="))
+        .find_map(|r| r.split_whitespace().next()?.parse::<i32>().ok());
+    let (Some(spawned), false) = (spawned, walls.is_empty()) else {
+        return Vec::new();
+    };
+    // The index of the first cmd sent on that snapshot.
+    let mut base = 0;
+    let mut at = None;
+    for l in text.lines() {
+        let Some(rest) = l
+            .strip_prefix(who)
+            .and_then(|r| r.trim_start().strip_prefix("CMDS st="))
+        else {
+            continue;
+        };
+        let f: Vec<&str> = rest.split_whitespace().collect();
+        let n = 1 + f
+            .iter()
+            .find_map(|t| t.strip_prefix("d="))
+            .map_or(0, |d| d.split(',').filter(|d| !d.is_empty()).count());
+        let snaps = f.iter().find_map(|t| t.strip_prefix("snap="));
+        at = snaps.into_iter().flat_map(|s| s.split(',')).find_map(|e| {
+            let (k, t) = e.split_once(':')?;
+            let k: usize = k.parse().ok()?;
+            (t.parse::<i32>().ok()? == spawned).then_some(base + k)
+        });
+        if at.is_some() {
+            break;
+        }
+        base += n;
+    }
+    let t0 = walls[at.expect("the SPAWNED snapshot in a snap= list")];
+    let mut newest = i32::MIN;
+    let mut out = Vec::new();
+    for ((t, _), w) in cmds_sent(text, who).into_iter().zip(walls) {
+        if t > newest {
+            newest = t;
+            out.push((t, w.saturating_sub(t0) / 1000));
         }
     }
     out
