@@ -2775,10 +2775,26 @@ The shards take:
   the difference unrounded (exact for these moves). VERIFIED (the
   instructions).
 - So the sweep takes the client's trace, `ClipMap::trace_client`
-  (`TraceFloats::Cod4Client`: 0x4f4d30's set-up, 0x4f37e0's brushes and
-  0x4f05c0's capsule against the triangles, cod4-collision.md 2, 3), and
-  so do the ragdolls, which sweep through the same `Clip`. VERIFIED (the
-  code, ours).
+  (`TraceFloats::Cod4Client`: 0x4f4d30's set-up, 0x4f37e0's brushes,
+  0x4f05c0's capsule and 0x4efce0's point against the triangles, their
+  edge and corner kernels, the border arm 0x4f1ae0 and the cull 0x4efb10,
+  cod4-collision.md 2, 3), and so do the ragdolls, which sweep through
+  the same `Clip`. VERIFIED (the code, ours).
+- The ragdoll sweeps take: `cod4_ragdoll_gdb.py` with `RAGDOLL_TRACES=1`
+  logs each `CM_Trace` (0x4f4d30) called at 0x5a6aea, the after-frame
+  sweep, or by `Ragdoll_BoneTrace` (0x5be30c, 0x5be33c, 0x5be37c), with
+  the `trace_t` it filled. A corpse killed on the ground swept 1140
+  times over 97 steps without a hit and `Ragdoll_BoneTrace` never ran;
+  dropped from 1200 up (`RAGDOLL_POS` z 1500), its sweeps met the ground
+  29 times on steps 87 to 93, every normal (0, 0, 1). VERIFIED (the
+  captures). `ragdoll_ab::the_ragdoll_sweeps_trace_as_retails` replays
+  steps 85 to 95 (132 sweeps) through mp_crash's clip map: each
+  fraction, normal, `startsolid` and `walkable` retail's to the bit
+  through `trace_client`, where the server's float model parts on 6 of
+  the 29 hits. The 6 come from the set-up, brush and face stores
+  (cod4-collision.md 2, 3): with the client's point, edge, corner,
+  border and cull kernels swapped for the server's the take still
+  matches. VERIFIED (the runs, ours).
 
 The shipment take:
 

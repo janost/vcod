@@ -123,13 +123,16 @@ impl Cx<'_> {
 
     /// `CM_CullBox` (0x08055404): the sweep's box against the node's,
     /// on the axes and, unless the sweep is short against its box, the
-    /// three cross axes of the sweep.
+    /// three cross axes of the sweep. The 1.7 client's (`iw3mp.exe`
+    /// 0x4efb10) stores each bound before its compare (cod4-collision.md 3).
     pub(super) fn cull_box(&self, origin: Vec3, half: Vec3) -> bool {
         let sw = &self.sw;
+        let client = sw.floats == super::TraceFloats::Cod4Client;
+        let bound = |x: f64| if client { f64::from(x as f32) } else { x };
         let d = sw.mid - origin;
         let e = half + sw.half_box;
         for k in 0..3 {
-            if f64::from(e[k]) + f64::from(sw.half_sweep_abs[k]) < f64::from(d[k].abs()) {
+            if bound(f64::from(e[k]) + f64::from(sw.half_sweep_abs[k])) < f64::from(d[k].abs()) {
                 return true;
             }
         }
@@ -141,7 +144,7 @@ impl Cx<'_> {
             (f64::from(a) * f64::from(b) - f64::from(c) * f64::from(e2)) as f32
         };
         let sum = |a: f32, b: f32, c: f32, e2: f32| {
-            f64::from(a) * f64::from(b) + f64::from(c) * f64::from(e2)
+            bound(f64::from(a) * f64::from(b) + f64::from(c) * f64::from(e2))
         };
         sum(e.z, ha.y, e.y, ha.z) < f64::from(cross(hd.y, d.z, hd.z, d.y).abs())
             || sum(e.x, ha.z, e.z, ha.x) < f64::from(cross(hd.z, d.x, hd.x, d.z).abs())

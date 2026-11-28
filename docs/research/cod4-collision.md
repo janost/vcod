@@ -321,13 +321,115 @@ VERIFIED (the instructions), each item:
   test is `closing > t - s` (0x4f0a30..0x4f0a43). The face contact's
   fraction goes through 0x4093c0 against 0 (0x4f0b18).
 - The edge kernel 0x4eff70 and the corner 0x4f0370 get the stored
-  sphere; their own arithmetic is not read.
+  sphere (calls at 0x4f0919, 0x4f09bf, 0x4f0a81, 0x4f0b4d).
 
-`mesh4::capsule_tri_client` takes this model, with the server's edge and
-corner kernels. With the server's model instead, the shipment take's
-step 25 sweep put a bottle a z ulp off retail's and the watermelon's
-step 27 sweep a chunk an ulp of x; with it both match retail on every
-step. VERIFIED (`phys_ab`, cod4-gsc.md 3.6.9).
+`mesh4::capsule_tri_client` takes this model. With the server's model
+instead, the shipment take's step 25 sweep put a bottle a z ulp off
+retail's and the watermelon's step 27 sweep a chunk an ulp of x; with it
+both match retail on every step. VERIFIED (`phys_ab`, cod4-gsc.md
+3.6.9). Those takes ran with the server's edge and corner kernels, before
+the client's below were ported, and match with either. VERIFIED (the
+runs, ours).
+
+The client's edge kernel (0x4eff70) runs the server's tests in the same
+order and returns the same codes (0 struck, 1 none, 2 and 3 past an end),
+storing nearly every value. VERIFIED (the instructions), each item:
+
+- The sphere's offset from the edge's start is three stores
+  (0x4eff7e..0x4eff9b), `across = sweep x along` three more
+  (0x4effad..0x4effcf); the offset along it `(across.y o.y + across.x o.x)
+  + across.z o.z` and `|across|^2` are one store each (0x4efff7,
+  0x4f0007). The reach `r + 0.125` is stored (0x4f0017), `off^2` kept as
+  a double (0x4f0025), `reach^2` stored and the room `reach^2 across2 -
+  off^2` stored (0x4f002f..0x4f003d), none when it is at most 0.
+- `|along|^2` is stored (0x4f0071), `room len2` stored into 0x401050's
+  root (`sqrt` of the float, stored), the half chord `root / across2`
+  stored (0x4f0096). `w = offset x along` is three stores (0x4f00b4,
+  0x4f00cb, 0x4f00da), `mid_scaled = across . w` one (0x4f00fa); `mid =
+  mid_scaled / across2`, `half + mid` before its test and the entry `mid -
+  half` (0x4f014c) are each stored.
+- From inside (an entry under 0): `s = -(offset . along)` is stored
+  (0x4f01a6), `k = s / len2` stored, the foot `offset + k along` through
+  0x403ae0 (each component `along k + offset`, one store); the foot's dot
+  with the sweep is stored before its test against 0 (0x4f0220); the
+  normal is 0x55f6e0's of the foot (0x4f0240), and `startsolid` is `len2
+  stored(r^2 across2 - off^2) > mid_scaled^2` (0x4f0250..0x4f0270).
+- From outside: the entry point `offset + enter sweep` is three stores
+  (0x4f02a1..0x4f02bb), `s` stored (0x4f02e1), `k` stored, the foot
+  through 0x403ae0, `1 / reach` stored (0x4f0336); the normal is its
+  three products with the foot, one store each (0x4f0344..0x4f0354), the
+  fraction the stored entry (0x4f035b).
+
+The client's corner kernel (0x4f0370; the triangle's and the border's,
+`walkable` its argument) stores as the edge's does. VERIFIED (the
+instructions), each item:
+
+- The offset from the corner is three stores (0x4f037c..0x4f0390), the
+  closing speed and the squared distance one each (0x4f03bd, 0x4f03e8);
+  the reach `r + 0.125` is kept and the gap `dist2 - reach^2` stored
+  (0x4f0406).
+- Within reach: 0x401050's root of the distance, `1 / root` stored
+  (0x4f042d), the normal three stored products, fraction 0, `walkable`
+  (0x4f0452), and `startsolid` when `stored(r^2) > dist2`
+  (0x4f0469..0x4f047e).
+- Else `b^2` is stored (0x4f0496) and the discriminant `b^2 - gap
+  |sweep|^2` (0x4f04aa); the graze test is `b^2 0.001 > disc` (0.001 a
+  float widened, 0x70af98); the fraction `(-root - b) / |sweep|^2` is
+  stored (0x4f04dd). The normal: `offset + f sweep` three stores
+  (0x4f04fd..0x4f0515), times the stored `1 / reach` (0x4f0528) three
+  more, its squared length stored and `(3 - len2) 0.5` stored (0x4f0577;
+  3.0 at 0x70add8, 0.5 at 0x70ace8), times it three more.
+
+The client's point sweep against a triangle (0x4efce0, which the AABB
+walk 0x4f2000 calls for a point at 0x4f20c0) stores what the server
+keeps: `v0 - v1` and `v0 - v2` are six stores (0x4efd09..0x4efd43), `n`
+three (0x4efd67, 0x4efd81, 0x4efd91), the closing speed one (0x4efdbe),
+`v0 - start` three (0x4efdd7..0x4efdeb), the depth one (0x4efe11), `m =
+sweep x (v0 - start)` three (0x4efe45..0x4efe65), `s` and `t` one each
+(0x4efe8d, 0x4efecd); the third test is `s - t < closing` off the stored
+two (0x4efee0..0x4efeeb), the normal 0x55f6e0's of `n` (0x4efef8) and the
+fraction the stored depth over the stored closing speed (0x4efeff..0x4eff09).
+VERIFIED (the instructions).
+
+The client's border arm (0x4f1ae0, per border at 0x4f2153 when the sweep
+moves sideways and the capsule has a length, 0x4f2118..0x4f2139) runs
+`CM_TraceCapsuleThroughBorder`'s tests with 1.7's end spheres (section
+2). Where it parts from vcod's CoD2 kernel, VERIFIED (the instructions):
+
+- The distance off the line stores the dot `start.x a + start.y b`, then
+  its difference with `c` (0x4f1b32, 0x4f1b3d); the CoD2 kernel keeps
+  the dot.
+- A corner within reach clears `walkable` (0x4f1ca8, 0x4f1e5e) and sets
+  `startsolid` when `stored(r^2) > c0` (0x4f1cbc..0x4f1cc4).
+- The far end's distance `start + length` is kept (0x4f1d6c), and its
+  height less the start's, `start.z - stored(slope length + base)`,
+  stored (0x4f1e0a..0x4f1e1e).
+- The wall top's height over the hit, `(slope along + base) - hit.z`, is
+  one store (0x4f1f13..0x4f1f21); the CoD2 kernel stores the height
+  first. A top within `sphere_z` of it is met by the straight part, which
+  clears `walkable` (0x4f1fb4); above by less than `stored(sphere_z + r)`
+  (0x4f1f48) the upper sphere, below by less than `stored(-sphere_z - r)`
+  (0x4f1f8a) the lower, each through 0x4f19f0 (0x4f1fa4).
+
+0x4f19f0 builds the top's two ends, each component rounded once off kept
+products and the far end's kept `start + length` (0x4f1a0d..0x4f1a55),
+sweeps the sphere at the edge between them through 0x4eff70 (0x4f1a99),
+then, past an end, at that end through 0x4f0370 with `walkable` clear
+(0x4f1aaa, 0x4f1ac7). VERIFIED (the instructions).
+
+The client's `CM_CullBox` (0x4efb10, called at 0x4f2013 by the AABB
+trace walk and at 0x4f2193) stores each axial bound `half + half_sweep`
+(0x4efb64, 0x4efb90, 0x4efbb6) and each cross bound (0x4efc06, 0x4efc4d,
+0x4efc94) before its compare; vcod's CoD2 kernel keeps them. VERIFIED
+(the instructions).
+
+`mesh4`'s `point_tri_client`, `sweep_edge_client`, `vertex_client`,
+`capsule_border_client` and `border_sphere_client`, and `Cx::cull_box`
+under `TraceFloats::Cod4Client`, take this model; `mesh4`'s tests pin an
+input per arm where the two models part. VERIFIED (the tests, ours). No
+take tells these five apart yet: the phys gates (bit-exact) and the
+ragdoll gates pass with them, and the ragdoll sweeps take (cod4-gsc.md
+3.6.9) reads retail's with or without them. VERIFIED (the runs, ours).
 
 ## 4. Submodels and static models
 
@@ -424,5 +526,11 @@ down, mask 0x2810011, the player's box (-15,-15,0)..(15,15,70). VERIFIED
   globals 0x889dea4 and 0x889de9c). VERIFIED (the disassembly). No gate
   shows a difference there yet.
 - `CM_TestBoxInBrush`'s strict bounds (section 2).
+- The client's walks and position test, unread against the server's:
+  the tree walk 0x4f4920's split, the leaf brush walk 0x4f3c40, the leaf
+  arm 0x4f40b0's brush box cull, and the position test (0x4f2180, which
+  recurses on itself and calls 0x4efb10 and 0x4f1930) with its brushes.
+  `Clip::sweep` reaches the position test for a body that has not moved
+  (`ode::phys`). VERIFIED (the calls); their float models are not read.
 - The server's pmove and script traces run over this clip map
   (cod4-pmove.md 15).
