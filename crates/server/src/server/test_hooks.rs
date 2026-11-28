@@ -316,6 +316,13 @@ impl Server {
         self.game.module.bot_admin.seed_rng = bot_admin::seed_stream(seed);
     }
 
+    /// `slot`'s gun-kick spring speeds (pitch, yaw), `None` without a sim.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_gun_kick_speed(&self, slot: usize) -> Option<[f32; 2]> {
+        let c = self.core.clients.get(slot)?.as_ref()?;
+        Some(c.sim.as_ref()?.gun_kick_speed())
+    }
+
     /// Whether a shot fired from eye height at `origin` along `yaw_deg`
     /// reaches `dist` without hitting anything. Test-facing, like
     /// `place_client`: a gate that puts one client in front of another has to

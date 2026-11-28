@@ -428,15 +428,9 @@ fn first_drop(lines: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// The first drops ours misses, each with its reason; none since the
-/// driverless prone run's lie-down waits for the ground as retail's does
-/// (coduo-vehicles.md 11.6, "The first drop").
-const FIRST_DROP_GAPS: &[(&str, &str)] = &[];
-
 /// The victim's first drop on ours against retail's, line for line to the
-/// hundredth, unless [`FIRST_DROP_GAPS`] names `capture`: then at least one
-/// line must differ.
-fn compare_first_drop(capture: &str, retail: &[String], ours: &[String]) {
+/// hundredth.
+fn compare_first_drop(retail: &[String], ours: &[String]) {
     let (r, o) = (first_drop(retail), first_drop(ours));
     assert_eq!(
         r.len(),
@@ -449,13 +443,7 @@ fn compare_first_drop(capture: &str, retail: &[String], ours: &[String]) {
         .filter(|(a, b)| !same(a, b, 0.01))
         .map(|(a, b)| format!("retail {a}\nours   {b}"))
         .collect();
-    match FIRST_DROP_GAPS.iter().find(|(c, _)| *c == capture) {
-        None => assert!(differ.is_empty(), "the first drop\n{}", differ.join("\n")),
-        Some((_, why)) => assert!(
-            !differ.is_empty(),
-            "the first drop matches retail's; drop its gap ({why})"
-        ),
-    }
+    assert!(differ.is_empty(), "the first drop\n{}", differ.join("\n"));
 }
 
 /// Retail's lines against ours one for one: whole words (times, damage,
@@ -488,7 +476,7 @@ fn a_jeep_runs_over_a_standing_player_twice() {
     let Some(o) = ours("stand", "axis", &[], false, &text) else {
         return;
     };
-    compare_first_drop("stand", &r, &o);
+    compare_first_drop(&r, &o);
     compare(&r, &o, 1000);
     compare_impacts(&r, &o);
 }
@@ -500,7 +488,7 @@ fn a_prone_player_under_a_jeep_takes_ten_a_cmd() {
     let Some(o) = ours("prone", "axis", &[], false, &text) else {
         return;
     };
-    compare_first_drop("prone", &r, &o);
+    compare_first_drop(&r, &o);
     compare(&r, &o, 1000);
     compare_impacts(&r, &o);
 }
@@ -521,7 +509,7 @@ fn a_teammate_s_jeep_makes_a_prone_player_hurt_himself() {
     ) else {
         return;
     };
-    compare_first_drop("prone-team", &r, &o);
+    compare_first_drop(&r, &o);
     compare(&r, &o, 1000);
     compare_impacts(&r, &o);
 }
@@ -544,7 +532,7 @@ fn a_driverless_jeep_runs_over_a_standing_player() {
     ) else {
         return;
     };
-    compare_first_drop("bail", &r, &o);
+    compare_first_drop(&r, &o);
     compare(&r, &o, 1000);
     compare_impacts(&r, &o);
 }
@@ -565,7 +553,7 @@ fn a_driverless_jeep_runs_over_a_prone_player() {
     ) else {
         return;
     };
-    compare_first_drop("bail-prone", &r, &o);
+    compare_first_drop(&r, &o);
     compare(&r, &o, 1000);
     compare_impacts(&r, &o);
 }
