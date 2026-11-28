@@ -21,11 +21,14 @@ fn mid((lo, hi): script::Bounds) -> [f32; 3] {
 /// Whether a retrieval pickup whose trigger's middle is `c` lies buried in
 /// the world's solid (`ReObjView::buried`), and the sides from which a
 /// standing eye sees the middle (`ReObjView::sides`): the side's point
-/// reaches the middle at its height, and the use pick's trace from the eye
-/// over the floor under it does too (`item::activate_ent`'s mask, items
-/// doc 2.1; bot-objectives.md 4.2.2).
+/// reaches the middle at its height, a standing box fits on the floor
+/// under it (but under the middle, which is tapped from anywhere near),
+/// and the use pick's trace from the eye over that floor reaches the
+/// middle too (`item::activate_ent`'s mask, items doc 2.1;
+/// bot-objectives.md 4.2.2, 4.2.5).
 fn pickup_reach(w: &vcod_common::collision::CollisionWorld, c: [f32; 3]) -> (bool, u16) {
     use vcod_common::collision::{CONTENTS_GLASS, CONTENTS_SOLID};
+    use vcod_common::pmove::{HALF_WIDTH, HEIGHT_STAND, VIEW_STAND};
     let mask = CONTENTS_SOLID | CONTENTS_GLASS;
     if w.point_contents(c.into()) & mask != 0 {
         return (true, 0);
@@ -36,12 +39,17 @@ fn pickup_reach(w: &vcod_common::collision::CollisionWorld, c: [f32; 3]) -> (boo
             && (tr.fraction >= 1.0 || w.entity_num(&tr) != crate::game::entity::ENTITYNUM_WORLD)
     };
     let mid = glam::Vec3::from(c);
+    let (lo, hi) = (
+        glam::Vec3::new(-HALF_WIDTH, -HALF_WIDTH, 0.0),
+        glam::Vec3::new(HALF_WIDTH, HALF_WIDTH, HEIGHT_STAND),
+    );
+    let stands = |f: glam::Vec3| !w.box_trace(f, f, lo, hi).startsolid;
     let sides = (0..crate::bots::PICKUP_SIDES)
         .filter(|&k| {
             let p = glam::Vec3::from(crate::bots::pickup_side(c, k));
             let floor = w.point_trace(p, p - glam::Vec3::Z * 128.0, mask, false);
-            let eye = floor.endpos + glam::Vec3::Z * vcod_common::pmove::VIEW_STAND;
-            (k == 0 || clear(mid, p)) && clear(p, eye) && clear(eye, mid)
+            let eye = floor.endpos + glam::Vec3::Z * VIEW_STAND;
+            (k == 0 || clear(mid, p) && stands(floor.endpos)) && clear(p, eye) && clear(eye, mid)
         })
         .fold(0, |m, k| m | 1 << k);
     (false, sides)
@@ -1767,7 +1775,9 @@ mod tests {
 
     /// An objective dropped just south of a thin wall, as on mp_pavlov
     /// (bot-objectives.md 4.2.2): the sides past the wall (north-east,
-    /// north, north-west) see no middle; one inside a brush is buried.
+    /// north, north-west) see no middle, nor do the east and west ones, where
+    /// a standing box would overlap it (4.2.5); one inside a brush is
+    /// buried.
     #[test]
     fn a_pickup_is_seen_from_the_sides_on_its_side_of_a_wall() {
         use vcod_common::collision::{CONTENTS_SOLID, synthetic_world};
@@ -1784,7 +1794,7 @@ mod tests {
         let seen: Vec<u32> = (0..crate::bots::PICKUP_SIDES)
             .filter(|k| sides & 1 << k != 0)
             .collect();
-        assert_eq!(seen, [0, 1, 5, 6, 7, 8]);
+        assert_eq!(seen, [0, 6, 7, 8]);
         assert_eq!(pickup_reach(&world, [216.0, 0.0, 16.0]), (true, 0));
     }
 

@@ -727,6 +727,61 @@ Seed 10 on the same build with it stalls 0. VERIFIED (measured, ours,
 release). INFERRED: the fix moves every chase, so the match moves from
 the first replan on as well; the six maps: 9.1.1.
 
+### 4.2.5 A pickup side no body stands on, 2026-11-28
+
+On master 3700b7168 the six maps of 9.1.1, seeds 1 to 48, stall 1180
+bot-ticks, 1010 of them on mp_pavlov, seeds 26 (760) and 15 (183) at
+(-9337 to -9160, 10007 to 10134, 106 to 160): 4.2.2's spot. VERIFIED
+(measured, ours, release, `bot_match GAMETYPE=re BOTS=10 TICKS=6000
+STALLS=1`). Traced on seed 26 with a temporary per-tick print of each
+attacker's target, `pick` and the objective's `sides`, and point and box
+traces of the collision round the drop through a temporary test. VERIFIED
+(the trace and the traces):
+
+- The objective lies dropped with its trigger's middle at (-9400.57,
+  9983.55, 162.13), on a strip of floor at 160 about 8 deep between a sill
+  to the north (its face at y 9983.875, its top between 182 and 190) and a
+  drop to 34 to the south. The wall 4.2.2 names at x -9360.125 stands to
+  the east.
+- `sides` reads 0, 1 and 5: the middle, east (-9360.57, 9983.55) and west
+  (-9440.57, 9983.55). The sides to the south stand over the drop, their
+  eye 126 lower; those to the north are past the sill.
+- A standing box fits on the floor under the west side, not under the
+  east one: 0.44 from the east wall and 0.33 from the sill.
+- Attackers on `pick` 1 take the second seen side, the east one. The
+  graph's node nearest it is node 27 at (-9337, 10016, 160), past the
+  wall; three attackers walked out their plans there and pressed into the
+  corner at (-9336.9, 10007.1) for the objective's 60 s. A side is tapped
+  from within 16 of it, so no tap came to move `pick` on. CoD1's bots do
+  not give up a point they walked out to (`Bot::track_reach` runs on CoD4
+  alone).
+
+The fix (`pickup_reach`): a side but the middle counts as seen only where
+a standing box (`HALF_WIDTH`, `HEIGHT_STAND`) fits on the floor under it.
+The middle is tapped from anywhere within 48, so it needs none. Here the
+sides go to 0 and 5
+(`server::bot_world::tests::a_pickup_is_seen_from_the_sides_on_its_side_of_a_wall`,
+whose wall-hugging east and west sides now drop out).
+
+VERIFIED (measured, ours, release, the same knobs, master 3700b7168 and
+the fix, each with a control: the same build with each bot's start hold
+drawn off another constant, as 9.1.1). Wins by team:
+
+| Build | stalled | captures | pickups | carrier deaths | allies W | axis W | kills |
+|---|---|---|---|---|---|---|---|
+| master | 1180 | 622 | 2128 | 947 | 891 | 441 | 10260 |
+| master, holds redrawn | 448 | 626 | 2132 | 943 | 915 | 425 | 10258 |
+| sides stood on | 237 | 624 | 2134 | 951 | 891 | 441 | 10273 |
+| sides stood on, holds redrawn | 448 | 622 | 2130 | 946 | 915 | 425 | 10263 |
+
+- VERIFIED (the runs): the fix moves three of master's 288 matches,
+  mp_pavlov seeds 15 and 26 (both to 0 stalled) and mp_brecourt seed 39,
+  and three of the control's, none of whose stalls move. mp_pavlov goes
+  from 1010 to 67.
+- The control reads 732 under master. Most of that is the two mp_pavlov
+  matches, which the redrawn holds do not reach. INFERRED (the per-match
+  counts).
+
 ## 5. Behind Enemy Lines (`bel`)
 
 ### 5.1 What stock `bel.gsc` asks of a player
