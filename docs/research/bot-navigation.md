@@ -3214,6 +3214,37 @@ for a nav pass:
 - mp_carentan `re` seed 2's carrier held upstairs at (446, 1799, 160) was
   no nav fault: an escort stood on his next node (bot-objectives.md 4.2).
 
+Rechecked 2026-11-28 on master 3700b7168: `bot_match GAMETYPE=re BOTS=10
+TICKS=6000 STALLS=1`, bot-objectives.md 9.1.1's six maps, seeds 1 to 48,
+with a control (each bot's start hold drawn off another constant).
+VERIFIED (measured, ours, release, the runs of bot-objectives.md 4.2.5
+and 4.2.6):
+
+- mp_pavlov's drop by bot-objectives.md 4.2.2's wall came back, 1010
+  stalled bot-ticks: a pickup side no body stands on. Fixed (4.2.5).
+- mp_dawnville's spot at (335 to 466, -16210 to -16032) is a stair nook
+  where a guard pinned a teammate. Fixed (4.2.6).
+- mp_rocket: seeds 89 and 36, 9.1.1's parts-off stalls, stall 0 on master
+  with the parts on. No window on any build here lies in the documents'
+  room. The give way's control stalls 205 on seed 13 at (9499, 1955,
+  280), a bot pressing at a node 13.5 units up the slope north of it, and
+  36 on seed 23 on 3.16's upper floor. Not traced.
+- mp_brecourt: no window at (624, 192, 33). Seed 22's 6 at (-3676, 1616,
+  36) from tick 688, the same on every build. Not traced.
+- mp_chateau seed 39: 28 on every build, 36 on every control, at (1016
+  to 1063, 940 to 1042, 143 to 260). Not traced.
+- mp_carentan seed 36 on 4.2.6's build, 57: bot 9, a defender bound for
+  its post at (547.6, 1856.1, 8.1) north of a door in a wall at y 1776 to
+  1784, paces south of it for 12 s while other bots run through the door
+  at 190 units/s. VERIFIED (a temporary per-tick print of its follower and
+  cmd). Over its ticks 1600 to 1654 the cmd's yaw holds still, its keys
+  and `ps.velocity` point away from its waypoint and its origin creeps
+  toward it at about 18 units/s. VERIFIED (the same print). The door's
+  gap runs x 536.125 to 583.875. INFERRED (the origins it stops at, x
+  551.13 and 568.88, a half-width off each side). Not traced further;
+  master's control stalls by the same door on seeds 4, 12, 16, 28 and 30,
+  each window starting at (540 to 560, 1793 to 1816, 8).
+
 ### 3.14 CoD4's fall heights, 2026-11-21
 
 Retail has no bots; this section is measured on vcod-server only.
