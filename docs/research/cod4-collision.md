@@ -427,8 +427,9 @@ trace walk and at 0x4f2193) stores each axial bound `half + half_sweep`
 `capsule_border_client` and `border_sphere_client`, and `Cx::cull_box`
 under `TraceFloats::Cod4Client`, take this model; `mesh4`'s tests pin an
 input per arm where the two models part. VERIFIED (the tests, ours). No
-take tells them apart: every phys take and every ragdoll gate reads the
-same under either. VERIFIED (the runs, ours).
+take tells these five apart yet: the phys gates (bit-exact) and the
+ragdoll gates pass with them, and the ragdoll sweeps take (cod4-gsc.md
+3.6.9) reads retail's with or without them. VERIFIED (the runs, ours).
 
 ## 4. Submodels and static models
 
