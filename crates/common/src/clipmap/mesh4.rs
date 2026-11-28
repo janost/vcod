@@ -1021,6 +1021,9 @@ fn segment_segment_dist2(p1: Vec3, q1: Vec3, p2: Vec3, q2: Vec3) -> f32 {
 }
 
 #[cfg(test)]
+mod vectors;
+
+#[cfg(test)]
 mod tests {
     use super::super::trace::Sweep;
     use super::super::{CLeaf, CNode, CPlane, ClipMap, CollAabbTree, MASK_PLAYERSOLID};
@@ -1029,7 +1032,7 @@ mod tests {
     /// One leaf holding one indexed floor triangle at z 0 with corners
     /// (-200, -100), (-200, 100), (-100, -100); only the long edge
     /// (opposite vertex 0) is walkable.
-    fn map() -> ClipMap {
+    pub(super) fn map() -> ClipMap {
         ClipMap {
             planes: vec![CPlane {
                 normal: Vec3::Z,
