@@ -2818,8 +2818,22 @@ The shards take:
   undulating field at (248, 76) (`251 92 1500 90`, 29 hits, 3 edge strikes
   a face took after). VERIFIED (the captures, the runs, ours). The
   ragdolls' sweeps are small cubes the ODE contacts keep from sinking,
-  so their hits are faces; no take yet ends a sweep on an edge, a corner
-  or a border.
+  so their hits are faces; no ragdoll take ends a sweep on an edge, a
+  corner or a border.
+- The edges take (`edges-mp_crash-1.7.txt`, 2026-11-28; the README has
+  the recipe): the shards take's driver with the two barrel shards put
+  flat 90 units over two ridges of mp_crash's terrain, each centre over
+  the ridge's edge, picked with the port. Each fell straight and on step
+  28 its centre passed the ridge within the step; the sweep that caught
+  it (a 0.001 box, both shards thin) ended on the client's edge kernel
+  (0x4eff70), at fractions 0x3ee43118 and 0x3ee42b65, the port's own.
+  `phys_ab` steps the take: every body retail's to the bit on all 100
+  steps, each sleep, seed and sound retail's. The driver's `PHYS_TRACES`
+  logged the sweeps; `phys_ab::the_edges_takes_sweeps_trace_as_retails`
+  replays its 119 hits through `trace_client`, each retail's to the bit,
+  where the server's float model parts on 3. With the server's edge
+  kernel in the client's trace both edge strikes part (cod4-collision.md
+  3). VERIFIED (the capture, the runs, ours, the swap on a lab build).
 
 The shipment take:
 
