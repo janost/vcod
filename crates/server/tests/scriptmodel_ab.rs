@@ -450,6 +450,25 @@ fn ours_pair_in(
     }
 }
 
+/// The script seed that draws a capture's `PROBE body` (head and gear) on
+/// ours; 1 (`load1`, head `a_01`) for one that logs none or wears `load1`,
+/// whose head no frag here strikes.
+fn body_seed(log: &str) -> u32 {
+    const SEEDS: &[(&str, &str, u32)] = &[("basehead_axis_b_02", "load3", 236)];
+    let Some(body) = log.lines().find(|l| l.starts_with("PROBE body ")) else {
+        return 1;
+    };
+    SEEDS
+        .iter()
+        .find(|(head, gear, _)| {
+            body.contains(&format!(":xmodel/{head} "))
+                && body.contains(&format!("gear_german_{gear}_"))
+        })
+        .map(|s| s.2)
+        .or(body.contains("gear_german_load1_").then_some(1))
+        .unwrap_or_else(|| panic!("no seed draws {body}"))
+}
+
 /// The time of the first `PROBE thrower` or `PROBE rphase` line.
 fn thrower_line_time<'a>(mut lines: impl Iterator<Item = &'a str>) -> Option<i64> {
     lines.find_map(|l| {
@@ -514,8 +533,9 @@ fn ours_pair_run(
     // (`randomInt(20)`) off `holdrand`, which retail seeds from its clock
     // (map-cycle doc 4.8). This seed draws variant 0, the `load1` gear the
     // 1.1d prone captures' rests sit on (the brecourt retake's `PROBE body`
-    // logs it, combat doc 12.4), and head `a_01`.
-    sv.pin_script_rand(1);
+    // logs it, combat doc 12.4), and head `a_01`; a capture that logs its
+    // `PROBE body` gets the seed that draws the same.
+    sv.pin_script_rand(target_log.map_or(1, body_seed));
     let (join_ms, late_ms) = match (target_play, target_log) {
         (Some((t, _)), Some(log)) => {
             let thrower = thrower_spawn(log);
@@ -624,8 +644,10 @@ fn ours_pair_run(
         if let Some(ca) = ca.as_mut() {
             send(ca, &mut ha, buttons, selected);
         }
-        if prone && live(&cb) {
+        if live(&cb) {
             played.get_or_insert(cb.snapshots().newest().unwrap().server_time.raw() as i64);
+        }
+        if prone && live(&cb) {
             let mut cmds = hb.cmds(&cb, 0);
             for c in &mut cmds {
                 c.wbuttons |= vcod_common::net::msg::WBUTTON_PRONE;
@@ -893,18 +915,45 @@ fn a_frag_bounces_off_a_script_model_and_a_players_bones() {
 
 /// [`a_frag_bounces_off_a_script_model_and_a_players_bones`] on a 1.1d
 /// retake that logged both clients' cmds, sent on their stamps: every
-/// missile snapshot of both frags on retail's to the bit but
-/// [`GRENADE_GAPS`]'s (docs/research/cod11-combat.md 12.4).
+/// missile snapshot of both frags on retail's to the bit, the strike on the
+/// target's posed bones included (docs/research/cod11-combat.md 12.4).
 #[test]
 fn a_frag_bounces_off_a_script_model_and_a_players_bones_like_retail() {
-    let Some(fs) = vcod_common::testing::game_fs_11() else {
-        return;
+    grenade_like_retail(
+        include_str!("fixtures/scriptmodel/mp_carentan-scriptmodel-grenade-cmds.txt"),
+        "grenade",
+    );
+}
+
+/// The 2026-11-28 retake of that recipe with the target's origin and angles
+/// logged (`PROBE target`) and the server under gdb: the target stands
+/// where retail's does to the bit, and both frags match every snapshot.
+#[test]
+fn a_frag_bounces_off_a_logged_target_like_retail() {
+    let fixture = include_str!("fixtures/scriptmodel/mp_carentan-scriptmodel-grenade-target.txt");
+    let ours = grenade_like_retail(fixture, "grenade probe_targetlog 1");
+    let target = |lines: &mut dyn Iterator<Item = &str>| -> Vec<String> {
+        lines
+            .filter(|l| l.starts_with("PROBE target "))
+            .map(str::to_string)
+            .collect()
     };
-    let fixture = include_str!("fixtures/scriptmodel/mp_carentan-scriptmodel-grenade-cmds.txt");
+    let r = target(&mut fixture.lines());
+    assert!(r.len() >= 3, "{r:?}");
+    assert_eq!(target(&mut ours.iter().map(String::as_str)), r);
+}
+
+/// Replays a grenade-part capture that logged both clients' cmds on their
+/// stamps: every missile snapshot's `trType`, base and ground retail's to
+/// the bit. Returns ours' lines.
+fn grenade_like_retail(fixture: &str, part: &str) -> Vec<String> {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
+        return Vec::new();
+    };
     let ours = ours_pair_in(
         fs,
         "mp_carentan",
-        "grenade",
+        part,
         true,
         16_000,
         None,
@@ -919,53 +968,14 @@ fn a_frag_bounces_off_a_script_model_and_a_players_bones_like_retail() {
     report(&retail, &ours);
     let (r, o) = (missile_grounds(&retail), missile_grounds(&ours));
     assert_eq!((r.len(), o.len()), (2, 2), "{o:?}");
-    let mut off = Vec::new();
     for g in 0..2 {
         assert_eq!(r[g].len(), o[g].len(), "grenade {g}'s snapshots");
         for (s, (a, b)) in r[g].iter().zip(&o[g]).enumerate() {
-            assert_eq!(
-                (a.0, a.2),
-                (b.0, b.2),
-                "grenade {g} snapshot {s}: {a:?} {b:?}"
-            );
-            let d = (0..3).map(|i| (a.1[i] - b.1[i]).abs()).fold(0.0, f32::max);
-            if d != 0.0 {
-                off.push((g, s, d));
-            }
+            assert_eq!(a, b, "grenade {g} snapshot {s}");
         }
     }
-    if std::env::var_os("SM_REPORT").is_some() {
-        eprintln!("off {off:?}");
-    }
-    for &(g, s, d) in &off {
-        let gap = GRENADE_GAPS
-            .iter()
-            .find(|(gg, from, to, _, _)| *gg == g && (*from..=*to).contains(&s));
-        assert!(
-            gap.is_some_and(|(.., near, _)| d <= *near),
-            "grenade {g} snapshot {s}: {d} off retail's"
-        );
-    }
-    for (g, from, to, _, why) in GRENADE_GAPS {
-        assert!(
-            off.iter()
-                .any(|(gg, s, _)| gg == g && (from..=to).contains(&s)),
-            "grenade {g} snapshots {from}-{to} match retail now; drop the row ({why})"
-        );
-    }
+    ours
 }
-
-/// The missile snapshots of [`a_frag_bounces_off_a_script_model_and_a_players_bones_like_retail`]
-/// left off retail's base: (grenade, first snapshot, last snapshot, how far,
-/// why).
-const GRENADE_GAPS: &[(usize, usize, usize, f32, &str)] = &[(
-    1,
-    5,
-    78,
-    0.016,
-    "every base from the strike on the target's posed bones on: his idle \
-         clip's pose (combat doc 12.4)",
-)];
 
 /// mp_carentan on UO: the grenade part's barrel with `setContents`
 /// 0x2000000, a body's contents: the frag leaves it at a quarter of the
