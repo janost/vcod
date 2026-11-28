@@ -1065,10 +1065,10 @@ otherwise.
   triangle, edge, corner, border and cull kernels store values
   `cod4_lnxded`'s keep, and the server's trace put a swept body a z ulp
   off retail's (cod4-collision.md 2, 3).
-- The client's position test of a cube in a triangle meets the point
-  nearest `2 v0 - p`, not `p` (0x4f0b70, cod4-collision.md 3.1). It is
-  retail's arithmetic, kept on purpose; `pos4`'s vectors fail on the
-  textbook closest point.
+- 1.7's position test of a cube in a triangle meets the point nearest
+  `2 v0 - p`, not `p`, on the client (0x4f0b70) and the server (0x81156c1)
+  alike (cod4-collision.md 3.1). It is retail's arithmetic, kept on
+  purpose; `pos4`'s vectors fail on the textbook closest point.
 - Inline: `cod4-player-anims.md` 8 and 9 (aim and lean, the corpse's
   models); `cod4-world.md` 9.4, 9.7, 9.9 (lighteners, reflection probes,
   the cell walk); `cod4-effects.md` 2; `cod4-client-perf.md` 18, 20, 23

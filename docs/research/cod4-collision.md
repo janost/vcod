@@ -157,6 +157,20 @@ section 6 says.
   through 0x401050). VERIFIED (the instructions). `Cx::trace_tree` takes
   both under `TraceFloats::Cod4Client` (`Sweep::box_radius`). The slack
   only prunes the walk; no take reads a difference. VERIFIED (the gates).
+- The server's tree walk (`cod4_lnxded` 0x811c19c, which `CM_Trace` calls
+  for the world at 0x811d73b) splits with the same slack: on a non-axial
+  plane 0.125 (0x3e000000, 0x811c21a) when trace work +0x84 is set
+  (0x811c225), else `+0x9c + 0.125` (0x811c234..0x811c23a, 0.125 at
+  0x820e270), and on an axial one the half box plus 0.125 (0x811c2d0).
+  `+0x9c` is the root of the squared half box kept, stored
+  (0x811d05d..0x811d075). The dots, the distances and the slack stay on
+  the stack (0x811c1e6..0x811c23a). VERIFIED (the instructions).
+  `Cx::trace_tree` takes the box's radius for both 1.7 models; CoD2 keeps
+  2048. With 2048 the walk also visits leaves past the one that left a
+  sweep all solid, and the normal such a sweep ends with can be another
+  brush's: `mesh_pins`' synthetic sweeps on mp_crash, mp_backlot and
+  mp_carentan read otherwise under the two slacks only on sweeps that end
+  all solid at fraction 0. VERIFIED (the pins under both, ours).
 - The client's brush kernel (0x4f37e0) runs at the client's 53-bit
   precision (cod4-player-anims.md 11) and stores as CoD2's does: each axial
   `d1`, `d2`, `fmin(d1, 0.125)`'s difference and each fraction is a float
@@ -255,12 +269,8 @@ the shared records; the AABB tree walk takes its indexed arm
   kernel set it and the trace did not start solid. `ClipTrace::walkable`
   carries it; CoD2 never sets it.
 - A position test (`CM_PositionTestCapsuleInTriangle`) is solid when the
-  capsule's axis segment comes within its radius of the triangle. vcod
-  computes that distance with its own closest-point routine
-  (`segment_tri_dist2`), not `CM_DoesCapsuleIntersectTriangle`'s
-  arithmetic, so a contact within a float step of the radius can read
-  differently. The client's test is read and ported (section 3.1); the
-  server's is not.
+  capsule's axis segment comes within its radius of the triangle, by the
+  tests section 3.1 reads off both 1.7 binaries.
 
 The point sweep's float model. 1.7 inlines it in its tree walk
 (`cod4_lnxded` 0x81169e3..0x81179c8) on the x87 stack, VERIFIED (the
@@ -334,8 +344,7 @@ Before it, `cod4_moves_ab`'s walk had its z a bit off on the terrain on
 24 rows and a zero vz's sign on 11, the mantle capture's walk-off z on 7,
 and `placeSpawnPoint`'s drop stopped a bit under retail's; with it all
 of them match retail. VERIFIED (the gates). The border's own corner arm
-(0x811633c on) and the position test (`segment_tri_dist2`) are still
-plain `f32`.
+(0x811633c on) is still plain `f32`; the position test is section 3.1's.
 
 The client's capsule (`iw3mp.exe` 0x4f05c0) runs the same tests in the
 same order but stores nearly every value, at its 53-bit precision.
@@ -568,6 +577,48 @@ their compares; `pos4`'s test reads each answer back from the port to
 the bit (`crates/cod4/tests/fixtures/clip/postest-1.7-client.txt`).
 VERIFIED (the vectors).
 
+The server's test is inlined in its AABB position walk (`cod4_lnxded`
+0x811546a, per triangle from 0x81158fd), with the client's tests in the
+client's order. VERIFIED (the instructions), each item:
+
+- Trace work +0x8c is 0 (0x811590d): the sphere arm (0x81156c1). It
+  stores `e1 = v1 - v0` and `e2 = v2 - v0`, then `a` off the stored `e1`
+  and `c` off `e2` with its x and z kept, each in two stores
+  (0x811574c..0x811577b), and keeps `b`, `d = e1 . (p - v0)`, `e`,
+  `det`, `s` and `t` (0x8115781..0x81157fb): it too takes `p - v0` and
+  meets the point nearest `2 v0 - p`. That point's offset from the start,
+  y and z stored (0x8115873, 0x8115895), gives the squared distance,
+  kept; solid when it is under the kept `r^2` (0x81158a1..0x81158d9).
+- Else the capsule arm (0x8115919): the axis from `stored(sphere_z +
+  start.z)` to `stored(start.z - sphere_z)` and `stored(r^2)`
+  (0x8115919..0x8115953), the face's crossing, the near ends, then three
+  calls to 0x8114c40 (0x8115d73, 0x8115d96, 0x8115dec), the edges'
+  segment distance as the client's 0x4f10e0 (INFERRED, their place). One
+  component of its normal takes `v2.z - v0.z` kept, another the same
+  difference stored (0x8115a23..0x8115a64); the client stores both.
+- A hit is fraction 0, `startsolid` and `allsolid` (0x81158c9..0x81158d9);
+  the walk stops at the first (0x81158e3).
+
+`tools/re/cod4_postest_server_vectors.py` runs the server's test in
+`x87emu` (which now reads an i386 ELF; at 53 bits where the server's x87
+keeps 64, so the kept values approximate it as vcod's server port does)
+on 200 generated triangles with three distinct corners, one per path
+through its compares (160) and 40 more: `pos4::capsule_in_tri` answers
+each as the server's instructions do
+(`crates/cod4/tests/fixtures/clip/postest-1.7-server.txt`,
+`pos4::tests::the_servers_position_test_answers_as_the_clients`). Of 6000
+random ones it answered every one with distinct corners as the server
+does; the textbook closest point vcod's server took before parted on 268,
+231 of them spheres. VERIFIED (the vectors, the runs, ours). So
+`Cx::position_indexed_r` takes `pos4` for both 1.7 models.
+
+On a triangle with two equal corners the two binaries part: the server's
+kept `v2.z - v0.z` leaves its normal off zero, so an axis across the
+sliver can read solid. 34 of the 6000, all capsules, read solid on the
+server and clear on the client, which vcod follows. VERIFIED (x87emu on
+both binaries). No stock map holds such a triangle: 0 of the 21 zones'
+584102. VERIFIED (the run, ours).
+
 ## 4. Submodels and static models
 
 - A submodel traces through its `cmodel_t` leaf alone
@@ -658,18 +709,20 @@ down, mask 0x2810011, the player's box (-15,-15,0)..(15,15,70). VERIFIED
 - The float model of the border arm (`CM_TraceSphereThroughBorder`,
   0x811626a: its ends, then its own corner tests, `fsqrt` at 0x8116423,
   0x811653a, 0x8116640, 0x81166d3) and of the position test's walk
-  (0x811546a). The trace's AABB tree walk is 0x811673a (recursive,
+  (0x811546a) past section 3.1's triangle test. The trace's AABB tree walk is 0x811673a (recursive,
   0x20-byte nodes, `childCount` at +0x1a; the `triIndices` and `verts`
   globals 0x889dea4 and 0x889de9c). VERIFIED (the disassembly). No gate
   shows a difference there yet.
 - `CM_TestBoxInBrush`'s strict bounds (section 2).
-- The server's tree walk split on a non-axial plane: whether 1.7 keeps
-  CoD2's 2048 or takes the client's box radius (section 2) is unread.
-- The client's sphere position test (section 3.1) meets the point
-  nearest `2 v0 - p`. `Clip::sweep` reaches the position test for a phys
-  body that has not moved while its state is 0 or 1, with a cube's box
-  when the body is thin (`ode::phys`, 0x5a6930); the fall take's ragdoll
-  boxes are all cubes. VERIFIED (the port's sweep, the take). No take
+- The server's position test keeps values the client stores (section
+  3.1); vcod's server takes the client's arithmetic, which reads the same
+  on every generated case with three distinct corners. Its capsule arm's
+  stores past the normal are unread.
+- 1.7's sphere position test (section 3.1), the server's and the
+  client's, meets the point nearest `2 v0 - p`. `Clip::sweep` reaches the
+  position test for a phys body that has not moved while its state is 0
+  or 1, with a cube's box when the body is thin (`ode::phys`, 0x5a6930);
+  the fall take's ragdoll boxes are all cubes. VERIFIED (the port's sweep, the take). No take
   has such a test over a triangle away from its v0, so the
   retail-visible effect is not measured.
 - A take whose sweep ends on the corner, the border or the border sphere,
@@ -680,6 +733,7 @@ down, mask 0x2810011, the player's box (-15,-15,0)..(15,15,70). VERIFIED
   met no corner: the sphere has to pass just outside the faces' outline
   along the sweep. A cube's capsule has no length, so the border arm
   never runs for a phys or ragdoll sweep (0x4f2118..0x4f2139). VERIFIED
-  (the runs, ours).
+  (the runs, ours). `mesh4::vectors` pins those kernels to the binary
+  meanwhile (section 3).
 - The server's pmove and script traces run over this clip map
   (cod4-pmove.md 15).
