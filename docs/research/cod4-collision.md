@@ -479,6 +479,20 @@ The fall take's contacts are brushes; the roof take's 126 hits are all
 triangles, and there the client's capsule kernel (0x4f05c0) gives
 retail's where the server's parts on 94. VERIFIED (the runs, ours).
 
+`tools/re/cod4_kernel_vectors.py` runs the five in `tools/re/x87emu.py`:
+the edge 0x4eff70, the corner 0x4f0370, the point 0x4efce0, the border
+0x4f1ae0 and the border sphere 0x4f19f0, with the CRT root 0x68aec0 taken
+as one 53-bit `fsqrt` (0x68aefc). It keeps one generated input per path
+through their compares: 12, 6, 9, 92 and 28, the border's and the border
+sphere's through the edge and corner calls they make. 40 contacts each
+follow. `mesh4::vectors` reads every case back from the client's port to
+the bit (`crates/cod4/tests/fixtures/clip/kernels-1.7-client.txt`): none
+parts. The server's kernel in each one's place parts on 42, 36, 38, 59
+and 49 of 52, 46, 49, 132 and 68 cases. Every compare in the five goes
+both ways in the cases but the border corner's `0 < f` (0x4f1d2f,
+0x4f1ed3), false only for a start exactly at the reach, and 0x55f6e0's
+zero length. VERIFIED (the vectors).
+
 ### 3.1 The client's position test
 
 `iw3mp.exe`'s AABB position walk (0x4f2180, from 0x4f22b0 per tree root

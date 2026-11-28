@@ -126,7 +126,8 @@ CoD4 1.7:
   compare with its address and outcome, which lays out a kernel's
   regions and float model. Only the instructions the clip code uses are
   in it. `cod4_postest_vectors.py` drives it over the client's position
-  test (cod4-collision.md 3.1).
+  test (cod4-collision.md 3.1), `cod4_kernel_vectors.py` over its edge,
+  corner, point, border and border sphere kernels (cod4-collision.md 3).
 - `cod4_tagread_gdb.py`: a gdb script for `cod4_lnxded` that logs each
   player body's end-frame swings, controller runs and script tag reads,
   and each `srand` (its header has the line format and the run;
