@@ -45,7 +45,11 @@
 //	barrel is deleted 5 s after the first grenade leaves, before the second.
 //	Each live grenade's origin is logged every frame. Under +set
 //	probe_contents <n> (UO) the barrel takes setContents(n) when it is
-//	spawned, logged as PROBE contents <time> <n>.
+//	spawned, logged as PROBE contents <time> <n>. Under +set
+//	probe_targetlog 1 the target's origin and angles are logged after the
+//	frame's hold whenever either moved, each component as fine1 prints it:
+//
+//	PROBE target <time> <origin> <angles>
 //
 //	blast: the grenade part's thrower and aim with nothing in the way; the
 //	target waits 48 behind the thrower until a grenade comes to rest, then
@@ -360,6 +364,7 @@ pair_part(part)
 	armed = false;
 	thrown = undefined;
 	last = undefined;
+	logged = undefined;
 	rested = 0;
 	shot = 0;
 	for (;;)
@@ -480,9 +485,53 @@ pair_part(part)
 			eye = site.a + (0, 0, 60);
 			shooter setplayerangles(vectortoangles(at - eye));
 			target setplayerangles((0, site.yaw + 180, 0));
+			if (getcvar("probe_targetlog") == "1")
+			{
+				line = fine(target.origin) + " " + fine(target.angles);
+				if (!isdefined(logged) || logged != line)
+				{
+					logged = line;
+					logPrint("PROBE target " + now + " " + line + "\n");
+				}
+			}
 		}
 		wait 0.05;
 	}
+}
+
+//	A vector as three fine1 components.
+fine(v)
+{
+	return fine1(v[0]) + "," + fine1(v[1]) + "," + fine1(v[2]);
+}
+
+//	A float to the last bit of its float: <int>:<thousandths>:<millionths of
+//	a thousandth>, `%g` keeping too few digits.
+fine1(x)
+{
+	sign = "";
+	if (x < 0)
+	{
+		sign = "-";
+		x = 0 - x;
+	}
+	n = whole(x);
+	r = (x - n) * 1000;
+	m = whole(r);
+	return sign + n + ":" + m + ":" + ((r - m) * 1000000);
+}
+
+//	The whole part by halving steps, each subtraction exact (the engine has
+//	no int()).
+whole(x)
+{
+	n = 0;
+	for (b = 8192; b >= 1; b = b / 2)
+	{
+		if (x - n >= b)
+			n = n + b;
+	}
+	return n;
 }
 
 //	A player's attached models, as ` <tag>:<model>` words: the gear the dm

@@ -6639,7 +6639,7 @@ both clients' stamps with the times plumbing the prone gate uses
 2) reads z 11.350475 against 11.350476, one float step, and the next
 contact re-bases it exactly; the second frag leaves the target's posed
 bones up to 0.0155 off retail's (its snapshots 5 to 78, the strike on and
-everything after it), the idle clip's pose the 0.1 gate already names.
+everything after it; closed in "The bounce off the target" below).
 vcod measurement: `SV_Trace`'s end point computed at 64 bits
 (`x87::F80`) instead of `f64` leaves the barrel's z where it was.
 
@@ -6664,20 +6664,41 @@ once it is retail's 11.350476. `game::missile`'s `full_trace` takes
 `combat::trace_point` for a model hit as for a body, and the first frag
 matches every snapshot to the bit.
 
-**The bounce off the target.** vcod measurement, the same replay: the
-second frag meets the target's bones 0.015 short of retail's along its
-flight (snapshot 5: (1490.4955, 2730.4294, -12.3102) against (1490.5105,
-2730.4446, -12.3088)), and every later base keeps that offset, so the
-struck face's normal is retail's within the print and the contact is not.
-The target has idled on `pb_stand_alert` for 14.55 s, and frag 0's blast
-(`PROBE hit 19900 axis dmg 77`) knocked him off the site: ours holds him
-at (1481.1371, 2721.1372, -23.875). Posing him 50 ms later moves the
-offset to 0.019, 50 to 200 ms earlier to 0.011. INFERRED: the gap is in
-his pose or his knocked origin; the capture logs neither after the blast
-(two `target FALL` lines, the spawn's), so it cannot tell them apart.
-Open: a retake that logs the target's origin each snapshot, or
-`tools/re/gdb_gunner_tree.py` on his anim records at the strike; the
-gate's `GRENADE_GAPS` names it.
+**The bounce off the target.** vcod measurement, the same replay
+before 2026-11-28: the second frag met the target's bones 0.015 short of
+retail's along its flight (snapshot 5: (1490.4955, 2730.4294, -12.3102)
+against (1490.5105, 2730.4446, -12.3088)), and every later base kept that
+offset.
+
+- VERIFIED, live (retail 1.1d, 2026-11-28, the recipe retaken with
+  `probe_targetlog 1` and the server under `tools/re/gdb_missile.py` and
+  `tools/re/gdb_gunner_tree.py`, grid mode on entity 0; fixtures
+  `mp_carentan-scriptmodel-grenade-target.txt` and `-target-gdb.txt`):
+  the target's origin is (1481.137085, 2721.137207, -23.874992) and his
+  angles (0, 225, 0) from 11850 to the end. No `PROBE target` line follows
+  that, so frag 0's blast (`PROBE hit 19750 axis dmg 77`) moved nothing.
+  INFERRED: the probe's damage callback only logs, so `finishPlayerDamage`
+  and its knockback (4.5) never run. Ours' replay logs the same lines to
+  the bit.
+- VERIFIED, the same gdb log: `pb_stand_alert` (node 122) reads node time
+  0 at the target's first weight step (level time 8800) and adds
+  0.00797872 a frame. At the steps of 23050 and 23100 it reads 0x3e8c41b3
+  (0.273939) and 0x3e90577d (0.281917). The second frag's move trace at
+  23050 strikes entity 0 at fraction 0x3cdf5614, hit location 14.
+- vcod measurement: ours posed that strike at node time 0.3297899, six
+  frames ahead. The gate's harness (`scriptmodel_ab::ours_pair_in`)
+  rejoins the target when his first playing frame misses the capture's,
+  and it read that frame only for the prone part. The grenade part's
+  target played 300 ms early: at 8550 against the `-cmds` capture's 8850,
+  and at 8450 against the retake's 8750. Rejoined on the capture's frame,
+  ours poses the strike at 0.28191748, retail's 23100 value. Both
+  captures' frags then match every missile snapshot to the bit (base,
+  `trType` and ground), with no row left open. INFERRED: so the trace
+  reads the node time of the frame's step that has already run.
+- VERIFIED, `PROBE body`: the retake's target wears
+  `playerbody_german_fallschirmjagergrey`, head `basehead_axis_b_02` and
+  `gear_german_load3_falshrm`. vcod measurement: ours draws these at
+  script seed 236 (`scriptmodel_ab::body_seed`).
 
 vcod: the move trace (`game::missile`) runs `combat::trace_bodies_faced`
 on every live body but the owner's while it passes, with the bone trace's
@@ -8993,7 +9014,8 @@ at the same place. VERIFIED, the same probe on retail UO, 2026-11-14:
 the same lines (`a_round_on_a_script_spawned_trigger_damage_matches_retail_uo`).
 
 **Left open** (not captured): a tank shell on the belltower (its walk,
-14.8.3); a grenade blast's charges (a 2026-11-14 UO recapture of
+14.8.3). A grenade blast's charges were open until the 2026-11-28 retake
+below (a 2026-11-14 UO recapture of
 `probe_dmgshot` with the client's cmd times,
 `fixtures/triggers/mp_uo_stanjel-dmgshot-uo.txt`, replayed on them by
 `tests/common`'s `direct_replay`, holds every round and swing line, but
@@ -9020,8 +9042,46 @@ start. On ours' origin and eye, retail's start is the bob at cycle 224
 with amplitude 4.88 (a speed of 697) within 0.02, so the gap fits a
 bob alone (INFERRED, a fit: the capture logs no thrower `bobCycle`,
 velocity or origin to check it against).
-Open: a retake whose client logs its own `bobCycle`, `velocity` and
-`origin` at the throw.
+
+**The throw's bob, measured.** VERIFIED, live (retail UO 1.51b,
+`probe_dmgshot` on mp_uo_stanjel retaken 2026-11-28 under
+`tools/re/gdb_muzzle.py`, fixture
+`fixtures/triggers/mp_uo_stanjel-dmgshot-muzzle-uo.txt`): the stop at
+`CalcMuzzlePoint`'s exit (0x7bc4f) reads the ps off `ent+0x160`
+(0x7b905), the cycle byte at `ps+8` (`BG_GetBobCycle`'s `movzx` at
+0x37b42), the velocity at `ps+0x20` (`BG_GetSpeed` 0x2e314) and the
+origin at `ps+0x14` (0x7b90b). The throw's call (level time 23900,
+`commandTime` 23900) reads `bobCycle` 241, origin (-1853.017, 3247.8862,
+-21.71184), bits 0xc4e7a08b 0x454afe2e 0xc1adb1d9, velocity (500, 885,
+-449), speed 1016.47675, `bg_bobMax` 8, the vertical factor -3.19396806
+and the horizontal -2.40610838, and its muzzle (-1853.017, 3245.48022,
+35.0941925) is the frag's first base to the bit (0xc4e7a08b 0x454ad7af
+0x420c6074 on the client's `VEH missile` line). vcod measurement: both
+factors are the 2.1.1 formulas at cycle 241 with amplitude `0.007 *
+1016.48` = 7.115, under the cap. So the 2026-11-14 fit (cycle 224,
+amplitude 4.88) is wrong: the bob is retail's rule, and its inputs moved.
+VERIFIED, the client's `VEH ps` lines (which log `bobCycle`, velocity
+and the origin's bits since this retake): the hold sets the thrower back
+on his spot every frame and he never lands, so his velocity grows phase
+after phase, (181, 195, -165) at 21400 to (504, 893, -453) at 23950, and
+the cycle byte steps only on the frames the velocity drops (144 to 153
+at 19300, where it falls from (269, 405, -229) to (180, 271, -180)); it
+holds 241 from 21400 to the throw. The spawn leaves him moving (1, 4, 0)
+(the `SPAWNED` line at 9500, the script's `setOrigin` in the spawn's
+frame, 2.1.1.1). vcod measurement: the replay without that velocity
+starts ours at (0, 0, -80), its first cmd (9533) reads (18, 34, -17)
+against retail's (5, 12, -6), its byte runs 51 ahead by 19000 (195
+against 144), and it throws at byte 30, the frag leaving (-1853.035, 3252.633,
+42.561). Handed retail's `SPAWNED` velocity after the spawn frame
+(`common::direct_replay_spawned`), ours throws at byte 241 from retail's
+origin bits and velocity, every frag snapshot sits on retail's base to
+the bit and every `PROBE` line holds, the charges 58 and 27 and the
+landing (-1807, 3420, -65) included
+(`dmgtrig_ab::a_uo_throw_under_the_hold_leaves_from_retails_muzzle`).
+INFERRED: the 2026-11-14 capture logged no spawn velocity, so its 26 and
+(-1809, 3421, -65) against this run's 27 and (-1807, 3420, -65) ride the
+spawn's landing (which spawn point the clock-seeded pick took, 2.1.1.1),
+and the port has no bob defect to fix.
 
 The `wait` arm's `crandom` draws off the level's glibc `rand()`, the
 stream every other game draw takes (`G_TriggerDamage`'s call at

@@ -50,6 +50,10 @@ CoD1 (1.1d, 1.5b, UO):
 - `gdb_missile.py`: a gdb script for the 1.1d server, read only, that logs
   every `G_RunMissile` move and ground-snap trace, its ends and its trace
   result, every float as its bits (cod11-combat.md 12.4).
+- `gdb_muzzle.py`: a gdb script for the UO server, read only, that logs
+  every `CalcMuzzlePoint`'s playerstate inputs (`bobCycle`, origin,
+  velocity, view), its bob factors and its muzzle, every float as its bits
+  (cod11-combat.md 14.8).
 - `gdb_teams.py`: a gdb script for the 1.1d, 1.5b and UO servers, read
   only, that logs the team pick of `Use_Item` and `RespawnItem`
   (cod11-items.md 14.8).

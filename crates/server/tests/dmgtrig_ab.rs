@@ -725,3 +725,59 @@ fn use_by_on_trigger_damage_counts_accumulate_plus_one_like_retail() {
         .collect();
     assert_eq!(ours, retail);
 }
+
+/// `client-probes/probe_dmgshot.gsc` on retail UO 1.51b retaken under
+/// `tools/re/gdb_muzzle.py` (`fixtures/triggers/mp_uo_stanjel-dmgshot-muzzle-uo.txt`).
+/// The script's hold never lands the thrower, so the spawn's landing
+/// velocity grows through every phase and the bob byte moves only on the
+/// frames he touches down: handed retail's `SPAWNED` velocity, ours'
+/// throw reads retail's `bobCycle` 241, origin and velocity, every frag
+/// snapshot sits on retail's base to the bit and every line holds, the
+/// blast's charges and landing included (cod11-combat.md 14.8).
+#[test]
+fn a_uo_throw_under_the_hold_leaves_from_retails_muzzle() {
+    let text = include_str!("fixtures/triggers/mp_uo_stanjel-dmgshot-muzzle-uo.txt");
+    if vcod_common::testing::uo_fs().is_none() {
+        return;
+    }
+    let proto = &vcod_common::net::protocol::PROTOCOL_V22;
+    let (lines, frames) = common::direct_replay_spawned(
+        vcod_common::testing::uo_fs,
+        proto,
+        "mp_uo_stanjel",
+        "probe_dmgshot",
+        "kar98k_mp",
+        text,
+    );
+    let retail: Vec<&str> = text.lines().filter(|l| l.starts_with("PROBE")).collect();
+    assert_eq!(lines, retail);
+    // (snapshot time, trType, base bits) of each live frag snapshot.
+    let ours: Vec<(i32, i32, [i32; 3])> = frames
+        .iter()
+        .filter_map(|(t, ents)| {
+            let e = ents
+                .values()
+                .find(|e| e.field_i32(proto, "eType") == vcod_common::net::flags::ET_MISSILE)?;
+            let b =
+                ["pos.trBase[0]", "pos.trBase[1]", "pos.trBase[2]"].map(|n| e.field_i32(proto, n));
+            Some((*t, e.field_i32(proto, "pos.trType"), b))
+        })
+        .collect();
+    let hex = |t: &str| u32::from_str_radix(t.trim_start_matches("0x"), 16).unwrap() as i32;
+    let retail: Vec<(i32, i32, [i32; 3])> = text
+        .lines()
+        .filter(|l| l.starts_with("VEH ") && l.contains(" missile ") && l.contains(" etype 4 "))
+        .map(|l| {
+            let t: Vec<&str> = l.split_whitespace().collect();
+            let at = |k: &str| t.iter().position(|w| *w == k).unwrap() + 1;
+            let b = at("bits");
+            (
+                t[1].parse().unwrap(),
+                t[at("type")].parse().unwrap(),
+                [hex(t[b]), hex(t[b + 1]), hex(t[b + 2])],
+            )
+        })
+        .collect();
+    assert!(!retail.is_empty());
+    assert_eq!(ours, retail);
+}
