@@ -77,7 +77,8 @@ built to the step it goes idle. Every float is its IEEE bits in hex
 - `end`: the dump stopped (the slot idle, or `RAGDOLL_STEPS` passed).
 - `trace SITE N | START | END | A | B | MASK | TRACE` (`RAGDOLL_TRACES=1`;
   `traces-mp_crash-1.7-fall.txt` keeps only these, steps 85 to 95, of a
-  corpse dropped from 1200 up): a `CM_Trace` (0x4f4d30) the ragdolls or
+  corpse dropped from 1200 up, `traces-mp_carentan-1.7-roof.txt` only the
+  hits of one dropped onto a tiled roof): a `CM_Trace` (0x4f4d30) the ragdolls or
   the after-frame sweep ran during step `N`, `SITE` its call (5a6aea the
   sweep, 5be30c, 5be33c, 5be37c `Ragdoll_BoneTrace`), its start, its end,
   the box's two corners (eax and `[esp+0xc]` at the call; their order is

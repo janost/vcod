@@ -469,8 +469,11 @@ trace walk and at 0x4f2193) stores each axial bound `half + half_sweep`
 under `TraceFloats::Cod4Client`, take this model; `mesh4`'s tests pin an
 input per arm where the two models part. VERIFIED (the tests, ours). No
 take tells these five apart yet: the phys gates (bit-exact) and the
-ragdoll gates pass with them, and the ragdoll sweeps take (cod4-gsc.md
-3.6.9) reads retail's with or without them. VERIFIED (the runs, ours).
+ragdoll gates pass with them, and the ragdoll sweeps takes (cod4-gsc.md
+3.6.9) read retail's with or without them. No phys or fall take contact
+is on a triangle; the roof take's 126 hits all are, and
+there the client's capsule kernel (0x4f05c0) gives retail's where the
+server's parts on 94. VERIFIED (the runs, ours).
 
 ### 3.1 The client's position test
 
