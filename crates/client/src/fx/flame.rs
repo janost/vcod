@@ -10,9 +10,10 @@
 //! `flamethrower_start`, then `flamethrower_fire` held while firing, then
 //! `flamethrower_cooldown`.
 //!
-//! vcod moves the chunks by retail's rules (coduo-diff.md 19.3.2, which
-//! lists what it leaves out) but draws them without the chain merging.
-//! Each stream chunk's trail steps shed climbing trail flames and, by its
+//! vcod moves the chunks by retail's rules, tracing ahead of each
+//! (coduo-diff.md 19.3.2, 19.3.4), and draws them as its chain draw does,
+//! merging a stream's overlapping chunks (19.3.5); each section lists what
+//! it leaves out. Each stream chunk's trail steps shed climbing trail flames and, by its
 //! speed, smoke (19.3.3). A fire chunk's first bounce off the
 //! world may leave a burning residue ([`Residue`]): a still emitter that
 //! sheds small drifting, rising flames for a second or two, which burn as
@@ -51,8 +52,9 @@ const LOOSE_FRICTION: f32 = 0.35;
 /// A stream chunk's `+0xa8`: it sags or climbs by `+0xa8` per 1000 ticks
 /// squared, scaled by its speed and size (0x30025990).
 const STREAM_A8: f32 = 60.0;
-/// A chunk's life, ms (1666 ticks).
-const LIFE_MS: f32 = 833.0;
+/// A chunk's life, ms: 2332 ticks, `(1.8 + 1) / 2` of 1666 truncated, read
+/// before the call's `+0xb8` drops to 1 (0x3002445b..0x3002447d).
+const LIFE_MS: f32 = 1166.0;
 const START_SIZE: f32 = 16.0;
 const MAX_SIZE: f32 = 290.0;
 /// Sprite frames `flamethrowerFire2` .. `flamethrowerFire44`.
@@ -62,7 +64,14 @@ const FRAMES: f32 = 43.0;
 const SPACING_MS: f32 = 8.888_889;
 /// A remote body's chain lives on this long without a frame of firing.
 const REMOTE_GRACE_MS: f32 = 75.0;
-const MAX_PER_FRAME: usize = 180;
+/// More chunks due than this in a frame spread this many over the gap
+/// (0x3007bd48, 0x3007c0f0).
+const MAX_DUE: f64 = 180.0;
+/// A chunk's move traces this far ahead (350 ticks, 0x30026049) and
+/// rebases only once more than this has passed since its base (20 ticks,
+/// 0x3007c128).
+const LOOK_AHEAD_MS: f64 = 175.0;
+const REBASE_MS: f64 = 10.0;
 
 /// A body streaming flame this frame: its nozzle (`tag_flash`), and
 /// whether it is the view's own (first person spaces its chunks wider).
@@ -129,7 +138,15 @@ struct Chunk {
     /// The body whose nozzle shed it, the entity `fdc` names.
     owner: u32,
     kind: Kind,
+    /// The drawn origin `+0xd8`, [`place`]d off the base `+0x70` at its
+    /// time `+0x80`.
     pos: Vec3,
+    base: Vec3,
+    base_at: f64,
+    /// How far the look-ahead has traced, and when the chunk gets there
+    /// (`+0xc0`, `+0xd0`): a contact is acted on once the clock passes it.
+    seen: Vec3,
+    seen_at: f64,
     dir: Vec3,
     speed: f32,
     size: f32,
@@ -162,6 +179,9 @@ struct Chunk {
     /// (`+0x128`, `+0x100`, `+0x10c`): while that stream fires on, the
     /// chunk brakes by how far the aim has moved since ([`chain_brake`]).
     chain: Option<(u32, Vec2, Vec3)>,
+    /// This frame's chain draw (0x300272b0) draws it, and so the report
+    /// may test it.
+    drawn: bool,
 }
 
 /// A burning residue (a type 3 chunk, uo cgame 0x30027ad0 spawned off a
@@ -346,15 +366,85 @@ fn trail_share(own: bool, run_ms: f32, turn_rate: f32) -> f64 {
 /// nozzle's aim and its place (0x30025e1e..0x30025e3f).
 type Streams = HashMap<u32, (u32, Vec2, Vec3)>;
 
-/// One chunk's move from its last on to `now`: it grows (0x30025c60),
-/// brakes, moves and, unless smoke, clips as [`ChunkWorld`] does
-/// (0x30025da0; type 5 skips the trace at 0x3002603b). Returns the struck
-/// face's normal when the strike may leave a residue.
+/// 0x30025990: where a chunk is at `t`, off its base: along its direction
+/// at its present speed, lowered by [`lift`] times the time since the base
+/// and its age, both in 1000 ticks. A brake since the base moves the whole
+/// span.
+fn place(c: &Chunk, t: f64) -> Vec3 {
+    let dt = (t - c.base_at) as f32;
+    let age = (t - c.born) as f32 / 500.0;
+    c.base + c.dir * c.speed * dt / 1000.0 - Vec3::Z * (lift(c) * dt / 500.0 * age)
+}
+
+/// 0x30027505..0x3002760a: a drawn stream chunk takes in the next older
+/// one of its chain while that one lies within `2 * ((r + 1) / 2)^1.5 *
+/// size` times 0.1 (the view's own stream) or 0.25 of it, `r` its size
+/// over 72.5 held to 1, and was born within 50 ticks of it.
+fn overlaps(c: &Chunk, n: &Chunk) -> bool {
+    let k = if c.own { 0.1 } else { 0.25 };
+    let r = f64::from((c.size / 72.5).min(1.0));
+    let reach = 2.0 * ((r + 1.0) * 0.5).powf(1.5) * f64::from(c.size) * k;
+    reach > f64::from(c.pos.distance(n.pos)) && ((c.born - n.born).abs() as f32) < 25.0
+}
+
+/// 0x300257e0: `c` takes in `n`, the next older chunk of its chain. When
+/// `n` is the larger, `c` takes its size, cap, size draw, clocks, life,
+/// roll, place, `+0xa8`, direction and speed, and keeps its own
+/// look-ahead, chain angles and friction; either way it takes `n`'s
+/// residue chance when it has none.
+fn merge(c: &mut Chunk, n: &Chunk) {
+    if n.size > c.size {
+        (c.size, c.size_max, c.size_rand) = (n.size, n.size_max, n.size_rand);
+        (c.moved, c.born, c.life, c.roll) = (n.moved, n.born, n.life, n.roll);
+        (c.base, c.base_at, c.pos) = (n.base, n.base_at, n.pos);
+        (c.a8, c.dir, c.speed) = (n.a8, n.dir, n.speed);
+    }
+    c.may_residue |= n.may_residue;
+}
+
+/// 0x30027632..0x300277a7: in another body's live stream a chunk whose
+/// size is within a tenth of the last drawn one's is skipped when `(1 -
+/// frac)^3 * min(size / 30, 1) * 32` beats `(0.1 + 0.9 * (1 - |cos|)) *
+/// |eye - last| * |chunk - last| / min(size, 30)`, the cosine between the
+/// two lines off the last drawn chunk.
+fn hidden_behind(c: &Chunk, last: &Chunk, now: f64, eye: Vec3) -> bool {
+    if (last.size - c.size).abs() >= c.size / 10.0 {
+        return false;
+    }
+    let (to_c, to_eye) = (c.pos - last.pos, eye - last.pos);
+    let cos = f64::from(
+        to_c.normalize_or_zero()
+            .dot(to_eye.normalize_or_zero())
+            .abs(),
+    );
+    let spread = (1.0 - cos) * 0.9 + 0.1;
+    let apart = f64::from(to_eye.length() / c.size.min(30.0) * to_c.length());
+    let frac = (now - c.born) / f64::from(c.life);
+    let fade = (1.0 - frac).powi(3) * f64::from((c.size / 30.0).min(1.0)) * 32.0;
+    fade > spread * apart
+}
+
+/// The last look-ahead trace of any chunk: where it ended and its fraction
+/// (0x300a85bc, 0x300a85b8).
+type LastTrace = Option<(Vec3, f32)>;
+
+/// One chunk's move from its last on to `now` (0x30025da0): it grows
+/// (0x30025c60), brakes, and, once more than [`REBASE_MS`] has passed since
+/// its base, moves on. Unless smoke (0x3002603b) and before the clock
+/// reaches its last trace, it traces [`LOOK_AHEAD_MS`] ahead at its present
+/// speed as [`ChunkWorld`] clips, from where the last trace ended; a miss
+/// within 2 of the last trace's end, when that one missed, is taken for
+/// a miss without a trace (0x3002605d..0x300260d1). Until the clock passes the contact the
+/// chunk only rebases where it is; past it, it bounces at the contact
+/// itself, but not off a `SURF_NOIMPACT` face, and stuck inside it stops
+/// (0x300261b0..0x3002656a). Returns the struck face's normal when the
+/// strike may leave a residue.
 fn move_chunk(
     c: &mut Chunk,
     now: f64,
     world: Option<&ChunkWorld>,
     streams: &Streams,
+    last: &mut LastTrace,
 ) -> Option<Vec3> {
     let dt_ms = ((now - c.moved) as f32).max(0.0);
     c.moved = now;
@@ -384,37 +474,72 @@ fn move_chunk(
             c.size_max = ((1.0 - c.speed / START_SPEED) + 140.0 - c.size_rand).min(MAX_SIZE);
         }
     }
-    if c.speed <= 2.0 && c.a8 == 0.0 {
+    if (c.speed <= 2.0 && c.a8 == 0.0) || now - c.base_at <= REBASE_MS {
+        c.pos = place(c, now);
         return None;
     }
-    let age = (now - c.born) as f32 / 500.0;
-    let to = c.pos + c.dir * c.speed * dt_ms / 1000.0 - Vec3::Z * (lift(c) * dt_ms / 500.0 * age);
-    if let Kind::Smoke(_) = c.kind {
-        c.pos = to;
+    let rebase = |c: &mut Chunk| {
+        c.base = place(c, now);
+        c.base_at = now;
+        c.pos = c.base;
+    };
+    if now <= c.seen_at || matches!(c.kind, Kind::Smoke(_)) {
+        rebase(c);
         return None;
     }
-    match world.map(|w| (w.trace(c.pos, to, c.owner), w.max_clients)) {
-        // 0x30025da0: stuck inside, the chunk loses its speed.
-        Some(((tr, _), _)) if tr.allsolid => {
-            c.dir = Vec3::ZERO;
-            c.speed = 0.0;
+    let ahead = now + LOOK_AHEAD_MS;
+    let end = place(c, ahead);
+    let traced = match (*last, world) {
+        (Some((at, frac)), _) if frac == 1.0 && at.distance(end) < CHUNK_BOX.x => {
+            c.seen = at;
+            c.seen_at = ahead;
+            None
         }
-        Some(((tr, entity), max_clients)) if tr.fraction < 1.0 => {
-            let v = clip_velocity(c.dir * c.speed, tr.normal);
-            c.dir = v.normalize_or_zero();
-            c.speed = v.length() * 0.25;
-            c.friction = 0.5;
-            c.pos = tr.endpos + tr.normal;
-            if std::mem::take(&mut c.may_residue)
-                && entity >= max_clients
-                && tr.surface_flags & SURF_NOIMPACT == 0
-                && !NO_RESIDUE_SURFACES.contains(&sound_material(tr.surface_flags))
-            {
-                return Some(tr.normal);
+        (_, Some(w)) => {
+            let (mut tr, entity) = w.trace(c.seen, end, c.owner);
+            if tr.allsolid {
+                tr.fraction = 0.0;
+                tr.endpos = c.seen;
             }
+            *last = Some((tr.endpos, tr.fraction));
+            c.seen_at += f64::from(tr.fraction) * (ahead - c.seen_at);
+            c.seen = tr.endpos;
+            Some((tr, entity, w.max_clients))
         }
-        _ => c.pos = to,
+        (_, None) => {
+            *last = Some((end, 1.0));
+            c.seen = end;
+            c.seen_at = ahead;
+            None
+        }
+    };
+    if now < c.seen_at {
+        rebase(c);
+        return None;
     }
+    let Some((tr, entity, max_clients)) = traced else {
+        c.pos = place(c, now);
+        return None;
+    };
+    if tr.allsolid {
+        c.dir = Vec3::ZERO;
+        c.speed = 0.0;
+    } else if tr.surface_flags & SURF_NOIMPACT == 0 {
+        let v = clip_velocity(c.dir * c.speed, tr.normal);
+        c.dir = v.normalize_or_zero();
+        c.speed = v.length() * 0.25;
+        c.friction = 0.5;
+        (c.base, c.seen, c.base_at, c.seen_at) = (tr.endpos, tr.endpos, now, now);
+        c.pos = tr.endpos;
+        if std::mem::take(&mut c.may_residue)
+            && entity >= max_clients
+            && !NO_RESIDUE_SURFACES.contains(&sound_material(tr.surface_flags))
+        {
+            return Some(tr.normal);
+        }
+        return None;
+    }
+    c.pos = place(c, now);
     None
 }
 
@@ -513,6 +638,7 @@ pub struct FlameSystem {
     /// 0x300ab750 and 0x300ab7e0 count against these).
     frame: u64,
     chains: u32,
+    last_trace: LastTrace,
 }
 
 impl Default for FlameSystem {
@@ -528,6 +654,7 @@ impl Default for FlameSystem {
             last_test: None,
             frame: 0,
             chains: 0,
+            last_trace: None,
         }
     }
 }
@@ -623,42 +750,46 @@ impl FlameSystem {
             } else {
                 (n.pos.distance(eye).clamp(2048.0, 6000.0)) / 2048.0
             };
-            let spacing = f64::from((k * SPACING_MS * far).max(1.0));
-            // A new stream's first chunk leaves now.
+            let mut spacing = f64::from((k * SPACING_MS * far).max(1.0));
+            // A new stream's frame lays only its type 1 head, never drawn
+            // or tested, whose birth the next frame's chunks space from
+            // (0x30024538..0x30024555, 0x3002521b).
+            let last_emit = self.owners[&n.owner].last_emit;
+            if (now - last_emit) / spacing > MAX_DUE {
+                spacing = (now - last_emit) / MAX_DUE;
+            }
             let mut t = match started {
-                true => now,
-                false => self.owners[&n.owner].last_emit + spacing,
+                true => f64::INFINITY,
+                false => last_emit + spacing,
             };
-            let mut emitted = 0;
             let aim = aim_of(n.dir);
-            while t <= now && emitted < MAX_PER_FRAME {
-                // 0x30024810..0x3002494e: a chunk takes the nozzle, aim and
+            while t <= now {
+                // 0x30024810..0x300249e0: a chunk takes the nozzle and
                 // velocity share lerped from last frame's by its time
-                // between the last chunk and now.
-                let (pos, at, v) = match last {
+                // between the last chunk and now, and the two frames'
+                // forwards lerped, normalized; its chain angles lerp as
+                // plain angles, no wrap (0x300248e4..0x30024947).
+                let (pos, at, fwd, v) = match last {
                     Some((pos0, aim0, vel0, born0, _)) if now > born0 => {
                         let f = ((now - t) / (now - born0)).clamp(0.0, 1.0) as f32;
-                        let wrap = |a: f32| (a + 180.0).rem_euclid(360.0) - 180.0;
-                        let turn = Vec2::new(wrap(aim.x - aim0.x), wrap(aim.y - aim0.y));
+                        let fwd = dir_of(aim0).lerp(dir_of(aim), 1.0 - f);
                         (
                             pos0.lerp(n.pos, 1.0 - f),
-                            aim0 + turn * (1.0 - f),
+                            aim0.lerp(aim, 1.0 - f),
+                            fwd.normalize_or(dir_of(aim)),
                             vel0.lerp(vel, 1.0 - f),
                         )
                     }
-                    _ => (n.pos, aim, vel),
+                    _ => (n.pos, aim, dir_of(aim), vel),
                 };
                 let at_t = Nozzle { pos, ..*n };
-                self.emit(&at_t, at, v, t, world);
+                self.emit(&at_t, at, fwd, v, t, world);
                 t += spacing;
-                emitted += 1;
             }
             if let Some(o) = self.owners.get_mut(&n.owner) {
-                o.last_emit = if emitted == MAX_PER_FRAME {
-                    now
-                } else {
-                    t - spacing
-                };
+                if !started {
+                    o.last_emit = t - spacing;
+                }
                 o.last_fire = now;
                 o.pos = n.pos;
                 o.vel = vel;
@@ -683,7 +814,7 @@ impl FlameSystem {
             if now < c.born + f64::from(c.life) {
                 self.trail(&mut c, now, eye, world, &streams, &mut born);
             }
-            if let Some(normal) = move_chunk(&mut c, now, world, &streams) {
+            if let Some(normal) = move_chunk(&mut c, now, world, &streams, &mut self.last_trace) {
                 struck.push((i, normal));
             }
             self.chunks[i] = c;
@@ -693,8 +824,8 @@ impl FlameSystem {
             let c = self.chunks[i];
             self.leave_residue(&c, normal, now);
         }
-        self.chunks.retain(|c| ((now - c.born) as f32) < c.life);
         self.residues.retain(|r| now < r.death);
+        self.draw_chains(now, eye);
         sounds
     }
 
@@ -724,7 +855,7 @@ impl FlameSystem {
                 may_residue: false,
                 ..*c
             };
-            move_chunk(&mut flame, next, world, streams);
+            move_chunk(&mut flame, next, world, streams, &mut self.last_trace);
             flame.chain = None;
             // It is older than its parent by a share of the life left
             // (0x30028026..0x300288a8); the clamp draws anew per test.
@@ -763,7 +894,7 @@ impl FlameSystem {
             if 0.02 < frac && frac < 0.8 {
                 self.smoke(c, &flame, frac, next, born);
             }
-            move_chunk(&mut flame, now, world, streams);
+            move_chunk(&mut flame, now, world, streams, &mut self.last_trace);
             born.push(flame);
             share *= f64::from(2.0 * frac + 1.0);
             let mut step = span * share;
@@ -794,9 +925,12 @@ impl FlameSystem {
         let size_max = (flame.size * 3.5 + 20.0).min(MAX_SIZE);
         let roll = (2.0 * self.rand() - 1.0) * 25.0 + 180.0;
         let life = (1600.0 + self.rand() * 2600.0) / 2.0;
+        let pos = flame.pos + Vec3::Z * (c.size * 0.19 + 6.0);
         born.push(Chunk {
             kind: Kind::Smoke(shade.min(6)),
-            pos: flame.pos + Vec3::Z * (c.size * 0.19 + 6.0),
+            pos,
+            // The rise goes on the base's z alone (0x30028e1d, 0x30028e23).
+            base: flame.base.with_z(pos.z),
             size: size_max / 20.0,
             size_max,
             born: at,
@@ -885,6 +1019,12 @@ impl FlameSystem {
                     owner: r.owner,
                     kind: Kind::ResidueFlame,
                     pos: r.pos,
+                    // Based at the step (0x30028816); its look-ahead goes
+                    // on from the contact the residue was left at.
+                    base: r.pos,
+                    base_at: r.next_emit,
+                    seen: r.pos,
+                    seen_at: r.born,
                     dir: dir.normalize_or_zero(),
                     speed,
                     size: size_max * 0.5,
@@ -901,6 +1041,7 @@ impl FlameSystem {
                     a8: (r.sink - 20.0) - (1.0 - n.z) * 5.0,
                     friction: 0.0,
                     chain: None,
+                    drawn: false,
                 });
                 if let Some(w) = world
                     && r.death - now >= RESIDUE_FACE_MS
@@ -916,10 +1057,77 @@ impl FlameSystem {
         }
     }
 
+    /// The chain draw (0x30027d10's last pass, 0x300272b0 from each chain's
+    /// newest chunk): a stream's chunks link newest to oldest, and a dead
+    /// one ends its chain, the older ones going with it (0x30027357;
+    /// 0x300256e0 frees the tail). A live chain, its owner's latest that
+    /// fired this frame, ages its chunks from its newest's birth, any other
+    /// from the clock, and a chunk no older than that is not drawn
+    /// (0x300274d2..0x300274f7). A drawn chunk first takes in the older
+    /// ones it [`overlaps`]; another body's live stream then skips one
+    /// [`hidden_behind`] the last drawn. Every other chunk is a chain of
+    /// its own.
+    fn draw_chains(&mut self, now: f64, eye: Vec3) {
+        let mut chains: HashMap<u32, Vec<usize>> = HashMap::new();
+        for (i, c) in self.chunks.iter_mut().enumerate() {
+            match c.chain {
+                Some((id, ..)) if c.kind == Kind::Stream => chains.entry(id).or_default().push(i),
+                _ => c.drawn = now > c.born,
+            }
+        }
+        let alive = |c: &Chunk| ((now - c.born) as f32) < c.life;
+        let mut gone = vec![false; self.chunks.len()];
+        for (id, links) in chains {
+            let mut links: Vec<usize> = links.into_iter().rev().collect();
+            if let Some(cut) = links.iter().position(|&i| !alive(&self.chunks[i])) {
+                for &i in &links[cut..] {
+                    gone[i] = true;
+                }
+                links.truncate(cut);
+            }
+            let Some(&newest) = links.first() else {
+                continue;
+            };
+            let head = self.chunks[newest];
+            let live = self
+                .owners
+                .get(&head.owner)
+                .is_some_and(|o| o.chain == id && o.fired_frame == self.frame);
+            let t0 = if live { head.born } else { now };
+            let mut last: Option<Chunk> = None;
+            let mut k = 0;
+            while let Some(&i) = links.get(k) {
+                k += 1;
+                let mut c = self.chunks[i];
+                c.drawn = false;
+                if t0 - c.born > 0.0 {
+                    while let Some(&j) = links.get(k)
+                        && overlaps(&c, &self.chunks[j])
+                    {
+                        merge(&mut c, &self.chunks[j]);
+                        gone[j] = true;
+                        k += 1;
+                    }
+                    c.drawn =
+                        !(live && !c.own && last.is_some_and(|l| hidden_behind(&c, &l, now, eye)));
+                    if c.drawn {
+                        last = Some(c);
+                    }
+                }
+                self.chunks[i] = c;
+            }
+        }
+        let mut i = 0;
+        self.chunks.retain(|c| {
+            i += 1;
+            !gone[i - 1] && alive(c)
+        });
+    }
+
     /// The cgame's flame report for this frame at `now` (ms), run after
     /// [`Self::step`] as `CG_AddFlameChunks` (uo cgame 0x30027d10) tests
     /// while it draws. Once `victim`'s check is due the flag drops, and
-    /// each live fire chunk short of 0.9 of its life is tested one in five
+    /// each drawn fire chunk short of 0.9 of its life is tested one in five
     /// (0x300268e0) until one reaches the victim's box (0x300265c0); a hit
     /// raises the flag and, two seconds past the last, names the chunk's
     /// owner for `fdc` (0x300291c0). The next check is 50 ms on, and the
@@ -949,7 +1157,7 @@ impl FlameSystem {
                     break;
                 }
                 let c = self.chunks[i];
-                if c.kind == Kind::Trail || (self.rand() * 5.0) as u32 != 0 {
+                if !c.drawn || c.kind == Kind::Trail || (self.rand() * 5.0) as u32 != 0 {
                     continue;
                 }
                 let frac = (now - c.born) as f32 / c.life;
@@ -1022,14 +1230,21 @@ impl FlameSystem {
         })
     }
 
-    /// One stream chunk leaving `n` at `born` aimed at `aim` (0x30024050's
-    /// chain branch, `+0xb8` 1): 1800 units a second along the aim with
-    /// the owner's velocity share `vel` taken in (0x30024d13..0x30024d5d,
-    /// the speed kept), a cap of 140 less its size draw and a start of 16
-    /// less 0.9 (own view) or 0.6 of that draw's share of 140
+    /// One stream chunk leaving `n` at `born` along `dir`, its chain angles
+    /// `aim` (0x30024050's chain branch, `+0xb8` 1): 1800 units a second
+    /// with the owner's velocity share `vel` taken in (0x30024d13..
+    /// 0x30024d5d, the speed kept), a cap of 140 less its size draw and a
+    /// start of 16 less 0.9 (own view) or 0.6 of that draw's share of 140
     /// (0x30024b12..0x30024c1d).
-    fn emit(&mut self, n: &Nozzle, aim: Vec2, vel: Vec3, born: f64, world: Option<&ChunkWorld>) {
-        let dir = dir_of(aim);
+    fn emit(
+        &mut self,
+        n: &Nozzle,
+        aim: Vec2,
+        dir: Vec3,
+        vel: Vec3,
+        born: f64,
+        world: Option<&ChunkWorld>,
+    ) {
         let size_rand = self.size_rand(born);
         let k = if n.own_view { 0.9 } else { 0.6 };
         let roll = self.rand() * 360.0;
@@ -1052,6 +1267,10 @@ impl FlameSystem {
             owner: n.owner,
             kind: Kind::Stream,
             pos: n.pos,
+            base: n.pos,
+            base_at: born,
+            seen: n.pos,
+            seen_at: born,
             dir: (dir * START_SPEED * 0.5 + vel).normalize_or(dir),
             speed,
             size: (1.0 - k * size_rand / 140.0) * START_SIZE,
@@ -1067,6 +1286,7 @@ impl FlameSystem {
             a8: STREAM_A8,
             friction: 1.0,
             chain: Some((o.chain, aim, n.pos)),
+            drawn: false,
         });
     }
 
@@ -1081,19 +1301,21 @@ impl FlameSystem {
         ((0.75 + 0.35) * ((b + 1.0) * 0.125 + (a * 0.5 + 1.0) * 0.25 + r) * 140.0).min(110.0)
     }
 
-    /// Camera-facing sprites: `flamethrowerFire{2..44}` by the chunk's
-    /// share of its life (0x300268e0), at a radius of half its size and no
-    /// less than 6; smoke as `flameSmoke{1..6}`, fading out.
+    /// Camera-facing sprites of the chunks the chain draw drew:
+    /// `flamethrowerFire{2..44}` by the chunk's share of its life
+    /// (0x300268e0), at a radius of half its size and no less than 6;
+    /// smoke as `flameSmoke{1..6}` ([`colour`]).
     pub fn quads(&self, now: f64, cam_right: Vec3, cam_up: Vec3) -> Vec<FxQuad> {
         self.chunks
             .iter()
+            .filter(|c| c.drawn)
             .map(|c| {
                 let frac = ((now - c.born) as f32 / c.life).clamp(0.0, 1.0);
-                let (shader, a) = match c.kind {
-                    Kind::Smoke(n) => (format!("flameSmoke{n}"), 0.4 * (1.0 - frac)),
+                let shader = match c.kind {
+                    Kind::Smoke(n) => format!("flameSmoke{n}"),
                     _ => {
                         let frame = (frac * FRAMES).floor().clamp(0.0, FRAMES - 1.0) as i32 + 2;
-                        (format!("flamethrowerFire{frame}"), 1.0)
+                        format!("flamethrowerFire{frame}")
                     }
                 };
                 let r = (c.size / 2.0).max(6.0);
@@ -1109,11 +1331,42 @@ impl FlameSystem {
                         (p - right - up).to_array(),
                     ],
                     uvs: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
-                    rgba: [a; 4],
+                    rgba: colour(c.kind, frac),
                     shader: shader.into(),
                 }
             })
             .collect()
+    }
+}
+
+/// A drawn chunk's vertex colour (0x30026b08..0x30026c4f): white for a
+/// stream chunk and its trail; a residue's flame greys up from black over
+/// the first half of its life; smoke is `g` times (249, 239, 219) / 255,
+/// `g` 100 over its first half falling to 20, with an alpha of 76.5 times
+/// the chain draw's half tent of its life (0x300277a9..0x30027819).
+/// Truncated to bytes as `_ftol` does.
+fn colour(kind: Kind, frac: f32) -> [f32; 4] {
+    let byte = |v: f32| f32::from(v as u8) / 255.0;
+    match kind {
+        Kind::Stream | Kind::Trail => [1.0; 4],
+        Kind::ResidueFlame => {
+            let g = byte((2.0 * frac).min(1.0) * 255.0);
+            [g, g, g, 1.0]
+        }
+        Kind::Smoke(_) => {
+            let g = f32::from(((1.0 - 2.0 * (frac - 0.5).max(0.0)) * 80.0 + 20.0) as u8);
+            let tent = if frac < 0.5 {
+                2.0 * frac
+            } else {
+                2.0 - 2.0 * frac
+            };
+            [
+                byte(g * 0.976_470_6),
+                byte(g * 0.937_254_9),
+                byte(g * 0.858_823_5),
+                byte(tent * 0.5 * 76.5),
+            ]
+        }
     }
 }
 
@@ -1203,6 +1456,10 @@ mod tests {
             owner,
             kind: Kind::Stream,
             pos,
+            base: pos,
+            base_at: born,
+            seen: pos,
+            seen_at: born,
             dir: Vec3::X,
             speed: 0.0,
             size,
@@ -1218,6 +1475,7 @@ mod tests {
             a8: 0.0,
             friction: 0.0,
             chain: None,
+            drawn: true,
         }
     }
 
@@ -1407,22 +1665,26 @@ mod tests {
                 FlameSound::Fire { owner: 3, .. }
             ]
         ));
+        // The start frame lays only its type 1 head, which is never drawn.
+        assert!(f.chunks.is_empty());
         let held = f.step(1016.0, 16.0, &[nozzle(3)], Vec3::ZERO, None);
         assert!(matches!(held[..], [FlameSound::Fire { owner: 3, .. }]));
-        // One at the start, two more at a 6.7 ms spacing in a 16 ms frame.
-        let live = f.chunks.iter().filter(|c| c.kind == Kind::Stream).count();
-        assert_eq!(live, 3);
+        // Two at a 6.7 ms spacing from the head's birth in a 16 ms frame.
+        let born: Vec<_> = f.chunks.iter().map(|c| c.born).collect();
+        assert_eq!(born.len(), 2);
+        assert!((born[0] - (1000.0 + 0.75 * f64::from(SPACING_MS))).abs() < 1e-4);
         // Released: the grace runs out, then the cooldown.
         assert!(f.step(1032.0, 16.0, &[], Vec3::ZERO, None).is_empty());
         let stop = f.step(1100.0, 16.0, &[], Vec3::ZERO, None);
         assert!(matches!(stop[..], [FlameSound::Stop { owner: 3, .. }]));
     }
 
-    /// 0x30024289..0x3002494e: the view's own moving body tilts its chunks
+    /// 0x30024289..0x300249e0: the view's own moving body tilts its chunks
     /// by 0.375 of `ps.velocity` against the nozzle's 900 a 1000 ticks;
     /// another body's chunks take its nozzle's move, and each chunk of a
-    /// frame takes the nozzle, aim and that share lerped from the last
-    /// frame's by its birth. The speed stays the nozzle's.
+    /// frame takes the nozzle and that share lerped from the last frame's
+    /// by its birth, and the two frames' forwards lerped. The speed stays
+    /// the nozzle's.
     #[test]
     fn a_stream_chunk_takes_in_its_owners_velocity_and_the_frames_lerp() {
         let mut f = FlameSystem::default();
@@ -1431,9 +1693,12 @@ mod tests {
             ..nozzle(1)
         };
         f.step(100.0, 16.0, &[own], Vec3::ZERO, None);
+        f.step(116.0, 16.0, &[own], Vec3::ZERO, None);
         let c = f.chunks[0];
         assert!((c.dir - Vec3::new(900.0, 75.0, 0.0).normalize()).length() < 1e-6);
-        assert_eq!(c.speed, START_SPEED);
+        // The nozzle's speed, braked since its birth as a steady stream's.
+        let braked = START_SPEED - FRICTION * 0.182_305_6 * (116.0 - c.born) as f32;
+        assert!((c.speed - braked).abs() < 1e-2, "{}", c.speed);
 
         let mut f = FlameSystem::default();
         let mut far = Nozzle {
@@ -1441,22 +1706,54 @@ mod tests {
             ..nozzle(3)
         };
         f.step(100.0, 20.0, &[far], Vec3::ZERO, None);
-        assert_eq!(f.chunks[0].dir, Vec3::X, "a new stream takes nothing");
         far.pos = Vec3::new(0.0, 20.0, 0.0);
         far.dir = Vec3::Y;
         f.step(120.0, 20.0, &[far], Vec3::ZERO, None);
-        // 20 units in 40 ticks is 500 a 1000 ticks, halved.
+        // 20 units in 40 ticks is 500 a 1000 ticks, halved; the start
+        // frame's share was 0.
         let vel = 250.0;
-        let fresh: Vec<_> = f.chunks.iter().filter(|c| c.born > 100.0).collect();
+        let fresh: Vec<_> = f.chunks.iter().filter(|c| c.kind == Kind::Stream).collect();
         assert!(fresh.len() > 2);
         for c in fresh {
             let share = ((c.born - 100.0) / 20.0) as f32;
             let (_, aim, at) = c.chain.unwrap();
             assert!((at.y - 20.0 * share).abs() < 1e-4, "{at} at {share}");
             assert!((aim.y - 90.0 * share).abs() < 1e-3, "{aim} at {share}");
-            let want = (dir_of(aim) * 900.0 + Vec3::Y * vel * share).normalize();
+            let fwd = Vec3::X.lerp(Vec3::Y, share).normalize();
+            let want = (fwd * 900.0 + Vec3::Y * vel * share).normalize();
             assert!((c.dir - want).length() < 1e-5, "{} against {want}", c.dir);
         }
+    }
+
+    /// 0x300248e4..0x30024947: a frame's chunks lerp their chain angles as
+    /// plain angles, so an aim crossing yaw 180 sweeps them the long way
+    /// round through 0, and those brake at the whole friction against the
+    /// latest aim, while their direction lerps the two forwards the short
+    /// way (0x30024969..0x300249e0).
+    #[test]
+    fn an_aim_across_yaw_180_sweeps_the_chain_angles_the_long_way() {
+        let mut f = FlameSystem::default();
+        let mut n = Nozzle {
+            own_view: false,
+            dir: dir_of(Vec2::new(0.0, 170.0)),
+            ..nozzle(3)
+        };
+        f.step(100.0, 20.0, &[n], Vec3::ZERO, None);
+        n.dir = dir_of(Vec2::new(0.0, -170.0));
+        f.step(120.0, 20.0, &[n], Vec3::ZERO, None);
+        let mid = f
+            .chunks
+            .iter()
+            .filter(|c| c.kind == Kind::Stream)
+            .min_by(|a, b| (a.born - 110.0).abs().total_cmp(&(b.born - 110.0).abs()))
+            .unwrap();
+        let share = ((mid.born - 100.0) / 20.0) as f32;
+        let (_, aim, at) = mid.chain.unwrap();
+        assert!((aim.y - (170.0 - 340.0 * share)).abs() < 1e-3, "{aim}");
+        assert!(aim.y.abs() < 20.0, "{aim}");
+        assert!(aim_of(mid.dir).y.abs() > 170.0, "{}", mid.dir);
+        let latest = (Vec2::new(0.0, -170.0), at);
+        assert_eq!(chain_brake((aim, at), latest), 1.0);
     }
 
     /// The fx clock is f64: 22 h in, a held stream sheds the
@@ -1485,6 +1782,7 @@ mod tests {
     #[test]
     fn chunks_slow_grow_play_through_their_frames_and_die() {
         let mut f = FlameSystem::default();
+        f.step(990.0, 10.0, &[nozzle(1)], Vec3::ZERO, None);
         f.step(1000.0, 10.0, &[nozzle(1)], Vec3::ZERO, None);
         let first = f.chunks[0];
         f.step(1200.0, 200.0, &[], Vec3::ZERO, None);
@@ -1495,20 +1793,21 @@ mod tests {
             .unwrap();
         let share = chain_brake((Vec2::ZERO, Vec3::ZERO), (Vec2::ZERO, Vec3::ZERO));
         assert!((share - 0.182_305_6).abs() < 1e-6, "{share}");
-        // Born at the frame's end, it moves from the next; released last
-        // frame, its stream still holds.
-        assert_eq!(c.speed, START_SPEED - FRICTION * share * 200.0);
+        // Released last frame, its stream still holds.
+        let age = (1200.0 - c.born) as f32;
+        assert!((c.speed - (START_SPEED - FRICTION * share * age)).abs() < 1e-2);
         assert!(c.size > first.size && c.size <= c.size_max);
-        let x = c.speed * 0.2;
+        // Placed off its birth at its present speed.
+        let x = c.speed * age / 1000.0;
         assert!((c.pos.x - x).abs() < 1e-2, "{} {x}", c.pos.x);
         assert!(c.pos.z < -1.0, "{}", c.pos.z);
         let q = f.quads(1200.0, Vec3::Y, Vec3::Z);
         assert!(
-            q.iter().any(|q| &*q.shader == "flamethrowerFire12"),
+            q.iter().any(|q| &*q.shader == "flamethrowerFire9"),
             "{:?}",
             q.iter().map(|q| &q.shader).collect::<Vec<_>>()
         );
-        f.step(2100.0, 900.0, &[], Vec3::ZERO, None);
+        f.step(2200.0, 1000.0, &[], Vec3::ZERO, None);
         assert!(f.chunks.iter().all(|c| matches!(c.kind, Kind::Smoke(_))));
     }
 
@@ -1536,7 +1835,7 @@ mod tests {
         };
         let slowed = |c: Chunk, streams: &Streams| {
             let mut c = c;
-            move_chunk(&mut c, 10.0, None, streams);
+            move_chunk(&mut c, 10.0, None, streams, &mut None);
             (1000.0 - c.speed) / (FRICTION * 10.0)
         };
         let firing = Streams::from([(7, (4, held.0, held.1))]);
@@ -1638,7 +1937,7 @@ mod tests {
             f.trail(&mut c, now, eye, None, &Streams::new(), &mut born);
             let flame = born.iter().find(|b| b.kind == Kind::Trail).unwrap();
             assert_eq!(born.iter().filter(|b| b.kind == Kind::Trail).count(), 1);
-            assert!(flame.born <= c.born && flame.born + f64::from(flame.life) <= at + 417.0);
+            assert!(flame.born <= c.born && flame.born + f64::from(flame.life) <= at + 583.0);
             assert!(flame.a8 < 0.0 && flame.friction == 0.15);
             let slowed = if c.own { 0.5 * 0.2 + 0.1 } else { 0.25 };
             assert!(flame.speed <= START_SPEED * slowed);
@@ -1795,7 +2094,7 @@ mod tests {
             "{}",
             r.pos
         );
-        assert!(r.death - 1000.0 <= 1500.0 + 1000.0 + 16.0, "{}", r.death);
+        assert!(r.death - r.born <= 1500.0 + 1000.0, "{}", r.death);
         // Released; a player stands against the wall where it burns.
         let victim = Victim {
             client: 2,
@@ -2072,5 +2371,165 @@ mod tests {
             head_on.abs_diff_eq(Vec3::new(-0.4, 0.0, 0.0), 1e-5),
             "{head_on}"
         );
+    }
+
+    /// 0x30025da0's look-ahead: the first move traces 175 ms ahead at the
+    /// chunk's speed and, as it missed, traces nothing more until the clock
+    /// reaches that span's end, so a wall that comes up inside it is met
+    /// only after (here a 2000-tick span, the chunk long past the wall's
+    /// face). A contact is acted on once the clock passes it: the chunk
+    /// bounces at the contact itself, a quarter as fast, and passes a
+    /// `SURF_NOIMPACT` face untouched.
+    #[test]
+    fn a_chunk_meets_only_what_its_look_ahead_traced() {
+        use vcod_common::collision::synthetic_world;
+        let wall = |surface: u32| {
+            synthetic_world(
+                &[("textures/test/wall", CONTENTS_SOLID, surface)],
+                &[(0, [100.0, -512.0, -64.0], [116.0, 512.0, 256.0])],
+            )
+        };
+        let open = synthetic_world(
+            &[("textures/test/wall", CONTENTS_SOLID, 0)],
+            &[(0, [3000.0, -512.0, -64.0], [3016.0, 512.0, 256.0])],
+        );
+        let fast = Chunk {
+            speed: START_SPEED,
+            ..fire(7, Vec3::ZERO, 16.0, 0.0, LIFE_MS)
+        };
+        let run = |c: &mut Chunk, worlds: &[(&CollisionWorld, f64)]| {
+            let mut last = None;
+            for &(w, now) in worlds {
+                move_chunk(c, now, Some(&bare(w)), &Streams::new(), &mut last);
+            }
+        };
+        let solid = wall(0);
+        // Traced in the open first: on through the wall until 191 ms.
+        let mut c = fast;
+        run(&mut c, &[(&open, 16.0), (&solid, 64.0), (&solid, 128.0)]);
+        assert!(c.pos.x > 200.0 && c.dir == Vec3::X, "{} {}", c.pos, c.dir);
+        assert!((c.seen_at - 191.0).abs() < 1e-9, "{}", c.seen_at);
+
+        // Traced against it: placed on until the contact's time (some 54
+        // ms in), then bounced at the contact.
+        let mut c = fast;
+        run(&mut c, &[(&solid, 16.0), (&solid, 48.0)]);
+        assert!(c.pos.x < 98.0 && c.dir == Vec3::X, "{}", c.pos);
+        assert!((50.0..60.0).contains(&c.seen_at), "{}", c.seen_at);
+        run(&mut c, &[(&solid, 64.0)]);
+        assert!(c.dir.x < 0.0 && c.speed < START_SPEED * 0.25, "{}", c.dir);
+        assert!((97.5..98.0).contains(&c.pos.x), "{}", c.pos);
+        assert_eq!((c.base, c.base_at), (c.pos, 64.0));
+
+        let mut c = fast;
+        let noimpact = wall(SURF_NOIMPACT);
+        run(
+            &mut c,
+            &[(&noimpact, 16.0), (&noimpact, 64.0), (&noimpact, 96.0)],
+        );
+        assert!(c.dir == Vec3::X && c.pos.x > 116.0, "{}", c.pos);
+    }
+
+    /// 0x300272b0 on a chain not live: newest first, a chunk takes in the
+    /// next older one it overlaps when born within 25 ms, keeping the
+    /// larger's size, birth and place; one born 30 ms apart stays. A dead
+    /// chunk ends its chain: the older ones go with it.
+    #[test]
+    fn the_chain_draw_merges_overlapping_chunks_and_drops_the_tail_behind_a_dead_one() {
+        let link = |chain: u32, x: f32, size: f32, born: f64, life: f32| Chunk {
+            chain: Some((chain, Vec2::ZERO, Vec3::ZERO)),
+            drawn: false,
+            ..fire(5, Vec3::new(x, 0.0, 0.0), size, born, life)
+        };
+        // Oldest first, as laid.
+        let mut f = FlameSystem {
+            chunks: vec![
+                link(1, 203.0, 100.0, 950.0, LIFE_MS),
+                link(1, 200.0, 100.0, 980.0, LIFE_MS),
+                link(1, 0.0, 120.0, 990.0, LIFE_MS),
+                link(1, 10.0, 100.0, 1000.0, LIFE_MS),
+                link(2, 500.0, 50.0, 0.0, 2000.0),
+                link(2, 600.0, 50.0, 100.0, 100.0),
+                link(2, 700.0, 50.0, 500.0, 2000.0),
+            ],
+            ..FlameSystem::default()
+        };
+        f.draw_chains(1010.0, Vec3::ZERO);
+        let left: Vec<_> = f
+            .chunks
+            .iter()
+            .map(|c| (c.chain.unwrap().0, c.pos.x, c.size, c.born, c.drawn))
+            .collect();
+        assert_eq!(
+            left,
+            [
+                (1, 203.0, 100.0, 950.0, true),
+                (1, 200.0, 100.0, 980.0, true),
+                (1, 0.0, 120.0, 990.0, true),
+                (2, 700.0, 50.0, 500.0, true),
+            ]
+        );
+    }
+
+    /// 0x300274d2..0x300277a7 on a live chain: the newest is not drawn,
+    /// its age from its own birth being 0; in another body's stream a
+    /// chunk alike the last drawn and in line with it from the eye is
+    /// skipped, one off the line is drawn, and the view's own stream draws
+    /// both.
+    #[test]
+    fn another_bodys_live_stream_skips_a_chunk_hidden_behind_the_last_drawn() {
+        let drawn = |own: bool| {
+            let link = |pos: Vec3, born: f64| Chunk {
+                chain: Some((3, Vec2::ZERO, Vec3::ZERO)),
+                own,
+                drawn: false,
+                ..fire(6, pos, 40.0, born, LIFE_MS)
+            };
+            let mut f = FlameSystem {
+                frame: 9,
+                ..FlameSystem::default()
+            };
+            f.owners.insert(
+                6,
+                Owner {
+                    last_emit: 1010.0,
+                    last_fire: 1010.0,
+                    pos: Vec3::ZERO,
+                    chain: 3,
+                    aim: Vec2::ZERO,
+                    fired_frame: 9,
+                    vel: Vec3::ZERO,
+                    run_ms: 0.0,
+                    turn_rate: 0.0,
+                },
+            );
+            f.chunks = vec![
+                link(Vec3::new(100.0, 30.0, 0.0), 910.0),
+                link(Vec3::new(101.0, 0.0, 0.0), 940.0),
+                link(Vec3::new(100.0, 0.0, 0.0), 970.0),
+                link(Vec3::new(0.0, 0.0, 0.0), 1010.0),
+            ];
+            f.draw_chains(1010.0, Vec3::ZERO);
+            f.chunks.iter().map(|c| c.drawn).collect::<Vec<_>>()
+        };
+        assert_eq!(drawn(false), [true, false, true, false]);
+        assert_eq!(drawn(true), [true, true, true, false]);
+    }
+
+    /// 0x30026b08..0x30026c4f: smoke greys from 100 to 20 over its second
+    /// half, tinted (249, 239, 219), its alpha 76.5 times half the tent of
+    /// its life; a residue's flame greys up from black over its first half.
+    #[test]
+    fn smoke_fades_by_a_tent_of_its_life_and_a_residue_flame_greys_up() {
+        let bytes = |c: [f32; 4]| c.map(|v| (v * 255.0).round() as u8);
+        assert_eq!(bytes(colour(Kind::Smoke(1), 0.25)), [97, 93, 85, 19]);
+        assert_eq!(bytes(colour(Kind::Smoke(1), 0.5)), [97, 93, 85, 38]);
+        assert_eq!(bytes(colour(Kind::Smoke(1), 0.75)), [58, 56, 51, 19]);
+        assert_eq!(
+            bytes(colour(Kind::ResidueFlame, 0.25)),
+            [127, 127, 127, 255]
+        );
+        assert_eq!(bytes(colour(Kind::ResidueFlame, 0.7)), [255; 4]);
+        assert_eq!(colour(Kind::Stream, 0.3), [1.0; 4]);
     }
 }

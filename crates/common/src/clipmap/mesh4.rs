@@ -4,7 +4,7 @@
 //! (`docs/research/cod4-collision.md` 3). The point and capsule sweeps keep
 //! 1.7's float model (what it stores, what stays on the x87 stack), the
 //! server's or the client's (`TraceFloats`); the server's border corner and
-//! the position test are plain `f32`.
+//! position test are plain `f32`, the client's position test is `pos4`.
 
 // A test written `!(a < b)` keeps the branch a NaN takes.
 #![allow(clippy::neg_cmp_op_on_partial_ord)]
@@ -884,7 +884,8 @@ impl Cx<'_> {
     /// the children stopping once one leaves the trace solid (doc 2). A
     /// leaf is solid when the capsule's axis, a point when it has no
     /// length, comes within its radius of a triangle
-    /// (`CM_PositionTestCapsuleInTriangle`, doc 3).
+    /// (`CM_PositionTestCapsuleInTriangle`, doc 3); the client's
+    /// (`iw3mp.exe` 0x4f2180) takes its own kernels (doc 3.1).
     pub(super) fn position_indexed_r(&mut self, m: &IndexedMesh, tree: usize, tr: &mut ClipTrace) {
         let node = self.map.aabbs[tree];
         if self.cull_box(node.origin, node.half_size) {
@@ -905,8 +906,19 @@ impl Cx<'_> {
         let (top, bottom) = (self.sw.start + up, self.sw.start - up);
         let r2 = self.sw.radius * self.sw.radius;
         let first = part.first_tri as usize;
-        let touches = (first..first + usize::from(part.tri_count))
-            .any(|i| segment_tri_dist2(top, bottom, corners(m, i)) < r2);
+        let client = self.sw.floats == TraceFloats::Cod4Client;
+        let touches = (first..first + usize::from(part.tri_count)).any(|i| {
+            if client {
+                super::pos4::capsule_in_tri(
+                    self.sw.start,
+                    self.sw.radius,
+                    self.sw.sphere_z,
+                    corners(m, i),
+                )
+            } else {
+                segment_tri_dist2(top, bottom, corners(m, i)) < r2
+            }
+        });
         if touches {
             tr.fraction = 0.0;
             tr.startsolid = true;
@@ -1370,6 +1382,30 @@ mod tests {
         };
         assert!(culls(TraceFloats::Cod4Server));
         assert!(!culls(TraceFloats::Cod4Client));
+    }
+
+    /// A cube's position test is a sphere, which the client meets at the
+    /// triangle's point nearest `2 v0 - p` (doc 3.1): 10 over the face's
+    /// middle is solid on the server and clear on the client.
+    #[test]
+    fn the_clients_sphere_position_test_reflects_through_v0() {
+        let (mins, maxs) = (Vec3::splat(-15.0), Vec3::splat(15.0));
+        let p = v(-180.0, 50.0, 10.0);
+        let solid = |floats| {
+            map()
+                .trace_as(floats, p, p, mins, maxs, MASK_PLAYERSOLID)
+                .startsolid
+        };
+        assert!(solid(TraceFloats::Cod4Server));
+        assert!(!solid(TraceFloats::Cod4Client));
+        // 10 over v0 itself, where the reflection is the point.
+        let p = v(-199.0, -99.0, 10.0);
+        let solid = |floats| {
+            map()
+                .trace_as(floats, p, p, mins, maxs, MASK_PLAYERSOLID)
+                .startsolid
+        };
+        assert!(solid(TraceFloats::Cod4Client));
     }
 
     const TRI: [Vec3; 3] = [

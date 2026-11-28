@@ -419,6 +419,7 @@ pub fn dead_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32) -> Vec<PmEven
     // for a dead player (combat doc, 1.12 and 1.13).
     ps.ads_active = false;
     update_lean(ps, &idle, false, world, dt);
+    ps.corpse = true;
     ground_trace(ps, world, MASK_DEADSOLID, &idle);
     dead_friction(ps);
     // `PM_CheckLadderMove` past its `pm_time` return: a dead player loses the
@@ -449,6 +450,7 @@ pub fn dead_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32) -> Vec<PmEven
     dead_eye(ps, dt);
     // `pm_type` 6 takes the default arm, tail and snap included.
     clamp_velocity_to_move(ps, world, dt);
+    ps.corpse = false;
     snap_velocity(ps);
     events
 }

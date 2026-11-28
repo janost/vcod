@@ -517,6 +517,10 @@ otherwise.
   off the capture (`Server::pin_stuck_rand`, player-clip doc 13.4).
 - `setOrigin` and a teleport link at the unsnapped origin until the next cmd
   relinks.
+- A corpse's pmove traces the standing box, 70 high, whatever its stance
+  (`PlayerState::corpse`), while UO's vehicle overlap test ahead of it takes
+  the stance's 30 or 50: a hull the test misses can still hold a prone
+  corpse (`coduo-vehicles.md` 11.6.1).
 - A brush model is traced at its live `r.currentAngles`, not its link's. A
   finished rotate leaves them truncated to 65536ths (60 reads 59.99634), so
   the clip turns by that, on all three servers (movers doc 22).
@@ -1067,6 +1071,10 @@ otherwise.
   triangle, edge, corner, border and cull kernels store values
   `cod4_lnxded`'s keep, and the server's trace put a swept body a z ulp
   off retail's (cod4-collision.md 2, 3).
+- The client's position test of a cube in a triangle meets the point
+  nearest `2 v0 - p`, not `p` (0x4f0b70, cod4-collision.md 3.1). It is
+  retail's arithmetic, kept on purpose; `pos4`'s vectors fail on the
+  textbook closest point.
 - Inline: `cod4-player-anims.md` 8 and 9 (aim and lean, the corpse's
   models); `cod4-world.md` 9.4, 9.7, 9.9 (lighteners, reflection probes,
   the cell walk); `cod4-effects.md` 2; `cod4-client-perf.md` 18, 20, 23

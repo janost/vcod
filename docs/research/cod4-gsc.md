@@ -2795,6 +2795,31 @@ The shards take:
   (cod4-collision.md 2, 3): with the client's point, edge, corner,
   border and cull kernels swapped for the server's the take still
   matches. VERIFIED (the runs, ours).
+- The roof take: the same driver with `RAGDOLL_POS="1165 1792 1500 0"`
+  on mp_carentan (`+set g_gametype war` before `+devmap`: a fresh
+  profile's `dm` restarted the map after the first connect and the
+  loopback connection timed out in the reload). The corpse fell onto the
+  tiled roof, whose tiles are clip map triangles, slid down it and came
+  to rest in the street at (1151, 2011, -35) after 266 steps; 126 of its
+  3180 sweeps hit, every one on the triangles. VERIFIED (the capture).
+  `ragdoll_ab::the_roof_sweeps_trace_as_retails` replays the 126: each
+  retail's to the bit through `trace_client`, where the server's float
+  model parts on 94. On each of the 94, the server's capsule kernel
+  (`capsule_tri4`) run on the same trace reads otherwise than the
+  client's (0x4f05c0, `capsule_tri_client`), so this take tells the two
+  triangle kernels apart, the first to. The client's edge kernel struck
+  in 3 of the sweeps, but a face took each after it, and with the edge
+  and corner kernels swapped for the server's every hit still matches.
+  VERIFIED (the runs, ours, the swaps on a lab build).
+- Takes that met no edge as the last contact: a drop on mp_carentan's
+  8-unit curb (`881 1880 1500 90`, 26 hits, faces only), on the narrow
+  wall top at (1784, 2476, 338) (`1784 2476 1500 0`, the corpse struck it
+  and came to rest beside it on the ground at -24, 200 hits, faces only) and on the
+  undulating field at (248, 76) (`251 92 1500 90`, 29 hits, 3 edge strikes
+  a face took after). VERIFIED (the captures, the runs, ours). The
+  ragdolls' sweeps are small cubes the ODE contacts keep from sinking,
+  so their hits are faces; no take yet ends a sweep on an edge, a corner
+  or a border.
 
 The shipment take:
 

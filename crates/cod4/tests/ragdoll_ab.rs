@@ -26,6 +26,9 @@ const MAX_LIFE: &str = "kill-mp_crash-1.7-maxlife.txt";
 /// A corpse dropped from 1200 up, its `trace` lines from step 85 to 95
 /// (cod4-gsc.md 3.6.9).
 const FALL_TRACES: &str = "traces-mp_crash-1.7-fall.txt";
+/// A corpse dropped onto mp_carentan's tiled roof at (1165, 1792): the
+/// 126 hits of its 3180 sweeps over 266 steps (cod4-gsc.md 3.6.9).
+const ROOF_TRACES: &str = "traces-mp_carentan-1.7-roof.txt";
 /// The max-life take's corpse, an opfor rifleman's body and head.
 const MAX_LIFE_MODELS: [&str; 2] = ["body_mp_arab_regular_assault", "head_mp_arab_regular_suren"];
 
@@ -247,19 +250,16 @@ fn the_kill_capture_reads_as_its_summary() {
     assert!(d.steps[79].bodies.is_empty());
 }
 
-/// The fall take's ragdoll sweeps (0x5a6aea, world 2) replayed through
-/// mp_crash's clip map: each trace's fraction, normal, `startsolid` and
-/// `walkable` (trace_t +0x29, +0x2a) retail's to the bit through the
-/// client's trace, where the server's float model parts on 6 of the 29
-/// hits (measured).
-#[test]
-fn the_ragdoll_sweeps_trace_as_retails() {
-    let Some(install) = cod4_install() else {
-        return;
-    };
-    let (_, walked) = Map::load(&install, "english", "mp_crash").unwrap();
+/// A take's ragdoll sweeps (0x5a6aea, world 2) replayed through `map`'s
+/// clip map: each trace's fraction, normal, `startsolid` and `walkable`
+/// (trace_t +0x29, +0x2a) retail's to the bit through the client's trace.
+/// Returns the sweeps, the hits and how many the server's float model
+/// parts on, or `None` with no install.
+fn sweeps_as_retails(map: &str, take: &str) -> Option<(usize, usize, usize)> {
+    let install = cod4_install()?;
+    let (_, walked) = Map::load(&install, "english", map).unwrap();
     let clip = ClipMap::from_assets(&walked.assets).unwrap();
-    let text = std::fs::read_to_string(format!("{FIXTURES}/{FALL_TRACES}")).unwrap();
+    let text = std::fs::read_to_string(format!("{FIXTURES}/{take}")).unwrap();
     let (mut sweeps, mut hits, mut server_parts) = (0, 0, 0);
     for line in text.lines().filter(|l| l.starts_with("trace ")) {
         let p: Vec<&str> = line.split('|').collect();
@@ -283,13 +283,35 @@ fn the_ragdoll_sweeps_trace_as_retails() {
         // the box's two corners (eax and [esp+0xc] at the call), in either order
         let (mins, maxs) = (a.min(b), a.max(b));
         let ours = read(clip.trace_client(start, end, mins, maxs, mask));
-        assert_eq!(ours, theirs, "{line}");
+        assert_eq!(ours, theirs, "{take}: {line}");
         server_parts += usize::from(read(clip.trace(start, end, mins, maxs, mask)) != theirs);
         sweeps += 1;
         hits += usize::from(w[0] != 1f32.to_bits());
     }
-    eprintln!("{sweeps} sweeps, {hits} hits, {server_parts} parted under the server's model");
-    assert_eq!((sweeps, hits, server_parts), (132, 29, 6));
+    eprintln!(
+        "{take}: {sweeps} sweeps, {hits} hits, {server_parts} parted under the server's model"
+    );
+    Some((sweeps, hits, server_parts))
+}
+
+/// The fall take's sweeps met only brushes; the server's float model parts
+/// on 6 of its 29 hits (measured).
+#[test]
+fn the_ragdoll_sweeps_trace_as_retails() {
+    if let Some(counts) = sweeps_as_retails("mp_crash", FALL_TRACES) {
+        assert_eq!(counts, (132, 29, 6));
+    }
+}
+
+/// The roof take's corpse slid down mp_carentan's tiled roof, triangles
+/// of the clip map, to the street: the client's capsule against them
+/// (0x4f05c0) gives retail's every hit, the server's model parts on 94 of
+/// the 126 (cod4-gsc.md 3.6.9).
+#[test]
+fn the_roof_sweeps_trace_as_retails() {
+    if let Some(counts) = sweeps_as_retails("mp_carentan", ROOF_TRACES) {
+        assert_eq!(counts, (126, 126, 94));
+    }
 }
 
 /// Every MP body model shares the def bones' lengths; the first two

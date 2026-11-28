@@ -65,6 +65,9 @@ pub(super) struct Sweep {
     pub sphere_z: f32,
     /// The capsule's half extents per axis; zero for a position test.
     pub capsule_half: Vec3,
+    /// `|half_box|`, stored: the 1.7 client's split slack on a non-axial
+    /// plane, plus 0.125 (`iw3mp.exe` trace work +0x9c, 0x4f4f30).
+    pub box_radius: f32,
     // The move.
     /// `end - start`, its length and squared length.
     pub sweep: Vec3,
@@ -153,6 +156,8 @@ impl Sweep {
             sw.half_box.x
         };
         sw.sphere_z = sw.half_box.z - sw.radius;
+        let h2 = dot(sw.half_box, sw.half_box) as f32;
+        sw.box_radius = f64::from(h2).sqrt() as f32;
         let r = sw.radius;
         for k in 0..2 {
             let (lo, hi) = if sw.start[k] < sw.end[k] {
@@ -226,12 +231,23 @@ impl<'a> Cx<'a> {
 
     /// `CM_TraceThroughTree` (0x0805b058): Q3's split with the box's extent
     /// plus 0.125 on axial planes and 2048 (0.125 for a point) on the rest.
-    /// A node whose reach the sweep's box misses holds no leaf test that
-    /// passes, so it is passed over: the walk under it has no other
-    /// effect (cod4-server-frame.md 11).
+    /// The 1.7 client's (`iw3mp.exe` 0x4f4920) stores a non-axial plane's
+    /// dot before taking `dist` off it, and its slack there is the box's
+    /// radius plus 0.125 (cod4-collision.md 2). A node whose reach the
+    /// sweep's box misses holds no leaf test that passes, so it is passed
+    /// over: the walk under it has no other effect (cod4-server-frame.md
+    /// 11).
     fn trace_tree(&mut self, mut num: i32, mut p1: [f32; 4], p2: [f32; 4], tr: &mut ClipTrace) {
         let reach = self.map.node_reach();
         let [sweep_lo, sweep_hi] = self.sw.reach;
+        let client = self.sw.floats == TraceFloats::Cod4Client;
+        let slack = if self.sw.point {
+            0.125
+        } else if client {
+            (f64::from(self.sw.box_radius) + f64::from(CLIP_EPS)) as f32
+        } else {
+            2048.0
+        };
         loop {
             if num < 0 {
                 self.trace_leaf(!num as usize, tr);
@@ -252,9 +268,11 @@ impl<'a> Cx<'a> {
                 )
             } else {
                 let at = |p: [f32; 4]| {
-                    (dot(Vec3::new(p[0], p[1], p[2]), plane.normal) - f64::from(plane.dist)) as f32
+                    let d = dot(Vec3::new(p[0], p[1], p[2]), plane.normal);
+                    let d = if client { f64::from(d as f32) } else { d };
+                    (d - f64::from(plane.dist)) as f32
                 };
-                (at(p1), at(p2), if self.sw.point { 0.125 } else { 2048.0 })
+                (at(p1), at(p2), slack)
             };
             match split(t1, t2, offset) {
                 Split::Front => num = node.children[0],
@@ -753,11 +771,21 @@ impl<'a> Cx<'a> {
     }
 
     /// `CM_TestBoxInBrush` (0x080594f6): the capsule's box against the
-    /// brush's bounds, its spheres against the other sides.
+    /// brush's bounds, its spheres against the other sides. The 1.7
+    /// client's (`iw3mp.exe` 0x4f3140) culls on strict bounds, stores the
+    /// dot and the grown distance, and clears the surface flags
+    /// (cod4-collision.md 2).
     fn test_brush(&self, b: &CBrush, tr: &mut ClipTrace) {
         let sw = &self.sw;
+        let client = sw.floats == TraceFloats::Cod4Client;
+        let [lo, hi] = sw.swept_box;
         for k in 0..3 {
-            if !(sw.swept_box[0][k] <= b.maxs[k] && b.mins[k] <= sw.swept_box[1][k]) {
+            let apart = if client {
+                b.maxs[k] <= lo[k] || b.mins[k] >= hi[k]
+            } else {
+                !(lo[k] <= b.maxs[k] && b.mins[k] <= hi[k])
+            };
+            if apart {
                 return;
             }
         }
@@ -765,9 +793,18 @@ impl<'a> Cx<'a> {
             let p = self.map.planes[plane as usize];
             let lift = (p.normal.z * sw.sphere_z).abs();
             let dist = f64::from(p.dist) + f64::from(sw.radius) + f64::from(lift);
-            if (dot(sw.start, p.normal) - dist) as f32 > 0.0 {
+            let out = if client {
+                let d = dot(sw.start, p.normal) as f32;
+                (f64::from(d) - f64::from(dist as f32)) as f32
+            } else {
+                (dot(sw.start, p.normal) - dist) as f32
+            };
+            if out > 0.0 {
                 return;
             }
+        }
+        if client {
+            tr.surface_flags = 0;
         }
         tr.allsolid = true;
         tr.startsolid = true;

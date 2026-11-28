@@ -351,6 +351,11 @@ pub struct PlayerState {
     /// slide and clears it after, so the hull and the step gate below read
     /// retail's `pm_type` 4 arms.
     pub spectator: bool,
+    /// The cmd running is a corpse's: [`dead_move`](super::dead_move) sets
+    /// it for its move and clears it after. `PM_CheckDuck`'s dead arm sizes
+    /// the box's height off `ps.maxs`, the standing 70, whatever the stance
+    /// (1.1d 0x317f6, 1.5b 0x2352c, UO 0x2807e; coduo-vehicles.md 11.6.1).
+    pub corpse: bool,
     /// Which patch's movement this player runs: the server's protocol for
     /// its players, the connection's for the predictor
     /// ([`MoveRules::for_protocol`]).
@@ -616,6 +621,7 @@ impl PlayerState {
             bob: BobCvars::default(),
             bg: BgCvars::default(),
             spectator: false,
+            corpse: false,
             rules: MoveRules::V1_1,
             jump_penalty: false,
             view_target: VIEW_STAND,
@@ -692,6 +698,9 @@ impl PlayerState {
     pub fn maxs(&self) -> Vec3 {
         if self.spectator {
             return SPECTATOR_MAXS;
+        }
+        if self.corpse {
+            return Vec3::new(HALF_WIDTH, HALF_WIDTH, HEIGHT_STAND);
         }
         let stance = match self.rules {
             MoveRules::V1_1 if self.stance == Stance::Prone && self.prone_box_crouch => {
