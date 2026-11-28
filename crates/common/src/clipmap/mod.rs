@@ -91,7 +91,7 @@ pub enum TraceFloats {
     /// the stack (cod4-collision.md 2).
     Cod4Server,
     /// `iw3mp.exe` 1.7, the client: its set-up and brushes store as CoD2's,
-    /// and its capsule against a triangle stores nearly every value
+    /// and its triangle, border and cull kernels store nearly every value
     /// (cod4-collision.md 2, 3).
     Cod4Client,
 }
