@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""A small i386 + x87 interpreter over objdump's Intel listing of a PE, for
-running a retail leaf function on chosen inputs (cod4-collision.md 3).
+"""A small i386 + x87 interpreter over objdump's Intel listing of a PE or an
+i386 ELF, for running a retail leaf function on chosen inputs
+(cod4-collision.md 3).
 
 The x87 runs at 53-bit precision, as iw3mp.exe's client does
 (cod4-player-anims.md 11): every stack value is a Python float, an m32
@@ -81,16 +82,25 @@ class Emu:
     def __init__(self, exe, sym=False):
         self.exe = exe
         d = open(exe, "rb").read()
-        pe = struct.unpack_from("<I", d, 0x3C)[0]
-        nsec = struct.unpack_from("<H", d, pe + 6)[0]
-        optsz = struct.unpack_from("<H", d, pe + 20)[0]
-        base = struct.unpack_from("<I", d, pe + 24 + 28)[0]
         self.image = []
-        off = pe + 24 + optsz
-        for _ in range(nsec):
-            vs, va, rs, pr = struct.unpack_from("<IIII", d, off + 8)
-            self.image.append((base + va, d[pr:pr + min(vs, rs)]))
-            off += 40
+        if d[:4] == b"\x7fELF":
+            # an i386 ELF (cod4_lnxded): its PT_LOAD segments
+            phoff, = struct.unpack_from("<I", d, 0x1C)
+            phentsize, phnum = struct.unpack_from("<HH", d, 0x2A)
+            for i in range(phnum):
+                kind, off, va, _, filesz = struct.unpack_from("<IIIII", d, phoff + i * phentsize)
+                if kind == 1:
+                    self.image.append((va, d[off:off + filesz]))
+        else:
+            pe = struct.unpack_from("<I", d, 0x3C)[0]
+            nsec = struct.unpack_from("<H", d, pe + 6)[0]
+            optsz = struct.unpack_from("<H", d, pe + 20)[0]
+            base = struct.unpack_from("<I", d, pe + 24 + 28)[0]
+            off = pe + 24 + optsz
+            for _ in range(nsec):
+                vs, va, rs, pr = struct.unpack_from("<IIII", d, off + 8)
+                self.image.append((base + va, d[pr:pr + min(vs, rs)]))
+                off += 40
         self.code = {}
         self.mem = {}
         self.sym = sym
@@ -201,7 +211,7 @@ class Emu:
             addr = int(m.group(1), 16)
             if addr >= a + 0x1000 - 16:
                 break
-            ops = m.group(3).split("#")[0].strip()
+            ops = re.sub(r"\s*<[^>]*>", "", m.group(3).split("#")[0]).strip()
             ops = [o.strip() for o in re.split(r",(?![^\[]*\])", ops)] if ops else []
             if prev is not None:
                 self.code[prev] = self.code[prev][:2] + (addr,)
@@ -464,6 +474,17 @@ class Emu:
             self.fcompare(st[0], st[1])
             st.pop(0)
             st.pop(0)
+        elif mn in ("fcomi", "fcomip", "fucomi", "fucomip"):
+            # the compare straight into ZF, PF, CF (cod4_lnxded's x87 code)
+            self.fcompare(st[0], st[self.sti(ops[1])] if len(ops) > 1 else st[1])
+            c0, c2, c3 = self.c
+            self.flags.update(ZF=c3, PF=c2, CF=c0)
+            if mn.endswith("p"):
+                st.pop(0)
+        elif mn.startswith("fcmov"):
+            cc = {"b": "b", "nb": "ae", "e": "e", "ne": "ne", "be": "be", "nbe": "a", "u": "p", "nu": "np"}[mn[5:]]
+            if self.cond(cc):
+                st[0] = st[self.sti(ops[1])]
         elif mn == "fnstsw":
             c0, c2, c3 = self.c
             self.put(ops[0], (c0 << 8) | (c2 << 10) | (c3 << 14))

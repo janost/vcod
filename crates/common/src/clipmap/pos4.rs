@@ -2,7 +2,9 @@
 //! (`iw3mp.exe` 0x4f1930, cod4-collision.md 3.1): a sphere against the
 //! triangle's nearest point, a capsule's axis against its face and edges.
 //! The client runs at 53-bit precision, so a kept value is an `f64` here
-//! and a stored one goes through `f32` (`st`).
+//! and a stored one goes through `f32` (`st`). The server's test
+//! (`cod4_lnxded` 0x81158fd) keeps more but answers as this one on every
+//! triangle with three distinct corners, so it runs this too.
 
 // A test written `!(a < b)` keeps the branch a NaN takes.
 #![allow(clippy::neg_cmp_op_on_partial_ord)]

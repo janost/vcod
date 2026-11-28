@@ -192,11 +192,13 @@ fn pin(clip: &ClipMap) -> Pin {
 /// Each map's digest under 1.7's float model: `CM_Trace`'s set-up, the
 /// brush kernel and the triangle arm's capsule kernels keep what
 /// `cod4_lnxded` keeps on the x87 stack (cod4-collision.md 2, 3), which
-/// the walk replay matches bit for bit (cod4-pmove.md 15.1).
+/// the walk replay matches bit for bit (cod4-pmove.md 15.1); the tree
+/// walk splits with the box's radius and the position test is the
+/// client's (2, 3.1).
 const PINS: [(&str, u64); 3] = [
-    ("mp_crash", 0xfa8f_19d5_1625_5c16),
-    ("mp_backlot", 0x3f95_422f_e78b_35e2),
-    ("mp_carentan", 0x3433_12c8_2b0f_a79c),
+    ("mp_crash", 0xac47_66e3_0cd2_89fe),
+    ("mp_backlot", 0xb045_53f7_a596_6e09),
+    ("mp_carentan", 0x6409_1d52_bb54_aed7),
 ];
 
 #[test]

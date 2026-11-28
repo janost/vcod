@@ -3,8 +3,8 @@
 //! capsule's position test, with a walkable bit per edge
 //! (`docs/research/cod4-collision.md` 3). The point and capsule sweeps keep
 //! 1.7's float model (what it stores, what stays on the x87 stack), the
-//! server's or the client's (`TraceFloats`); the server's border corner and
-//! position test are plain `f32`, the client's position test is `pos4`.
+//! server's or the client's (`TraceFloats`); the server's border corner is
+//! plain `f32`, and both position tests are `pos4`.
 
 // A test written `!(a < b)` keeps the branch a NaN takes.
 #![allow(clippy::neg_cmp_op_on_partial_ord)]
@@ -883,9 +883,10 @@ impl Cx<'_> {
     /// `CM_PositionTestInAabbTree_r` over indexed triangles, depth first,
     /// the children stopping once one leaves the trace solid (doc 2). A
     /// leaf is solid when the capsule's axis, a point when it has no
-    /// length, comes within its radius of a triangle
-    /// (`CM_PositionTestCapsuleInTriangle`, doc 3); the client's
-    /// (`iw3mp.exe` 0x4f2180) takes its own kernels (doc 3.1).
+    /// length, comes within its radius of a triangle by [`super::pos4`]'s
+    /// tests: the client's (`iw3mp.exe` 0x4f2180), which the server's
+    /// (`cod4_lnxded` 0x811546a) answers as on every triangle with three
+    /// distinct corners (doc 3.1).
     pub(super) fn position_indexed_r(&mut self, m: &IndexedMesh, tree: usize, tr: &mut ClipTrace) {
         let node = self.map.aabbs[tree];
         if self.cull_box(node.origin, node.half_size) {
@@ -902,22 +903,14 @@ impl Cx<'_> {
         let Some(part) = self.stamp_partition(node.child_or_partition as usize) else {
             return;
         };
-        let up = Vec3::new(0.0, 0.0, self.sw.sphere_z);
-        let (top, bottom) = (self.sw.start + up, self.sw.start - up);
-        let r2 = self.sw.radius * self.sw.radius;
         let first = part.first_tri as usize;
-        let client = self.sw.floats == TraceFloats::Cod4Client;
         let touches = (first..first + usize::from(part.tri_count)).any(|i| {
-            if client {
-                super::pos4::capsule_in_tri(
-                    self.sw.start,
-                    self.sw.radius,
-                    self.sw.sphere_z,
-                    corners(m, i),
-                )
-            } else {
-                segment_tri_dist2(top, bottom, corners(m, i)) < r2
-            }
+            super::pos4::capsule_in_tri(
+                self.sw.start,
+                self.sw.radius,
+                self.sw.sphere_z,
+                corners(m, i),
+            )
         });
         if touches {
             tr.fraction = 0.0;
@@ -927,98 +920,8 @@ impl Cx<'_> {
     }
 }
 
-/// The squared distance from the segment `a..b` to the triangle `t`.
-fn segment_tri_dist2(a: Vec3, b: Vec3, t: [Vec3; 3]) -> f32 {
-    let [v0, v1, v2] = t;
-    let n = (v1 - v0).cross(v2 - v0);
-    let (da, db) = ((a - v0).dot(n), (b - v0).dot(n));
-    if da * db <= 0.0 && da != db {
-        // The segment crosses the plane: through the face is distance 0.
-        let p = a + (b - a) * (da / (da - db));
-        let inside = [(v0, v1), (v1, v2), (v2, v0)]
-            .iter()
-            .all(|&(e0, e1)| (e1 - e0).cross(p - e0).dot(n) >= 0.0);
-        if inside {
-            return 0.0;
-        }
-    }
-    let mut best = point_tri_dist2(a, t).min(point_tri_dist2(b, t));
-    for (p, q) in [(v0, v1), (v1, v2), (v2, v0)] {
-        best = best.min(segment_segment_dist2(a, b, p, q));
-    }
-    best
-}
-
-/// The squared distance from `p` to the triangle `t`, by the region of
-/// the triangle's plane the projection falls in.
-fn point_tri_dist2(p: Vec3, t: [Vec3; 3]) -> f32 {
-    let [a, b, c] = t;
-    let (ab, ac, ap) = (b - a, c - a, p - a);
-    let (d1, d2) = (ab.dot(ap), ac.dot(ap));
-    if d1 <= 0.0 && d2 <= 0.0 {
-        return ap.length_squared();
-    }
-    let bp = p - b;
-    let (d3, d4) = (ab.dot(bp), ac.dot(bp));
-    if d3 >= 0.0 && d4 <= d3 {
-        return bp.length_squared();
-    }
-    let vc = d1 * d4 - d3 * d2;
-    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
-        return (p - (a + ab * (d1 / (d1 - d3)))).length_squared();
-    }
-    let cp = p - c;
-    let (d5, d6) = (ab.dot(cp), ac.dot(cp));
-    if d6 >= 0.0 && d5 <= d6 {
-        return cp.length_squared();
-    }
-    let vb = d5 * d2 - d1 * d6;
-    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
-        return (p - (a + ac * (d2 / (d2 - d6)))).length_squared();
-    }
-    let va = d3 * d6 - d5 * d4;
-    if va <= 0.0 && d4 - d3 >= 0.0 && d5 - d6 >= 0.0 {
-        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
-        return (p - (b + (c - b) * w)).length_squared();
-    }
-    let denom = 1.0 / (va + vb + vc);
-    let q = a + ab * (vb * denom) + ac * (vc * denom);
-    (p - q).length_squared()
-}
-
-/// The squared distance between the segments `p1..q1` and `p2..q2`.
-fn segment_segment_dist2(p1: Vec3, q1: Vec3, p2: Vec3, q2: Vec3) -> f32 {
-    let (d1, d2, r) = (q1 - p1, q2 - p2, p1 - p2);
-    let (a, e, f) = (d1.dot(d1), d2.dot(d2), d2.dot(r));
-    let (s, t) = if a <= f32::EPSILON && e <= f32::EPSILON {
-        (0.0, 0.0)
-    } else if a <= f32::EPSILON {
-        (0.0, (f / e).clamp(0.0, 1.0))
-    } else {
-        let c = d1.dot(r);
-        if e <= f32::EPSILON {
-            ((-c / a).clamp(0.0, 1.0), 0.0)
-        } else {
-            let b = d1.dot(d2);
-            let denom = a * e - b * b;
-            let mut s = if denom != 0.0 {
-                ((b * f - c * e) / denom).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            let mut t = (b * s + f) / e;
-            if t < 0.0 {
-                t = 0.0;
-                s = (-c / a).clamp(0.0, 1.0);
-            } else if t > 1.0 {
-                t = 1.0;
-                s = ((b - c) / a).clamp(0.0, 1.0);
-            }
-            (s, t)
-        }
-    };
-    ((p1 + d1 * s) - (p2 + d2 * t)).length_squared()
-}
+#[cfg(test)]
+mod vectors;
 
 #[cfg(test)]
 mod tests {
@@ -1029,7 +932,7 @@ mod tests {
     /// One leaf holding one indexed floor triangle at z 0 with corners
     /// (-200, -100), (-200, 100), (-100, -100); only the long edge
     /// (opposite vertex 0) is walkable.
-    fn map() -> ClipMap {
+    pub(super) fn map() -> ClipMap {
         ClipMap {
             planes: vec![CPlane {
                 normal: Vec3::Z,
@@ -1384,44 +1287,22 @@ mod tests {
         assert!(!culls(TraceFloats::Cod4Client));
     }
 
-    /// A cube's position test is a sphere, which the client meets at the
+    /// A cube's position test is a sphere, which 1.7 meets at the
     /// triangle's point nearest `2 v0 - p` (doc 3.1): 10 over the face's
-    /// middle is solid on the server and clear on the client.
+    /// middle is clear on the server and the client alike, 10 over v0
+    /// solid.
     #[test]
-    fn the_clients_sphere_position_test_reflects_through_v0() {
+    fn the_sphere_position_test_reflects_through_v0() {
         let (mins, maxs) = (Vec3::splat(-15.0), Vec3::splat(15.0));
-        let p = v(-180.0, 50.0, 10.0);
-        let solid = |floats| {
+        let solid = |floats, p| {
             map()
                 .trace_as(floats, p, p, mins, maxs, MASK_PLAYERSOLID)
                 .startsolid
         };
-        assert!(solid(TraceFloats::Cod4Server));
-        assert!(!solid(TraceFloats::Cod4Client));
-        // 10 over v0 itself, where the reflection is the point.
-        let p = v(-199.0, -99.0, 10.0);
-        let solid = |floats| {
-            map()
-                .trace_as(floats, p, p, mins, maxs, MASK_PLAYERSOLID)
-                .startsolid
-        };
-        assert!(solid(TraceFloats::Cod4Client));
-    }
-
-    const TRI: [Vec3; 3] = [
-        Vec3::ZERO,
-        Vec3::new(10.0, 0.0, 0.0),
-        Vec3::new(0.0, 10.0, 0.0),
-    ];
-
-    #[test]
-    fn distances_to_a_triangle() {
-        assert_eq!(point_tri_dist2(Vec3::new(2.0, 2.0, 3.0), TRI), 9.0);
-        assert_eq!(point_tri_dist2(Vec3::new(-3.0, -4.0, 0.0), TRI), 25.0);
-        assert_eq!(point_tri_dist2(Vec3::new(5.0, -2.0, 0.0), TRI), 4.0);
-        let down = segment_tri_dist2(Vec3::new(2.0, 2.0, 5.0), Vec3::new(2.0, 2.0, -5.0), TRI);
-        assert_eq!(down, 0.0);
-        let beside = segment_tri_dist2(Vec3::new(-2.0, 5.0, 5.0), Vec3::new(-2.0, 5.0, -5.0), TRI);
-        assert!((beside - 4.0).abs() < 1e-5, "{beside}");
+        for floats in [TraceFloats::Cod4Server, TraceFloats::Cod4Client] {
+            assert!(!solid(floats, v(-180.0, 50.0, 10.0)));
+            // 10 over v0 itself, where the reflection is the point.
+            assert!(solid(floats, v(-199.0, -99.0, 10.0)));
+        }
     }
 }

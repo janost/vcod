@@ -45,6 +45,9 @@
 #                  end the run (default 600)
 #   PHYS_FX_FROM   the frame from which each effect started gets an `fx`
 #                  line (default PHYS_AT)
+#   PHYS_TRACES    1: also each after-frame sweep (CM_Trace 0x4f4d30 called
+#                  at 0x5a6aea, any world) while the dump runs, its arguments
+#                  and the trace_t it filled (`trace`, as the ragdoll dump's)
 import os
 import struct
 
@@ -68,6 +71,8 @@ assert all(len(v) == 19 for v in PLACE.values()), "PHYS_PLACE: 19 words a body"
 CONTACT_IDS = {int(x) for x in os.environ.get("PHYS_CONTACT_IDS", "").split()}
 GIVEUP = int(os.environ.get("PHYS_GIVEUP", "600"))
 FX_FROM = int(os.environ.get("PHYS_FX_FROM", str(AT)))
+TRACES = os.environ.get("PHYS_TRACES") == "1"
+TRACE_CALL, TRACE_RET = 0x5A6AEA, 0x5A6AEF
 
 CL_INGAME = 0xC5F8F0  # dvar_t*, bool value at +0xc
 CBUF = 0x1410BD4  # local client 0: data, maxsize, cursize
@@ -397,6 +402,25 @@ def on_round():
     OUT.flush()
 
 
+def on_trace_call():
+    # at the call: [esp] the trace_t, [esp+4] start, [esp+8] end, eax and
+    # [esp+0xc] the box's corners, [esp+0x14] the mask
+    if st["done"] or not st["started"]:
+        return
+    esp = reg("esp")
+    st["trace"] = (u32(esp), "%s | %s | %s | %s | %s" % (
+        words(u32(esp + 4), 3), words(u32(esp + 8), 3), words(reg("eax"), 3),
+        words(u32(esp + 0xC), 3), words(esp + 0x14, 1)))
+
+
+def on_trace_return():
+    # the trace_t's 0x2c bytes, as cod4_ragdoll_gdb.py's `trace` line
+    t = st.pop("trace", None)
+    if t is None:
+        return
+    log("trace %x %d | %s | %s" % (TRACE_CALL, st["steps"], t[1], words(t[0], 11)))
+
+
 class B(gdb.Breakpoint):
     def __init__(self, addr, fn):
         super().__init__("*0x%x" % addr, internal=True)
@@ -434,6 +458,9 @@ B(0x5A5F9E, on_collide)
 B(0x5A2760, on_cut)
 B(0x5A5900, on_push)
 B(0x5A5F0E, on_sound)
+if TRACES:
+    B(TRACE_CALL, on_trace_call)
+    B(TRACE_RET, on_trace_return)
 gdb.execute("continue")
 # a stop returned True: the dump is complete. Detached, the client runs on
 # for run.sh's SHOTS=1 grab.
