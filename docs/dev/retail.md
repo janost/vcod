@@ -330,6 +330,10 @@ python3 -I tools/re/cod4_ragdoll_summary.py tmp/ragdoll.txt [another dump]
   filled (`trace` lines). A corpse killed standing on the ground sweeps
   without a hit; `RAGDOLL_POS="207 2291 1500 0"` drops it from 1200 up,
   and its sweeps meet the ground on steps 87 to 93.
+- A fresh `COD4_WINE_DIR` starts its profile on `dm`: the first run on
+  mp_carentan restarted the map as `war` after the connect, and the
+  loopback connection timed out in the reload. Put `+set g_gametype war`
+  before `+devmap`.
 - The format and the committed takes: `crates/cod4/tests/fixtures/README.md`.
 
 ### Worlds 0 and 1 from the first push to rest
