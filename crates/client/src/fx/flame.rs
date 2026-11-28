@@ -60,6 +60,9 @@ const START_SIZE: f32 = 16.0;
 const MAX_SIZE: f32 = 290.0;
 /// Sprite frames `flamethrowerFire2` .. `flamethrowerFire44`.
 const FRAMES: f32 = 43.0;
+/// A frame draws this many sprites nearer the eye than their size, and no
+/// more (`cmp ecx,0x32` with `jg` at 0x30026da3).
+const NEAR_SPRITES: u32 = 51;
 /// Chunk spacing, ms per chunk before the view scale: `16 / 900` of 1000
 /// ticks.
 const SPACING_MS: f32 = 8.888_889;
@@ -186,6 +189,9 @@ struct Chunk {
     /// `+0x118`: the face its look-ahead last struck, zero until one
     /// (0x300261b0..0x3002621f); copies keep it.
     normal: Vec3,
+    /// Its place in retail's allocation order, newer higher, which sets
+    /// where its chain comes in the chain draw ([`FlameSystem::walk`]).
+    seq: u64,
 }
 
 /// A burning residue (a type 3 chunk, uo cgame 0x30027ad0 spawned off a
@@ -204,6 +210,18 @@ struct Residue {
     next_emit: f64,
     /// Its `+0xa8`: -0.2 at the bounce, redrawn each step on a wall.
     sink: f32,
+    /// [`Chunk::seq`]: a residue is a pool chunk in retail, and its flames
+    /// are born where the move pass reaches it.
+    seq: u64,
+}
+
+/// What a frame's move pass bears, before [`FlameSystem::allocate`] gives
+/// it a [`Chunk::seq`]: a residue flame already in the pool at its index,
+/// or a chunk or residue to add.
+enum Birth {
+    Placed(usize),
+    Chunk(Chunk),
+    Residue(Residue),
 }
 
 /// 0x30025da0's bounce: the velocity clipped against the struck face with
@@ -647,6 +665,8 @@ pub struct FlameSystem {
     frame: u64,
     chains: u32,
     last_trace: LastTrace,
+    /// The last [`Chunk::seq`] handed out.
+    seq: u64,
 }
 
 impl Default for FlameSystem {
@@ -663,6 +683,7 @@ impl Default for FlameSystem {
             frame: 0,
             chains: 0,
             last_trace: None,
+            seq: 0,
         }
     }
 }
@@ -814,11 +835,11 @@ impl FlameSystem {
             keep
         });
 
-        self.shed_residue_flames(now, dt_ms, world);
+        let mut births = self.shed_residue_flames(now, dt_ms, world);
         let mut struck = Vec::new();
-        let mut born = Vec::new();
         for i in 0..self.chunks.len() {
             let mut c = self.chunks[i];
+            let mut born = Vec::new();
             if now < c.born + f64::from(c.life) {
                 self.trail(&mut c, now, eye, world, &streams, &mut born);
             }
@@ -826,12 +847,15 @@ impl FlameSystem {
                 struck.push((i, normal));
             }
             self.chunks[i] = c;
+            births.extend(born.into_iter().map(|b| (c.seq, Birth::Chunk(b))));
         }
-        self.chunks.extend(born);
         for (i, normal) in struck {
             let c = self.chunks[i];
-            self.leave_residue(&c, normal, now);
+            if let Some(r) = self.leave_residue(&c, normal, now) {
+                births.push((c.seq, Birth::Residue(r)));
+            }
         }
+        self.allocate(births);
         self.residues.retain(|r| now < r.death);
         self.draw_chains(now, eye);
         sounds
@@ -899,11 +923,14 @@ impl FlameSystem {
             flame.friction = 0.15;
             flame.roll += (self.rand() * 15.0).floor();
             flame.speed *= if c.own { frac * 0.2 + 0.1 } else { 0.25 };
+            // The flame's pool call precedes its smoke's (0x30027f8a,
+            // 0x30028cca).
+            let at = born.len();
             if 0.02 < frac && frac < 0.8 {
                 self.smoke(c, &flame, frac, next, born);
             }
             move_chunk(&mut flame, now, world, streams, &mut self.last_trace);
-            born.push(flame);
+            born.insert(at, flame);
             share *= f64::from(2.0 * frac + 1.0);
             let mut step = span * share;
             let dist = eye.distance(c.pos).max(2.0);
@@ -913,6 +940,24 @@ impl FlameSystem {
             next += step / 2.0 + f64::from(self.rand()) * step;
         }
         c.trail = Some((next, share));
+    }
+
+    /// Hands the move pass's `births`, each keyed by its parent's
+    /// [`Chunk::seq`] in the parent's own order, their places in the
+    /// pool. Retail's move pass walks the pool newest first (0x300ab728
+    /// down `+0x0`, 0x30027db5..0x300290c9) and the pool call puts each
+    /// chunk born there in front (0x3002562f..0x30025640): the newest
+    /// parent's births are laid first, and the oldest's end up newest.
+    fn allocate(&mut self, mut births: Vec<(u64, Birth)>) {
+        births.sort_by_key(|&(parent, _)| std::cmp::Reverse(parent));
+        for (_, b) in births {
+            self.seq += 1;
+            match b {
+                Birth::Placed(i) => self.chunks[i].seq = self.seq,
+                Birth::Chunk(c) => self.chunks.push(Chunk { seq: self.seq, ..c }),
+                Birth::Residue(r) => self.residues.push(Residue { seq: self.seq, ..r }),
+            }
+        }
     }
 
     /// A trail step's smoke (0x30028c32..0x30028eeb): with a chance of
@@ -955,20 +1000,20 @@ impl FlameSystem {
     /// in the last 3 s, a residue of the chunk's size (at most 145) at the
     /// contact, living one to two and a half seconds by the face's slope
     /// (0x30027ad0 and the death and trail it is given there).
-    fn leave_residue(&mut self, c: &Chunk, normal: Vec3, now: f64) {
+    fn leave_residue(&mut self, c: &Chunk, normal: Vec3, now: f64) -> Option<Residue> {
         if let Some(&(t, at)) = self.last_residue.get(&c.owner)
             && (((now - t) as f32) < RESIDUE_EVERY_MS
                 || (t <= now
                     && (now - t) as f32 <= RESIDUE_NEAR_MS
                     && at.distance(c.pos) <= RESIDUE_NEAR))
         {
-            return;
+            return None;
         }
         self.last_residue.insert(c.owner, (now, c.pos));
         let life =
             RESIDUE_LIFE_MS * (1.0 + (1.0 - normal.z.abs()) * 0.5) + self.rand() * RESIDUE_LIFE_MS;
         let next_emit = now + f64::from(self.rand() * RESIDUE_STEP_MS);
-        self.residues.push(Residue {
+        Some(Residue {
             owner: c.owner,
             pos: c.pos,
             normal,
@@ -977,7 +1022,8 @@ impl FlameSystem {
             death: now + f64::from(life),
             next_emit,
             sink: RESIDUE_SINK,
-        });
+            seq: 0,
+        })
     }
 
     /// Every residue's flames due by `now` (0x30027d10, a type 3 parent's
@@ -987,8 +1033,15 @@ impl FlameSystem {
     /// drifts along the face at 4 units a second or more, off a wall
     /// as well, and rises ever faster ([`Chunk::a8`]). Such a flame
     /// never trails a smoke (type 2, 0x30028bfb), and a residue whose face
-    /// went dies ([`RESIDUE_FACE_MS`]).
-    fn shed_residue_flames(&mut self, now: f64, dt_ms: f32, world: Option<&ChunkWorld>) {
+    /// went dies ([`RESIDUE_FACE_MS`]). The flames go in the pool now, to
+    /// be moved this frame; each [`Birth::Placed`] waits for its `seq`.
+    fn shed_residue_flames(
+        &mut self,
+        now: f64,
+        dt_ms: f32,
+        world: Option<&ChunkWorld>,
+    ) -> Vec<(u64, Birth)> {
+        let mut births = Vec::new();
         for i in 0..self.residues.len() {
             while self.residues[i].next_emit < now.min(self.residues[i].death) {
                 // A wall's residue redraws its `+0xa8` each step (|z| of
@@ -1053,7 +1106,9 @@ impl FlameSystem {
                     // A copy of the residue, a copy of the chunk at the
                     // contact.
                     normal: n,
+                    seq: 0,
                 });
+                births.push((r.seq, Birth::Placed(self.chunks.len() - 1)));
                 if let Some(w) = world
                     && r.death - now >= RESIDUE_FACE_MS
                 {
@@ -1066,6 +1121,7 @@ impl FlameSystem {
                 self.residues[i].next_emit += f64::from(step);
             }
         }
+        births
     }
 
     /// The chain draw (0x30027d10's last pass, 0x300272b0 from each chain's
@@ -1143,6 +1199,8 @@ impl FlameSystem {
     /// raises the flag and, two seconds past the last, names the chunk's
     /// owner for `fdc` (0x300291c0). The next check is 50 ms on, and the
     /// flag holds in between. `None` for a victim keeps the flag down.
+    /// The chunks go in the chain draw's order ([`Self::walk`]), the test
+    /// being the sprite add's.
     /// `fdc` is subject to the server's flood window, so while
     /// `flood_open` the report holds it back for a later check.
     pub fn report(
@@ -1163,7 +1221,7 @@ impl FlameSystem {
         let mut fdc = None;
         if clock.next_check < now {
             self.in_flame = false;
-            for i in 0..self.chunks.len() {
+            for i in self.walk() {
                 if self.in_flame {
                     break;
                 }
@@ -1274,6 +1332,7 @@ impl FlameSystem {
         let o = self.owners[&n.owner];
         let step_k = trail_share(n.own_view, o.run_ms, o.turn_rate);
         let first = born + f64::from(self.rand()) * f64::from(life) * step_k;
+        self.seq += 1;
         self.chunks.push(Chunk {
             owner: n.owner,
             kind: Kind::Stream,
@@ -1299,6 +1358,7 @@ impl FlameSystem {
             chain: Some((o.chain, aim, n.pos)),
             drawn: false,
             normal: Vec3::ZERO,
+            seq: self.seq,
         });
     }
 
@@ -1313,17 +1373,44 @@ impl FlameSystem {
         ((0.75 + 0.35) * ((b + 1.0) * 0.125 + (a * 0.5 + 1.0) * 0.25 + r) * 140.0).min(110.0)
     }
 
-    /// Camera-facing sprites of the chunks the chain draw drew, placed by
-    /// [`sprite`]: `flamethrowerFire{2..44}` by the chunk's share of its
-    /// life (0x300268e0), smoke as `flameSmoke{1..6}` ([`colour`]).
-    /// `halve` is the cgame's `r_fullscreen` and `r_overbrightbits` test.
+    /// The chain draw's order (0x300290f5..0x30029164): the chain heads
+    /// at 0x300d9750 run newest first, the pool call putting each new one
+    /// in front and taking a stream chunk's parent out (0x30025600..
+    /// 0x300256d1), and 0x300272b0 walks each from its newest chunk down
+    /// `+0x8`. The indices of [`Self::chunks`] in that order.
+    fn walk(&self) -> Vec<usize> {
+        let mut newest: HashMap<u32, u64> = HashMap::new();
+        for c in &self.chunks {
+            if let (Kind::Stream, Some((id, ..))) = (c.kind, c.chain) {
+                let n = newest.entry(id).or_default();
+                *n = (*n).max(c.seq);
+            }
+        }
+        let head = |c: &Chunk| match c.chain {
+            Some((id, ..)) if c.kind == Kind::Stream => newest[&id],
+            _ => c.seq,
+        };
+        let mut order: Vec<usize> = (0..self.chunks.len()).collect();
+        order.sort_by_key(|&i| std::cmp::Reverse((head(&self.chunks[i]), self.chunks[i].seq)));
+        order
+    }
+
+    /// Camera-facing sprites of the chunks the chain draw drew, in its
+    /// order ([`Self::walk`]), placed by [`sprite`]: `flamethrowerFire{2..44}`
+    /// by the chunk's share of its life (0x300268e0), smoke as
+    /// `flameSmoke{1..6}` ([`colour`]). The roll goes in whole degrees,
+    /// `_ftol` (0x3006be3c) truncating it (0x3002699e..0x300269ac,
+    /// 0x30026dc8). `halve` is the cgame's `r_fullscreen` and
+    /// `r_overbrightbits` test.
     pub fn quads(&self, now: f64, view: &SpriteView, halve: bool) -> Vec<FxQuad> {
         let (cam_right, cam_up) = (view.right, view.up);
-        self.chunks
-            .iter()
+        let mut near = 0;
+        self.walk()
+            .into_iter()
+            .map(|i| &self.chunks[i])
             .filter(|c| c.drawn)
             .filter_map(|c| {
-                let (p, r) = sprite(c, view.eye, view.forward)?;
+                let (p, r) = sprite(c, view.eye, view.forward, &mut near)?;
                 let frac = ((now - c.born) as f32 / c.life).clamp(0.0, 1.0);
                 let shader = match c.kind {
                     Kind::Smoke(n) => format!("flameSmoke{n}"),
@@ -1332,7 +1419,7 @@ impl FlameSystem {
                         format!("flamethrowerFire{frame}")
                     }
                 };
-                let (s, co) = c.roll.to_radians().sin_cos();
+                let (s, co) = c.roll.trunc().to_radians().sin_cos();
                 let right = (cam_right * co + cam_up * s) * r;
                 let up = (cam_up * co - cam_right * s) * r;
                 Some(FxQuad {
@@ -1368,9 +1455,11 @@ pub struct SpriteView {
 /// within its radius of the eye goes 20 behind it (0x30026a4b..0x30026ae5).
 /// The radius is held to 0.5 (0x30026aef..0x30026b00), a sprite whose
 /// centre is not ahead of the eye is dropped (0x30026d41..0x30026d88),
-/// and the quad is raised by `0.55 * min(radius, 72.5) - 8.8`
+/// one whose depth is under the chunk's size counts in `near`, and past
+/// [`NEAR_SPRITES`] of those is dropped too (0x30026d8e..0x30026dab). The
+/// quad is raised by `0.55 * min(radius, 72.5) - 8.8`
 /// (0x30027005..0x300270cb).
-fn sprite(c: &Chunk, eye: Vec3, forward: Vec3) -> Option<(Vec3, f32)> {
+fn sprite(c: &Chunk, eye: Vec3, forward: Vec3, near: &mut u32) -> Option<(Vec3, f32)> {
     let mut p = c.pos;
     let mut r = c.size * 0.5;
     if c.normal != Vec3::ZERO && c.normal.z < 0.0 {
@@ -1384,8 +1473,15 @@ fn sprite(c: &Chunk, eye: Vec3, forward: Vec3) -> Option<(Vec3, f32)> {
         r *= pull / len + 1.0;
     }
     r = r.max(0.5);
-    if forward.dot(p - eye) <= 0.0 {
+    let depth = forward.dot(p - eye);
+    if depth <= 0.0 {
         return None;
+    }
+    if depth < c.size {
+        *near += 1;
+        if *near > NEAR_SPRITES {
+            return None;
+        }
     }
     p.z += r.min(72.5) * 0.55 - 8.8;
     Some((p, r))
@@ -1535,6 +1631,7 @@ mod tests {
             chain: None,
             drawn: true,
             normal: Vec3::ZERO,
+            seq: 0,
         }
     }
 
@@ -2104,6 +2201,7 @@ mod tests {
             death: 3000.0,
             next_emit: 1000.0,
             sink: RESIDUE_SINK,
+            seq: 0,
         };
         let run = |world: &CollisionWorld, from: f64| {
             let mut f = FlameSystem::default();
@@ -2359,6 +2457,7 @@ mod tests {
             death: 3000.0,
             next_emit: 1000.0,
             sink: RESIDUE_SINK,
+            seq: 0,
         });
         let r = f.residues[0];
         let mut now = 1000.0;
@@ -2511,7 +2610,7 @@ mod tests {
                 normal,
                 ..fire(4, pos, size, 0.0, LIFE_MS)
             };
-            sprite(&c, Vec3::ZERO, Vec3::X).map(|(p, r)| (p.to_array(), r))
+            sprite(&c, Vec3::ZERO, Vec3::X, &mut 0).map(|(p, r)| (p.to_array(), r))
         };
         let near = |got: Option<([f32; 3], f32)>, want: ([f32; 3], f32)| {
             let (p, r) = got.expect("drawn");
@@ -2541,6 +2640,96 @@ mod tests {
         near(at(high, 40.0, false, Vec3::Z), ([200.0, 0.0, 102.2], 20.0));
         let slant = Vec3::new(0.6, 0.0, -0.8);
         near(at(high, 40.0, false, slant), ([200.0, 0.0, 86.2], 20.0));
+    }
+
+    /// The view along +x from the origin.
+    const ALONG_X: SpriteView = SpriteView {
+        eye: Vec3::ZERO,
+        forward: Vec3::X,
+        right: Vec3::NEG_Y,
+        up: Vec3::Z,
+    };
+
+    /// 0x300290f5..0x30029164 and 0x30026d8e..0x30026dab: the chain draw
+    /// walks the newest chain first, each from its newest chunk, and the
+    /// sprite add draws 51 chunks a frame whose depth is under their size;
+    /// later ones are dropped, and one at a depth of its size still draws.
+    #[test]
+    fn the_sprite_add_draws_51_near_chunks_a_frame_in_the_chain_walks_order() {
+        let at = |seq: u64, size: f32, chain: Option<u32>| Chunk {
+            kind: if chain.is_some() {
+                Kind::Stream
+            } else {
+                Kind::Trail
+            },
+            chain: chain.map(|id| (id, Vec2::ZERO, Vec3::ZERO)),
+            seq,
+            ..fire(4, Vec3::new(100.0, seq as f32, 0.0), size, 0.0, LIFE_MS)
+        };
+        let mut chunks = vec![at(0, 100.0, None), at(1, 120.0, Some(1))];
+        chunks.extend((2..=53).map(|seq| at(seq, 120.0, None)));
+        chunks.push(at(100, 120.0, Some(1)));
+        let f = FlameSystem {
+            chunks,
+            ..FlameSystem::default()
+        };
+        let order: Vec<u64> = f.walk().into_iter().map(|i| f.chunks[i].seq).collect();
+        assert_eq!(order[..4], [100, 1, 53, 52]);
+        assert_eq!(order[order.len() - 2..], [2, 0]);
+        let drawn: Vec<u64> = f
+            .quads(500.0, &ALONG_X, false)
+            .iter()
+            .map(|q| ((q.verts[0][1] + q.verts[2][1]) / 2.0).round() as u64)
+            .collect();
+        let mut want = vec![100, 1];
+        want.extend((5..=53).rev());
+        want.push(0);
+        assert_eq!(drawn, want);
+    }
+
+    /// `_ftol` (0x3006be3c) truncates toward zero: the sprite add turns the
+    /// quad by the roll's whole degrees (0x3002699e..0x300269ac,
+    /// 0x30026dc8).
+    #[test]
+    fn the_sprite_turns_by_the_rolls_whole_degrees_toward_zero() {
+        let verts = |roll: f32| {
+            let f = FlameSystem {
+                chunks: vec![Chunk {
+                    roll,
+                    ..fire(4, Vec3::new(200.0, 0.0, 0.0), 40.0, 0.0, LIFE_MS)
+                }],
+                ..FlameSystem::default()
+            };
+            f.quads(500.0, &ALONG_X, false)[0].verts
+        };
+        assert_eq!(verts(30.9), verts(30.0));
+        assert_eq!(verts(-30.9), verts(-30.0));
+        assert_ne!(verts(30.0), verts(31.0));
+    }
+
+    /// 0x30027db5..0x300290c9 and 0x3002562f..0x30025640: the move pass
+    /// walks the pool newest first and lays each birth in front, so the
+    /// oldest parent's births end up newest and draw first; a trail
+    /// step's smoke comes after its flame (0x30027f8a, 0x30028cca).
+    #[test]
+    fn a_frames_births_take_their_place_from_their_parents_age() {
+        let mut f = FlameSystem {
+            seq: 10,
+            ..FlameSystem::default()
+        };
+        let born = |x: f32| fire(4, Vec3::new(x, 0.0, 0.0), 40.0, 0.0, LIFE_MS);
+        f.allocate(vec![
+            (5, Birth::Chunk(born(1.0))),
+            (5, Birth::Chunk(born(2.0))),
+            (9, Birth::Chunk(born(3.0))),
+            (7, Birth::Chunk(born(4.0))),
+        ]);
+        let walked: Vec<(f32, u64)> = f
+            .walk()
+            .into_iter()
+            .map(|i| (f.chunks[i].pos.x, f.chunks[i].seq))
+            .collect();
+        assert_eq!(walked, [(2.0, 14), (1.0, 13), (4.0, 12), (3.0, 11)]);
     }
 
     /// 0x300272b0 on a chain not live: newest first, a chunk takes in the

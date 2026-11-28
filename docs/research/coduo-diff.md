@@ -2252,12 +2252,73 @@ trap 0x40. Addresses are `uo_cgame_mp_x86.dll`; `cg.refdef.vieworg` is
   shader is `+0x30` if set, else frame `clamp(_ftol(floor(frac * 43)),
   0, 42)` of the fire sprites (0x3007c218, the table 0x300a8508)
   (0x30026fcc..0x30027130) (VERIFIED (the instructions)).
+- **The count.** `CG_AddFlameChunks` (0x30027d10, its one call at
+  0x3004262e) zeroes 0x300d9880 before its move pass (`mov
+  [0x300d9880],ebp` at 0x30027df0, EBP 0 from 0x30027d47) (VERIFIED (the
+  instructions)). So the count runs per frame across every chain
+  (INFERRED, the caller draws the frame). The depth is `len`, the length of the
+  projection less `vieworg`, which 0x30049700 returns as it normalizes the
+  line (0x30026d41; 0x3004a520 projects onto the unit `viewaxis[0]`).
+  `fcomp [ebp+0xe4]` with `test ah,0x5` / `jp` (0x30026d8e..0x30026d99)
+  counts a chunk only when `len` is below its full size `+0xe4`, strictly:
+  equal or unordered skips the count. The count loads, bumps and stores
+  the counter, then `cmp ecx,0x32` / `jg` on the old value (0x30026d9b..
+  0x30026dab), so the 52nd counted chunk and every later one return at
+  0x30027295 with no quad. The walk goes on: a later chunk not under its
+  size still draws (VERIFIED (the instructions)). The size is the chunk's,
+  not the pulled radius, and the depth the pulled centre's, before the
+  rise (INFERRED, the operands).
+- **The order.** The sprite add's only caller is the chain draw (19.3.5),
+  so its order is the chain walk's: the heads from 0x300d9750 down `+0xc`
+  (0x300290f5..0x30029164), each chain from its newest chunk down `+0x8`.
+  The pool call (0x30025600) puts each new chunk at the front of the heads
+  (0x300256b3..0x300256c3) and, given a parent (a type 0 chunk's ESI, 19.3.2
+  "Its link"), takes the parent out (0x3002567c..0x300256ab); the free
+  (0x300256e0) unlinks a head (0x30025731..0x30025759) (VERIFIED (the
+  instructions)). So the heads run newest chain first, a stream's chain
+  keeping the place its newest chunk took (INFERRED, the links). The move
+  pass walks the pool newest first (0x300ab728 down `+0x0`, 0x30027db5,
+  0x30027e08 and 0x300290c1), and each chunk it lays goes in front of the pool
+  (0x3002562f..0x30025640), unvisited that frame; a chunk's trail steps
+  (0x30027f22..0x30029063) lay a flame (pool call 0x30027f8a, ESI 0 at
+  0x30027f7b) and then its smoke (0x30028cca, ESI 0 at 0x30028cc4), and its
+  own move (0x3002909b) lays its residue (0x3002646b) after them (VERIFIED
+  (the instructions)). So a frame's births are laid by their parents'
+  age, the newest parent's first, and draw in the reverse: the oldest
+  parent's last birth first, a smoke before its flame (INFERRED, the two
+  orders).
+- **A dead head.** The pool call reads the first head and, when its
+  `+0x24` is set, links the new chunk in with a next of 0
+  (0x3002560e..0x3002561e, 0x300256c0) (VERIFIED (the instructions)).
+  The move pass marks a type 0 or 1 chunk dead and leaves it for the chain
+  draw (0x300290b0..0x300290be), so a chunk laid in the move pass after a
+  stream's last chunk died at the front cuts every older chain off the
+  heads: never drawn again, and the dead chunk never freed (INFERRED, the
+  links). That needs the stream's last chunk at the front, nothing laid
+  in the 1166 ms since, and then a birth off an older chunk in the same
+  pass, such as a residue's flame; vcod leaves it out.
+- **The roll.** With the fourth argument 1 the roll is `+0x98` (0x30026994..
+  0x3002699e), `_ftol` (0x3006be3c, 0x300269ac) makes it an integer, and
+  `fild` stores it back as `angles[2]` for 0x3004a200 (0x30026dc8..
+  0x30026de0) (VERIFIED (the instructions)). `_ftol` rounds with `fistp`
+  and takes one off a positive value that rounded up, or adds one to a
+  negative value that rounded down (0x3006be45..0x3006be99), so it
+  truncates toward zero (VERIFIED (the instructions)).
 - **vcod.** `fx::flame::sprite` runs the ceiling drop, the pull, the floor,
-  the cull and the rise; `FlameSystem::quads` lays the quad at its result
-  (`the_sprite_add_pulls_the_views_own_chunks_in_and_lowers_one_off_a_ceiling`).
-  `Chunk::normal` is `+0x118`, set at a contact in `move_chunk`. Left out:
-  the count of 51 near the eye, since vcod's quads go in pool order, not
-  the chain walk's; and the roll's truncation to whole degrees.
+  the cull, the count of 51 and the rise; `FlameSystem::quads` lays the
+  quad at its result, the roll truncated
+  (`the_sprite_add_pulls_the_views_own_chunks_in_and_lowers_one_off_a_ceiling`,
+  `the_sprite_add_draws_51_near_chunks_a_frame_in_the_chain_walks_order`,
+  `the_sprite_turns_by_the_rolls_whole_degrees_toward_zero`).
+  `Chunk::normal` is `+0x118`, set at a contact in `move_chunk`.
+  `FlameSystem::walk` gives the chain walk's order off `Chunk::seq`, the
+  allocation order, and `quads` and `report` go in it. A stream chunk's
+  `seq` is its emission's; `FlameSystem::allocate` hands the move pass's
+  births theirs by their parents' `seq`, newest parent first
+  (`a_frames_births_take_their_place_from_their_parents_age`). A residue
+  carries a `seq` too, and its flames key on it. vcod's move pass still
+  walks the pool oldest first, and its residue flames move in their birth
+  frame. Left out: the dead head's cut.
 
 ### 19.4 HUD
 
