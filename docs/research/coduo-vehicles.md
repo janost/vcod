@@ -1242,8 +1242,12 @@ that move, alias and snapped origin (`compare_impacts`).
     0.1 to 0.3 units off retail's (two runs), so the 2026-10-17 capture,
     whose drop ours meets, stayed. VERIFIED, the gate on those runs. The
     2026-11-28 recapture that replaced it (11.6.1) lands on retail's
-    numbers to the hundredth (VERIFIED, the gate); the two runs' slide
-    stays unread.
+    numbers to the hundredth (VERIFIED, the gate). So do eight more prone
+    runs taken 2026-11-28 on its recipe without gdb, two with a spawn velocity ((-9,
+    -12, -3) and (-12, -2, -2)), every line of each, first drop to ram
+    sounds (VERIFIED, the gate on each). The two sliding runs were not
+    kept, so their slide stays unread, and whether a pmove change since
+    2026-11-14 closed it is not known.
   - a victim who lies down on his placement 300 ahead (the driverless
     prone runs below) lands 300 ms later on the grade, and retail slides
     him 0.35 units on along y over two frames where ours stops: every one
