@@ -44,7 +44,12 @@ fn the_position_test_kernels_answer_as_iw3mps() {
             }
             other => panic!("kernel {other}"),
         };
-        assert_eq!(got, want, "{line}");
+        // A degenerate triangle answers NaN. x87's default NaN is negative
+        // (0xffc00000) and AArch64's positive, and no caller reads its sign.
+        let nan = |b: u32| k < 2 && f32::from_bits(b).is_nan();
+        if !(nan(got) && nan(want)) {
+            assert_eq!(got, want, "{line}");
+        }
         runs[k] += 1;
     }
     assert!(runs.iter().all(|&n| n > 50), "{runs:?}");
