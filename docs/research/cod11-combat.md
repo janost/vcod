@@ -6639,7 +6639,7 @@ both clients' stamps with the times plumbing the prone gate uses
 2) reads z 11.350475 against 11.350476, one float step, and the next
 contact re-bases it exactly; the second frag leaves the target's posed
 bones up to 0.0155 off retail's (its snapshots 5 to 78, the strike on and
-everything after it), the idle clip's pose the 0.1 gate already names.
+everything after it; closed in "The bounce off the target" below).
 vcod measurement: `SV_Trace`'s end point computed at 64 bits
 (`x87::F80`) instead of `f64` leaves the barrel's z where it was.
 
@@ -6664,20 +6664,41 @@ once it is retail's 11.350476. `game::missile`'s `full_trace` takes
 `combat::trace_point` for a model hit as for a body, and the first frag
 matches every snapshot to the bit.
 
-**The bounce off the target.** vcod measurement, the same replay: the
-second frag meets the target's bones 0.015 short of retail's along its
-flight (snapshot 5: (1490.4955, 2730.4294, -12.3102) against (1490.5105,
-2730.4446, -12.3088)), and every later base keeps that offset, so the
-struck face's normal is retail's within the print and the contact is not.
-The target has idled on `pb_stand_alert` for 14.55 s, and frag 0's blast
-(`PROBE hit 19900 axis dmg 77`) knocked him off the site: ours holds him
-at (1481.1371, 2721.1372, -23.875). Posing him 50 ms later moves the
-offset to 0.019, 50 to 200 ms earlier to 0.011. INFERRED: the gap is in
-his pose or his knocked origin; the capture logs neither after the blast
-(two `target FALL` lines, the spawn's), so it cannot tell them apart.
-Open: a retake that logs the target's origin each snapshot, or
-`tools/re/gdb_gunner_tree.py` on his anim records at the strike; the
-gate's `GRENADE_GAPS` names it.
+**The bounce off the target.** vcod measurement, the same replay
+before 2026-11-28: the second frag met the target's bones 0.015 short of
+retail's along its flight (snapshot 5: (1490.4955, 2730.4294, -12.3102)
+against (1490.5105, 2730.4446, -12.3088)), and every later base kept that
+offset.
+
+- VERIFIED, live (retail 1.1d, 2026-11-28, the recipe retaken with
+  `probe_targetlog 1` and the server under `tools/re/gdb_missile.py` and
+  `tools/re/gdb_gunner_tree.py`, grid mode on entity 0; fixtures
+  `mp_carentan-scriptmodel-grenade-target.txt` and `-target-gdb.txt`):
+  the target's origin is (1481.137085, 2721.137207, -23.874992) and his
+  angles (0, 225, 0) from 11850 to the end. No `PROBE target` line follows
+  that, so frag 0's blast (`PROBE hit 19750 axis dmg 77`) moved nothing.
+  INFERRED: the probe's damage callback only logs, so `finishPlayerDamage`
+  and its knockback (4.5) never run. Ours' replay logs the same lines to
+  the bit.
+- VERIFIED, the same gdb log: `pb_stand_alert` (node 122) reads node time
+  0 at the target's first weight step (level time 8800) and adds
+  0.00797872 a frame. At the steps of 23050 and 23100 it reads 0x3e8c41b3
+  (0.273939) and 0x3e90577d (0.281917). The second frag's move trace at
+  23050 strikes entity 0 at fraction 0x3cdf5614, hit location 14.
+- vcod measurement: ours posed that strike at node time 0.3297899, six
+  frames ahead. The gate's harness (`scriptmodel_ab::ours_pair_in`)
+  rejoins the target when his first playing frame misses the capture's,
+  and it read that frame only for the prone part. The grenade part's
+  target played 300 ms early: at 8550 against the `-cmds` capture's 8850,
+  and at 8450 against the retake's 8750. Rejoined on the capture's frame,
+  ours poses the strike at 0.28191748, retail's 23100 value. Both
+  captures' frags then match every missile snapshot to the bit (base,
+  `trType` and ground), with no row left open. INFERRED: so the trace
+  reads the node time of the frame's step that has already run.
+- VERIFIED, `PROBE body`: the retake's target wears
+  `playerbody_german_fallschirmjagergrey`, head `basehead_axis_b_02` and
+  `gear_german_load3_falshrm`. vcod measurement: ours draws these at
+  script seed 236 (`scriptmodel_ab::body_seed`).
 
 vcod: the move trace (`game::missile`) runs `combat::trace_bodies_faced`
 on every live body but the owner's while it passes, with the bone trace's
