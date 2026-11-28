@@ -566,7 +566,8 @@ The fix, on the server's `re` view (`Server::bot_re`, `pickup_reach`):
 - `ReObjView::sides`: of the nine tries (the middle and the eight sides
   40 off it, `objective::pickup_side`), those whose point the middle
   reaches at its own height and whose standing eye (60 over the floor
-  under the point) reaches the middle, by the pick's mask. The taps go
+  under the point) reaches the middle, by the pick's mask, and since
+  4.2.5 under which a standing box fits. The taps go
   round those alone; with none, round all nine as before
   (`server::bot_world::tests::a_pickup_is_seen_from_the_sides_on_its_side_of_a_wall`,
   `bots::objective::tests::the_taps_go_round_the_sides_that_see_the_pickup`).
