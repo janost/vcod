@@ -41,6 +41,10 @@
 #                  rows), at rest with its accumulators cleared and its
 #                  geoms marked moved (a drop the scenario only wakes)
 #   PHYS_CONTACT_IDS  "ID ID ...": only these bodies' collide and cut lines
+#   PHYS_GIVEUP    frames past the action with no body in the world that
+#                  end the run (default 600)
+#   PHYS_FX_FROM   the frame from which each effect started gets an `fx`
+#                  line (default PHYS_AT)
 import os
 import struct
 
@@ -62,6 +66,8 @@ PLACE = {int(k): [int(x, 16) for x in v.split(",")] for k, v in
          (e.split("=") for e in os.environ.get("PHYS_PLACE", "").split(";") if e)}
 assert all(len(v) == 19 for v in PLACE.values()), "PHYS_PLACE: 19 words a body"
 CONTACT_IDS = {int(x) for x in os.environ.get("PHYS_CONTACT_IDS", "").split()}
+GIVEUP = int(os.environ.get("PHYS_GIVEUP", "600"))
+FX_FROM = int(os.environ.get("PHYS_FX_FROM", str(AT)))
 
 CL_INGAME = 0xC5F8F0  # dvar_t*, bool value at +0xc
 CBUF = 0x1410BD4  # local client 0: data, maxsize, cursize
@@ -166,6 +172,10 @@ def on_frame():
             return
         st["ingame"] = 0
     st["frame"] += 1
+    if not st["started"] and st["frame"] > AT + GIVEUP:
+        log("# frame %d: no body by now" % st["frame"])
+        st["done"] = True
+        return
     for f, cmd in SCRIPT:
         if f == st["frame"]:
             log("# frame %d time %d: %s" % (f, i32(CLOCKS + WORLD * 0xCC + 4), cmd))
@@ -371,6 +381,16 @@ def on_fxbody():
     log("fxbody elem %d seed %d | effect %s" % (index, seed, words(eff, 0x60 // 4)))
 
 
+def on_effect():
+    # FX_SpawnEffect 0x4a142d, ebp the effect (def +0, the def's name +0)
+    # with its frame set: each effect started from PHYS_FX_FROM
+    if st["frame"] < FX_FROM:
+        return
+    eff = reg("ebp")
+    name = gdb.selected_inferior().read_memory(u32(u32(eff)), 96).tobytes().split(b"\0")[0]
+    log("# frame %d fx %s | %s" % (st["frame"], name.decode("latin-1"), words(eff + 0x28, 7)))
+
+
 def on_round():
     # DynEntCl_EntityImpactEvent 0x48e0f0: a round's leg walked the dynents
     log("# frame %d round leg" % st["frame"])
@@ -405,6 +425,7 @@ B(0x4FFCE0, on_frame)
 for a in CREATORS:
     B(a, on_made)
 B(0x48E0F0, on_round)
+B(0x4A142D, on_effect)
 if WORLD == 1:
     B(0x4A1FF0, on_fxbody)
 B(0x5A6D50, on_run_to_time)
