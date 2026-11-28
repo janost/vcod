@@ -467,13 +467,17 @@ trace walk and at 0x4f2193) stores each axial bound `half + half_sweep`
 `mesh4`'s `point_tri_client`, `sweep_edge_client`, `vertex_client`,
 `capsule_border_client` and `border_sphere_client`, and `Cx::cull_box`
 under `TraceFloats::Cod4Client`, take this model; `mesh4`'s tests pin an
-input per arm where the two models part. VERIFIED (the tests, ours). No
-take tells these five apart yet: the phys gates (bit-exact) and the
-ragdoll gates pass with them, and the ragdoll sweeps takes (cod4-gsc.md
-3.6.9) read retail's with or without them. No phys or fall take contact
-is on a triangle; the roof take's 126 hits all are, and
-there the client's capsule kernel (0x4f05c0) gives retail's where the
-server's parts on 94. VERIFIED (the runs, ours).
+input per arm where the two models part. VERIFIED (the tests, ours). The
+edges take (cod4-gsc.md 3.6.9) tells the edge kernel apart: the sweep
+that catches each of its two shards on a terrain ridge ends on 0x4eff70,
+and with the server's edge kernel (`sweep_edge`) in the client's trace
+both part from retail's, by an ulp of the fraction and the normal's low
+bits. VERIFIED (the run, ours, the swap on a lab build). No take tells
+the other four apart: the phys gates (bit-exact) and the ragdoll gates
+pass with them, and the sweeps takes read retail's with or without them.
+The fall take's contacts are brushes; the roof take's 126 hits are all
+triangles, and there the client's capsule kernel (0x4f05c0) gives
+retail's where the server's parts on 94. VERIFIED (the runs, ours).
 
 ### 3.1 The client's position test
 
@@ -654,5 +658,14 @@ down, mask 0x2810011, the player's box (-15,-15,0)..(15,15,70). VERIFIED
   boxes are all cubes. VERIFIED (the port's sweep, the take). No take
   has such a test over a triangle away from its v0, so the
   retail-visible effect is not measured.
+- A take whose sweep ends on the corner, the border or the border sphere,
+  or a point sweep (`Ragdoll_BoneTrace`) on a triangle. A 0.001 box
+  dropped straight over a terrain vertex meets a face at its corner
+  (0x4f05c0's edge coordinates read 0 there, so the contact is inside),
+  and 4000 port drops of a turned shard over mp_crash's ridges and peaks
+  met no corner: the sphere has to pass just outside the faces' outline
+  along the sweep. A cube's capsule has no length, so the border arm
+  never runs for a phys or ragdoll sweep (0x4f2118..0x4f2139). VERIFIED
+  (the runs, ours).
 - The server's pmove and script traces run over this clip map
   (cod4-pmove.md 15).

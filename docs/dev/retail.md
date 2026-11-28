@@ -386,6 +386,12 @@ python3 -I tools/re/cod4_phys_summary.py tmp/phys.txt [--trim OUT]
   and its geoms marked moved. The scenario only wakes it, so a prop drops
   where retail never puts one (the shards take: two barrel shards over a
   step edge). `part_edges`' drops give the words.
+- `PHYS_TRACES=1` logs each after-frame sweep (the `CM_Trace` call at
+  0x5a6aea) and the `trace_t` it filled, as the ragdoll driver's
+  `RAGDOLL_TRACES`. A shard put flat over a terrain ridge's edge falls
+  straight onto it, and the sweep that catches it ends on the client's
+  edge kernel; `ragdoll_ab::sweeps_as_retails` replays the lines (the
+  edges take, the fixture README).
 - A long take's body lines thin out with `cod4_phys_summary.py --every
   K`: every Kth step, and each body's first and first asleep step.
 - Every effect started from frame `PHYS_FX_FROM` (default `PHYS_AT`)
