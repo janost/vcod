@@ -919,7 +919,7 @@ fn a_frag_bounces_off_a_script_model_and_a_players_bones() {
 /// target's posed bones included (docs/research/cod11-combat.md 12.4).
 #[test]
 fn a_frag_bounces_off_a_script_model_and_a_players_bones_like_retail() {
-    grenade_like_retail(
+    let _ = grenade_like_retail(
         include_str!("fixtures/scriptmodel/mp_carentan-scriptmodel-grenade-cmds.txt"),
         "grenade",
     );
@@ -931,7 +931,9 @@ fn a_frag_bounces_off_a_script_model_and_a_players_bones_like_retail() {
 #[test]
 fn a_frag_bounces_off_a_logged_target_like_retail() {
     let fixture = include_str!("fixtures/scriptmodel/mp_carentan-scriptmodel-grenade-target.txt");
-    let ours = grenade_like_retail(fixture, "grenade probe_targetlog 1");
+    let Some(ours) = grenade_like_retail(fixture, "grenade probe_targetlog 1") else {
+        return;
+    };
     let target = |lines: &mut dyn Iterator<Item = &str>| -> Vec<String> {
         lines
             .filter(|l| l.starts_with("PROBE target "))
@@ -945,11 +947,9 @@ fn a_frag_bounces_off_a_logged_target_like_retail() {
 
 /// Replays a grenade-part capture that logged both clients' cmds on their
 /// stamps: every missile snapshot's `trType`, base and ground retail's to
-/// the bit. Returns ours' lines.
-fn grenade_like_retail(fixture: &str, part: &str) -> Vec<String> {
-    let Some(fs) = vcod_common::testing::game_fs_11() else {
-        return Vec::new();
-    };
+/// the bit. Returns ours' lines, `None` without a 1.1 install.
+fn grenade_like_retail(fixture: &str, part: &str) -> Option<Vec<String>> {
+    let fs = vcod_common::testing::game_fs_11()?;
     let ours = ours_pair_in(
         fs,
         "mp_carentan",
@@ -974,7 +974,7 @@ fn grenade_like_retail(fixture: &str, part: &str) -> Vec<String> {
             assert_eq!(a, b, "grenade {g} snapshot {s}");
         }
     }
-    ours
+    Some(ours)
 }
 
 /// mp_carentan on UO: the grenade part's barrel with `setContents`
