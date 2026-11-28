@@ -379,6 +379,13 @@ python3 -I tools/re/cod4_phys_summary.py tmp/phys.txt [--trim OUT]
   step edge). `part_edges`' drops give the words.
 - A long take's body lines thin out with `cod4_phys_summary.py --every
   K`: every Kth step, and each body's first and first asleep step.
+- Every effect started from frame `PHYS_FX_FROM` (default `PHYS_AT`)
+  gets a `# frame F fx NAME` line, and a run whose world has no body
+  `PHYS_GIVEUP` (600) frames past the action ends there. A frag held 30
+  frames explodes about 230 frames past its release. On mp_crossfire's
+  upper floor at (5752, -1226, 160), wood by the clip map though drawn
+  as tiles, no effect started in the 600 frames past the throw; the
+  wood take's mp_backlot floor did (the fixture README).
 - The format and the committed takes: `crates/cod4/tests/fixtures/phys/README.md`.
 
 ## Public servers and the master
