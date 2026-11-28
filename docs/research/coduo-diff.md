@@ -1172,7 +1172,7 @@ The client side: vcod watches and plays on a UO server.
   (`pk3::base_dirs`), as section 1's `FS_Startup` order; the stock pak test
   knows `uo/pakuo*`.
 - **Drawn.** Players, corpses, items, script models and movers as on 1.1.
-  `eType` 9, 14 and 15 draw nothing. The fog and the spectator header's
+  `eType` 9 and 14 draw nothing; 15 is the owner icon (19.4.1). The fog and the spectator header's
   timer read their slots through `Cod1Wire::cs` (13 and 14; the retail
   gamestate's 13 holds the fog's `"0"` and 14 the start time, VERIFIED,
   `the_uo_timer_reads_the_rebased_start_slot`). The ammo and health items
@@ -1976,6 +1976,45 @@ switches on the owner draw id through 0x300326e8 / 0x30032648 (VERIFIED).
   (`adsOverlayShader`); no artillery marker or range readout exists
   (VERIFIED).
 
+#### 19.4.1 The owner icon
+
+`eType` 15, the marker `_teams.gsc`'s vehicle purchase spawns over the
+bought vehicle (`spawn("script_vehicle_owner_icon", vehicle.origin)`, its
+`vehicle_owner`, `duration` 10 and `radius` 130 for a jeep, 170 for a
+tank; VERIFIED, `pakuo` `maps/mp/gametypes/_teams.gsc`). No stock script
+sets the `supply_available` the purchase checks first, so only a mod
+reaches it (VERIFIED, a search of the `pakuo` and `uomappack00` scripts).
+
+- **The game.** `SP_script_vehicle_owner_icon` (`game.mp.uo.i386.so`
+  0xa19fd) sets `eType` 15 and a think 100 ms on. That think,
+  `script_vehicle_owner_enable` (0xa18e2), once `vehicle_owner` is a
+  client: copies the origin into `pos.trBase`, sets `r.singleClient` to
+  the owner and `svFlags` 0x800, `s.time` to `level.time` plus `duration`
+  seconds and `s.leanf` to `radius`, and links it (INFERRED (decompile)).
+  So only the buyer gets it (INFERRED, 0x800 as Q3's
+  `SVF_SINGLECLIENT`).
+- **The draw.** Case 15 of `CG_AddCEntity` (jump table 0x30022228, entry
+  0x300221ec) runs 0x30021540 (VERIFIED (the instructions)):
+  - registers `gfx/hud/headicon@us_rank1.dds` (0x30077184) and sets the
+    entity's `lerpOrigin` to `pos.trBase`;
+  - for `k` 0, 500 and 1000, takes the phase `p = (cg.time + k) % 1500`
+    and an alpha of `p * 0.002` under 500, `(1500 - p) * 0.002` past 1000,
+    else 1 (0x3007bf28); once `cg.time` is past `s.time - 2000` it scales
+    that by `(s.time - cg.time) * 0.0005` (0x3007c058); the alpha is that
+    to the power 1.5 (0x3007c278, a double);
+  - hands 0x300213c0 the height `ftol(leanf - ftol(p * 0.0533333))`
+    (0x3007c280), no distance scale and a rotation of 180 (`push 0xb4`).
+  - 0x300213c0 places a `reType` 4 sprite at the `lerpOrigin` raised by
+    the height plus 72 (0x3007be18), radius 20 (0x3007be04), white, the
+    alpha times 255 (0x3007bd64) as its alpha byte (VERIFIED (the
+    instructions)).
+  - So three upside-down chevrons fall 80 units from `radius` over each
+    1.5 s, a third of a cycle apart, fading in and out, all fading over the
+    marker's last 2 s (INFERRED, the arithmetic).
+- **vcod.** `head_icon::owner_icon` draws it off the newest snapshot's
+  entity at the render clock. vcod-server's purchase spawns no
+  `script_vehicle_owner_icon` (no spawn function for the classname).
+
 ### 19.5 The turret view
 
 Read off the UO cgame disassembly over 0x30041550..0x30041a2c, called from
@@ -2205,7 +2244,8 @@ wire's, as `event_dump` prints them.
   `CameraShake` and `F`
   (`fx::sim`), UO's earthquake fields
   (`play::quake`).
-- The HUD items above (`hud::uo`). Decoded `pm_flags` keep sprinting,
+- The HUD items above (`hud::uo`), the owner icon (19.4.1,
+  `head_icon::owner_icon`). Decoded `pm_flags` keep sprinting,
   winded and overheated at 0x1000000, 0x2000000, 0x4000000 (`PMF_*_V22`).
 - The captures gate the dispatch (`fx::registry`'s and `audio::cues`'
   `uo_capture_gates`, `AudioSystem`'s
