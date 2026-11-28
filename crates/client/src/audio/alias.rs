@@ -135,6 +135,26 @@ pub struct AliasTable {
     pub(crate) cod1: bool,
     /// What CoD2's loader would print as `^1ERROR` lines, one per message.
     pub errors: Vec<String>,
+    /// United Offensive's `soundloadspecs/mp/<map>.csv` by map, `default`
+    /// among them: the alias files a level loads, in order
+    /// ([`Self::for_uo_map`]).
+    pub(crate) load_specs: HashMap<String, Vec<String>>,
+}
+
+/// A load spec's file names (`CoDUOMP.exe` 0x437d70): a line's first token,
+/// lowercased, each once; a blank line or one whose token opens with `#`
+/// lists nothing.
+fn parse_load_spec(text: &str) -> Vec<String> {
+    let mut files: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let token = line.trim_start().trim_start_matches('"');
+        let token = token.split_whitespace().next().unwrap_or("");
+        let token = token.trim_end_matches('"').to_ascii_lowercase();
+        if !token.is_empty() && !token.starts_with('#') && !files.contains(&token) {
+            files.push(token);
+        }
+    }
+    files
 }
 
 /// Upper bound for a row's `probability` weight.
@@ -407,6 +427,15 @@ impl AliasTable {
             cod1: true,
             ..AliasTable::default()
         };
+        for path in fs.file_list("soundloadspecs/mp", ".csv") {
+            let Some(bytes) = fs.read(&path) else {
+                continue;
+            };
+            let map = path.rsplit('/').next().unwrap_or(&path);
+            let map = map.trim_end_matches(".csv").to_ascii_lowercase();
+            let files = parse_load_spec(&String::from_utf8_lossy(&bytes));
+            table.load_specs.insert(map, files);
+        }
         for path in fs.file_list("soundaliases", ".csv") {
             match fs.read(&path) {
                 Some(bytes) => {
@@ -476,6 +505,45 @@ impl AliasTable {
             }
         }
         out
+    }
+
+    /// The rows a United Offensive level loads (`CoDUOMP.exe` syscall 0xc2,
+    /// 0x401f30's case; coduo-diff.md 16): only the files `map`'s load spec
+    /// lists, else `default.csv`'s, read in the spec's order, then
+    /// [`Self::for_map`]. With no spec at all every file loads.
+    pub fn for_uo_map(&self, map: &str) -> AliasTable {
+        let key = map.to_ascii_lowercase();
+        let files = self
+            .load_specs
+            .get(&key)
+            .or_else(|| self.load_specs.get("default"));
+        let (Some(files), false) = (files, key.is_empty()) else {
+            return self.for_map(map);
+        };
+        let rank = |csv: &str| {
+            let base = csv.rsplit('/').next().unwrap_or(csv);
+            files.iter().position(|f| f.eq_ignore_ascii_case(base))
+        };
+        let mut kept: Vec<(usize, &AliasRow)> = self
+            .rows
+            .values()
+            .flatten()
+            .filter_map(|r| Some((rank(&r.csv)?, r)))
+            .collect();
+        kept.sort_by_key(|&(i, r)| (i, r.order));
+        let mut spec = AliasTable {
+            skipped: self.skipped,
+            cod1: self.cod1,
+            ..AliasTable::default()
+        };
+        for (order, (_, r)) in kept.into_iter().enumerate() {
+            let row = AliasRow {
+                order: order as u32,
+                ..r.clone()
+            };
+            spec.rows.entry(r.name.clone()).or_default().push(row);
+        }
+        spec.for_map(map)
     }
 
     /// Weighted variant for `name`; `roll` is uniform in `[0, 1)`. With 3+
@@ -618,6 +686,46 @@ mod tests {
         let x = &t.get("x").unwrap()[0];
         assert_eq!(x.master_slave, MasterSlave::Slave(25.0));
         assert_eq!(x.loadspec, "! airfield");
+    }
+
+    /// 0x437d70: a UO level loads only its spec's files, `default.csv`'s
+    /// for a map with none, in the spec's order; with no spec, all.
+    #[test]
+    fn a_uo_level_loads_only_its_load_specs_files() {
+        let mut fs = vcod_common::pk3::Pk3Fs::empty();
+        fs.overlay(
+            "soundaliases/a.csv",
+            b"name,file\nshared,a.wav\nonly_a,a.wav\n".to_vec(),
+        );
+        fs.overlay(
+            "soundaliases/b.csv",
+            b"name,file\nshared,b.wav\nonly_b,b.wav\n".to_vec(),
+        );
+        fs.overlay(
+            "soundloadspecs/mp/mp_one.csv",
+            b"# the spec\n\"# quoted \"\"comment\"\"\"\nb.csv\na.csv\nB.csv\n".to_vec(),
+        );
+        fs.overlay("soundloadspecs/mp/default.csv", b"a.csv\n".to_vec());
+        let all = AliasTable::load(&fs);
+        assert_eq!(all.load_specs["mp_one"], ["b.csv", "a.csv"]);
+        let files = |t: &AliasTable, n: &str| -> Vec<String> {
+            t.get(n)
+                .map_or(Vec::new(), |r| r.iter().map(|r| r.file.clone()).collect())
+        };
+        let one = all.for_uo_map("mp_one");
+        assert_eq!(files(&one, "only_b"), ["b.wav"]);
+        // Two csvs' rows of one name and sequence keep the later csv name's.
+        assert_eq!(files(&one, "shared"), ["b.wav"]);
+        let two = all.for_uo_map("MP_Two");
+        assert_eq!(files(&two, "shared"), ["a.wav"]);
+        assert!(two.get("only_b").is_none());
+        // The front end and an install with no specs load everything.
+        assert!(all.for_uo_map("").get("only_b").is_some());
+        let bare = AliasTable {
+            load_specs: HashMap::new(),
+            ..AliasTable::load(&fs)
+        };
+        assert!(bare.for_uo_map("mp_two").get("only_b").is_some());
     }
 
     /// UO's no-repeat rule counts only the admitted rows (0x438300): two

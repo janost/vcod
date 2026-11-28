@@ -1931,6 +1931,7 @@ impl LiveCx<'_> {
                         .then(|| u32::try_from(newest.ps.field_i32(p, "viewlocked_entNum")).ok())
                         .flatten(),
                     voice: &|num| self.quick_chat.sprite(num, time),
+                    time: render_time.unwrap_or(0),
                 },
                 cam_right,
                 cam_up,

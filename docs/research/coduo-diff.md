@@ -909,7 +909,10 @@ version (`pmove::weapon::cooking`).
   three (VERIFIED). Every stock UO shader script parses without a warning
   (VERIFIED, `cod11-shader-scripts.md` 3).
 - **Effects.** 768 `fx/` and 970 `lofx/` files, the latter a new low-detail
-  tree; vcod's efx parser reads all 1738 (VERIFIED). New: a `CameraShake`
+  tree; vcod's efx parser reads all 1738 (VERIFIED). No string `lofx` is
+  in `CoDUOMP.exe`, `CoDUOSP.exe` or any of the install's cgame, game and
+  ui modules, whose one effect path format is `fx/%s` (cgame 0x30076e04)
+  (VERIFIED, a strings search). So nothing loads the tree (INFERRED). New: a `CameraShake`
   block (82 uses, key `intensity`), emitter keys `rotationAccel`,
   `rotationClamp`, `velocityClamp`, flags `clampRotation`,
   `clampVelocity[XYZ]`, `continualLighting`, spawn flags `oppositeAccel`,
@@ -984,11 +987,22 @@ The shader keyword's flag and its one reader, in `CoDUOMP.exe`:
   `type` value `loaded` appears (17 rows) (VERIFIED). vcod's alias parser
   keys columns by header, so both read without error (VERIFIED).
 - `soundloadspecs/mp/<map>.csv` (12 maps plus `default.csv`) chooses which
-  alias files load per map (VERIFIED, the files). That the engine reads them
-  is INFERRED from the header comment. vcod-server touches the map's spec
-  (or `default.csv`) for its pak list (section 24). The client loads every
-  `soundaliases/*.csv`, which under UO merges SP duplicates into MP alias
-  groups (`panzerIV_idle_low` has 7 rows across files, VERIFIED).
+  alias files load per map (VERIFIED, the files). The cgame's syscall 0xc2
+  (`CoDUOMP.exe` 0x401f30's case) does nothing for the level already
+  loaded; else it strips `maps/mp/` and `.bsp` off the name, lowercases it
+  and reads `soundloadspecs/mp/<map>.csv`, then each file it lists in
+  turn (0x44fab0, 0x437220) and sorts the table (0x437780) (INFERRED
+  (decompile)). The reader 0x437d70 falls back to `default.csv`
+  (0x59764c), errors when neither opens; it takes each line's first token,
+  skips a blank one or one opening with `#`, and lists a name once
+  (0x437ce0's compare) (INFERRED (decompile)). An empty list is a
+  `Com_Error` (0x439cc0) (INFERRED (decompile)). vcod-server touches the
+  map's spec (or `default.csv`) for its pak list (section 24). vcod's
+  client loads every `soundaliases/*.csv`; on a UO connection a level keeps
+  only its spec's files, in the spec's order (`AliasTable::for_uo_map`),
+  so SP duplicates no longer merge into MP alias groups
+  (`panzerIV_idle_low` has 7 rows across files, VERIFIED). The front end
+  keeps every file.
 - **Shells in flight.** The cgame registers a weapon file's
   `projectileSoundBlend1` and `2` (weaponDef +0xf8 and +0xfc, field table
   rows at 0x30084690 and 0x3008469c) through syscall 0xc3 into weaponInfo
@@ -1158,7 +1172,7 @@ The client side: vcod watches and plays on a UO server.
   (`pk3::base_dirs`), as section 1's `FS_Startup` order; the stock pak test
   knows `uo/pakuo*`.
 - **Drawn.** Players, corpses, items, script models and movers as on 1.1.
-  `eType` 9, 14 and 15 draw nothing. The fog and the spectator header's
+  `eType` 9 and 14 draw nothing; 15 is the owner icon (19.4.1). The fog and the spectator header's
   timer read their slots through `Cod1Wire::cs` (13 and 14; the retail
   gamestate's 13 holds the fog's `"0"` and 14 the start time, VERIFIED,
   `the_uo_timer_reads_the_rebased_start_slot`). The ammo and health items
@@ -1194,9 +1208,9 @@ The client side: vcod watches and plays on a UO server.
 - **Events, effects, HUD.** Section 19.
 - **Wheel dust** is `coduo-vehicles.md` 15.
 - **Not done.** The wheel suspension of section 9 (0.024 units at most on
-  the stock vehicles, not drawn),
-  `lofx/`, soundloadspecs on the client and the
-  rest of section 19's "Not done". The own gunner's gun and the drawn steer
+  the stock vehicles, not drawn) and the
+  rest of section 19's "Not done". No UO binary reads `lofx/` (section
+  13). The own gunner's gun and the drawn steer
   are `coduo-vehicles.md` 9, a shell's sound blend section 16, the server
   sections 20 to 22.
 - **Playing on foot.** The client predicts under `MoveRules::Uo` and sends
@@ -1304,11 +1318,37 @@ registered in 0x3002b560 (VERIFIED, strings).
     `es.pos` at the frame's time (0x30005f30) at 0x3004918e. The start
     0x3002ca80 takes the loop's handle (`weapons + 0x128`) in `eax`, the
     origin in `ecx` and `es.number` pushed, every frame time is left.
+  - The frame's call reaches syscall 0xc6, `CoDUOMP.exe` 0x4529f0, which
+    hands 0x452870 the alias as both rows of a blend at 0 (VERIFIED (the
+    instructions), the dispatch at 0x402d9f and the call at 0x452a0a). On
+    a loop already playing on the entity that is the looping dedupe
+    0x4523c0 of section 16's syscall 199: it sets the volume to the row's
+    `vol_min` times 0.8 (0x5b9c20, VERIFIED bytes), the pitch to `pitch_min` when the row
+    fixes it and not at 1, the rate and the 3D position (0x4510d0 on the
+    origin, called at 0x45251c), and the frame stamp, and starts nothing
+    (VERIFIED (the instructions), 0x4523c0..0x4527a4). It writes nothing
+    to a 3D voice's entity offset (`+0x28`, 0x9cc010 in the 0x38-byte
+    record at 0x9cbfe8; its only stores are the stream rows' 0x9ccff8, at
+    0x452776..0x452788) (VERIFIED (the instructions)).
+  - Each frame `S_Update`'s voice pass (0x454530) runs 0x4541d0 on every
+    live 3D voice, which rebuilds its position from that offset in the
+    frame cgame `vmMain` 14 returns for its entity (0x451030, `push 0xe` at
+    0x451043) and sets it (0x4510d0 at 0x454224) (VERIFIED (the
+    instructions)). So the loop stays at its first start's offset in the
+    body's frame and is not restarted; the refresh's own placement holds
+    until the voice pass (INFERRED, Q3's `CL_Frame` order). The start draws
+    the volume between `vol_min` and `vol_max` (0x4527c0); every later
+    frame drops it to `vol_min` (INFERRED, the two paths). On the stock
+    rows that is 1.25 against a start up to 1.4 (`weap_mg42_loop`,
+    `weap_sg43_loop`; VERIFIED, `gmi_mp_vehicles_ge.csv` and its kin).
   - vcod starts the loop and the stop as a `Source::Tag` at that origin
-    (`AudioSystem::fire_loop_source`) and keeps one voice on the entity's
-    frame (`cod11-sound-system.md` 8), where retail restarts the call each
-    frame. The tag barely moves in the body's frame, so the two sit within a
-    few units.
+    (`AudioSystem::fire_loop_source`), keeps one voice on the entity's
+    frame (`cod11-sound-system.md` 8) and refreshes its volume and fixed
+    pitch each frame (`AudioSystem::refresh_loop`); on a UO connection the
+    `loopSound` and `projectileSound` loops, which run through the same
+    0x3002ca80, refresh alike each snapshot. Left out: 0x452870's
+    `dist_max` cull before the refresh, after which the reaper ends the
+    voice until the body comes back in range.
   - A turret's loop rides `es.loopSound` from `turret_think` 0x6bc29; a
     vehicle's MGs ride its sound blend entities (VERIFIED,
     `game.mp.uo.i386.so`).
@@ -1739,8 +1779,11 @@ ticks (500 ms), so vcod's units a second are twice them.
   or not (INFERRED, the two branches). vcod lays its type 0 chunks from
   the first frame and has no head.
 - **A stream chunk.** Its speed is `(+0xb8 * 0.9 + 0.1) * 900`
-  (0x30024cbc, 0x3007bf6c, 0x3007c0d8), 900 with `+0xb8` 1, plus half the
-  owner's velocity, normalized as one (VERIFIED (the instructions)). Its `+0xa8` is
+  (0x30024cbc, 0x3007bf6c, 0x3007c0d8), 900 with `+0xb8` 1. Its direction
+  `+0x88` is the aim's times that speed plus the owner's velocity share,
+  normalized (0x30024d13..0x30024d5d); both `VectorNormalize` lengths
+  (0x30049700) are popped, so `+0x94` keeps the speed (VERIFIED (the
+  instructions)). Its `+0xa8` is
   60 (0x30024bea), `+0xbc` 1 (0x30024da8), `+0x14` 1 (0x30024c04)
   (VERIFIED (the instructions)).
 - **Its size.** The draw `+0x60` is `(0.75 * +0xb8 + 0.35) * (0.125 * (b
@@ -1782,15 +1825,44 @@ ticks (500 ms), so vcod's units a second are twice them.
   (0x30023ba6..0x30023c1c) (VERIFIED (the instructions)). 0x30025c60 adds
   it only while the size is under the cap, so a cap that falls does not
   shrink the chunk (VERIFIED (the instructions), 0x30025c63..0x30025c9e).
+- **The owner's velocity share** (0x300242c7..0x30024468; VERIFIED (the
+  instructions) and bytes):
+  - for the view's own body (`cg.snap`'s `clientNum`) whose `ps.velocity`
+    (`cg.snap+0x2c`) is longer than 1 (0x3007bce0), that velocity times
+    0.75 (0x3007be38);
+  - else, while the stream fires on (fired this frame or the last, or for
+    another body within 150 ticks, 0x300ab750, 0x300ab7a4), the nozzle's
+    move since its last firing frame (0x300ab760) times `1000 / ticks`
+    (0x3007be88), `ticks` since that frame held to 20 (0x3007c128);
+  - else 0; then halved (0x3007bce8). Against the nozzle's 900 a 1000
+    ticks, a body running at 190 units a second turns its own stream by
+    about 4.5 degrees (INFERRED, the arithmetic).
+- **The frame's lerp.** The chunks a call lays (the loop around the pool
+  call at 0x3002494e) take their nozzle, aim and velocity share lerped from the owner's last
+  (0x300ab760, 0x300ab784, 0x300ab778) to this frame's by
+  `f = (now - t) / (now - last)`, `t` the chunk's birth and `last` the
+  owner's latest chunk's (`+0x48` of 0x300ab790) (VERIFIED (the
+  instructions), 0x30024810..0x300248dd and the decompile's loop). The aim
+  lerps as plain angles (INFERRED (decompile)); what range the caller's
+  angles take, and so where a lerp would cross the wrap, is unread.
 - **vcod.** `fx::flame` moves each chunk a frame at a time by these rules
   (`move_chunk`, `brake`, `chain_brake`, `lift`, `FlameSystem::size_rand`),
   its stream the owner's from its first firing frame to its release, the
-  aim the nozzle's. Left out:
-  - the owner's velocity in the speed;
-  - the type 1 head, and the per-chunk lerp of nozzle and aim across a
-    frame (the loop around the pool call at 0x3002494e);
+  aim the nozzle's. The velocity share is `owner_velocity`, the own body's
+  off the snapshot's `ps.velocity`, and each chunk lerps nozzle, aim (the
+  short way round) and share as above (`FlameSystem::step`). Left out:
+  - the type 1 head;
   - the 350-tick look-ahead of the chunk's trace (0x30026049) and its
-    rebase every 20 ticks (vcod moves and traces each frame);
+    rebase every 20 ticks (vcod moves and traces each frame). The move
+    traces from the last traced point `+0xc0` to the chunk's place 350
+    ticks on at its present speed (0x30025990 on `now + 0x15e`), sets
+    `+0xd0` to the hit's time along that span and, until the clock passes
+    it, only places the chunk; past it, the next trace starts at the
+    contact and the chunk bounces there (INFERRED (decompile)). The skip
+    and the 350 are read at 0x30026023..0x300260d1 (VERIFIED (the
+    instructions)). A chunk
+    braking short of a wall can still meet it (INFERRED, the speed held
+    over the span);
   - the chain draw (0x300272b0), which skips a chunk near the last drawn
     and fades by a tent of its life.
 
@@ -1935,6 +2007,45 @@ switches on the owner draw id through 0x300326e8 / 0x30032648 (VERIFIED).
 - **Binoculars.** Both binocular weapons draw the generic sight overlay
   (`adsOverlayShader`); no artillery marker or range readout exists
   (VERIFIED).
+
+#### 19.4.1 The owner icon
+
+`eType` 15, the marker `_teams.gsc`'s vehicle purchase spawns over the
+bought vehicle (`spawn("script_vehicle_owner_icon", vehicle.origin)`, its
+`vehicle_owner`, `duration` 10 and `radius` 130 for a jeep, 170 for a
+tank; VERIFIED, `pakuo` `maps/mp/gametypes/_teams.gsc`). No stock script
+sets the `supply_available` the purchase checks first, so only a mod
+reaches it (VERIFIED, a search of the `pakuo` and `uomappack00` scripts).
+
+- **The game.** `SP_script_vehicle_owner_icon` (`game.mp.uo.i386.so`
+  0xa19fd) sets `eType` 15 and a think 100 ms on. That think,
+  `script_vehicle_owner_enable` (0xa18e2), once `vehicle_owner` is a
+  client: copies the origin into `pos.trBase`, sets `r.singleClient` to
+  the owner and `svFlags` 0x800, `s.time` to `level.time` plus `duration`
+  seconds and `s.leanf` to `radius`, and links it (INFERRED (decompile)).
+  So only the buyer gets it (INFERRED, 0x800 as Q3's
+  `SVF_SINGLECLIENT`).
+- **The draw.** Case 15 of `CG_AddCEntity` (jump table 0x30022228, entry
+  0x300221ec) runs 0x30021540 (VERIFIED (the instructions)):
+  - registers `gfx/hud/headicon@us_rank1.dds` (0x30077184) and sets the
+    entity's `lerpOrigin` to `pos.trBase`;
+  - for `k` 0, 500 and 1000, takes the phase `p = (cg.time + k) % 1500`
+    and an alpha of `p * 0.002` under 500, `(1500 - p) * 0.002` past 1000,
+    else 1 (0x3007bf28); once `cg.time` is past `s.time - 2000` it scales
+    that by `(s.time - cg.time) * 0.0005` (0x3007c058); the alpha is that
+    to the power 1.5 (0x3007c278, a double);
+  - hands 0x300213c0 the height `ftol(leanf - ftol(p * 0.0533333))`
+    (0x3007c280), no distance scale and a rotation of 180 (`push 0xb4`).
+  - 0x300213c0 places a `reType` 4 sprite at the `lerpOrigin` raised by
+    the height plus 72 (0x3007be18), radius 20 (0x3007be04), white, the
+    alpha times 255 (0x3007bd64) as its alpha byte (VERIFIED (the
+    instructions)).
+  - So three upside-down chevrons fall 80 units from `radius` over each
+    1.5 s, a third of a cycle apart, fading in and out, all fading over the
+    marker's last 2 s (INFERRED, the arithmetic).
+- **vcod.** `head_icon::owner_icon` draws it off the newest snapshot's
+  entity at the render clock. vcod-server's purchase spawns no
+  `script_vehicle_owner_icon` (no spawn function for the classname).
 
 ### 19.5 The turret view
 
@@ -2165,7 +2276,8 @@ wire's, as `event_dump` prints them.
   `CameraShake` and `F`
   (`fx::sim`), UO's earthquake fields
   (`play::quake`).
-- The HUD items above (`hud::uo`). Decoded `pm_flags` keep sprinting,
+- The HUD items above (`hud::uo`), the owner icon (19.4.1,
+  `head_icon::owner_icon`). Decoded `pm_flags` keep sprinting,
   winded and overheated at 0x1000000, 0x2000000, 0x4000000 (`PMF_*_V22`).
 - The captures gate the dispatch (`fx::registry`'s and `audio::cues`'
   `uo_capture_gates`, `AudioSystem`'s
