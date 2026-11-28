@@ -165,6 +165,11 @@ by doc and section. Grep `Trap:` in the subsystem doc you were sent to.
   (`NavGraph::by_ladder`), where it walked a bot off mp_ship's crow's
   nest plate. Without it a CoD1 guard pinned a teammate in
   mp_dawnville's stair nook (bot-objectives.md 4.2.6).
+- A guard keeps its post while the teammates dealt before it stand the
+  spread it was dealt at off (`posts::Held::spread`), not the rule's
+  first spread. Tested against the first, a post dealt at a looser one
+  was dropped the next tick, the pick took the other side of a door, and
+  the guard's goal swapped sides every tick (bot-objectives.md 4.2.7).
 - A point goal that moves on parks the plan and plans again
   (`RETARGET`). The new plan keeps the progress of the edge the old one
   was under way on; reset on every replan, a chase never gave up an edge

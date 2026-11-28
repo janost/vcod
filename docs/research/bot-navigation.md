@@ -3245,6 +3245,44 @@ and 4.2.6):
   master's control stalls by the same door on seeds 4, 12, 16, 28 and 30,
   each window starting at (540 to 560, 1793 to 1816, 8).
 
+Rechecked on fix/bots-leftovers-1128, 2026-11-28, with temporary
+per-tick prints of the stalled bot's goal, follower (plan, edges and
+their `jump` flags) and cmd. VERIFIED (the prints, ours, release, the
+knobs above):
+
+- mp_carentan's door: a guard's outpost swapping sides of the door each
+  tick, which its goal followed. Fixed (bot-objectives.md 4.2.7): over
+  seeds 1 to 192 mp_carentan stalls 489 on master, 23 with the fix.
+- mp_rocket seed 13, 205 on master's control: the allied carrier
+  (`Deliver` to (8208.5, -430.9, 223.7)), running east off the ground,
+  holds at (9499.24, 1955.04, 280.29) from its tick 5252 to 5639, off
+  the ground with zero velocity, forward 127 at every yaw it turns to,
+  its waypoint 4.2.6's node 10281 at (9499.3, 1968.6, 282.1) or none.
+  INFERRED: the box is wedged between two faces too steep to stand on,
+  where every move clips to nothing. Whether retail's pmove wedges a body
+  there is not checked. Not fixed. The fix's control moves the match off
+  it (0).
+- mp_chateau seed 39, 28 on every build: bot 5, bound for its post at
+  (643.5, 1024.1, 168.1), climbs a stair on a plan through node 4681
+  (1056.0, 967.7, 172.1), 5712 (1027.7, 991.5, 274.1) and 6373 (996.8,
+  959.8, 324.1), the last edge a jump 50 up. It slides along a wall at x
+  1018.125 toward -y with the jump key never pressed, leaves the stair's
+  open side at y 955.3 on its tick 963 and lands at 143. The follower
+  avoids 5712 to 6373 and plans again through 5712, 5961 (1024.5, 964.0,
+  289.1) and 4885 (984.9, 956.9, 294.1), that edge a jump too. On its
+  tick 961 its velocity reads (-152.16, -113.78), the negation of a
+  teammate's climbing the stair 63 under it. Not traced further.
+- mp_brecourt seed 22, 6: bot 2's plans toward (1106, -1118, -1), its
+  destination node 674 at (1098.9, -1055.9, -35.9), end in
+  `Plan::Failed` with no edge blocked; it rests and plans again from
+  nodes 965, 579, 3297 and 1983 round (-3700, 1550). Not traced further.
+- On the fix, seeds 49 to 192 add mp_rocket seeds 124 (110) and 114
+  (35), which master's own matches do not stall (its control's seed 114
+  does, 49), and mp_carentan seed 87's
+  (1142, 1546, -8); mp_brecourt seed 154 (21), mp_chateau seed 72 (38)
+  and mp_pavlov seed 71 (44, 45 on master) stall on master too. Not
+  traced.
+
 `uo_tdm_games_that_stalled_or_never_sprinted` seed 1, vehicles off, on
 fix/cod1-fire-anim-draw-order-1128 (master 19641e85c with 1.5 and UO's
 fire anim draw moved ahead of the recoil's four, cod15-movement.md 6.1):
