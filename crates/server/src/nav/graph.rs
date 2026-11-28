@@ -753,6 +753,17 @@ impl NavGraph {
         self.walkable_start(world, p, &|_| true).map(|(n, _)| n)
     }
 
+    /// Whether `p` stands within [`LADDER_NEAR`] across of a ladder's box,
+    /// between a standing height under its foot and one over its head:
+    /// there the ladder yields part bodies, not the plan round them or a
+    /// give way (bot-objectives.md 4.2.3, 4.2.6).
+    pub fn by_ladder(&self, p: Vec3) -> bool {
+        use vcod_common::pmove::HEIGHT_STAND;
+        self.ladder_boxes.iter().any(|b| {
+            box_flat(b, p) < LADDER_NEAR && p.z > b.0.z - HEIGHT_STAND && p.z < b.1.z + HEIGHT_STAND
+        })
+    }
+
     /// [`Self::nearest_walkable`], and whether the walk there takes a jump.
     /// Where no walk arrives without one, the first of the nearest few a
     /// bot's walk ([`as_a_bot`]) arrives at with its jump: a dent off the

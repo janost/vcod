@@ -236,7 +236,7 @@ pub struct Footing {
 
 impl Footing {
     #[cfg(test)]
-    const STANDING: Footing = Footing {
+    pub(crate) const STANDING: Footing = Footing {
         still: true,
         on_ground: true,
         on_ladder: false,
