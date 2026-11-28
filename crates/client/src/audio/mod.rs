@@ -987,7 +987,11 @@ impl AudioSystem {
     /// loop already playing on the entity re-picks the alias and sets the
     /// voice's volume to that row's `vol_min`, its pitch to `pitch_min` when
     /// the row fixes it and not at 1. The position keeps the start's offset
-    /// in the entity's frame (coduo-diff.md 19.1, "MG fire loop").
+    /// in the entity's frame (coduo-diff.md 19.1, "MG fire loop"). 0x452870
+    /// culls first: a spatial row whose origin is past `dist_max` (squared
+    /// distances, inclusive at the edge) skips the refresh and the reaper
+    /// ends the voice, so the voice stops here and the owner restarts it
+    /// once the origin is back in range.
     fn refresh_loop(&mut self, id: VoiceId, alias: &str, source: Source) {
         let cue = Cue {
             alias: alias.to_string(),
@@ -997,6 +1001,12 @@ impl AudioSystem {
         let Some(r) = self.pick_row(&cue, false) else {
             return;
         };
+        if r.channel.is_spatial()
+            && source.pos().distance_squared(self.listener.pos) > r.dist.1 * r.dist.1
+        {
+            self.stop_voice(id);
+            return;
+        }
         self.table
             .set_volume(id, r.vol.0 * self.profile.volume_scale);
         if r.pitch.0 == r.pitch.1
@@ -3950,6 +3960,58 @@ mod tests {
             a.stop_voice(id);
         }
         assert!(drawn.iter().any(|v| *v > 1.26), "the start draws {drawn:?}");
+    }
+
+    /// 0x452870's cull ahead of the refresh: a UO fire loop whose body is
+    /// past the row's `dist_max` ends, one at exactly `dist_max` is kept,
+    /// and one back in range starts again.
+    #[test]
+    fn a_uo_fire_loop_past_dist_max_ends_and_restarts_in_range() {
+        let mut fs = Pk3Fs::empty();
+        fs.overlay("sound/a.wav", silent_wav(2205));
+        let csv = "name,sequence,file,vol_min,vol_max,pitch_min,pitch_max,dist_min,dist_max,lod_min,lod_max,channel,type,probability,loop,masterslave,loadspec,subtitle\n\
+              weap_mg34_loop,,a.wav,1.25,1.4,0.95,1,10,500,,,weapon,,,looping\n";
+        let mut a = AudioSystem::new(
+            &fs,
+            AudioOpts {
+                enabled: false,
+                volume: 1.0,
+                rate: 0,
+            },
+        );
+        a.aliases_all = AliasTable::parse_csv(csv, "loop.csv");
+        a.set_protocol(&vcod_common::net::protocol::PROTOCOL_V22);
+        a.on_gamestate("mp_cassino");
+        a.weapon_sounds.insert(
+            4,
+            Some(WeaponSounds {
+                loop_fire: Some("weap_mg34_loop".into()),
+                fire_time_ms: 100.0,
+                ..Default::default()
+            }),
+        );
+        a.fire_loops.insert(
+            3,
+            FireLoop {
+                weapon: 4,
+                left: 1000.0,
+                voice: None,
+            },
+        );
+        let listener = a.listener.pos;
+        let at = |d: f32| HashMap::from([(3, listener + Vec3::X * d)]);
+        let none = HashMap::new();
+        a.step_fire_loops(&fs, 1.0, &at(100.0), &none);
+        let id = a.fire_loops[&3].voice.unwrap();
+        a.step_fire_loops(&fs, 1.0, &at(500.0), &none);
+        assert!(a.table.looping(id).is_some(), "kept at exactly dist_max");
+        a.step_fire_loops(&fs, 1.0, &at(501.0), &none);
+        assert!(a.table.looping(id).is_none(), "ended past dist_max");
+        a.step_fire_loops(&fs, 1.0, &at(501.0), &none);
+        assert!(a.table.ids().is_empty(), "no restart out of range");
+        a.step_fire_loops(&fs, 1.0, &at(100.0), &none);
+        let again = a.fire_loops[&3].voice.unwrap();
+        assert!(a.table.looping(again).is_some(), "restarted in range");
     }
 
     /// The bazooka capture (`net/snapshots-uo-bazooka.bin`, coduo-diff.md
