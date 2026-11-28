@@ -912,7 +912,7 @@ version (`pmove::weapon::cooking`).
   tree; vcod's efx parser reads all 1738 (VERIFIED). No string `lofx` is
   in `CoDUOMP.exe`, `CoDUOSP.exe` or any of the install's cgame, game and
   ui modules, whose one effect path format is `fx/%s` (cgame 0x30076e04)
-  (VERIFIED, a strings search), so nothing loads the tree (INFERRED). New: a `CameraShake`
+  (VERIFIED, a strings search). So nothing loads the tree (INFERRED). New: a `CameraShake`
   block (82 uses, key `intensity`), emitter keys `rotationAccel`,
   `rotationClamp`, `velocityClamp`, flags `clampRotation`,
   `clampVelocity[XYZ]`, `continualLighting`, spawn flags `oppositeAccel`,
@@ -1853,7 +1853,16 @@ ticks (500 ms), so vcod's units a second are twice them.
   short way round) and share as above (`FlameSystem::step`). Left out:
   - the type 1 head;
   - the 350-tick look-ahead of the chunk's trace (0x30026049) and its
-    rebase every 20 ticks (vcod moves and traces each frame);
+    rebase every 20 ticks (vcod moves and traces each frame). The move
+    traces from the last traced point `+0xc0` to the chunk's place 350
+    ticks on at its present speed (0x30025990 on `now + 0x15e`), sets
+    `+0xd0` to the hit's time along that span and, until the clock passes
+    it, only places the chunk; past it, the next trace starts at the
+    contact and the chunk bounces there (INFERRED (decompile)). The skip
+    and the 350 are read at 0x30026023..0x300260d1 (VERIFIED (the
+    instructions)). A chunk
+    braking short of a wall can still meet it (INFERRED, the speed held
+    over the span);
   - the chain draw (0x300272b0), which skips a chunk near the last drawn
     and fades by a tent of its life.
 
