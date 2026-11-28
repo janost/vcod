@@ -65,8 +65,9 @@ pub(super) struct Sweep {
     pub sphere_z: f32,
     /// The capsule's half extents per axis; zero for a position test.
     pub capsule_half: Vec3,
-    /// `|half_box|`, stored: the 1.7 client's split slack on a non-axial
-    /// plane, plus 0.125 (`iw3mp.exe` trace work +0x9c, 0x4f4f30).
+    /// `|half_box|`, stored: 1.7's split slack on a non-axial plane, plus
+    /// 0.125 (trace work +0x9c; `iw3mp.exe` 0x4f4f30 roots the stored
+    /// square, `cod4_lnxded` 0x811d073 the kept one).
     pub box_radius: f32,
     // The move.
     /// `end - start`, its length and squared length.
@@ -156,8 +157,8 @@ impl Sweep {
             sw.half_box.x
         };
         sw.sphere_z = sw.half_box.z - sw.radius;
-        let h2 = dot(sw.half_box, sw.half_box) as f32;
-        sw.box_radius = f64::from(h2).sqrt() as f32;
+        let h2 = dot(sw.half_box, sw.half_box);
+        sw.box_radius = if kept { h2 } else { f64::from(h2 as f32) }.sqrt() as f32;
         let r = sw.radius;
         for k in 0..2 {
             let (lo, hi) = if sw.start[k] < sw.end[k] {
@@ -231,22 +232,22 @@ impl<'a> Cx<'a> {
 
     /// `CM_TraceThroughTree` (0x0805b058): Q3's split with the box's extent
     /// plus 0.125 on axial planes and 2048 (0.125 for a point) on the rest.
-    /// The 1.7 client's (`iw3mp.exe` 0x4f4920) stores a non-axial plane's
-    /// dot before taking `dist` off it, and its slack there is the box's
-    /// radius plus 0.125 (cod4-collision.md 2). A node whose reach the
-    /// sweep's box misses holds no leaf test that passes, so it is passed
-    /// over: the walk under it has no other effect (cod4-server-frame.md
-    /// 11).
+    /// 1.7's slack there is the box's radius plus 0.125 (`cod4_lnxded`
+    /// 0x811c19c, `iw3mp.exe` 0x4f4920), and the client stores a non-axial
+    /// plane's dot before taking `dist` off it (cod4-collision.md 2). A
+    /// node whose reach the sweep's box misses holds no leaf test that
+    /// passes, so it is passed over: the walk under it has no other effect
+    /// (cod4-server-frame.md 11).
     fn trace_tree(&mut self, mut num: i32, mut p1: [f32; 4], p2: [f32; 4], tr: &mut ClipTrace) {
         let reach = self.map.node_reach();
         let [sweep_lo, sweep_hi] = self.sw.reach;
         let client = self.sw.floats == TraceFloats::Cod4Client;
         let slack = if self.sw.point {
             0.125
-        } else if client {
-            (f64::from(self.sw.box_radius) + f64::from(CLIP_EPS)) as f32
-        } else {
+        } else if self.sw.floats == TraceFloats::Cod2 {
             2048.0
+        } else {
+            (f64::from(self.sw.box_radius) + f64::from(CLIP_EPS)) as f32
         };
         loop {
             if num < 0 {

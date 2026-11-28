@@ -4,6 +4,9 @@ use super::{capsule_in_tri, point_dist2, segment_dist2, segment_meets_tri};
 
 /// iw3mp.exe's own kernels run on each case by tools/re/x87emu.py.
 const VECTORS: &str = include_str!("../../../../cod4/tests/fixtures/clip/postest-1.7-client.txt");
+/// cod4_lnxded's inlined triangle test (0x81158fd..) run likewise.
+const SERVER_VECTORS: &str =
+    include_str!("../../../../cod4/tests/fixtures/clip/postest-1.7-server.txt");
 
 fn floats(hex: &[&str]) -> Vec<f32> {
     hex.iter()
@@ -53,4 +56,25 @@ fn the_position_test_kernels_answer_as_iw3mps() {
         runs[k] += 1;
     }
     assert!(runs.iter().all(|&n| n > 50), "{runs:?}");
+}
+
+/// The server's test answers every case as the client's does, the sphere
+/// meeting the point nearest `2 v0 - p` (cod4-collision.md 3.1).
+#[test]
+fn the_servers_position_test_answers_as_the_clients() {
+    let (mut cases, mut solid) = (0, 0);
+    for line in SERVER_VECTORS.lines().filter(|l| !l.starts_with('#')) {
+        let (ins, out) = line.split_once(" -> ").unwrap();
+        let f = floats(&ins.split(' ').collect::<Vec<_>>()[1..]);
+        let tri = [v(&f[0..]), v(&f[3..]), v(&f[6..])];
+        let want = out == "1";
+        assert_eq!(
+            capsule_in_tri(v(&f[9..]), f[12], f[13], tri),
+            want,
+            "{line}"
+        );
+        cases += 1;
+        solid += usize::from(want);
+    }
+    assert!(cases > 150 && solid > 30, "{cases} cases, {solid} solid");
 }

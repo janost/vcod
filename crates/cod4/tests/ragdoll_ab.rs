@@ -250,16 +250,17 @@ fn the_kill_capture_reads_as_its_summary() {
     assert!(d.steps[79].bodies.is_empty());
 }
 
-/// A take's ragdoll sweeps (0x5a6aea, world 2) replayed through `map`'s
-/// clip map: each trace's fraction, normal, `startsolid` and `walkable`
-/// (trace_t +0x29, +0x2a) retail's to the bit through the client's trace.
-/// Returns the sweeps, the hits and how many the server's float model
-/// parts on, or `None` with no install.
-fn sweeps_as_retails(map: &str, take: &str) -> Option<(usize, usize, usize)> {
+/// A take's after-frame sweeps (0x5a6aea, any world: the ragdolls' and
+/// worlds 0 and 1's) replayed through `map`'s clip map: each trace's
+/// fraction, normal, `startsolid` and `walkable` (trace_t +0x29, +0x2a)
+/// retail's to the bit through the client's trace. `take` is the fixture's
+/// path. Returns the sweeps, the hits and how many the server's float
+/// model parts on, or `None` with no install.
+pub(crate) fn sweeps_as_retails(map: &str, take: &str) -> Option<(usize, usize, usize)> {
     let install = cod4_install()?;
     let (_, walked) = Map::load(&install, "english", map).unwrap();
     let clip = ClipMap::from_assets(&walked.assets).unwrap();
-    let text = std::fs::read_to_string(format!("{FIXTURES}/{take}")).unwrap();
+    let text = std::fs::read_to_string(take).unwrap();
     let (mut sweeps, mut hits, mut server_parts) = (0, 0, 0);
     for line in text.lines().filter(|l| l.starts_with("trace ")) {
         let p: Vec<&str> = line.split('|').collect();
@@ -298,7 +299,7 @@ fn sweeps_as_retails(map: &str, take: &str) -> Option<(usize, usize, usize)> {
 /// on 6 of its 29 hits (measured).
 #[test]
 fn the_ragdoll_sweeps_trace_as_retails() {
-    if let Some(counts) = sweeps_as_retails("mp_crash", FALL_TRACES) {
+    if let Some(counts) = sweeps_as_retails("mp_crash", &format!("{FIXTURES}/{FALL_TRACES}")) {
         assert_eq!(counts, (132, 29, 6));
     }
 }
@@ -309,7 +310,7 @@ fn the_ragdoll_sweeps_trace_as_retails() {
 /// the 126 (cod4-gsc.md 3.6.9).
 #[test]
 fn the_roof_sweeps_trace_as_retails() {
-    if let Some(counts) = sweeps_as_retails("mp_carentan", ROOF_TRACES) {
+    if let Some(counts) = sweeps_as_retails("mp_carentan", &format!("{FIXTURES}/{ROOF_TRACES}")) {
         assert_eq!(counts, (126, 126, 94));
     }
 }
