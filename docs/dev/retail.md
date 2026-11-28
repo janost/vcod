@@ -544,6 +544,10 @@ the wire's numbering.
   `times` and `ran`. A placement in the spawn's frame keeps the velocity
   the cmds run at the spawn point left, which the gate hands ours from
   `SPAWNED` (`Server::test_set_client_velocity`, cod11-combat.md 2.1).
+  `--probe-vehicle` times its steps on its wall clock from the spawn, and
+  `in=` logs no forward key: a gate takes a step's keys on the cmds
+  `common::cmds_script_ms` puts in it, never at a `serverTime` offset
+  (coduo-vehicles.md 11.6.1).
 
 ### Receive order
 

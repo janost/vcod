@@ -1222,9 +1222,10 @@ that move, alias and snapped origin (`compare_impacts`).
 
   The driver's `CMDS` lines replay too (2026-11-15): his cmds on their
   times, his use taps on the cmds that carried them (`in=` 64), and the
-  throttle from 2000 ms past the first tap's end, where
-  `vehicle_probe.rs` holds it, for 6 s (`RAM`) or to the exit tap's end
-  (`BAIL`). The jeep then moves on retail's frame: its first move had
+  throttle where `vehicle_probe.rs` holds it, for 6 s (`RAM`) or to the
+  exit tap's end (`BAIL`), on the cmds the probe's script clock puts there
+  (11.6.1, since 2026-11-28; it was 2000 ms of `serverTime` past the first
+  tap's end). The jeep then moves on retail's frame: its first move had
   landed 50 ms early on the gate's own clock. With it, and the corpse rule
   below, the 2026-11-14 recaptures that log the victim's spawn velocity
   match retail line for line to the hundredth, first drop, flight, both
@@ -1396,9 +1397,39 @@ matches the gdb log on every cmd of the team run, and `vehicle_runover_ab`'s
 prone and prone-team rows match retail's lines to the hundredth with no drift
 on the 2026-11-28 recaptures, as do two more team runs taken the same way, one
 of them with the probe client's 34, 1 and 0 ms cmds (VERIFIED, the gate). The
-2026-11-14 prone-team capture this replaced still misses by 0.19: ours' jeep
-moves a frame early on that capture's driver replay, so the hull passes the
-corpse a frame off (VERIFIED, its `PROBE a` lines against ours).
+2026-11-14 prone-team capture this replaced missed by 0.19 until the driver's
+throttle moved to the probe's script clock below.
+
+**The driver's script clock.** `vehicle_probe.rs` times its steps on the probe
+client's wall clock from the loop pass that first sees a `PM_NORMAL` snapshot,
+not on `serverTime`, and the `CMDS` lines log the forward key nowhere (`in=`
+holds buttons, `wbuttons` and up). The `w=` stamps carry that clock. Taking its
+start as the `w=` of the first cmd sent on the `SPAWNED` snapshot (its `snap=`
+entry), 23 of the 24 use-tap edges (`in=` 64 on and off) of the six
+2026-11-14 and 2026-11-28 run-over captures fall on the first cmd at or past
+their step's boundary, and one 0.03 ms short of it (VERIFIED, the captures).
+The stamp trails the loop's clock by a few varying microseconds (INFERRED).
+
+- On the 2026-11-14 prone-team run the drive step (4150 ms) opens on a cmd
+  repeating 13450, 16 ms after the first 13450 (4142 and 4158 ms on that
+  clock). `SV_UserMove` skips it, so the first throttle cmd the server runs
+  is 13466: frame 13450 reads `ct=` 13450, frame 13500 13466, and the Horch
+  first moves at 13550 (VERIFIED, capture). The gate had put the throttle on
+  `serverTime` 13450 (the tap's release at 11450 plus 2000), the first 13450,
+  which ran in frame 13450: ours' jeep moved at 13500 (VERIFIED, the gate).
+- On all six captures the first throttle cmd the server runs lands in frame F
+  and `PROBE a`'s first nonzero speed reads F + 50 (VERIFIED, `ct=` and
+  `PROBE a` lines).
+
+`vehicle_runover_ab` now puts the driver's throttle on the cmds whose script
+time (`common::cmds_script_ms`) lies in the drive step. The 2026-11-14
+prone-team run (`mp_kharkov-jeep-runover-prone-team-repeat-uo.txt`) then
+matches retail's lines to the hundredth, first drop, creep, damage and ram
+sounds; the other five rows still do, and on `bail-prone` and `prone-team`
+the first throttle cmd moves one cmd on inside the same frame (14066 for 14050,
+16266 for 16250) (VERIFIED, the gate). No other gate replays a driver's keys
+off the step table: `vehicle_die_ab` replays only `in=`, `vehicle_ram_ab`'s
+captures log no `CMDS`.
 
 ### 11.7 A rider killed in his seat
 
