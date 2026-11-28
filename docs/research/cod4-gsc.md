@@ -2300,18 +2300,17 @@ The gate, `cod4::phys_box_ab::box_contacts_match_retails_collides`:
 - Every class 1 collide of the four takes (3.6.2), fed the captured pose
   and sides, against the capture's `dCollide` output and its contact
   pass input: count, order, position, normal, depth within 1e-4,
-  surface flags. Raw contacts: the round's 40 collides, the frag's 160
-  and the car's 160 equal to the bit; the watermelon's 238 of 240 equal
-  to the bit, one within 5e-7, one 2.4e-4 off. The cut through
-  `collide::cut`: every pass input but the one off's, 239 of 240.
-  VERIFIED (the run, ours).
+  surface flags. Raw contacts: the round's 40 collides, the frag's 160,
+  the shards' 168, the car's 160 and the watermelon's 240, every one
+  equal to the bit, and the cut through `collide::cut` every pass
+  input. VERIFIED (the run, ours).
 - A take's `body` line is dumped at 0x5a6e69, before the frame's sweep
   (0x5a6c10 into 0x5a6930, 3.6.1), so the gate moves each body as that
   sweep does from the line before: three collides (the car's step 39
   body 2, the watermelon's steps 28 and 34) match only so. VERIFIED (the
-  run). The one left 2.4e-4 off (step 28) is an ulp of position at x
-  3530, the sweep's stop: vcod's trace and retail's put it an ulp apart.
-  INFERRED.
+  run). The watermelon's step 28 matched only once that sweep took the
+  client's trace (3.6.9); with the server's it was an ulp of x at 3530
+  off. VERIFIED (the run, ours).
 - The watermelon's step 13 body 5 cut to its five in another order
   while `cut` reduced in `f32`; with the stores 3.6.4 put in it, it
   matches. VERIFIED (the runs, ours).
@@ -2653,9 +2652,9 @@ sweep, as the `body` lines are):
 
 - The round's 61 steps, the frag's 140 and the car's 132: every body's
   position and quaternion equal to retail's to the bit on every step.
-  The watermelon's 170: to the bit through step 27, then within 2.5e-4
-  units and 3.3e-4 degrees, the ulp of body 4's sweep on step 27 (3.6.5).
-  VERIFIED (the run, ours).
+  The watermelon's 170 too, since the sweep takes the client's trace
+  (3.6.9); before, it parted by the ulp of body 4's sweep on step 27
+  (3.6.5). VERIFIED (the run, ours).
 - In all four, every body's flags on every step, so each sleep step
   (and the watermelon's body 5 awake to the cut), every next `msecStep`
   and every seed after a step are retail's. VERIFIED (the run, ours).
@@ -2670,7 +2669,7 @@ sweep, as the `body` lines are):
   met under one alias and each alias under one handle
   (`physics_metal_default`, `physics_tire_default`,
   `physics_car_door_default`, `physics_fruit_default`), each mean point
-  within 5e-7 of retail's. VERIFIED (the run, ours).
+  retail's to the bit. VERIFIED (the run, ours).
 - `an_impact_sounds_past_the_least_momentum_into_the_contacts`,
   `a_jitter_lifts_a_body_at_its_floor_contacts`,
   `impact_rows_take_the_surfaces_alias_or_the_prefixs_default` and
@@ -2701,8 +2700,8 @@ Running (`vcod_cod4::ode`, `fx_phys`, `play::cod4_physics`):
 - The effects' physics models: looping and one-shot elements, a chained
   effect's in the frame its chain fires, the frame through 0x561100 and
   the timed seed's walk (cod4-effects.md 9.1.1.1 to 9.1.1.3).
-- Matched on two more takes (3.6.9): the shards step for step and the
-  shipment frag by each body's sleep and rest.
+- Matched on two more takes (3.6.9), the shards and the shipment frag,
+  step for step.
 
 Not ported, no take reaching them:
 
@@ -2716,7 +2715,6 @@ Not ported, no take reaching them:
 
 The box's narrow pass is matched on the shards take, and a mp_shipment
 frag's 20 s of rolling bottles and fruit on the shipment take (3.6.9).
-Open: the sweep that puts a thin box a z ulp off retail's (3.6.9).
 
 Unchecked: an effect's physics elements' nonzero angles, cylinder and
 non-sphere 0xc0 frames, 0x80 origins and looping spawns are ported on the
@@ -2754,24 +2752,30 @@ The shards take:
   instructions). `boxes::brush` does the same, but for an unordered
   compare (a NaN centre), which takes the plus face on retail and the
   minus face on the port.
-- `phys_ab` steps the take: equal to the bit to step 32, then within
-  0.11 units and 2.8 degrees to the cut at step 110, every flag and sleep
-  on retail's step and the 16 impact sounds retail's. The seed parts after
-  step 35. VERIFIED (the run, ours).
-- What parts it: the sweep after step 32's frame (0x5a6930) hit at
-  fraction 0.645 on shard 5 (a point trace: half its least side, 1.04, is
-  under twice `phys_csl`) and backed it off to 0.0313. Retail's pose then
-  sits a z ulp higher: every step 33 contact's z is an ulp over the port's
-  (85.21312 against 85.21311) and nothing else differs. VERIFIED (the run,
-  ours). The back-off reads as the port has it: the trace's fraction kept
-  as a double (0x5a6b4b), less half the size times 0x403a90's fast inverse
-  root of the move's squared length, stored, floored at 0 (0x4093c0), then
-  0x432700's `from + (to - from) f` with the difference unrounded (exact
-  for these moves). VERIFIED (the instructions). An ulp of z at 86 takes
-  the backed-off fraction 1.6e-5 apart, far past an ulp of the trace's,
-  so the trace (0x4f4d30) itself differs, another plane or the terrain
-  met. INFERRED. Not chased: the gate lets this take's seed part after
-  step 33 (`SEED_AFTER_SWEEP`).
+- `phys_ab` steps the take: every body equal to retail's to the bit on
+  all 110 steps, every flag, sleep, seed and `msecStep` retail's, and the
+  16 impact sounds at retail's points. VERIFIED (the run, ours).
+- What parted it before, from step 33 on: the sweep after step 32's frame
+  (0x5a6930) met a brush side (normal (0.0172, -0.0321, 0.9993)) on shard
+  5, a point trace (half its least side, 1.04, is under twice
+  `phys_csl`). The port traced it in the server's float model, which
+  keeps each side's distances on the x87 stack (cod4-collision.md 2), and
+  met it at fraction 0.6666290 (0x3f2aa832); the client's brush kernel
+  (0x4f37e0), which stores them, gives 0.6666216 (0x3f2aa7b7). Backed off
+  to 0.3469427 and 0.3469354, the body's z came out an ulp apart
+  (0x42ad17a5 against 0x42ad17a6), retail's the higher: every step 33
+  contact's z an ulp over the port's (85.21312 against 85.21311).
+  VERIFIED (the runs, ours). The back-off reads as the port has it: the
+  trace's fraction kept as a double (0x5a6b4b), less half the size times
+  0x403a90's fast inverse root of the move's squared length, stored,
+  floored at 0 (0x4093c0), then 0x432700's `from + (to - from) f` with
+  the difference unrounded (exact for these moves). VERIFIED (the
+  instructions).
+- So the sweep takes the client's trace, `ClipMap::trace_client`
+  (`TraceFloats::Cod4Client`: 0x4f4d30's set-up, 0x4f37e0's brushes and
+  0x4f05c0's capsule against the triangles, cod4-collision.md 2, 3), and
+  so do the ragdolls, which sweep through the same `Clip`. VERIFIED (the
+  code, ours).
 
 The shipment take:
 
@@ -2780,16 +2784,21 @@ The shipment take:
   transform). They slept between steps 103 and 1212 (1.75 s to 20.6 s),
   `msecStep` 17 throughout, with no impact sound. VERIFIED (the capture).
 - `phys_ab::the_shipment_frag_against_the_port` builds each body off the
-  dynamic entity at its origin and steps the port past the take until the
-  last sleeps: 9 of 11 sleep on retail's step, a mango on 1116 against
-  1105, another on 896 against 897 and the last on 1218 against 1212.
-  Each rests within 0.45 units and 12 degrees of retail's pose. The
-  bodies equal retail's to the bit on the dumped steps to step 20 (the
-  take keeps every tenth) and part by step 30; the seed parts after step
-  281. VERIFIED (the run, ours). So the 22.1 s the port took over another
-  shipment throw is retail's rolling, and the old solver's 8.4 s was not.
-  INFERRED (one throw each). What parts the bodies is not captured (no
-  contacts dumped).
+  dynamic entity at its origin and steps the take: every body equal to
+  retail's to the bit on every dumped step (every tenth, and each body's
+  first and first asleep), each asleep on retail's step, the seed and
+  `msecStep` retail's throughout. VERIFIED (the run, ours). So the 22.1 s
+  the port took over another shipment throw is retail's rolling, and the
+  old solver's 8.4 s was not. INFERRED (one throw each).
+- Before the client's trace the bodies parted by step 30 and the seed
+  after step 281: the sweep after step 25 met a terrain triangle on body
+  5 and the one after step 29 another on body 8, each 0x5a6930's point
+  (a 0.001 box, a capsule to the kernels) through `capsule_tri4`'s
+  server model, and put each a z ulp over
+  retail's (196.07306 against 196.07304 on step 30), with nothing else
+  apart. The client's model (`capsule_tri_client`, cod4-collision.md 3)
+  closes both. VERIFIED (the runs, ours). No contacts were needed: the
+  take was not retaken.
 
 `part_edges`, measured again: each drop's sink is the deepest point of a
 grid through each geom's bounds (nine planes an axis, plus planes 0.1 to

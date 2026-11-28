@@ -69,7 +69,7 @@ pub trait Clip: Pieces {
 
 impl Clip for crate::collision::ClipMap {
     fn sweep(&self, a: Vec3, b: Vec3, mins: Vec3, maxs: Vec3) -> Sweep {
-        let t = self.trace(a, b, mins, maxs, CLIP_MASK);
+        let t = self.trace_client(a, b, mins, maxs, CLIP_MASK);
         Sweep {
             fraction: t.fraction,
             normal: t.normal,
