@@ -360,3 +360,82 @@ fn a_uo_sighted_burst_climbs_with_the_gun_kick() {
     let climb = check(&PROTOCOL_V22, fs, "uo");
     assert!(climb > 50.0, "{climb}");
 }
+
+/// `key`'s value in a `WEAPONFILE\key\value...` file.
+fn file_key(stock: &[u8], key: &str) -> f32 {
+    let text = String::from_utf8_lossy(stock);
+    let parts: Vec<&str> = text.split('\\').collect();
+    parts[1..]
+        .chunks(2)
+        .find(|kv| kv[0] == key)
+        .and_then(|kv| kv.get(1)?.trim().parse().ok())
+        .unwrap_or_else(|| panic!("no {key}"))
+}
+
+/// A fire cmd's anim `rand()` (`PM_Weapon` inside `Pmove`, cod15-movement.md
+/// 6.1) is the stream's first draw; `BG_WeaponFireRecoil`'s view kick takes
+/// the next two and the gun kick the two after. The spring's speeds after the
+/// cmd read which draws it got. No capture gates the order: retail seeds
+/// libc off the clock.
+fn fire_cmd_draw_order(p: &'static Cod1Wire, fs: Pk3Fs) {
+    const SEED: u64 = 7;
+    let stock = fs.read(&format!("weapons/mp/{WEAPON}")).expect("thompson");
+    let range = |axis: &str| {
+        let (lo, hi) = (
+            file_key(&stock, &format!("hipGunKick{axis}Min")),
+            file_key(&stock, &format!("hipGunKick{axis}Max")),
+        );
+        move |draw: u32| lo + (hi - lo) * (draw as f32 / 2_147_483_648.0)
+    };
+    let (pitch, yaw) = (range("Pitch"), range("Yaw"));
+    let mut stream = vcod_common::rng::GlibcRand::new(SEED as u32);
+    let d: Vec<u32> = (0..5).map(|_| stream.next_u31()).collect();
+    let anim_first = [pitch(d[3]), yaw(d[4])];
+    let recoil_first = [pitch(d[2]), yaw(d[3])];
+    assert_ne!(anim_first, recoil_first, "the stock ranges are degenerate");
+
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        ..common::Boot::new(MAP, "dm")
+    }
+    .start(fs);
+    let q = Rc::new(RefCell::new(common::Queues::default()));
+    let (mut cl, _) = common::join(&mut sv, &q, &mut now, "allies", WEAPON);
+    let fire = UserCmd {
+        buttons: vcod_common::net::msg::BUTTON_ATTACK,
+        ..common::holding(&cl)
+    };
+    for _ in 0..40 {
+        // The stream restarts each frame, so the cmd that fires draws the
+        // same sequence whenever it lands.
+        sv.test_seed_rng(SEED);
+        now += Duration::from_millis(common::FRAME_MS as u64);
+        cl.send_frame(&fire);
+        common::step(&mut sv, &q, &mut cl, now);
+        let speed = sv.test_gun_kick_speed(0).expect("a sim");
+        if speed != [0.0; 2] {
+            assert_eq!(
+                speed, anim_first,
+                "recoil drew ahead of the anim: {recoil_first:?}"
+            );
+            return;
+        }
+    }
+    panic!("the thompson never fired");
+}
+
+#[test]
+fn a_fire_cmds_anim_draw_precedes_its_recoil_draws_on_1_5() {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
+        return;
+    };
+    fire_cmd_draw_order(&PROTOCOL_V6, fs);
+}
+
+#[test]
+fn a_fire_cmds_anim_draw_precedes_its_recoil_draws_on_uo() {
+    let Some(fs) = vcod_common::testing::uo_fs() else {
+        return;
+    };
+    fire_cmd_draw_order(&PROTOCOL_V22, fs);
+}

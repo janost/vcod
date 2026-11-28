@@ -803,6 +803,15 @@ so does United Offensive's (both VERIFIED by the captures below).
   1.5 file offsets are 1.1's plus 0xc (gun kick 0x35c..0x368 and
   0x39c..0x3a8, view kick 0x37c..0x388 and 0x3bc..0x3c8); UO's sit at
   0x3d4..0x448. VERIFIED.
+- Draw order within a cmd: `PM_Weapon` raises the fire anim through
+  `BG_AnimScriptEvent` (event 2, 1.5b 0x2fc8e) inside `Pmove`, so its
+  `rand()` comes before the four `G_PlayerEvent` draws, which run after
+  `Pmove`. VERIFIED (the call address and the call order above). vcod's
+  `client_think` flushes the cmd's anims, then the recoil
+  (`gunkick_ab::a_fire_cmds_anim_draw_precedes_its_recoil_draws_on_1_5`, `_on_uo`). No
+  capture gates it: retail seeds libc from the clock. 1.1d draws no
+  recoil, so its order is moot (`PM_Weapon` 0x34331 before `PM_Footsteps`
+  0x34336, player-model-anim-system.md 6.6).
 - The spring (1.5b 0x31940 stepping 0x3171a per axis) is 1.1's: 5 ms
   substeps (0x77700) of `msec * 0.001`, the four keys blended hip to
   sight by the fraction, settled under 0.25 degrees (0x776e8) and 1 a

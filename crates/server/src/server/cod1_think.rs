@@ -235,7 +235,6 @@ impl Cod1Module {
             let st = cmd.server_time;
             crate::client_log::write(|_| format!("ran slot={slot} st={st} ev={}", ev.join(",")));
         }
-        player_events(eng, &tick.weapons, slot, &raised);
         let (attacks, take) = self.client_events(eng, tick, slot, &cmd, &raised);
         let t = end_move(
             eng,
@@ -248,9 +247,12 @@ impl Cod1Module {
             take,
             &pm,
         );
-        // `PM_Footsteps` runs inside each cmd's `PmoveSingle` (0x34336),
-        // after `PM_Weapon` (0x34331).
+        // The anim draws belong to the pmove: `PM_Weapon`'s fire event
+        // (1.5b 0x2fc8e) and `PM_Footsteps` (1.1d 0x34336, after
+        // `PM_Weapon` 0x34331) run inside `PmoveSingle`, ahead of
+        // `G_PlayerEvent`'s recoil draws (cod15-movement.md 6.1).
         self.flush_anims(eng, slot, &mut tick.rounds[slot]);
+        player_events(eng, &tick.weapons, slot, &raised);
         self.use_press(eng, tick, slot, &cmd);
         self.mirror_cmd(eng, &t);
         for attack in attacks {
