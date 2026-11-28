@@ -301,6 +301,7 @@ impl App {
             &heads,
             &shadow_marks,
             render_time,
+            cam_forward,
             cam_right,
             cam_up,
             fx_t0,
@@ -1809,6 +1810,7 @@ impl LiveCx<'_> {
         heads: &HashMap<u32, Vec3>,
         shadow_marks: &[crate::marks::MarkRequest],
         render_time: Option<i32>,
+        cam_forward: Vec3,
         cam_right: Vec3,
         cam_up: Vec3,
         fx_t0: Instant,
@@ -1914,7 +1916,17 @@ impl LiveCx<'_> {
             fdc = report.fdc;
         }
         let mut fx_quads = self.fx.build_quads(cam.pos, cam_right, cam_up, time);
-        fx_quads.extend(self.flame.quads(time * 1000.0, cam_right, cam_up));
+        // The cgame halves the flame's colour under `r_fullscreen` and
+        // `r_overbrightbits`; vcod has no `r_overbrightbits`, its
+        // renderer taking retail's default 1 (coduo-diff.md 19.3.5).
+        let view = fx::flame::SpriteView {
+            eye: cam.pos,
+            forward: cam_forward,
+            right: cam_right,
+            up: cam_up,
+        };
+        let halve = self.shell.cvar_f32("r_fullscreen") as i32 != 0;
+        fx_quads.extend(self.flame.quads(time * 1000.0, &view, halve));
         if let Some(newest) = newest {
             fx_quads.extend(head_icon::quads(
                 &head_icon::Scene {
