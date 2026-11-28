@@ -413,7 +413,7 @@ fn ours_pair_in(
     target_log: Option<&str>,
 ) -> Vec<String> {
     let fs = Rc::new(fs);
-    let run = |shift: (i64, i64)| {
+    let run = |joins: Option<(i64, i64)>| {
         ours_pair_run(
             fs.clone(),
             map,
@@ -423,31 +423,37 @@ fn ours_pair_in(
             prone_yaw,
             thrower_at,
             target_log,
-            shift,
+            joins,
         )
     };
-    let (lines, played) = run((0, 0));
-    // Ours' join takes as long as its gamestate's fragments: a map or a
-    // protocol whose join runs a frame off rejoins that much earlier, so
-    // the target plays on the capture's frame and his cmds land on it.
-    let target = match (target_log.map(first_play), played) {
-        (Some((t, _)), Some(p)) => t - p,
-        _ => 0,
+    let Some(log) = target_log else {
+        return run(None).0;
     };
-    let lines = if target != 0 {
-        run((target, 0)).0
-    } else {
-        lines
-    };
-    // The same for the thrower, on his spawn line (`PROBE thrower`, or the
-    // grenade part's `PROBE rphase`).
-    match (
-        target_log.and_then(|l| thrower_line_time(l.lines())),
-        thrower_line_time(lines.iter().map(String::as_str)),
-    ) {
-        (Some(r), Some(o)) if r != o => run((target, r - o)).0,
-        _ => lines,
+    // How long ours' join takes to play rides its gamestate's fragments (750
+    // to 1150 ms over these maps and protocols), and the captures log no
+    // connect, so it is measured: each client's join moves by what the last
+    // run missed by, until the target plays on the capture's frame (his
+    // cmds land on it) and the thrower's spawn line (`PROBE thrower`, or the
+    // grenade part's `PROBE rphase`) logs on the capture's time.
+    let (play, _) = first_play(log);
+    let spawn = thrower_line_time(log.lines());
+    let mut joins = (play, thrower_spawn(log));
+    let mut lines = Vec::new();
+    for _ in 0..4 {
+        let played;
+        (lines, played) = run(Some(joins));
+        let missed = (
+            played.map_or(0, |p| play - p),
+            spawn
+                .zip(thrower_line_time(lines.iter().map(String::as_str)))
+                .map_or(0, |(r, o)| r - o),
+        );
+        if missed == (0, 0) {
+            break;
+        }
+        joins = (joins.0 + missed.0, joins.1 + missed.1);
     }
+    lines
 }
 
 /// The script seed that draws a capture's `PROBE body` (head and gear) on
@@ -479,11 +485,11 @@ fn thrower_line_time<'a>(mut lines: impl Iterator<Item = &'a str>) -> Option<i64
     })
 }
 
-/// One run of [`ours_pair_in`], the target joining `shift.0` ms later than
-/// [`TARGET_PLAYS_AFTER_JOIN_MS`] says and the thrower `shift.1` ms later
-/// again, and the target's first playing
-/// snapshot time. `part` is `probe_part`'s value, then any more of the
-/// probe's cvars as `name value` words.
+/// One run of [`ours_pair_in`], the target and the thrower connecting at
+/// `joins`' level times (at [`TARGET_JOIN_MS`] and [`SHOOTER_LATE_MS`] after
+/// it without), and the target's first playing snapshot time. `part` is
+/// `probe_part`'s value, then any more of the probe's cvars as `name value`
+/// words.
 #[expect(clippy::too_many_arguments)]
 fn ours_pair_run(
     fs: Rc<vcod_common::pk3::Pk3Fs>,
@@ -494,7 +500,7 @@ fn ours_pair_run(
     prone_yaw: Option<f32>,
     thrower_at: Option<[f32; 3]>,
     target_log: Option<&str>,
-    shift: (i64, i64),
+    joins: Option<(i64, i64)>,
 ) -> (Vec<String>, Option<i64>) {
     let prone = prone_yaw.is_some();
     let mut missiles = Vec::new();
@@ -536,16 +542,7 @@ fn ours_pair_run(
     // logs it, combat doc 12.4), and head `a_01`; a capture that logs its
     // `PROBE body` gets the seed that draws the same.
     sv.pin_script_rand(target_log.map_or(1, body_seed));
-    let (join_ms, late_ms) = match (target_play, target_log) {
-        (Some((t, _)), Some(log)) => {
-            let thrower = thrower_spawn(log);
-            (
-                t - TARGET_PLAYS_AFTER_JOIN_MS + shift.0,
-                thrower - t + TARGET_PLAYS_AFTER_JOIN_MS - THROWER_SPAWNS_AFTER_JOIN_MS + shift.1,
-            )
-        }
-        _ => (TARGET_JOIN_MS, SHOOTER_LATE_MS),
-    };
+    let (join_ms, late_ms) = joins.map_or((TARGET_JOIN_MS, SHOOTER_LATE_MS), |(t, s)| (t, s - t));
     common::run_alone(&mut sv, &mut now, join_ms);
     let (qa, qb) = (
         Rc::new(RefCell::new(Queues::default())),
@@ -716,11 +713,6 @@ fn ours_pair_run(
     out.extend(missiles);
     (out, played)
 }
-
-/// How long after ours' client connects its first playing snapshot comes,
-/// the target's, and the thrower's spawn line (`PROBE thrower`).
-const TARGET_PLAYS_AFTER_JOIN_MS: i64 = 1100;
-const THROWER_SPAWNS_AFTER_JOIN_MS: i64 = 1100;
 
 /// The time and origin of the first `target FALL` line that plays.
 fn first_play(log: &str) -> (i64, [f32; 3]) {

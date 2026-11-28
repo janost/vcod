@@ -54,6 +54,14 @@ CoD1 (1.1d, 1.5b, UO):
   every `CalcMuzzlePoint`'s playerstate inputs (`bobCycle`, origin,
   velocity, view), its bob factors and its muzzle, every float as its bits
   (cod11-combat.md 14.8).
+- `gdb_corpse.py`: a gdb script for the UO server, read only, that logs
+  each cmd's vehicle overlap test in `ClientThink_real`, what it unlinked,
+  the `Pmove` after it, and a dead body's ps and box at eight points of
+  `PmoveSingle` (coduo-vehicles.md 11.6.1).
+- `gdb_trigger_walk.py`: a gdb script for the UO server, read only, that
+  logs every `G_CheckHitTriggerDamage` walk: its attacker, start, end,
+  damage and means of death, every float as its bits (cod11-combat.md
+  14.8.3).
 - `gdb_teams.py`: a gdb script for the 1.1d, 1.5b and UO servers, read
   only, that logs the team pick of `Use_Item` and `RespawnItem`
   (cod11-items.md 14.8).

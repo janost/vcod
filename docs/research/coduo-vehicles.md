@@ -1217,8 +1217,8 @@ that move, alias and snapped origin (`compare_impacts`).
   (`Server::test_set_client_velocity`). The first drop then matches
   retail's to the hundredth on every standing and prone-teammate run
   tried, the spawn's velocity included. VERIFIED, the gate. The fixture
-  `mp_kharkov-jeep-runover-prone-team-uo.txt` is now such a run, its gap
-  gone and its creep held to 0.15.
+  `mp_kharkov-jeep-runover-prone-team-uo.txt` was such a run, its gap
+  gone; a 2026-11-28 recapture under gdb has since replaced it (11.6.1).
 
   The driver's `CMDS` lines replay too (2026-11-15): his cmds on their
   times, his use taps on the cmds that carried them (`in=` 64), and the
@@ -1239,7 +1239,10 @@ that move, alias and snapped origin (`compare_impacts`).
 
   - prone: the fall matches, and a prone body landing on the grade slides
     0.1 to 0.3 units off retail's (two runs), so the 2026-10-17 capture,
-    whose drop ours meets, stays. VERIFIED, the gate on those runs.
+    whose drop ours meets, stayed. VERIFIED, the gate on those runs. The
+    2026-11-28 recapture that replaced it (11.6.1) lands on retail's
+    numbers to the hundredth (VERIFIED, the gate); the two runs' slide
+    stays unread.
   - a victim who lies down on his placement 300 ahead (the driverless
     prone runs below) lands 300 ms later on the grade, and retail slides
     him 0.35 units on along y over two frames where ours stops: every one
@@ -1264,8 +1267,8 @@ that move, alias and snapped origin (`compare_impacts`).
   The 150-ahead prone runs fall about 14 units, inside the bound, and lie
   down on the placement as before.
 
-**The corpse's creep.** Two rows still hold the prone corpse's creep to a
-drift: `prone` (0.1, the 2026-10-17 capture, no `CMDS`) and `prone-team`
+**The corpse's creep.** Two rows held the prone corpse's creep to a
+drift until 2026-11-28: `prone` (0.1, the 2026-10-17 capture, no `CMDS`) and `prone-team`
 (0.15; ours 0.13 at worst with both clients' cmds replayed on the
 capture's `ct=` frames). In the prone-team capture the Horch's origin is
 135 units on by the first frame that differs (`PROBE a 14800`), and the
@@ -1274,8 +1277,9 @@ his cmds (`ct=` 14750:14750 to 14800:14782), and not at all at +1150
 (15050), which ran three (15000:14983 to 15050:15033) (VERIFIED,
 capture). Ours moves 0.04 on the first and 0.06 on the second, and lands
 retail's +900 point at +1050 (VERIFIED, `RUNOVER_REPORT`). So retail's
-creep is not a fixed share per cmd run (INFERRED, those two frames);
-what moves it is unread.
+creep is not a fixed share per cmd run (INFERRED, those two frames).
+What moves it and what holds it is read in 11.6.1; both rows now match
+retail's to the hundredth.
 
 **A strike that kills.** `VEH_PlayerCollision` runs inside the drive
 step's probe loop (0x827ab), on each of the six `vehCheckSolidOffsets`
@@ -1345,6 +1349,56 @@ replays it on the 2026-11-14 recapture run 6, which logs both clients'
 cmds: every line matches retail's to the hundredth, the corpse's flight
 included, once ours runs the victim's cmds on their times (the whole
 cmds a frame above). VERIFIED, the gate.
+
+### 11.6.1 What moves a dead body near a vehicle
+
+Read under gdb on retail UO 1.51b, 2026-11-28 (`tools/re/gdb_corpse.py`, recipe
+in the headers of `mp_kharkov-jeep-runover-prone{,-team}-uo.txt`): every cmd of
+the prone victim's corpse, the overlap test's trace, what `ClientThink_real`
+unlinked, and the ps at eight points of `PmoveSingle`'s default arm.
+
+- The creep is the corpse's own dead move: every cmd that is not held moves
+  it 0.009 along -x and 0.018 along +y on the grade under it, 0.012 and 0.023
+  on an 18 ms cmd, and leaves the velocity snapped to (-1, 1, 0) (VERIFIED,
+  the gdb log). That is the ladder check's drop and the air move's slide
+  (cod11-player-clip.md 8.11) (INFERRED, the shape).
+- A cmd is held when the hull is linked across his box: the origin stays,
+  `pm_flags` takes 0x8000 and the velocity snaps to 0 (VERIFIED, the gdb
+  log). In the held cmds the first ground trace of the default arm (the call
+  at 0x2dfd4; it runs again at 0x2e044 after the move) leaves
+  `groundEntityNum` (`ps+0x58`) at 1023, and `PM_UpdatePronePitch` (0x2c158)
+  then refuses the airborne body and sets 0x8000 (0x2c31d); the move after
+  it leaves the origin where it was (VERIFIED, a second team run's gdb log
+  at 0x2dfe8, 0x2dfed and 0x2e044). INFERRED: the dead move's box starts
+  all solid in the hull.
+- So under the hull the creep alternates: a cmd with the snapped (-1, 1, 0)
+  left is past 1.0 and, while the flat dot to the hull's origin is under
+  0.8, keeps the hull linked (11.6 step 3) and is held; the next starts at 0,
+  unlinks the hull and creeps. Once the hull has passed to his side the dot
+  goes past 0.8 and every cmd creeps (VERIFIED, the gdb log: the frame at
+  17200 of the team run unlinks 182 on all three cmds).
+- The dead move's box is the standing one. `PM_CheckDuck`'s `pm_type > 5`
+  arm takes `pm.maxs[2]` from `ps.maxs` (UO `ps+0x570` at 0x2807e-0x28084,
+  1.1d `ps+0x338` at 0x317f6, 1.5b `ps+0x338` at 0x2352c;
+  cod11-gsc-object-model.md 22.3) (VERIFIED (the instructions)), and UO's
+  `pmove_t` box reads (-15, -15, 0)..(15, 15, 70) at `pm+0xd8` on every cmd
+  of the prone corpse (VERIFIED, a third team run's gdb log). The overlap
+  test ahead of it takes the stance's 30 instead (11.6 step 1). So the hull can
+  hold the corpse after the test has stopped finding it: three cmds of the
+  team run (17450 to 17482) miss the hull in the test, trace `entityNum`
+  1023, unlink nothing, and are held all the same (VERIFIED, the gdb log).
+  vcod sized the dead move by the stance, 30 for a prone corpse, and crept
+  through those three (VERIFIED, ours' per-cmd log against the gdb log).
+
+vcod's `dead_move` now sizes its box by `PlayerState::corpse`, the standing 70
+(`PlayerState::maxs`), on all three games. With it the corpse's origin on ours
+matches the gdb log on every cmd of the team run, and `vehicle_runover_ab`'s
+prone and prone-team rows match retail's lines to the hundredth with no drift
+on the 2026-11-28 recaptures, as do two more team runs taken the same way, one
+of them with the probe client's 34, 1 and 0 ms cmds (VERIFIED, the gate). The
+2026-11-14 prone-team capture this replaced still misses by 0.19: ours' jeep
+moves a frame early on that capture's driver replay, so the hull passes the
+corpse a frame off (VERIFIED, its `PROBE a` lines against ours).
 
 ### 11.7 A rider killed in his seat
 

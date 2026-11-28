@@ -2826,7 +2826,7 @@ The fixtures `crates/server/tests/fixtures/dyingpose/mp_carentan-dm-corpseblast*
 and `net/{gamestate,snapshots}-corpseblast*.bin`, gated by
 `dyingpose_ab::a_blast_corpse_keeps_its_fresh_flag_like_*`.
 
-## probe_dmgtrig, probe_dmgshot, probe_dmgtouch, probe_belltower, probe_dmgspawn
+## probe_dmgtrig, probe_dmgshot, probe_dmgtouch, probe_belltower, probe_belltower_tank, probe_dmgspawn
 
 `trigger_damage` on United Offensive's mp_uo_stanjel
 (docs/research/cod11-combat.md 14.8). `probe_dmgtrig` needs no client: it
@@ -2857,6 +2857,13 @@ last shell from inside the belfry. Each takes `SECS=75` and
 second). A gdb breakpoint on `G_CheckHitTriggerDamage` (run the server
 binary under `gdb -batch` through `COD_LNXDED`, and read the arguments
 off `$ebp+8` on) prints each walk's segment.
+
+`probe_belltower_tank` puts a tank's shell on the belltower: mp_foy with
+`crates/server/tests/fixtures/triggers/mp_foy-belltower-tank.ent`
+appended (one more Panzer IV facing the tower), and one
+`--probe-vehicle sit` client who boards it and fires once. The recipe is
+in the header of `crates/server/tests/fixtures/triggers/mp_foy-belltower-tank-uo.txt`;
+`tools/re/gdb_trigger_walk.py` prints the shell's walk.
 
 `probe_dmgspawn` needs no client: it spawns a `trigger_damage` from
 script on any 1.1d map and blasts at it twice.

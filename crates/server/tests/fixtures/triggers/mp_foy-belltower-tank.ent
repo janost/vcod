@@ -1,0 +1,9 @@
+{
+"targetname" "tank"
+"spawnflags" "0"
+"vehicletype" "panzeriv_mp"
+"classname" "script_vehicle"
+"model" "xmodel/mp_vehicle_panzeriv_snow"
+"origin" "495 -608 8"
+"angles" "0 270 0"
+}

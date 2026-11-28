@@ -142,12 +142,7 @@ fn ours(
                 .collect();
             [v[0], v[1], v[2]]
         });
-    // A capture from before the probe logged CMDS lines holds the victim
-    // prone from his placement, as he lay down on the gsc's `PROBE_IN`.
-    let mut victim_in = common::cmds_inputs(capture, "victim");
-    if victim_hold.times.is_empty() && victim == "prone" {
-        victim_in.push((i32::MIN, (0, 0x40, -127)));
-    }
+    let victim_in = common::cmds_inputs(capture, "victim");
     let mut placed_at: Option<i64> = None;
     let mut sounds = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
@@ -304,7 +299,7 @@ fn time(l: &str) -> Option<i32> {
 /// `vehicle_hit_person`) from 100 ms before the first hit to `upto` ms past
 /// it, each time made relative to the jeep's first move: the drive's start
 /// rides the probe client's own clock from its spawn.
-fn around_hit(lines: &[String], upto: i32, origins: bool) -> Vec<String> {
+fn around_hit(lines: &[String], upto: i32) -> Vec<String> {
     let placed = lines
         .iter()
         .filter(|l| l.starts_with("PROBE a "))
@@ -321,7 +316,7 @@ fn around_hit(lines: &[String], upto: i32, origins: bool) -> Vec<String> {
         .filter(|l| {
             l.starts_with("PROBE v ")
                 || l.starts_with("PROBE dmg ")
-                || (origins && l.starts_with("PROBE dmgorigin "))
+                || l.starts_with("PROBE dmgorigin ")
                 || (l.starts_with("VEH ") && l.contains(" parm 8 "))
         })
         .filter_map(|l| {
@@ -387,32 +382,6 @@ fn time_rel(l: &str) -> i32 {
         .find_map(|w| w.strip_prefix('+')?.parse().ok())
         .unwrap_or(0)
 }
-
-/// Lines past `after` ms from the first hit let differ from retail's by
-/// at most `within` a number, for `why`; at least one must.
-struct Drift {
-    after: i32,
-    within: f32,
-    why: &'static str,
-}
-
-/// A prone corpse creeping off the hull's line: retail's +1150 repeats
-/// +1100 (a frame no cmd reached), the creep a cmd at a time.
-const CREEP: Drift = Drift {
-    after: 200,
-    within: 0.1,
-    why: "the probe client's cmd clock in the corpse's creep",
-};
-
-/// Where a prone teammate's victim settles and creeps: with both clients'
-/// cmds, his prone press and spawn velocity replayed he lies on retail's
-/// spot to the hundredth, and his corpse creeps up to 0.13 apart after the
-/// jeep has passed (coduo-vehicles.md 11.6, "The corpse's creep").
-const LIE_DOWN: Drift = Drift {
-    after: -1000,
-    within: 0.15,
-    why: "the prone victim's creep under the jeep",
-};
 
 fn words(l: &str) -> Vec<String> {
     l.split([' ', '(', ')', ','])
@@ -490,28 +459,10 @@ fn compare_first_drop(capture: &str, retail: &[String], ours: &[String]) {
 }
 
 /// Retail's lines against ours one for one: whole words (times, damage,
-/// health, alias indices) equal, decimals within 0.01 up to `drift.after`
-/// ms past the first hit and within `drift.within` from there; every one
-/// within 0.01 without a drift.
-fn compare(retail: &[String], ours: &[String], upto: i32, drift: Option<Drift>) {
-    let Some(drift) = drift else {
-        let (r, o) = (around_hit(retail, upto, true), around_hit(ours, upto, true));
-        let differ: Vec<String> = r
-            .iter()
-            .zip(&o)
-            .filter(|(a, b)| !same(a, b, 0.01))
-            .map(|(a, b)| format!("retail {a}\nours   {b}"))
-            .collect();
-        assert!(differ.is_empty(), "{}", differ.join("\n"));
-        assert_eq!(r.len(), o.len(), "line counts\nretail {r:#?}\nours {o:#?}");
-        return;
-    };
-    // Captures from before the probe logged `dmgorigin` carry none.
-    let origins = retail.iter().any(|l| l.starts_with("PROBE dmgorigin "));
-    let (r, o) = (
-        around_hit(retail, upto, origins),
-        around_hit(ours, upto, origins),
-    );
+/// health, alias indices) equal, decimals within 0.01. `RUNOVER_REPORT`
+/// prints both sides.
+fn compare(retail: &[String], ours: &[String], upto: i32) {
+    let (r, o) = (around_hit(retail, upto), around_hit(ours, upto));
     if std::env::var_os("RUNOVER_REPORT").is_some() {
         for l in &r {
             eprintln!("retail {l}");
@@ -520,42 +471,14 @@ fn compare(retail: &[String], ours: &[String], upto: i32, drift: Option<Drift>) 
             eprintln!("ours   {l}");
         }
     }
-    let hit = r
+    let differ: Vec<String> = r
         .iter()
-        .find(|l| l.starts_with("PROBE dmg "))
-        .map(|l| time_rel(l))
-        .expect("retail's first hit");
-    if std::env::var_os("RUNOVER_REPORT").is_some() {
-        let off = |a: &str, b: &str| -> f32 {
-            words(a)
-                .iter()
-                .zip(words(b))
-                .filter_map(|(x, y)| Some((x.parse::<f32>().ok()? - y.parse::<f32>().ok()?).abs()))
-                .filter(|d| d.is_finite())
-                .fold(0.0, f32::max)
-        };
-        let worst = r.iter().zip(&o).map(|(a, b)| off(a, b)).fold(0.0, f32::max);
-        eprintln!("drift: {worst} at most ({})", drift.why);
-    }
-    let mut drifted = false;
-    for (a, b) in r.iter().zip(&o) {
-        if same(a, b, 0.01) {
-            continue;
-        }
-        assert!(
-            time_rel(a) > hit + drift.after && same(a, b, drift.within),
-            "past {} ({})\nretail {a}\nours   {b}",
-            drift.within,
-            drift.why
-        );
-        drifted = true;
-    }
+        .zip(&o)
+        .filter(|(a, b)| !same(a, b, 0.01))
+        .map(|(a, b)| format!("retail {a}\nours   {b}"))
+        .collect();
+    assert!(differ.is_empty(), "{}", differ.join("\n"));
     assert_eq!(r.len(), o.len(), "line counts\nretail {r:#?}\nours {o:#?}");
-    assert!(
-        drifted,
-        "every line matches; drop the drift ({})",
-        drift.why
-    );
 }
 
 #[test]
@@ -566,7 +489,7 @@ fn a_jeep_runs_over_a_standing_player_twice() {
         return;
     };
     compare_first_drop("stand", &r, &o);
-    compare(&r, &o, 1000, None);
+    compare(&r, &o, 1000);
     compare_impacts(&r, &o);
 }
 
@@ -578,7 +501,7 @@ fn a_prone_player_under_a_jeep_takes_ten_a_cmd() {
         return;
     };
     compare_first_drop("prone", &r, &o);
-    compare(&r, &o, 1000, Some(CREEP));
+    compare(&r, &o, 1000);
     compare_impacts(&r, &o);
 }
 
@@ -599,7 +522,7 @@ fn a_teammate_s_jeep_makes_a_prone_player_hurt_himself() {
         return;
     };
     compare_first_drop("prone-team", &r, &o);
-    compare(&r, &o, 1000, Some(LIE_DOWN));
+    compare(&r, &o, 1000);
     compare_impacts(&r, &o);
 }
 
@@ -622,7 +545,7 @@ fn a_driverless_jeep_runs_over_a_standing_player() {
         return;
     };
     compare_first_drop("bail", &r, &o);
-    compare(&r, &o, 1000, None);
+    compare(&r, &o, 1000);
     compare_impacts(&r, &o);
 }
 
@@ -643,6 +566,6 @@ fn a_driverless_jeep_runs_over_a_prone_player() {
         return;
     };
     compare_first_drop("bail-prone", &r, &o);
-    compare(&r, &o, 1000, None);
+    compare(&r, &o, 1000);
     compare_impacts(&r, &o);
 }

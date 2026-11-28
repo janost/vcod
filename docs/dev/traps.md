@@ -511,6 +511,10 @@ otherwise.
   off the capture (`Server::pin_stuck_rand`, player-clip doc 13.4).
 - `setOrigin` and a teleport link at the unsnapped origin until the next cmd
   relinks.
+- A corpse's pmove traces the standing box, 70 high, whatever its stance
+  (`PlayerState::corpse`), while UO's vehicle overlap test ahead of it takes
+  the stance's 30 or 50: a hull the test misses can still hold a prone
+  corpse (`coduo-vehicles.md` 11.6.1).
 - A brush model is traced at its live `r.currentAngles`, not its link's. A
   finished rotate leaves them truncated to 65536ths (60 reads 59.99634), so
   the clip turns by that, on all three servers (movers doc 22).
