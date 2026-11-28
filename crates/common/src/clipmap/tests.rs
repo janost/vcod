@@ -150,6 +150,21 @@ fn a_mask_without_solid_passes_everything() {
     assert_eq!(t, ClipTrace::clear());
 }
 
+/// A box resting exactly on the brush's top: the server's
+/// `CM_TestBoxInBrush` takes the touch as solid, the 1.7 client's culls
+/// on strict bounds (cod4-collision.md 2).
+#[test]
+fn the_clients_box_test_passes_a_touch() {
+    let p = Vec3::new(32.0, 0.0, 64.0);
+    let solid = |floats| {
+        map()
+            .trace_as(floats, p, p, PLAYER_MINS, PLAYER_MAXS, MASK_PLAYERSOLID)
+            .startsolid
+    };
+    assert!(solid(TraceFloats::Cod4Server));
+    assert!(!solid(TraceFloats::Cod4Client));
+}
+
 /// One test map per shape `check_trees` refuses: the kernels would spin,
 /// recurse without end, or index past an array on each.
 #[test]
