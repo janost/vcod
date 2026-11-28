@@ -1325,7 +1325,7 @@ pub(crate) fn step<W: BotWorld>(w: &mut W) {
         view.hunt = vantage(w, slot, view.origin, plan.vantage);
         drop(looking);
         let p = crate::tick_profile::phase("bots/goal");
-        if W::PARTS_MATES {
+        if W::PARTS_MATES || W::SHUNS_BODIES {
             let _p = crate::tick_profile::phase("goal/give way");
             view.give_way = give_way(w, slot, &teams);
         }
@@ -1948,9 +1948,13 @@ const GIVE_WAY_STEP: f32 = 64.0;
 
 /// Where the bot in `slot`, standing still, steps to make room for a
 /// teammate within [`GIVE_WAY_REACH`] planning round it
-/// ([`mates_in_way`]): [`GIVE_WAY_STEP`] on from him, away. Two guards in
-/// mp_crash's radio room door held a third outside it until the round
-/// ended: there was no way round them (bot-objectives.md 12.7).
+/// ([`mates_in_way`]), or held up and planning round the node under it
+/// ([`crate::nav::Follower::bodies_in_way`]): [`GIVE_WAY_STEP`] on from
+/// him, away. Two guards in mp_crash's radio room door held a third
+/// outside it until the round ended: there was no way round them
+/// (bot-objectives.md 12.7). A guard posted at mp_dawnville's stair foot
+/// pinned a teammate in the nook beside it (4.2.6). The shun's give way
+/// keeps off ladders ([`NavGraph::by_ladder`]).
 fn give_way<W: BotWorld>(w: &W, slot: usize, teams: &[i32]) -> Option<[f32; 3]> {
     let d = w.driver();
     give_way_among(&|s| w.body(s), d.nav.as_deref(), &d.paths, slot, teams)
@@ -1970,10 +1974,19 @@ fn give_way_among(
     let mine = g.nearest(me.origin.to_array())?;
     let queued = paths
         .iter()
-        .filter(|(s, f)| **s != slot && teams.get(**s) == Some(&team) && f.mate_block.0 > 0)
-        .filter(|(_, f)| f.mate_block.1.contains(&mine))
-        .filter_map(|(s, _)| body(*s))
-        .map(|b| b.origin)
+        .filter(|(s, _)| **s != slot && teams.get(**s) == Some(&team))
+        .filter_map(|(s, f)| {
+            let b = body(*s)?;
+            let parts = f.mate_block.0 > 0 && f.mate_block.1.contains(&mine);
+            // Not by a ladder, where the ladder's yields part the two: a
+            // guard on mp_ship's crow's nest plate stepped off it into the
+            // hatch.
+            let shuns = f.shuns(mine)
+                && b.velocity.truncate().length() < HELD_UP_SPEED
+                && !g.by_ladder(me.origin)
+                && !g.by_ladder(b.origin);
+            (parts || shuns).then_some(b.origin)
+        })
         .filter(|o| o.distance(me.origin) < GIVE_WAY_REACH)
         .min_by(|a, b| a.distance(me.origin).total_cmp(&b.distance(me.origin)))?;
     let away = (me.origin - queued)
@@ -2594,7 +2607,7 @@ fn plan_one<W: BotWorld>(
             v
         }
     });
-    if W::PARTS_MATES {
+    if W::PARTS_MATES || W::SHUNS_BODIES {
         let body = |s: usize| cx.bodies.get(s).copied().flatten();
         view.give_way = give_way_among(&body, Some(cx.g), cx.paths, slot, cx.shared.teams);
     }
@@ -2660,6 +2673,60 @@ mod tests {
     use super::*;
     use crate::game::script::{TEAM_ALLIES, TEAM_AXIS};
     use crate::nav::Footing;
+
+    /// A still bot on a corridor's node 2 gives way to a teammate held up
+    /// behind it whose plan keeps off that node (CoD1's shun,
+    /// bot-objectives.md 4.2.6): it steps on, away from him. Not to one
+    /// running, nor to an enemy.
+    #[test]
+    fn a_still_bot_gives_way_to_a_teammate_shunning_its_node() {
+        let nodes: Vec<Vec3> = (0..5)
+            .map(|i| Vec3::new(i as f32 * 48.0, 0.0, 0.0))
+            .collect();
+        let edges = (0..5u32)
+            .map(|i| {
+                [i.checked_sub(1), (i < 4).then_some(i + 1)]
+                    .into_iter()
+                    .flatten()
+                    .collect()
+            })
+            .collect();
+        let g = NavGraph::from_parts(nodes, edges);
+        let w = vcod_common::collision::test_world(&[]);
+        let (guard, mate) = (Vec3::new(96.0, 0.0, 0.0), Vec3::new(66.0, 0.0, 0.0));
+        let mut f = Follower::default();
+        let goal = Goal::To([192.0, 0.0, 0.0]);
+        assert!(
+            f.waypoint(
+                &g,
+                Some(&w),
+                goal,
+                mate.into(),
+                Footing::STANDING,
+                &mut 100,
+                &mut || 0
+            )
+            .is_some()
+        );
+        let others = [(guard, Vec3::ZERO)];
+        assert!((0..8).any(|_| f.bodies_in_way(&g, mate, Footing::STANDING, &others)));
+        assert!(f.shuns(2));
+        let paths = BTreeMap::from([(1, f)]);
+        let at = |o: Vec3, v: f32| Body {
+            origin: o,
+            velocity: Vec3::new(v, 0.0, 0.0),
+            playing: true,
+            on_ground: true,
+            on_ladder: false,
+        };
+        let gives = |speed: f32, teams: &[i32]| {
+            let body = |s: usize| [Some(at(guard, 0.0)), Some(at(mate, speed))][s];
+            give_way_among(&body, Some(&g), &paths, 0, teams)
+        };
+        assert_eq!(gives(0.0, &[TEAM_AXIS, TEAM_AXIS]), Some([160.0, 0.0, 0.0]));
+        assert_eq!(gives(100.0, &[TEAM_AXIS, TEAM_AXIS]), None);
+        assert_eq!(gives(0.0, &[TEAM_AXIS, TEAM_ALLIES]), None);
+    }
 
     /// Six `re` attackers with `Bot::squad` on get S&D's parts, two
     /// flankers and a rear guard, and the one carrying stays in the main

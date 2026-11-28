@@ -159,6 +159,12 @@ by doc and section. Grep `Trap:` in the subsystem doc you were sent to.
   climber just off the rungs is what makes the bot give way to him
   (`shun_through`, read by `Follower::stand_aside`), and planned round him
   the climber was pressed back down the hatch (bot-objectives.md 4.2.3).
+- A still bot gives way to a teammate held up behind it (`give_way`): on
+  CoD2 and CoD4 when `mates_in_way` blocks its node, on CoD1 when the
+  teammate's follower shuns it (`Follower::shuns`), but not by a ladder
+  (`NavGraph::by_ladder`), where it walked a bot off mp_ship's crow's
+  nest plate. Without it a CoD1 guard pinned a teammate in
+  mp_dawnville's stair nook (bot-objectives.md 4.2.6).
 - A point goal that moves on parks the plan and plans again
   (`RETARGET`). The new plan keeps the progress of the edge the old one
   was under way on; reset on every replan, a chase never gave up an edge

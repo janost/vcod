@@ -426,25 +426,24 @@ impl Follower {
     /// ([`Self::stand_aside`]); planned round him, the climber was pressed
     /// back through the hatch.
     pub(super) fn starts_clear(&self, g: &NavGraph, here: Vec3, n: u32) -> bool {
-        use vcod_common::pmove::{HALF_WIDTH, HEIGHT_STAND, STEPSIZE};
-        let by_ladder = |p: Vec3| {
-            g.ladder_boxes.iter().any(|b| {
-                box_flat(b, p) < LADDER_NEAR
-                    && p.z > b.0.z - HEIGHT_STAND
-                    && p.z < b.1.z + HEIGHT_STAND
-            })
-        };
+        use vcod_common::pmove::{HALF_WIDTH, STEPSIZE};
         let to = g.nodes[n as usize];
         self.shun.is_empty()
             || !self.shun_still
-            || by_ladder(here)
-            || self.shunned.iter().any(|&o| by_ladder(o))
+            || g.by_ladder(here)
+            || self.shunned.iter().any(|&o| g.by_ladder(o))
             || ((to.z - here.z).abs() < STEPSIZE
                 && self.shun.binary_search(&n).is_err()
                 && self.shunned.iter().all(|&o| {
                     let now = (o - here).truncate().length();
                     seg_dist_flat(here, to, o) >= (2.0 * HALF_WIDTH).min(now) - 1.0
                 }))
+    }
+
+    /// Whether the plan round still bodies ([`Self::bodies_in_way`]) keeps
+    /// off node `n` now.
+    pub fn shuns(&self, n: u32) -> bool {
+        self.shun.binary_search(&n).is_ok()
     }
 
     /// The waypoint the follower handed out this tick, for the bodies
