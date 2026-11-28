@@ -773,6 +773,9 @@ pub struct Held {
     pub hold: i32,
     /// Posts dealt this life, the rotation's draw.
     pub turn: u32,
+    /// The spread it was dealt at ([`Rules::spread`]): it is kept while
+    /// the teammates before it stand that far off.
+    pub spread: f32,
     /// A post an enemy saw or shot the guard on, and when that runs out.
     pub burnt: Option<(Vec3, i32)>,
 }
@@ -788,10 +791,10 @@ pub fn draw(slot: usize, round: u32, turn: u32) -> u64 {
 
 /// Deals one side's guards of one objective (`guards`: slot and feet, in
 /// slot order) their posts this tick, keeping each on the post it holds
-/// until its spell there ends or a teammate earlier in slot order stands
-/// on it, then the best free post at least [`SPREAD`] from the others'
-/// and off its last. With more guards than posts that far apart, the rest
-/// share.
+/// until its spell there ends or a teammate earlier in slot order holds
+/// one nearer it than the spread it was dealt at, then the best free post
+/// at least [`SPREAD`] from the others' and off its last. With more guards
+/// than posts that far apart, the rest share, and keep the shared post.
 pub fn assign(
     survey: &Survey,
     key: Key,
@@ -821,7 +824,6 @@ pub fn assign_by(
     let reached = |feet: Vec3, p: Vec3| {
         (feet - p).truncate().length() < ARRIVE && (feet.z - p.z).abs() < super::ARRIVE_HEIGHT
     };
-    let first = rules.spread[0];
     for &(slot, feet) in guards {
         let prior = held.get(&slot).copied().filter(|h| h.key == key);
         let burnt = held
@@ -831,7 +833,7 @@ pub fn assign_by(
         let keep = prior.filter(|h| {
             let done = h.reached.is_some_and(|t| now.wrapping_sub(t) >= h.hold);
             let late = h.reached.is_none() && now.wrapping_sub(h.since) >= rules.walk_ms;
-            !done && !late && taken.iter().all(|t| t.at.distance(h.post.at) >= first)
+            !done && !late && taken.iter().all(|t| t.at.distance(h.post.at) >= h.spread)
         });
         let h = match keep {
             Some(mut h) => {
@@ -873,11 +875,11 @@ pub fn assign_by(
                         .max_by(|(i, p), (j, q)| value(*i, p).total_cmp(&value(*j, q)))
                         .map(|(_, p)| *p)
                 };
-                let Some(post) = rules
+                let Some((post, spread)) = rules
                     .spread
                     .iter()
-                    .find_map(|s| pick(*s))
-                    .or(prior.map(|h| h.post))
+                    .find_map(|s| pick(*s).map(|p| (p, *s)))
+                    .or(prior.map(|h| (h.post, 0.0)))
                 else {
                     continue;
                 };
@@ -888,6 +890,7 @@ pub fn assign_by(
                     reached: reached(feet, post.at).then_some(now),
                     hold: rules.hold_ms + (r % rules.hold_spread_ms as u64) as i32,
                     turn,
+                    spread,
                     burnt,
                 }
             }
@@ -1139,6 +1142,20 @@ mod tests {
         }
         let b = assign(&s, Key::default(), &guards, &mut held, 50, 1);
         assert_eq!(a, b, "kept");
+    }
+
+    /// A guard dealt a post near a teammate's, where the posts leave no
+    /// room, keeps it tick to tick.
+    #[test]
+    fn a_guard_sharing_a_post_keeps_it() {
+        let s = row();
+        let guards = [1, 2, 3, 4].map(|s| (s, Vec3::ZERO));
+        let mut held = BTreeMap::new();
+        let a = assign(&s, Key::default(), &guards, &mut held, 0, 1);
+        assert_eq!(held[&4].spread, 0.0, "the fourth shares");
+        let b = assign(&s, Key::default(), &guards, &mut held, 50, 1);
+        assert_eq!(a, b, "kept");
+        assert_eq!(held[&4].turn, 0);
     }
 
     /// A guard on its post moves to another once its hold there runs out,
