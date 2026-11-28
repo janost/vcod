@@ -135,6 +135,28 @@ section 6 says.
   calls). That 0x4f37e0 is `CM_TraceThroughBrush` and 0x4f05c0 the
   capsule against the triangles is INFERRED (their shape; 0x4f05c0 reads
   the radius and the sphere offset, trace work +0x88 and +0x8c).
+- The client's walks keep vcod's float model but for one split. The leaf
+  arm 0x4f40b0 runs the brushes (0x4f3fc0) while the fraction is not 0,
+  then the AABB trees while it stays so (0x4f40f4). 0x4f3fc0 grows the
+  leaf's box by the half box, each bound stored (0x4f3fc7..0x4f400a), and
+  culls it through `CM_TraceBox` (0x4f6d00), which stores each `d1`, `d2`
+  and fraction and moves the enter and leave fractions on the sign of a
+  stored difference (0x4f6d3f..0x4f6dfa), as `Cx::trace_box_culls` does.
+  The leaf brush walk 0x4f3c40 stores `t1`, `t2` and the offset `(half +
+  0.125) - clearance` (0x4f3cb1..0x4f3cd3), takes `fmin`, `fmax` and `1 -
+  frac` off stored differences, `1 / |t2 - t1|` and both fractions stored
+  (0x4f3dc2..0x4f3e05), and each point of the split stored
+  (0x4f3e54..0x4f3eb2, 0x4f3ef8..0x4f3f50), as `Cx::trace_brush_node`
+  does. VERIFIED (the instructions).
+- The tree walk 0x4f4920 splits as that walk does on an axial plane, but
+  on any other it stores the dot with each end before taking `dist` off
+  it (0x4f49b2, 0x4f49d5), and its offset there is not CoD2's 2048: 0.125
+  (0x700be8) for a point (trace work +0x84, set at 0x4f511c..0x4f5146 when
+  the half box sums to 0), else the stored `+0x9c + 0.125` (0x4f49ee),
+  where `+0x9c` is `sqrt(stored(|half box|^2))` stored (0x4f4f11..0x4f4f35,
+  through 0x401050). VERIFIED (the instructions). `Cx::trace_tree` takes
+  both under `TraceFloats::Cod4Client` (`Sweep::box_radius`). The slack
+  only prunes the walk; no take reads a difference. VERIFIED (the gates).
 - The client's brush kernel (0x4f37e0) runs at the client's 53-bit
   precision (cod4-player-anims.md 11) and stores as CoD2's does: each axial
   `d1`, `d2`, `fmin(d1, 0.125)`'s difference and each fraction is a float
@@ -149,9 +171,27 @@ section 6 says.
   client's trace, which the physics worlds' sweep and the ragdolls use
   (cod4-gsc.md 3.6.9).
 - Two other differences, INFERRED: `CM_TestBoxInBrush` culls on strict
-  bounds where CoD2's accepts a touch (unported; matters only for a box
-  exactly touching a brush), and the AABB position walk stops at the
-  first child that starts solid (ported in the indexed arm, section 3).
+  bounds where CoD2's accepts a touch (unported for the server; matters
+  only for a box exactly touching a brush), and the AABB position walk
+  stops at the first child that starts solid (ported in the indexed arm,
+  section 3).
+- The client's `CM_TestBoxInBrush` (0x4f3140) culls on strict bounds: a
+  brush whose maxs is at or under the box's lower bound, or whose mins is
+  at or over its upper bound, is passed (0x4f3140..0x4f31b5). Per side it
+  stores the dot with the start (0x4f31dc), the lift `|sphere_z n.z|`
+  (0x4f31f1, through 0x401000) and `(dist + radius) + lift` (0x4f320f),
+  and the box is out when their stored difference is over 0 (0x6ffa44,
+  0x4f3223). A box inside every side takes fraction 0, `startsolid`,
+  `allsolid`, the brush's contents and surface flags of 0
+  (0x4f323e..0x4f3254). VERIFIED (the instructions).
+  `Cx::test_brush` takes it under `TraceFloats::Cod4Client`.
+- The client's position test (0x4f36c0, `CM_Trace`'s still arm at
+  0x4f510f) grows the box by 1, each bound stored (0x4f36da..0x4f3772),
+  lists the leaves through 0x4f2c60 (0x400 of them), and per leaf until
+  `allsolid` runs the brush walk (0x4f3360: the leaf's box must overlap
+  the bounds strictly, 0x4f3373..0x4f339b; the node walk 0x4f3270 as
+  `Cx::test_brush_node`), then, unless that left it solid, the AABB trees
+  (0x4f22b0). VERIFIED (the instructions). Its triangles: section 3.1.
 - 1.7's capsule border is not CoD2's. Past the end and height tests, the
   tree walk computes the wall top's height at the contact,
   `z_slope * along + z_base` (0x81173c4, the border's +0x10 and +0xc),
@@ -219,7 +259,8 @@ the shared records; the AABB tree walk takes its indexed arm
   computes that distance with its own closest-point routine
   (`segment_tri_dist2`), not `CM_DoesCapsuleIntersectTriangle`'s
   arithmetic, so a contact within a float step of the radius can read
-  differently.
+  differently. The client's test is read and ported (section 3.1); the
+  server's is not.
 
 The point sweep's float model. 1.7 inlines it in its tree walk
 (`cod4_lnxded` 0x81169e3..0x81179c8) on the x87 stack, VERIFIED (the
@@ -431,6 +472,81 @@ take tells these five apart yet: the phys gates (bit-exact) and the
 ragdoll gates pass with them, and the ragdoll sweeps take (cod4-gsc.md
 3.6.9) reads retail's with or without them. VERIFIED (the runs, ours).
 
+### 3.1 The client's position test
+
+`iw3mp.exe`'s AABB position walk (0x4f2180, from 0x4f22b0 per tree root
+whose material meets the mask) culls each node through its `CM_CullBox`
+(0x4efb10), recurses on the children until one sets `startsolid` (trace
++0x29, 0x4f21d3), and at a leaf stamps the partition (0x4f21fc) and runs
+0x4f1930 per triangle until one does (0x4f2239). 0x4f22b0 then takes the
+root's material flags once `allsolid` (+0x28) is set (0x4f2300).
+VERIFIED (the instructions).
+
+0x4f1930 picks the test by the sphere offset (trace work +0x8c, compared
+with 0 at 0x4f1935): VERIFIED (the instructions), each item:
+
+- With an offset, the capsule's axis from `stored(sphere_z + start.z)` to
+  `stored(start.z - sphere_z)` goes to 0x4f1400 with `stored(r^2)`
+  (0x4f1942..0x4f1994).
+- With none (a cube's box), the squared distance 0x4f0f90 returns is
+  compared with `stored(r^2)`, solid when under it (0x4f19b0..0x4f19d6).
+- Solid is fraction 0 and `allsolid`, `startsolid` set (0x4f19a0..0x4f19a9).
+
+0x4f0f90 takes `e1 = v1 - v0`, `e2 = v2 - v0` stored, their three dots
+stored, calls 0x4f0b70 for a point, and returns the stored `(x^2 + y^2) +
+z^2` of that point less the start, each component stored
+(0x4f0fb8..0x4f10cf). VERIFIED (the instructions).
+
+0x4f0b70 is the barycentric region search of a closest point on a
+triangle, with each dot, `det`, `s` and `t` stored and the region sums
+kept (0x4f0b77..0x4f0c1b), but its offset is `p - v0` (0x4f0b77..0x4f0b8e)
+where the regions it then picks need `v0 - p`: it returns the point
+nearest `2 v0 - p`. VERIFIED (the instructions, run on chosen inputs by
+`tools/re/x87emu.py`: 10 over the middle of a 10-unit triangle with v0 at
+the origin, `(2, 3, 5)`, it returns v0, squared distance 38). So a
+sphere's position test is solid only near v0, or where the reflection
+lands near the triangle. Which bodies retail tests this way, and that a
+take shows it, is open (section 6).
+
+0x4f1400, the capsule's axis `top..bottom` against the triangle,
+VERIFIED (the instructions), each item:
+
+- `n = e1 x e2`, each component stored; the plane's `v0 . n`, `top . n`
+  and `bottom . n` stored and the two distances off them kept
+  (0x4f142a..0x4f1540).
+- Their product under 0 (0x4f1548, 0.0 at 0x70adf0; 0 itself is not a
+  crossing) is a crossing: the point at `stored(dt / (dt - db))` along
+  the axis, each component stored (0x4f1606..0x4f1645), goes to 0x4f0ec0,
+  and inside the triangle is a hit (0x4f166d).
+- Otherwise, or past the triangle, an end whose squared distance is
+  under `stored(|n|^2) r^2` is near (0x4f1673..0x4f16d9,
+  0x4f16e6..0x4f174f); with no crossing and no near end there is no hit
+  (0x4f1758). A near end inside the triangle is a hit, the top first
+  (0x4f17ec..0x4f1866).
+- Then the axis against the edges `v0 e1`, `v0 e2` and `v1 (v2 - v1)`,
+  through 0x4f10e0, each a hit when `stored(r^2)` is over the distance
+  (0x4f1874..0x4f191a).
+
+0x4f0ec0 takes `v0 - q` stored and its dots with the edges stored, `s =
+d2 e12 - d1 e22` and `t = e12 d1 - d2 e11` kept against the kept `det =
+e22 e11 - e12^2` 0x4f1400 passes: inside when `s >= 0`, `t >= 0` and
+`s + t <= det` (0x4f0f3d..0x4f0f7a). VERIFIED (the instructions).
+
+0x4f10e0 is the squared distance between two segments by the region of
+its `s, t` square: `a, b, c, d, e, f` stored (0x4f10e7..0x4f11a1), `det`
+and both numerators kept and tested with no parallel case
+(0x4f11c9..0x4f130e), each region's quadratic kept and stored once.
+VERIFIED (the instructions).
+
+`clipmap::pos4` is this test, and `Cx::position_indexed_r` takes it under
+`TraceFloats::Cod4Client`. `tools/re/cod4_postest_vectors.py` runs the
+four kernels 0x4f0f90, 0x4f10e0, 0x4f1400 and 0x4f1930 in
+`tools/re/x87emu.py` (an i386 and x87 interpreter at 53-bit precision over
+objdump's listing) on 469 generated inputs, keeping one per path through
+their compares; `pos4`'s test reads each answer back from the port to
+the bit (`crates/cod4/tests/fixtures/clip/postest-1.7-client.txt`).
+VERIFIED (the vectors).
+
 ## 4. Submodels and static models
 
 - A submodel traces through its `cmodel_t` leaf alone
@@ -526,11 +642,14 @@ down, mask 0x2810011, the player's box (-15,-15,0)..(15,15,70). VERIFIED
   globals 0x889dea4 and 0x889de9c). VERIFIED (the disassembly). No gate
   shows a difference there yet.
 - `CM_TestBoxInBrush`'s strict bounds (section 2).
-- The client's walks and position test, unread against the server's:
-  the tree walk 0x4f4920's split, the leaf brush walk 0x4f3c40, the leaf
-  arm 0x4f40b0's brush box cull, and the position test (0x4f2180, which
-  recurses on itself and calls 0x4efb10 and 0x4f1930) with its brushes.
-  `Clip::sweep` reaches the position test for a body that has not moved
-  (`ode::phys`). VERIFIED (the calls); their float models are not read.
+- The server's tree walk split on a non-axial plane: whether 1.7 keeps
+  CoD2's 2048 or takes the client's box radius (section 2) is unread.
+- The client's sphere position test (section 3.1) meets the point
+  nearest `2 v0 - p`. `Clip::sweep` reaches the position test for a phys
+  body that has not moved while its state is 0 or 1, with a cube's box
+  when the body is thin (`ode::phys`, 0x5a6930); the fall take's ragdoll
+  boxes are all cubes. VERIFIED (the port's sweep, the take). No take
+  has such a test over a triangle away from its v0, so the
+  retail-visible effect is not measured.
 - The server's pmove and script traces run over this clip map
   (cod4-pmove.md 15).

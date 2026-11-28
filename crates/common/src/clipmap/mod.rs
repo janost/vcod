@@ -13,6 +13,7 @@
 
 mod mesh;
 mod mesh4;
+mod pos4;
 mod trace;
 
 use std::cell::RefCell;
