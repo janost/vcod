@@ -3,14 +3,15 @@
 //! disconnected icon and the talk balloon. Retail's player sprite pass is
 //! cgame 0x300274d0; docs/research/cod11-gametypes-re-bel.md, section 7.3.
 //! A United Offensive vehicle draws its own icon (uo cgame 0x30021771,
-//! coduo-diff.md 9).
+//! coduo-diff.md 9), and a bought vehicle's owner icon its three chevrons
+//! (`eType` 15, coduo-diff.md 19.4.1).
 
 use std::collections::{BTreeMap, HashMap};
 
 use glam::Vec3;
 use vcod_common::net::flags::{
-    EF_DEAD, EF_DISCONNECTED, EF_NODRAW, EF_TALK, ET_PLAYER, ET_VEHICLE_CORPSE_V22, ET_VEHICLE_V22,
-    TEAM_SPECTATOR,
+    EF_DEAD, EF_DISCONNECTED, EF_NODRAW, EF_TALK, ET_PLAYER, ET_VEHICLE_CORPSE_V22,
+    ET_VEHICLE_OWNER_ICON_V22, ET_VEHICLE_V22, TEAM_SPECTATOR,
 };
 use vcod_common::net::msg::{ClientState, EntityState};
 use vcod_common::net::protocol::{Cod1Wire, CsRange, ENTITYNUM_NONE};
@@ -32,6 +33,9 @@ const TALK_DROP: f32 = 5.0;
 /// half-extent, never distance scaled (uo cgame 0x3002182a, 0x300213c0).
 const VEHICLE_HEIGHT: f32 = 100.0;
 const VEHICLE_RADIUS: f32 = 20.0;
+/// The owner icon's chevron (uo cgame 0x30077184, registered with its
+/// `.dds`, which the shader name drops).
+const OWNER_SHADER: &str = "gfx/hud/headicon@us_rank1";
 const TALK_SHADER: &str = "headiconTalkBalloon";
 const DISCONNECTED_SHADER: &str = "headiconDisconnected";
 const KILLCAM_SHADER: &str = "headiconYouInKillCam";
@@ -137,6 +141,8 @@ pub struct Scene<'a> {
     pub riding: Option<u32>,
     /// A player's live quick-chat icon (`QuickChat::sprite`).
     pub voice: &'a dyn Fn(u32) -> Option<&'a str>,
+    /// `cg.time`, ms: the owner icon's cycle and fade.
+    pub time: i32,
 }
 
 /// Up to two sprites per drawn player: the head icon the viewer may see,
@@ -155,6 +161,10 @@ pub fn quads(s: &Scene, right: Vec3, up: Vec3) -> Vec<FxQuad> {
     let mut out = Vec::new();
     for (&num, ent) in s.entities {
         let int = |name: &str| ent.field_i32(p, name);
+        if int("eType") == ET_VEHICLE_OWNER_ICON_V22 && p.et_events > ET_VEHICLE_OWNER_ICON_V22 {
+            out.extend(owner_icon(p, ent, s.time, right, up));
+            continue;
+        }
         if matches!(int("eType"), ET_VEHICLE_V22 | ET_VEHICLE_CORPSE_V22)
             && p.et_events > ET_VEHICLE_CORPSE_V22
         {
@@ -260,6 +270,44 @@ fn vehicle_icon(
     Some(sized_sprite(centre, VEHICLE_RADIUS, right, up, shader))
 }
 
+/// A bought vehicle's owner icon (uo cgame 0x30021540, `eType` 15; the
+/// server sends it to the buyer only, coduo-diff.md 19.4.1): three
+/// chevrons turned 180 degrees over `pos.trBase`, the `k`th on a 1500 ms
+/// cycle `k * 500` ms ahead. Each falls 80 units from `leanf` (the script's
+/// `radius`), fading in over its first 500 ms and out over its last, and
+/// all fade out over the 2 s before `time`; the alpha is that to the 1.5.
+fn owner_icon(p: &Cod1Wire, ent: &EntityState, time: i32, right: Vec3, up: Vec3) -> Vec<FxQuad> {
+    let base = Vec3::new(
+        ent.field_f32(p, "pos.trBase[0]"),
+        ent.field_f32(p, "pos.trBase[1]"),
+        ent.field_f32(p, "pos.trBase[2]"),
+    );
+    let (radius, end) = (ent.field_f32(p, "leanf"), ent.field_i32(p, "time"));
+    (0..3)
+        .filter_map(|k| {
+            let phase = time.wrapping_add(k * 500) % 1500;
+            let mut a = match phase {
+                ..500 => phase as f32 * 0.002,
+                1001.. => (1500 - phase) as f32 * 0.002,
+                _ => 1.0,
+            };
+            if time > end.wrapping_sub(2000) {
+                a *= end.wrapping_sub(time) as f32 * 0.0005;
+            }
+            // `pow` of a negative fade is NaN, which `ftol` makes alpha 0.
+            let alpha = a.powf(1.5);
+            if alpha.is_nan() || alpha <= 0.0 {
+                return None;
+            }
+            let height = (radius - (phase as f32 * 0.053_333_335) as i32 as f32) as i32;
+            let centre = base + Vec3::Z * (height as f32 + ABOVE_ORIGIN);
+            let mut q = sized_sprite(centre, VEHICLE_RADIUS, -right, -up, OWNER_SHADER);
+            q.rgba = [1.0, 1.0, 1.0, alpha.min(1.0)];
+            Some(q)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,6 +383,7 @@ mod tests {
             entity_pos: &entity_pos,
             riding: None,
             voice: &|_| None,
+            time: 0,
         };
         let q = quads(&scene, Vec3::Y, Vec3::Z);
         assert_eq!(q.len(), 1);
@@ -431,6 +480,7 @@ mod tests {
             entity_pos: &entity_pos,
             riding: None,
             voice: &|_| None,
+            time: 0,
         };
         let q = quads(&scene, Vec3::Y, Vec3::Z);
         let centre = |q: &FxQuad| q.verts[0][2] - RADIUS;
@@ -484,6 +534,7 @@ mod tests {
             entity_pos: &entity_pos,
             riding: None,
             voice: &|_| None,
+            time: 0,
         };
         let q = quads(&scene, Vec3::Y, Vec3::Z);
         assert_eq!(q.len(), 1);
@@ -495,5 +546,58 @@ mod tests {
         // A passenger of the tank sees none over it.
         scene.riding = Some(100);
         assert!(quads(&scene, Vec3::Y, Vec3::Z).is_empty());
+    }
+
+    /// uo cgame 0x30021540: three upside-down chevrons on staggered
+    /// 1500 ms cycles, falling from `leanf` and fading at both ends of the
+    /// cycle and over the last 2 s before the entity's `time`.
+    #[test]
+    fn an_owner_icon_cycles_three_falling_chevrons() {
+        let p = &vcod_common::net::protocol::PROTOCOL_V22;
+        let mut e = EntityState::null(p);
+        let mut set = |n: &str, v: i32| {
+            e.fields[EntityState::field_index(p, n).unwrap()] = v;
+        };
+        set("eType", ET_VEHICLE_OWNER_ICON_V22);
+        set("pos.trBase[2]", 100.0f32.to_bits() as i32);
+        set("leanf", 170.0f32.to_bits() as i32);
+        set("time", 20_000);
+        let at = |time: i32| owner_icon(p, &e, time, Vec3::Y, Vec3::Z);
+        let centre = |q: &FxQuad| (q.verts[0][2] + q.verts[2][2]) / 2.0;
+        // At 12000 the phases are 0 (alpha 0, dropped), 500 and 1000.
+        let q = at(12_000);
+        assert_eq!(q.len(), 2);
+        assert_eq!(&*q[0].shader, OWNER_SHADER);
+        // 170 - trunc(500 * 0.05333) = 144, plus 72 over the base.
+        assert_eq!((centre(&q[0]), q[0].rgba[3]), (316.0, 1.0));
+        assert_eq!((centre(&q[1]), q[1].rgba[3]), (289.0, 1.0));
+        // Turned 180 degrees: the top-left corner sits right and below.
+        assert_eq!(q[0].verts[0], [0.0, VEHICLE_RADIUS, 316.0 - VEHICLE_RADIUS]);
+        // Phase 250 fades in at 0.5^1.5.
+        let q = at(12_250);
+        assert!((q[0].rgba[3] - 0.5f32.powf(1.5)).abs() < 1e-6);
+        // A second before `time`, everything is at half the fade.
+        let q = at(19_000 + 500);
+        assert!((q[0].rgba[3] - 0.25f32.powf(1.5)).abs() < 1e-6);
+        assert!(at(20_000).is_empty());
+        // The pass draws it with no roster at all past the viewer.
+        let entities = BTreeMap::from([(200, e.clone())]);
+        let clients = BTreeMap::from([(0, ClientState::named(p, 0, 1, "x"))]);
+        let none = HashMap::new();
+        let scene = Scene {
+            protocol: p,
+            entities: &entities,
+            clients: &clients,
+            configstrings: &[],
+            viewer: 0,
+            own: 0,
+            eye: Vec3::ZERO,
+            heads: &none,
+            entity_pos: &none,
+            riding: None,
+            voice: &|_| None,
+            time: 12_000,
+        };
+        assert_eq!(quads(&scene, Vec3::Y, Vec3::Z).len(), 2);
     }
 }

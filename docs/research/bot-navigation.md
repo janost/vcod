@@ -2721,10 +2721,13 @@ whose `PARTS_MATES` plans round a still teammate, bot-objectives.md
   that body's box stands over (`NavGraph::nodes_in_box`, two
   half-widths, a step) and the node under way when he stands on its
   edge, for 60 ticks (`SHUN_TICKS`), and starts at a node the bot walks
-  to. A plan that finds no way round goes through them
+  to: when every body it keeps off stands still and none, nor the bot,
+  stands by a ladder, not one under them or whose leg from the bot runs
+  into one (`Follower::starts_clear`, bot-objectives.md 4.2.3). A plan
+  that finds no way round goes through them
   (`Search::shunning`, then the same search without them); so does one
   whose first two legs from the body pass within two half-widths of
-  him, since the start node is never kept off. No second plan round a
+  him, since the search never keeps off its start. No second plan round a
   body while the first's nodes are kept off. The tick it plans round,
   the bot's stall circle starts again (`BotView::detour`): the circle
   and the rule fired on the same tick, and the spell walked the bot off

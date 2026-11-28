@@ -218,9 +218,51 @@ pub fn escorts(carrier: [f32; 3], mates: &[(usize, [f32; 3])]) -> Vec<usize> {
     by.into_iter().take(ESCORTS).map(|(_, s)| s).collect()
 }
 
+/// How much nearer a carried `re` objective's goal another defender must
+/// stand than the one holding it to take the hold over ([`goal_holder`]).
+pub const HOLD_MARGIN: f32 = 512.0;
+
+/// Of the defenders that may hold a carried objective's goal (`open`, each
+/// slot and its feet), the nearest `goal`, lower slot first on a tie; but
+/// `held`, last tick's holder, keeps it while still open and no more than
+/// [`HOLD_MARGIN`] farther. Without the margin two defenders about as far
+/// off traded the hold every 15 to 45 ticks, and the one that lost it
+/// turned back to sweep (mp_rocket `re` seed 46, bot-objectives.md 4.2.3).
+pub fn goal_holder(
+    goal: [f32; 3],
+    open: &[(usize, [f32; 3])],
+    held: Option<usize>,
+) -> Option<usize> {
+    let far = |p: [f32; 3]| dist_sq(goal, p).sqrt();
+    let (near, d) = open
+        .iter()
+        .map(|&(s, p)| (s, far(p)))
+        .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)))?;
+    let kept = open
+        .iter()
+        .find(|(s, _)| Some(*s) == held)
+        .filter(|(_, p)| far(*p) <= d + HOLD_MARGIN);
+    Some(kept.map_or(near, |k| k.0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The nearest defender takes the hold; last tick's holder keeps it
+    /// until another stands [`HOLD_MARGIN`] nearer, or it drops out.
+    #[test]
+    fn the_goal_holder_keeps_the_hold_inside_the_margin() {
+        let goal = [0.0, 0.0, 0.0];
+        let at = |x: f32| [x, 0.0, 0.0];
+        let open = [(3, at(1000.0)), (5, at(1100.0))];
+        assert_eq!(goal_holder(goal, &open, None), Some(3));
+        assert_eq!(goal_holder(goal, &open, Some(5)), Some(5));
+        let open = [(3, at(1000.0)), (5, at(1000.0 + HOLD_MARGIN + 1.0))];
+        assert_eq!(goal_holder(goal, &open, Some(5)), Some(3));
+        assert_eq!(goal_holder(goal, &[(3, at(1000.0))], Some(5)), Some(3));
+        assert_eq!(goal_holder(goal, &[], Some(5)), None);
+    }
 
     #[test]
     fn ranks_are_a_permutation_that_changes_with_the_round() {

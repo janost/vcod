@@ -16,7 +16,7 @@ use anyhow::{Context, Result, bail, ensure};
 use glam::Vec3;
 use vcod_common::clipmap::{
     self, BrushNode, CBrush, CLeaf, CNode, CPlane, ClipTrace, CollAabbTree, CollBorder,
-    CollPartition, IndexedMesh,
+    CollPartition, IndexedMesh, TraceFloats,
 };
 use vcod_common::collision::WorldClip;
 
@@ -137,6 +137,22 @@ impl ClipMap {
     /// `CM_BoxTrace` on model 0 and `CM_Trace`'s closing walkable rule.
     pub fn trace(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: u32) -> ClipTrace {
         close(self.world.trace(start, end, mins, maxs, mask))
+    }
+
+    /// [`Self::trace`] as the client's `CM_Trace` (0x4f4d30) rounds it
+    /// (cod4-collision.md 2, 3).
+    pub fn trace_client(
+        &self,
+        start: Vec3,
+        end: Vec3,
+        mins: Vec3,
+        maxs: Vec3,
+        mask: u32,
+    ) -> ClipTrace {
+        close(
+            self.world
+                .trace_as(TraceFloats::Cod4Client, start, end, mins, maxs, mask),
+        )
     }
 
     /// `CM_BoxTrace` on clip model `model`: 0 the world, else the

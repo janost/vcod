@@ -1436,24 +1436,26 @@ impl crate::bots::driver::BotWorld for Server {
                 })
                 .collect();
             // Per carried objective, the playing defender nearest its goal
-            // holds it (bot-objectives.md 4.2.1).
-            let holders: Vec<usize> = objectives
+            // holds it (bot-objectives.md 4.2.1), by a margin (4.2.3).
+            let open: Vec<(usize, [f32; 3])> = views
                 .iter()
-                .filter(|(o, _, _)| o.carried)
-                .filter_map(|(o, _, _)| {
-                    views
-                        .iter()
-                        .filter(|(s, v)| {
-                            team(*s) == *defenders && v.playing && !v.dead && !solo.contains(s)
-                        })
-                        .min_by(|a, b| {
-                            let d =
-                                |v: &crate::bots::BotView| crate::bots::dist_sq(v.origin, o.goal);
-                            d(&a.1).total_cmp(&d(&b.1))
-                        })
-                        .map(|(s, _)| *s)
+                .filter(|(s, v)| {
+                    team(*s) == *defenders && v.playing && !v.dead && !solo.contains(s)
+                })
+                .map(|(s, v)| (*s, v.origin))
+                .collect();
+            let held = std::mem::take(&mut self.driver_mut().re_holders);
+            let holders: Vec<Option<usize>> = objectives
+                .iter()
+                .enumerate()
+                .map(|(i, (o, _, _))| {
+                    let held = held.get(i).copied().flatten();
+                    o.carried
+                        .then(|| crate::bots::team::goal_holder(o.goal, &open, held))
+                        .flatten()
                 })
                 .collect();
+            self.driver_mut().re_holders = holders.clone();
             for (slot, view) in views.iter_mut() {
                 let mine = team(*slot);
                 let role = if mine == *attackers {
@@ -1478,7 +1480,7 @@ impl crate::bots::driver::BotWorld for Server {
                     holds_goal: if alone {
                         rank == 0
                     } else {
-                        holders.contains(slot)
+                        holders.contains(&Some(*slot))
                     },
                     escort: alone || escorts.contains(slot),
                     objectives: objectives

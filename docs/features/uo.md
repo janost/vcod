@@ -27,12 +27,16 @@ Joining and watching:
   type, artillery, smoke and tank explodes, deploy, fatigue, overheating,
   the gunner's fire, the MG fire loop.
 - Vehicle engines and MG loops crossfade as UO's sound blend entities do;
-  tank shells whizz in flight.
+  tank shells whizz in flight. A level loads only the sound alias files its
+  `soundloadspecs` list.
 - A vehicle MG's rounds draw the impacts and tracers UO's cgame traces
   itself and stop on vehicles. Tracers follow UO's length gate and
   `sv_night` width.
 - The flamethrower streams flame that bounces off bodies, leaves burning
-  residue, and reports its burns on you to the server (`fdc`).
+  residue, and reports its burns on you to the server (`fdc`). The stream
+  takes in its owner's movement.
+- A bought vehicle's owner icon (`script_vehicle_owner_icon`) draws over
+  it. No stock script turns the purchase on, so only a mod's does.
 - efx camera shakes shake the view. The HUD adds the sprint and fatigue
   icon, vehicle status icons and crosshair, and vehicles on the compass
   (coduo-diff.md 19).

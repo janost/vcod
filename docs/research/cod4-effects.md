@@ -503,16 +503,18 @@ visual the model 3.6.3 pinned, and the run passing 3.6.7's rule to step
 0 ms are zero in that element, so 0x4a62f0's turn rests on the
 instructions alone; the 0x40 origin has its own take (9.1.1.4).
 
-Ported on the instructions alone, no take reaching them: a spawn's
-nonzero angles, the cylinder offset and the non-sphere 0xc0 frame (all
-three in `explosions/grenadeexp_wood`, 9.1.1.4), 0x80 origins and
-looping elements (9.1.1.1). Not ported: the frame 0x4a30e0 lerps
-between a moving effect's two frames for each looping spawn (0x4a2d50
-at 0x4a31c2; vcod spawns each in the frame the effect started in), and
-the order of the FX update against world 1's run in a frame (the update
-runs on the worker threads, world 1 at 0x5fa373 under the critical
-section 0xcc12038; vcod makes the bodies before the run, a chain's
-after it). The rest of what the worlds leave out is cod4-gsc.md 3.6.8.
+A spawn's nonzero angles, the cylinder offset, the non-sphere 0xc0 frame
+and looping elements have their take, a frag on wood (9.1.1.4). Ported
+on the instructions alone, no take reaching them: 0x80 origins (no stock
+map or script plays an effect with them, 9.1.1.4). A body takes the
+effect's own frames, never the one 0x4a30e0 lerps for a looping spawn
+(9.1.1.5). Where the FX update runs against world 1's run in a frame is
+read off the wood take alone: each frame's looping spawns are in world
+1 at that frame's `Phys_RunToTime` entry, as vcod makes them before the
+run (9.1.1.1); that the update runs on the worker threads and world 1 at
+0x5fa373 under the critical section 0xcc12038 is INFERRED (the calls).
+A chain's bodies are made after vcod's run. The rest of what the worlds
+leave out is cod4-gsc.md 3.6.8.
 
 ##### 9.1.1.1 Chained effects and looping elements
 
@@ -560,6 +562,14 @@ one-shot one does: nothing in 0x4a25b0 reads the element's place
   life 0x4a2fa0's sum of `spawnDelayMsec`'s and `lifeSpanMsec`'s bases
   and amplitudes (0x4a310f..0x4a3147, 0x4a2fbe..0x4a2fc7). VERIFIED (the
   instructions).
+
+The wood take (9.1.1.4) shows the schedule: sequence 0 made in the
+explosion's frame (effect +0x20, 20613, that frame's time), then each
+frame's spawns whose grid time is not past the frame's time, made before
+world 1 runs to it: 3, 3, 4, 3, 4, 3, 3, 4 and 2 bodies over the next 9
+frames, the last (20766, 153 ms in, past the 145 ms looping life) still
+spawning its due two, sequences 28 and 29, the count's last. VERIFIED
+(the take, its `frame` and `fxbody` lines).
 
 vcod (`fx_phys::looping_spawns`, `Cod4Physics::run_loops`): sequence 0
 with the effect, then each frame's due spawns at their grid times before
@@ -631,6 +641,15 @@ impact, emitted or runner effect. So the stock effects use nonzero
 angles, the cylinder and the non-sphere 0xc0 frame (a frag on wood),
 0x40 origins (the cluster bombs, the copy paper box) and 0x80 ones.
 
+No stock map or script plays either 0x80 effect: `_hardpoints.gsc`
+loads `explosions/wall_explosion_pm_a` as `level.bombstrike` (its line
+54) and never plays it, `_destructables.gsc` names
+`breakables/exp_wall_cinderblock_96` only in a comment (its line 3), and
+no map's entities give a `script_fxid` or a `destructable` targetname
+(the `script_destructable_area` keys on mp_crash's and mp_crash_snow's
+spawn points only block spawns). VERIFIED (`common_mp`'s and the MP map
+zones' rawfiles and entity strings). So no take reaches an 0x80 origin.
+
 The copy paper take (`copypaper-mp_broadcast-1.7.txt`, 2026-11-27, the
 fixture README's recipe): MP5 fire into a box on mp_broadcast until it
 broke, its `fxbody` lines giving the effect's frame, seed and start at
@@ -645,9 +664,58 @@ centres 3.9 units off the spawn), and the run is retail's to the bit on
 all 97 steps, each sleep on retail's step and the one impact sound
 (`physics_cardboard_default`) at retail's point. VERIFIED (the run,
 ours). That puts 0x4a2220's origin taken into a turned 0x40 frame and
-0x4a2021's back out of it on the take. A frag on wood
-(`grenadeexp_wood`) would check the angles, the cylinder and looping;
-no take has one.
+0x4a2021's back out of it on the take.
+
+The wood take (`wood-mp_backlot-1.7.txt`, 2026-11-28, the fixture
+README's recipe): a frag dropped on mp_backlot's upper wood floor
+(`ch_woodplank02`, surface type 21) played `explosions/grenadeexp_wood`
+(the impact table's `grenade_explode` row) at (929, -1456, 209)
+with the quaternion `(0.70710677, 0, 0.70710677, 0)`, forward up the
+floor's normal, effect seed 436, start 20613; its element 1 made 30
+splinters (`fx_wood_splinter01`, `02`, mass 3, a box each) over 10
+frames. VERIFIED (the take). `phys_ab::the_frag_on_wood_spawned_through_the_fx_path`
+spawns them through `fx_phys` on 9.1.1.1's schedule from the take's
+frame and seed: each element seed is the take's, each body comes in
+retail's frame with its position, quaternion and velocities to the bit,
+and the run is retail's to the bit on all 151 steps, every sleep on
+retail's step and the 79 impact sounds on retail's steps at retail's
+points. VERIFIED (the run, ours). That puts a spawn's nonzero angles
+(0x4a62f0's turn), the cylinder offset round the effect's axes, the
+non-sphere 0xc0 frame (0x401000's side) and looping elements on a take.
+The velocity graph of a `common_mp` element is bulk data: walked without
+it, every splinter started at rest.
+
+##### 9.1.1.5 The looping spawn's frame, 0x4a2d50
+
+0x4a30e0 hands each looping spawn a frame of its own: 0x4a2d50 at
+0x4a31c2, `(msec - from) / (to - from)` of the way (stored, 0x4a318d..
+0x4a31b7) from the effect's +0x60 frame to its +0x44 one (0x4a4ebd..
+0x4a4ec4 into 0x4a32a0, then 0x4a31ae..0x4a31b3), each origin and
+quaternion word `(b - a) frac + a` stored, then the quaternion over its
+length (0x5636e0 at 0x4a2dbd), into `FX_SpawnElem`'s frame argument
+(0x4a31e2..0x4a31ea). Sequence 0 and the one-shot elements get +0x28 as
+it stands (0x4a1442, 0x4a146a). VERIFIED (the instructions,
+0x4a2d50..0x4a2dc5, 0x4a30e0..0x4a3214).
+
+A physics element's body never reads that frame: `FX_SpawnElem` calls
+0x4a1ff0 with the effect, the element's def, its seed and the element
+(0x4a2840..0x4a2849), and 0x4a1ff0 hands 0x4a5d30 the effect's +0x28
+and +0x44 frames (0x4a2015..0x4a201c). 0x4a5d30 takes +0x28 under run
+bits 0x40 (0x4a5d84..0x4a5da0), +0x44 under 0x80 (0x4a5dad..0x4a5dc7)
+and the 0xc0 spawn origin through +0x28 (0x4a5dcc..0x4a5dd7). VERIFIED
+(the instructions). On the wood take the 29 looping spawns match to the
+bit in the effect's frame; with 0x4a2d50's normalized quaternion
+(`0x3f3504f3` becomes `0x3f3504f4`) 14 of them part by an ulp or so.
+VERIFIED (the run, ours).
+
+So only a moving effect's 0x80 bodies would see it move: they take its
+frame at the update (+0x44), the others the one it started in. That
++0x44 is the frame at the update, as its use as the lerp's end says, is
+INFERRED (its writer is not read). vcod keeps the frame the effect
+started in (`EffectFrame`) for all three: of the stock physics effects
+only the cluster bombs' play on a moving tag (`_hardpoints.gsc`'s
+`playfxontag` on each bomb), and theirs are one-shot 0x40 elements
+(9.1.1.4).
 
 ## 10. The weapon's tags
 
