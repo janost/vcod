@@ -449,16 +449,11 @@ fn worst(diffs: &[Diff]) -> Diff {
 }
 
 /// Each take against the port, every step to its last (each body's sleep
-/// or the cut): no body more than 0.25 units or 5 degrees from retail's,
-/// every body's flags retail's on every step (so each sleeps on retail's
-/// step), every `msecStep` and every seed after a step retail's, and the
-/// impact sounds retail's in count on every step, under one alias per
-/// retail handle and one handle per alias, within 0.01 of retail's point.
-/// Measured: the round, frag, car and copy paper takes equal to the bit on every step;
-/// the watermelon's to step 27, then within 2.5e-4 (its body 4's sweep on
-/// step 27, cod4-gsc.md 3.6.5 and 3.6.7); the shards' to step 32, then
-/// within 0.11 and 2.8 degrees, every sleep on retail's step, the seed
-/// parting after step 35 ([`SEED_AFTER_SWEEP`]).
+/// or the cut): every body's position and quaternion retail's to the bit
+/// and its flags retail's on every step (so each sleeps on retail's step),
+/// every `msecStep` and every seed after a step retail's, and the impact
+/// sounds retail's in count on every step, under one alias per retail
+/// handle and one handle per alias, each at retail's point.
 #[test]
 fn the_phys_takes_against_the_port() {
     let Some(install) = cod4_install() else {
@@ -518,32 +513,22 @@ fn the_phys_takes_against_the_port() {
     }
 }
 
-/// Takes whose seed may part after a step: there 0x5a6930's sweep puts a
-/// thin box a z ulp off retail's (cod4-gsc.md 3.6.9), so a later step
-/// draws on another contact count.
-const SEED_AFTER_SWEEP: &[(&str, usize)] = &[("shards-mp_crash-1.7.txt", 33)];
-
 /// The gate's rule over a run of take `f` (see the test above).
 fn check(f: &str, r: &Run) {
     let w = worst(&r.diffs);
     for (k, d) in r.diffs.iter().enumerate() {
-        if d.pos > 0.25 || d.turn_deg > 5.0 || d.flags > 0 {
+        if !d.exact || d.flags > 0 {
             eprintln!("  step {}: {d:?}", k + 1);
         }
     }
-    assert!(w.pos <= 0.25 && w.turn_deg <= 5.0, "{f}: {w:?}");
+    assert!(w.exact, "{f}: {w:?}");
     assert_eq!(w.flags, 0, "{f}: steps whose flags part");
     assert!(
         r.asleep.values().all(|(a, b)| a == b),
         "{f}: {:?}",
         r.asleep
     );
-    let ulp = SEED_AFTER_SWEEP.iter().find(|(file, _)| *file == f);
-    match (r.seed_parts, ulp) {
-        (None, _) => {}
-        (Some(k), Some(&(_, step))) => assert!(k > step, "{f}: the seed parts after {k}"),
-        (Some(k), None) => panic!("{f}: the seed parts after step {k}"),
-    }
+    assert_eq!(r.seed_parts, None, "{f}: the seed parts after a step");
     assert!(r.msec_parts.is_empty(), "{f}: msecStep {:?}", r.msec_parts);
     assert!(r.sounds_part.is_empty(), "{f}: sounds {:?}", r.sounds_part);
     let names: Vec<_> = r.handles.values().collect();
@@ -554,7 +539,7 @@ fn check(f: &str, r: &Run) {
     );
     let distinct: HashSet<_> = names.iter().flat_map(|n| n.iter()).collect();
     assert_eq!(distinct.len(), names.len(), "{f}: one handle an alias");
-    assert!(r.sound_pos <= 0.01, "{f}: sound point {}", r.sound_pos);
+    assert_eq!(r.sound_pos, 0.0, "{f}: sound point");
 }
 
 /// The ODE words a body starts with, as a `new` line gives them.
@@ -1028,12 +1013,8 @@ fn dynent_models(t: &Take, defs: &[vcod_cod4::dynent::DynDef]) -> Vec<String> {
 
 /// The mp_shipment frag (`fixtures/phys/`, cod4-gsc.md 3.6.9): eleven
 /// bottles and fruit flung off the floor by one blast, the last asleep on
-/// retail's step 1212 (20.6 s). Stepped past the take until the port's
-/// last body sleeps too: every body sleeps within 15 steps of retail's
-/// step and rests within 0.5 units and 15 degrees of retail's pose, every
-/// `msecStep` is retail's and the seed holds past step 250. Measured: 9
-/// of 11 on retail's step, the last on step 1218, at most 0.45 units and
-/// 12 degrees off; the seed parts after step 281.
+/// retail's step 1212 (20.6 s), held to [`check`]'s rule on the steps the
+/// take keeps (every tenth, and each body's first and first asleep).
 #[test]
 fn the_shipment_frag_against_the_port() {
     let Some(install) = cod4_install() else {
@@ -1062,65 +1043,11 @@ fn the_shipment_frag_against_the_port() {
         .collect();
     let (mut pw, ids) = build(&t, &models);
     let r = run(&t, &mut pw, &ids, &clip, &[]);
-    let w = worst(&r.diffs);
-    let first_inexact = r.diffs.iter().position(|d| !d.exact).map(|k| k + 1);
     eprintln!(
-        "shipment: {} steps, worst {w:?}, first inexact step {first_inexact:?}; seed parts after {:?}; \
-         asleep (ours, retail's) {:?}; msec parts {:?}",
+        "shipment: {} steps, worst {:?}; asleep (ours, retail's) {:?}",
         r.diffs.len(),
-        r.seed_parts,
-        r.asleep,
-        r.msec_parts
+        worst(&r.diffs),
+        r.asleep
     );
-    // On past the take until the port's last body sleeps too, at 17 ms
-    // frames as the take's.
-    let mut to = t.steps.last().unwrap().to;
-    let mut extra = 0;
-    let awake = |pw: &PhysWorld| ids.iter().filter(|&&id| !pw.asleep(id)).count();
-    let dv = PhysDvars::default();
-    let contact = collide::Dvars::default();
-    let mut slept = r.asleep.clone();
-    while awake(&pw) > 0 && extra < 3600 {
-        to += 17;
-        extra += 1;
-        pw.run_to_time(to, &dv, &contact, &clip, &mut |_| {});
-        for (i, &id) in ids.iter().enumerate() {
-            if pw.asleep(id) {
-                slept
-                    .get_mut(&(i as u32 + 1))
-                    .unwrap()
-                    .0
-                    .get_or_insert(t.steps.len() + extra);
-            }
-        }
-    }
-    for (i, &id) in ids.iter().enumerate() {
-        let n = i as u32 + 1;
-        let (ours, theirs) = slept[&n];
-        let (ours, theirs) = (ours.expect("the port's body sleeps"), theirs.unwrap());
-        let rest = t.steps[theirs - 1].bodies[&n];
-        let b = pw.world.body(id);
-        let (off, turn) = (
-            Vec3::from(b.pos).distance(Vec3::from(rest.pos)),
-            turn_deg(b.q, rest.q),
-        );
-        eprintln!(
-            "  body {n} {}: asleep on step {ours}, retail's {theirs}; at rest {off} off, {turn} degrees",
-            names[i]
-        );
-        assert!(
-            ours.abs_diff(theirs) <= 15,
-            "body {n}: asleep on {ours}, retail's {theirs}"
-        );
-        assert!(
-            off <= 0.5 && turn <= 15.0,
-            "body {n}: at rest {off} off, {turn} degrees"
-        );
-    }
-    assert!(r.msec_parts.is_empty(), "msecStep {:?}", r.msec_parts);
-    assert!(
-        r.seed_parts.is_none_or(|k| k > 250),
-        "the seed parts after {:?}",
-        r.seed_parts
-    );
+    check("frag-mp_shipment-1.7.txt", &r);
 }

@@ -519,7 +519,7 @@ impl Cod4Players {
                 // death anim's own skins are never drawn (cod4-client-perf.md
                 // 31), and a corpse fires no tag.
                 let transform = frame.transform();
-                if let Some(models) = ragdolled(body, rag, &rig, transform, &worlds) {
+                if let Some((models, transform)) = ragdolled(body, rag, &rig, transform, &worlds) {
                     out.push((i, rig.clone(), PosedPlayer { transform, models }));
                     continue;
                 }
@@ -616,15 +616,17 @@ fn posed_worlds(
 /// A corpse's ragdoll on this frame: its slot taken the first frame its
 /// entity reads a ragdoll type with `ragdoll_enable` on, fed the death
 /// anim's pose (`model_worlds`, the body's frame) every frame, let go once
-/// its entity takes another type. Its skins once it draws; `None` draws
-/// the death anim's pose.
+/// its entity takes another type. Its skins and the transform they are
+/// under once it draws, the entity's origin moved to the ragdoll's root as
+/// 0x5ba060 moves it (cod4-player-anims.md 10.7.2); `None` draws the death
+/// anim's pose.
 fn ragdolled(
     body: &mut Body,
     rag: Option<&mut Ragdolls>,
     rig: &PlayerRig,
     transform: Mat4,
     model_worlds: &[(Vec3, Quat)],
-) -> Option<Skins> {
+) -> Option<(Skins, Mat4)> {
     let Some(r) = rag else {
         body.ragdoll = Rag::None;
         return None;
@@ -657,13 +659,17 @@ fn ragdolled(
         &DObj {
             skel: &rig.skeleton,
             base: &base,
-            origin: at,
+            origin: r.root(id).unwrap_or(at),
             turn,
             world: &world,
         },
     );
     r.pose(id)?;
-    Some(ragdoll_skins(body, r, id, rig, transform))
+    let mut moved = transform;
+    if let Some(root) = r.root(id) {
+        moved.w_axis = root.extend(1.0);
+    }
+    Some((ragdoll_skins(body, r, id, rig, moved), moved))
 }
 
 /// The skins of a corpse at its ragdoll's pose, kept while the pose, the

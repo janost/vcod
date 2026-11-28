@@ -1555,6 +1555,15 @@ the target's bones and logs where they stand every frame from 8500 to
 
 ### 9.4 The frag
 
+- `BG_EvaluateTrajectory`'s `TR_SINE` arm (lnxded 0x80df61f..0x80df6b6):
+  `fild` of `at - trTime` over `fild` of `trDuration`, stored as a float;
+  that float times the double pi at rodata 0x8154d30 (`0x400921fb54442d18`),
+  doubled (`fadd st,st`), stored as a double and passed to libm `sin` (the
+  `sin@plt` call, not `sinf` or `fsin`); the result stored as a float, then
+  the vec-ma helper at 0x80e11b8 computes `delta * phase + base` with one
+  float store per component. VERIFIED (the instructions). `vcod-cod2`
+  mirrors it (`Trajectory2::sine`); an all-float `sin` differs by an ulp
+  at 100 ms of a 2 s period.
 - The throw matches to the bit: `pos` from the muzzle at
   `projectileSpeed` and `projectileSpeedUp`, `trTime` the frame.
   VERIFIED, `hit-throw`.

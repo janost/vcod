@@ -1163,8 +1163,16 @@ What changed:
 3. A corpse whose ragdoll runs or sleeps no longer poses and skins the
    death anim under it (`Cod4Players::posed`) and keeps no tags. Since
    2026-11-27 it poses the death anim again, unskinned, for the bones the
-   ragdoll does not set (cod4-player-anims.md 10.7.2); that cost is not
-   measured here.
+   ragdoll does not set (cod4-player-anims.md 10.7.2). A ragdolled
+   corpse costs 12.9 us a frame for that pose (the death anim's locals
+   and `worlds_of`) and 6.2 us for `Ragdolls::feed` and the skin lookup
+   (19.1 us in all) at 4 ms frames, 19.9 and 8.8 us at 100 ms ones, six
+   corpses over 32 s of `cod4_live_ragdolls_hold_still` (test profile,
+   opt-level 1, lavapipe not involved; a temporary timer around the two
+   calls, removed). Six corpses cost 0.1 ms of a 6-7 ms frame, so
+   nothing is cut: the pose is the input of the feed and cannot be
+   skipped without its own freshness test, and the feed's work is
+   per-frame by design. VERIFIED (the runs, ours).
 
 Lavapipe (640 x 372, one sample, mp_crossfire): held view `finish` 0.54
 -> 0.45 ms (405 of 405 world draws bundled, three runs), `cull` 0.22 ->

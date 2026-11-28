@@ -417,6 +417,24 @@ ragdoll_baselerp_bone 1 j_head 1000
         assert!(drawn.0.distance(held.0) > 1.0, "{} {}", drawn.0, held.0);
     }
 
+    /// The entity's origin once the slot draws is the first def bone's
+    /// drawn position (0x5ba060).
+    #[test]
+    fn the_root_is_the_first_def_bones_drawn_position() {
+        let (skel, base) = figure();
+        let floor = Floor::new(false);
+        let mut r = pool(Dvars::default());
+        let id = r.create().unwrap();
+        assert_eq!(r.root(id), None);
+        for up in [20.0, 21.0] {
+            feed(&mut r, id, &skel, &base, &worlds(&base, up));
+            assert_eq!(r.root(id), None);
+            r.update(17, &floor);
+        }
+        let first = skel.bone_index("j_mainroot").unwrap();
+        assert_eq!(r.root(id), Some(r.pose(id).unwrap()[first].0));
+    }
+
     /// A bone whose length crosses a wall fails the tunnel test at the
     /// build, and the slot goes free.
     #[test]

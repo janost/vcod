@@ -136,7 +136,7 @@ fn swept(clip: &ClipMap, from: [f32; 3], to: [f32; 3], sides: [f32; 3]) -> [f32;
     } else {
         (w(m) * 0.200_000_002_980_232_24) as f32
     };
-    let tr = clip.trace(
+    let tr = clip.trace_client(
         glam::Vec3::from(from),
         glam::Vec3::from(to),
         glam::Vec3::splat(-e),
@@ -194,11 +194,6 @@ fn list_diff(port: &[ContactGeom], cap: &[[u32; 12]]) -> Option<(f32, bool)> {
 }
 
 const TOL: f32 = 1e-4;
-
-/// Collides whose pose the capture does not hold to the bit: the sweep
-/// after the frame (0x5a6930) put the body where vcod's trace lands an ulp
-/// off retail's (3.6.5).
-const POSE_ULP: &[(&str, u32, u32)] = &[("watermelon-mp_bog-1.7.txt", 28, 4)];
 
 #[derive(Default, Debug)]
 struct Tally {
@@ -259,9 +254,7 @@ fn run(name: &str, clip: &ClipMap) -> Tally {
                     c.raw.len()
                 );
                 print("raw", &raw, &c.raw);
-                if !POSE_ULP.contains(&key) {
-                    bad.push(key);
-                }
+                bad.push(key);
                 false
             }
         };
@@ -316,8 +309,6 @@ fn box_contacts_match_retails_collides() {
         "{} of {} collides equal to the bit; the narrow pass added {narrow} contacts",
         exact.0, exact.1
     );
-    // The watermelon's step 28 and its neighbour, the shards' steps 33 and
-    // 34: each an ulp of the sweep's position (3.6.5, 3.6.9).
-    assert!(exact.0 + 4 >= exact.1, "{exact:?}");
+    assert_eq!(exact.0, exact.1, "collides equal to the bit");
     assert!(narrow > 0, "no take reached the narrow pass");
 }

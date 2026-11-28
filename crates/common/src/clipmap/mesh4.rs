@@ -11,7 +11,7 @@
 use glam::{DVec3, Vec3};
 
 use super::trace::{CLIP_EPS, Cx};
-use super::{ClipTrace, CollBorder, CollPartition, IndexedMesh};
+use super::{ClipTrace, CollBorder, CollPartition, IndexedMesh, TraceFloats};
 
 /// Below this share of `b * b` a corner's discriminant is a graze and
 /// the corner is passed (doc 3).
@@ -69,9 +69,12 @@ impl Cx<'_> {
         tr: &mut ClipTrace,
     ) {
         let first = part.first_tri as usize;
+        let client = self.sw.floats == TraceFloats::Cod4Client;
         for i in first..first + usize::from(part.tri_count) {
             if self.sw.point {
                 self.point_tri4(m, i, tr);
+            } else if client {
+                self.capsule_tri_client(m, i, tr);
             } else {
                 self.capsule_tri4(m, i, tr);
             }
@@ -246,6 +249,123 @@ impl Cx<'_> {
             outside = true;
         }
         if closing > t - s {
+            let Some(beyond) = edge(b, b - c, [b, c], 0, tr) else {
+                return;
+            };
+            if let Some((v, bit)) = beyond {
+                corner = Some(v);
+                walk &= bit;
+            }
+        } else if !outside {
+            tr.normal = normal;
+            tr.walkable = false;
+            tr.fraction = if -fraction < 0.0 { fraction } else { 0.0 };
+            tr.startsolid = solid;
+            return;
+        }
+        if let Some(v) = corner {
+            self.vertex4(sphere, v, walk, tr);
+        }
+    }
+
+    /// The 1.7 client's capsule against triangle `i` (`iw3mp.exe`
+    /// 0x4f05c0): [`Self::capsule_tri4`]'s tests in its order, but the
+    /// edges, the normal, the closing speed, the sphere's centre, its lead
+    /// point, the gap, the foot, the moment and both edge coordinates each
+    /// stored, the normal through 0x55f6e0's stored length (doc 3). Its edge
+    /// and corner kernels are taken as the server's (unread on the client).
+    fn capsule_tri_client(&self, m: &IndexedMesh, i: usize, tr: &mut ClipTrace) {
+        let sw = &self.sw;
+        let k = f64::from;
+        let [a, b, c] = corners(m, i);
+        let (e01, e02) = (a - b, a - c);
+        let n = Vec3::new(
+            (k(e02.y) * k(e01.z) - k(e02.z) * k(e01.y)) as f32,
+            (k(e01.x) * k(e02.z) - k(e01.z) * k(e02.x)) as f32,
+            (k(e02.x) * k(e01.y) - k(e01.x) * k(e02.y)) as f32,
+        );
+        let sweep = sw.sweep;
+        let closing = ((k(sweep.y) * k(n.y) + k(n.x) * k(sweep.x)) + k(sweep.z) * k(n.z)) as f32;
+        if closing >= 0.0 {
+            return;
+        }
+        let (normal, area2) = crate::x87::normalize_stored_len(n);
+        let off = if normal.z >= 0.0 {
+            sw.sphere_z
+        } else {
+            -sw.sphere_z
+        };
+        let sphere = Vec3::new(sw.start.x, sw.start.y, sw.start.z - off);
+        let r = -sw.radius;
+        let lead = Vec3::new(
+            (k(normal.x) * k(r) + k(sphere.x)) as f32,
+            (k(normal.y) * k(r) + k(sphere.y)) as f32,
+            (k(r) * k(normal.z) + k(sphere.z)) as f32,
+        ) - a;
+        // `(y + x) + z`, as the dots here sum.
+        let dot = |p: Vec3, q: Vec3| ((k(p.y) * k(q.y) + k(p.x) * k(q.x)) + k(p.z) * k(q.z)) as f32;
+        let gap = dot(normal, lead);
+        let (fraction, solid, foot) = if !(gap < 0.0) {
+            let f = (-(((k(gap) - k(CLIP_EPS)) * k(area2)) / k(closing))) as f32;
+            if tr.fraction <= f {
+                return;
+            }
+            (f, false, lead)
+        } else {
+            let rel = sphere - a;
+            let d = dot(rel, normal);
+            if (k(sw.radius) * k(sw.radius)) as f32 as f64 <= k(d) * k(d) {
+                return;
+            }
+            let nd = k(-d);
+            let foot = Vec3::new(
+                (k(rel.x) + nd * k(normal.x)) as f32,
+                (k(rel.y) + k(normal.y) * nd) as f32,
+                (k(rel.z) + nd * k(normal.z)) as f32,
+            );
+            (0.0, true, foot)
+        };
+        let moment = Vec3::new(
+            (k(sweep.y) * k(foot.z) - k(foot.y) * k(sweep.z)) as f32,
+            (k(foot.x) * k(sweep.z) - k(foot.z) * k(sweep.x)) as f32,
+            (k(foot.y) * k(sweep.x) - k(foot.x) * k(sweep.y)) as f32,
+        );
+        let s = dot(moment, e01);
+        let mut outside = false;
+        let mut walk = true;
+        let mut corner = None;
+        let edge = |from, along, ends: [Vec3; 2], opposite, tr: &mut ClipTrace| match self
+            .sweep_edge(sphere, from, along, tr)
+        {
+            EdgeSweep::Struck => {
+                tr.walkable = m.edge_walkable(3 * i + opposite);
+                None
+            }
+            EdgeSweep::Clear => Some(None),
+            EdgeSweep::Beyond(end) => Some(Some((ends[end], m.edge_walkable(3 * i + opposite)))),
+        };
+        if 0.0 > s {
+            outside = true;
+            let Some(beyond) = edge(a, e01, [a, b], 2, tr) else {
+                return;
+            };
+            if let Some((v, bit)) = beyond {
+                corner = Some(v);
+                walk = bit;
+            }
+        }
+        let t = dot(moment, e02);
+        if 0.0 < t {
+            outside = true;
+            let Some(beyond) = edge(a, e02, [a, c], 1, tr) else {
+                return;
+            };
+            if let Some((v, bit)) = beyond {
+                corner = Some(v);
+                walk &= bit;
+            }
+        }
+        if k(closing) > k(t) - k(s) {
             let Some(beyond) = edge(b, b - c, [b, c], 0, tr) else {
                 return;
             };
