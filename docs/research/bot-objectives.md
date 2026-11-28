@@ -858,6 +858,95 @@ the same set): stalled 218 and 583 on 4.2.5 with it and its control, 151
 and 571 with the give way as well; it moves one control match on the
 give way build. No count moves past the controls.
 
+### 4.2.7 A far guard's outpost swaps sides of a door every tick, 2026-11-28
+
+bot-navigation.md 3.13's mp_carentan door (y 1776 to 1784) stalls 57
+bot-ticks on seed 36 of 4.2.6's build. VERIFIED (measured, the runs of
+4.2.6). Traced on that seed with a temporary per-tick print of the bot's
+goal and what `Bot::goal` reads (give way, lane, guard post, heal,
+enemy), of its follower, and of `driver::deal_far`'s guards, near one,
+pulls and each guard's `posts::Held`. VERIFIED (the trace):
+
+- Bot 9, an axis guard holding far round (362, 2106, 195), is dealt an
+  outpost that swaps each tick between (547.6, 1856.1, 8.1), north of
+  the door, and (447.9, 1571.5, 0.1), south of it; its `Held::turn`
+  counts up by one a tick (212, 213, 214, ...). Its goal follows, the
+  follower parks one plan and takes up the other, and the waypoint
+  swaps sides of the door each tick: 3.13's still yaw and the 18
+  units/s creep.
+- Bot 7, earlier in slot order, holds the outpost (582.4, 1728.0, 160.1)
+  over the door. Bot 9's two posts stand 201 and 262 off it, inside
+  `OUT_SPREAD` (400). `posts::assign_by` deals bot 9 the best post
+  `OUT_SPREAD * 0.5` (200) off and 64 off its last. The next tick its
+  keep test reads the rules' first spread (400), drops the post, and the
+  pick, passing over the post just held, takes the other, which clears
+  200 too.
+
+The fix (`posts::Held::spread`): a post is kept while the teammates
+dealt before it stand the spread it was dealt at off, not the first.
+A post dealt at a looser spread (`OUTER`'s 200 or any, `INNER`'s
+shared one) is kept until its spell ends or a teammate comes nearer
+than that (`bots::posts::tests::a_guard_sharing_a_post_keeps_it`: a
+fourth guard on `INNER`'s row, which before the fix moved off its
+shared post on the next tick). Seed 36 stalls 0. VERIFIED (the test,
+the run).
+
+VERIFIED (measured, ours, release, `bot_match GAMETYPE=re BOTS=10
+TICKS=6000 STALLS=1`, 9.1.1's six maps, seeds 1 to 192, 1152 matches a
+row; master ad956a78a and the fix, each with a control, its start
+holds drawn off `0x2545_f491_4f6c_dd1d`, the constant 4.2.5's and
+4.2.6's controls used). Wins by team. The last row is one standard
+error of a row's total, from the spread of the per-match counts:
+
+| Build | stalled | captures | pickups | carrier deaths | allies W | axis W | kills |
+|---|---|---|---|---|---|---|---|
+| master | 1047 | 2475 | 8369 | 3733 | 3456 | 1851 | 40937 |
+| master, holds redrawn | 1036 | 2454 | 8368 | 3725 | 3467 | 1870 | 41017 |
+| fix | 526 | 2510 | 8370 | 3689 | 3493 | 1836 | 41000 |
+| fix, holds redrawn | 501 | 2512 | 8347 | 3661 | 3468 | 1859 | 40893 |
+| one standard error | 140 to 290 | 57 | 90 | | 48 | 48 | |
+
+- VERIFIED (the runs): seeds 1 to 48 of master read 4.2.6's give way
+  row match for match. The fix moves only mp_carentan, mp_pavlov and
+  mp_rocket matches; mp_brecourt, mp_chateau and mp_dawnville read the
+  same to the count.
+- VERIFIED (the runs, `STALLS=1`): mp_carentan stalls 489 on master,
+  25 matches (seed 36 57, seeds 92 and 156 94 each; 27 of the 30
+  windows begin within 150 of the door, on the 8 floor between it and
+  (445, 1690)), and 23 with the fix, one match: seed 87, bot 0 at
+  (1142, 1546, -8), another spot, not traced. Master's control stalls
+  342 there in 16 matches, the fix's 0.
+- VERIFIED (the table): the stall totals fall from 1047 and 1036 to 526
+  and 501, where each build's two rows read 11 and 25 apart. Captures,
+  pickups and wins move under one standard error.
+
+### 4.2.8 The give way measured longer, 2026-11-28
+
+4.2.6 left open whether its give way costs the attackers: on 288
+matches pickups fell 25 and 28, captures 11 and 21, and the axis won 16
+and 32 more rounds. Measured again on 4.2.7's fix with the give way and
+without it (`give_way_among`'s shun test off), seeds 1 to 192, the knobs
+of 4.2.7. VERIFIED (measured, ours, release). Wins by side: the
+attackers are allies but on mp_dawnville:
+
+| Build | stalled | captures | pickups | carrier deaths | att W | def W |
+|---|---|---|---|---|---|---|
+| 4.2.7, no give way | 1153 | 2516 | 8361 | 3673 | 3056 | 2243 |
+| 4.2.7 | 526 | 2510 | 8370 | 3689 | 3058 | 2271 |
+
+- VERIFIED (the runs): without it mp_dawnville stalls 587 in seven
+  matches (seeds 35, 60, 89, 127, 150, 170, 192, each 40 to 127), each
+  window starting in 4.2.6's nook at (335 to 347, -16089 to -16071);
+  with it 0. Captures move by 6, pickups by 9, the
+  attackers' wins by 2 and the defenders' by 28, each under half a
+  standard error of the difference (81, 128 and 68).
+- VERIFIED (the runs): on mp_rocket, 4.2.6's worry, the give way reads
+  pickups 550 to 603 and the attackers' wins 352 to 371, the other way.
+  Seeds 1 to 48 alone still read 4.2.6's shift (captures 633 to 594,
+  the attackers' wins 775 to 745, under one standard error each).
+- INFERRED: 4.2.6's shift was noise of 288 matches; the give way costs
+  the attackers nothing measurable and is kept as it stands.
+
 ## 5. Behind Enemy Lines (`bel`)
 
 ### 5.1 What stock `bel.gsc` asks of a player
@@ -4886,7 +4975,7 @@ deal pass, before any bot thinks.
   stands within 128 units of it; then each takes the best post 128 or
   more from its teammates' and 64 off its last, by score, plus a draw of
   up to 0.35, less a unit per 1500 of distance. More guards than posts
-  that far apart share. On it the bot holds, crouched where the post
+  that far apart share, and keep the shared post (4.2.7). On it the bot holds, crouched where the post
   hides it, looking within 60 degrees of the objective (`Bot::watch_heading`).
   Not for a moving point: an `re` carrier's escort and a `ctf` carrier's
   are `ObjTarget::Escort` and hold the 250-unit ring as before; nor a
@@ -5172,7 +5261,8 @@ plans read it alike serial and on threads (`bot_threads`).
 - Dealing (`posts::assign_by`, `posts::OUTER`). From two far guards of
   a side up, one, drawn per round (`NEAR_SALT`), keeps a post round the
   objective (section 13's); the rest take outposts, at least 400 from a
-  teammate's (200, then any, where the lanes leave no room), a post on a
+  teammate's (200, then any, where the lanes leave no room; such a post
+  is kept while its teammates stand that far off, 4.2.7), a post on a
   lane a teammate holds costing 0.5, held 15 to 30 s, given up 30 s
   unreached, the next one costing a unit per 600 of walk from the last.
   An outpost held while an enemy is in sight or a hit lands is burnt:

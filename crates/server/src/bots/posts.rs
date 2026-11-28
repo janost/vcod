@@ -774,7 +774,7 @@ pub struct Held {
     /// Posts dealt this life, the rotation's draw.
     pub turn: u32,
     /// The spread it was dealt at ([`Rules::spread`]): it is kept while
-    /// the teammates before it stand that far off.
+    /// the teammates before it stand that far off (bot-objectives.md 4.2.7).
     pub spread: f32,
     /// A post an enemy saw or shot the guard on, and when that runs out.
     pub burnt: Option<(Vec3, i32)>,
