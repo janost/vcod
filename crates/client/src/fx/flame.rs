@@ -72,6 +72,9 @@ pub struct Nozzle {
     pub pos: Vec3,
     pub dir: Vec3,
     pub own_view: bool,
+    /// The view's own body: `cg.snap`'s `ps.velocity`, which tilts its
+    /// chunks; zero for another body.
+    pub ps_velocity: Vec3,
 }
 
 /// The sounds a frame's flames start; the caller plays them on `owner`.
@@ -96,6 +99,9 @@ struct Owner {
     chain: u32,
     aim: Vec2,
     fired_frame: u64,
+    /// Last frame's share of the owner's velocity in its chunks' direction
+    /// ([`owner_velocity`]), in retail's units per 1000 ticks.
+    vel: Vec3,
     /// How long the stream has fired (0x300ab7a8, at most 1000 ms
     /// counted), and the aim's turn rate, degrees a second on its faster
     /// axis, at most 200 (0x3007bf44).
@@ -203,6 +209,31 @@ fn brake(speed: f32, friction: f32, brake: f32, dt_ms: f32) -> f32 {
 fn aim_of(dir: Vec3) -> Vec2 {
     let pitch = -dir.z.atan2(dir.x.hypot(dir.y)).to_degrees();
     Vec2::new(pitch, dir.y.atan2(dir.x).to_degrees())
+}
+
+/// Q3's `AngleVectors` forward off a pitch and yaw in degrees.
+fn dir_of(aim: Vec2) -> Vec3 {
+    let (sp, cp) = aim.x.to_radians().sin_cos();
+    let (sy, cy) = aim.y.to_radians().sin_cos();
+    Vec3::new(cp * cy, cp * sy, -sp)
+}
+
+/// The owner's velocity a stream chunk's direction takes in, per 1000
+/// ticks (0x30024289..0x3002439d): for the view's own body moving faster
+/// than 1, its `ps.velocity` times 0.75; else, while the stream fires on,
+/// the nozzle's own move since the last firing frame, per 1000 ticks with
+/// the gap held to 20 ticks; else nothing. Halved.
+fn owner_velocity(n: &Nozzle, last: Option<(Vec3, f64)>, now: f64) -> Vec3 {
+    if n.own_view && n.ps_velocity.length() > 1.0 {
+        return n.ps_velocity * 0.75 * 0.5;
+    }
+    match last {
+        Some((pos, at)) => {
+            let ticks = ((now - at) * 2.0).max(20.0) as f32;
+            (n.pos - pos) * (1000.0 / ticks) * 0.5
+        }
+        None => Vec3::ZERO,
+    }
 }
 
 /// A stream chunk's share of the friction while its stream fires on
@@ -543,6 +574,14 @@ impl FlameSystem {
                 Some(o) => (now - o.last_fire) as f32 > dt_ms.max(1.0) + REMOTE_GRACE_MS,
                 None => true,
             };
+            // Last frame's nozzle, aim and velocity share, and the last
+            // chunk's birth, which each chunk of this frame lerps from.
+            let last = self
+                .owners
+                .get(&n.owner)
+                .filter(|_| !started)
+                .map(|o| (o.pos, o.aim, o.vel, o.last_emit, o.last_fire));
+            let vel = owner_velocity(n, last.map(|l| (l.0, l.4)), now);
             if started {
                 sounds.push(FlameSound::Start {
                     owner: n.owner,
@@ -558,6 +597,7 @@ impl FlameSystem {
                         chain: self.chains,
                         aim: aim_of(n.dir),
                         fired_frame: self.frame,
+                        vel,
                         run_ms: -dt_ms,
                         turn_rate: 0.0,
                     },
@@ -590,8 +630,26 @@ impl FlameSystem {
                 false => self.owners[&n.owner].last_emit + spacing,
             };
             let mut emitted = 0;
+            let aim = aim_of(n.dir);
             while t <= now && emitted < MAX_PER_FRAME {
-                self.emit(n, t, world);
+                // 0x30024810..0x3002494e: a chunk takes the nozzle, aim and
+                // velocity share lerped from last frame's by its time
+                // between the last chunk and now.
+                let (pos, at, v) = match last {
+                    Some((pos0, aim0, vel0, born0, _)) if now > born0 => {
+                        let f = ((now - t) / (now - born0)).clamp(0.0, 1.0) as f32;
+                        let wrap = |a: f32| (a + 180.0).rem_euclid(360.0) - 180.0;
+                        let turn = Vec2::new(wrap(aim.x - aim0.x), wrap(aim.y - aim0.y));
+                        (
+                            pos0.lerp(n.pos, 1.0 - f),
+                            aim0 + turn * (1.0 - f),
+                            vel0.lerp(vel, 1.0 - f),
+                        )
+                    }
+                    _ => (n.pos, aim, vel),
+                };
+                let at_t = Nozzle { pos, ..*n };
+                self.emit(&at_t, at, v, t, world);
                 t += spacing;
                 emitted += 1;
             }
@@ -603,6 +661,7 @@ impl FlameSystem {
                 };
                 o.last_fire = now;
                 o.pos = n.pos;
+                o.vel = vel;
             }
         }
         let streams = self.streams();
@@ -963,11 +1022,14 @@ impl FlameSystem {
         })
     }
 
-    /// One stream chunk leaving `n` at `born` (0x30024050's chain branch,
-    /// `+0xb8` 1): 1800 units a second, a cap of 140 less its size draw and
-    /// a start of 16 less 0.9 (own view) or 0.6 of that draw's share of 140
+    /// One stream chunk leaving `n` at `born` aimed at `aim` (0x30024050's
+    /// chain branch, `+0xb8` 1): 1800 units a second along the aim with
+    /// the owner's velocity share `vel` taken in (0x30024d13..0x30024d5d,
+    /// the speed kept), a cap of 140 less its size draw and a start of 16
+    /// less 0.9 (own view) or 0.6 of that draw's share of 140
     /// (0x30024b12..0x30024c1d).
-    fn emit(&mut self, n: &Nozzle, born: f64, world: Option<&ChunkWorld>) {
+    fn emit(&mut self, n: &Nozzle, aim: Vec2, vel: Vec3, born: f64, world: Option<&ChunkWorld>) {
+        let dir = dir_of(aim);
         let size_rand = self.size_rand(born);
         let k = if n.own_view { 0.9 } else { 0.6 };
         let roll = self.rand() * 360.0;
@@ -976,7 +1038,7 @@ impl FlameSystem {
         let blocked = world.map(|w| {
             let tr = w
                 .world
-                .point_trace(n.pos - n.dir * 16.0, n.pos, CONTENTS_SOLID, false);
+                .point_trace(n.pos - dir * 16.0, n.pos, CONTENTS_SOLID, false);
             tr.fraction < 1.0
         });
         let (speed, life) = match blocked {
@@ -990,7 +1052,7 @@ impl FlameSystem {
             owner: n.owner,
             kind: Kind::Stream,
             pos: n.pos,
-            dir: n.dir.normalize_or_zero(),
+            dir: (dir * START_SPEED * 0.5 + vel).normalize_or(dir),
             speed,
             size: (1.0 - k * size_rand / 140.0) * START_SIZE,
             size_max: 140.0 - size_rand,
@@ -1004,7 +1066,7 @@ impl FlameSystem {
             may_residue: true,
             a8: STREAM_A8,
             friction: 1.0,
-            chain: Some((o.chain, o.aim, o.pos)),
+            chain: Some((o.chain, aim, n.pos)),
         });
     }
 
@@ -1083,6 +1145,13 @@ pub fn nozzles(
                 pos,
                 dir,
                 own_view,
+                ps_velocity: match own_view {
+                    true => Vec3::from_array(
+                        ["velocity[0]", "velocity[1]", "velocity[2]"]
+                            .map(|f| snap.ps.field_f32(p, f)),
+                    ),
+                    false => Vec3::ZERO,
+                },
             });
         }
     };
@@ -1125,6 +1194,7 @@ mod tests {
             pos: Vec3::ZERO,
             dir: Vec3::X,
             own_view: true,
+            ps_velocity: Vec3::ZERO,
         }
     }
 
@@ -1346,6 +1416,47 @@ mod tests {
         assert!(f.step(1032.0, 16.0, &[], Vec3::ZERO, None).is_empty());
         let stop = f.step(1100.0, 16.0, &[], Vec3::ZERO, None);
         assert!(matches!(stop[..], [FlameSound::Stop { owner: 3, .. }]));
+    }
+
+    /// 0x30024289..0x3002494e: the view's own moving body tilts its chunks
+    /// by 0.375 of `ps.velocity` against the nozzle's 900 a 1000 ticks;
+    /// another body's chunks take its nozzle's move, and each chunk of a
+    /// frame takes the nozzle, aim and that share lerped from the last
+    /// frame's by its birth. The speed stays the nozzle's.
+    #[test]
+    fn a_stream_chunk_takes_in_its_owners_velocity_and_the_frames_lerp() {
+        let mut f = FlameSystem::default();
+        let own = Nozzle {
+            ps_velocity: Vec3::new(0.0, 200.0, 0.0),
+            ..nozzle(1)
+        };
+        f.step(100.0, 16.0, &[own], Vec3::ZERO, None);
+        let c = f.chunks[0];
+        assert!((c.dir - Vec3::new(900.0, 75.0, 0.0).normalize()).length() < 1e-6);
+        assert_eq!(c.speed, START_SPEED);
+
+        let mut f = FlameSystem::default();
+        let mut far = Nozzle {
+            own_view: false,
+            ..nozzle(3)
+        };
+        f.step(100.0, 20.0, &[far], Vec3::ZERO, None);
+        assert_eq!(f.chunks[0].dir, Vec3::X, "a new stream takes nothing");
+        far.pos = Vec3::new(0.0, 20.0, 0.0);
+        far.dir = Vec3::Y;
+        f.step(120.0, 20.0, &[far], Vec3::ZERO, None);
+        // 20 units in 40 ticks is 500 a 1000 ticks, halved.
+        let vel = 250.0;
+        let fresh: Vec<_> = f.chunks.iter().filter(|c| c.born > 100.0).collect();
+        assert!(fresh.len() > 2);
+        for c in fresh {
+            let share = ((c.born - 100.0) / 20.0) as f32;
+            let (_, aim, at) = c.chain.unwrap();
+            assert!((at.y - 20.0 * share).abs() < 1e-4, "{at} at {share}");
+            assert!((aim.y - 90.0 * share).abs() < 1e-3, "{aim} at {share}");
+            let want = (dir_of(aim) * 900.0 + Vec3::Y * vel * share).normalize();
+            assert!((c.dir - want).length() < 1e-5, "{} against {want}", c.dir);
+        }
     }
 
     /// The fx clock is f64: 22 h in, a held stream sheds the
@@ -1667,6 +1778,7 @@ mod tests {
             pos: Vec3::new(0.0, 0.0, 30.0),
             dir: Vec3::X,
             own_view: false,
+            ps_velocity: Vec3::ZERO,
         };
         let world = wall(0);
         let mut f = FlameSystem::default();
@@ -1792,6 +1904,7 @@ mod tests {
             pos: from,
             dir: Vec3::X,
             own_view: false,
+            ps_velocity: Vec3::ZERO,
         };
         let mut f = FlameSystem::default();
         let mut now = 1000.0;
@@ -1855,6 +1968,7 @@ mod tests {
                 pos: Vec3::new(0.0, 0.0, 30.0),
                 dir: Vec3::X,
                 own_view: false,
+                ps_velocity: Vec3::ZERO,
             };
             let mut f = FlameSystem::default();
             let mut now = 1000.0;

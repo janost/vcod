@@ -1779,8 +1779,11 @@ ticks (500 ms), so vcod's units a second are twice them.
   or not (INFERRED, the two branches). vcod lays its type 0 chunks from
   the first frame and has no head.
 - **A stream chunk.** Its speed is `(+0xb8 * 0.9 + 0.1) * 900`
-  (0x30024cbc, 0x3007bf6c, 0x3007c0d8), 900 with `+0xb8` 1, plus half the
-  owner's velocity, normalized as one (VERIFIED (the instructions)). Its `+0xa8` is
+  (0x30024cbc, 0x3007bf6c, 0x3007c0d8), 900 with `+0xb8` 1. Its direction
+  `+0x88` is the aim's times that speed plus the owner's velocity share,
+  normalized (0x30024d13..0x30024d5d); both `VectorNormalize` lengths
+  (0x30049700) are popped, so `+0x94` keeps the speed (VERIFIED (the
+  instructions)). Its `+0xa8` is
   60 (0x30024bea), `+0xbc` 1 (0x30024da8), `+0x14` 1 (0x30024c04)
   (VERIFIED (the instructions)).
 - **Its size.** The draw `+0x60` is `(0.75 * +0xb8 + 0.35) * (0.125 * (b
@@ -1822,13 +1825,33 @@ ticks (500 ms), so vcod's units a second are twice them.
   (0x30023ba6..0x30023c1c) (VERIFIED (the instructions)). 0x30025c60 adds
   it only while the size is under the cap, so a cap that falls does not
   shrink the chunk (VERIFIED (the instructions), 0x30025c63..0x30025c9e).
+- **The owner's velocity share** (0x300242c7..0x30024468; VERIFIED (the
+  instructions) and bytes):
+  - for the view's own body (`cg.snap`'s `clientNum`) whose `ps.velocity`
+    (`cg.snap+0x2c`) is longer than 1 (0x3007bce0), that velocity times
+    0.75 (0x3007be38);
+  - else, while the stream fires on (fired this frame or the last, or for
+    another body within 150 ticks, 0x300ab750, 0x300ab7a4), the nozzle's
+    move since its last firing frame (0x300ab760) times `1000 / ticks`
+    (0x3007be88), `ticks` since that frame held to 20 (0x3007c128);
+  - else 0; then halved (0x3007bce8). Against the nozzle's 900 a 1000
+    ticks, a body running at 190 units a second turns its own stream by
+    about 4.5 degrees (INFERRED, the arithmetic).
+- **The frame's lerp.** The chunks a call lays (the loop around the pool
+  call at 0x3002494e) take their nozzle, aim and velocity share lerped from the owner's last
+  (0x300ab760, 0x300ab784, 0x300ab778) to this frame's by
+  `f = (now - t) / (now - last)`, `t` the chunk's birth and `last` the
+  owner's latest chunk's (`+0x48` of 0x300ab790) (VERIFIED (the
+  instructions), 0x30024810..0x300248dd and the decompile's loop). The aim
+  lerps as plain angles (INFERRED (decompile)); what range the caller's
+  angles take, and so where a lerp would cross the wrap, is unread.
 - **vcod.** `fx::flame` moves each chunk a frame at a time by these rules
   (`move_chunk`, `brake`, `chain_brake`, `lift`, `FlameSystem::size_rand`),
   its stream the owner's from its first firing frame to its release, the
-  aim the nozzle's. Left out:
-  - the owner's velocity in the speed;
-  - the type 1 head, and the per-chunk lerp of nozzle and aim across a
-    frame (the loop around the pool call at 0x3002494e);
+  aim the nozzle's. The velocity share is `owner_velocity`, the own body's
+  off the snapshot's `ps.velocity`, and each chunk lerps nozzle, aim (the
+  short way round) and share as above (`FlameSystem::step`). Left out:
+  - the type 1 head;
   - the 350-tick look-ahead of the chunk's trace (0x30026049) and its
     rebase every 20 ticks (vcod moves and traces each frame);
   - the chain draw (0x300272b0), which skips a chunk near the last drawn

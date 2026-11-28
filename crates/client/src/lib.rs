@@ -5480,6 +5480,7 @@ mod tests {
             pos: Vec3::new(0.0, 0.0, 60.0),
             dir: Vec3::X,
             own_view: false,
+            ps_velocity: Vec3::ZERO,
         };
         flame.step(100.0, 16.0, &[nozzle], Vec3::ZERO, None);
         assert!(!flame.is_empty());
