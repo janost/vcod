@@ -1357,8 +1357,8 @@ registered in 0x3002b560 (VERIFIED, strings).
   view weapon does the same at 0x30046387 (VERIFIED).
   - The chunk system 0x30024050..0x30029210 is RTCW's `cg_flamethrower.c`
     reworked (VERIFIED, the constants): 8192 chunks, nozzle speed 1800 u/s,
-    minimum 60, friction up to 7200 u/s per s (section 19.3.2), life 833
-    ms, start size 16, size cap 290, growth `sizeMax / life / (2 (v / 1800)^3 + 0.8)` per ms, chunk
+    minimum 60, friction up to 7200 u/s per s (section 19.3.2), life 1166
+    ms (19.3.2, "The life"), start size 16, size cap 290, growth `sizeMax / life / (2 (v / 1800)^3 + 0.8)` per ms, chunk
     spacing `k * 8.89` ms (0.75 own view, 0.35 others, the latter scaled by
     eye distance over 2048 clamped to 1..2.93), a hit clipping the chunk
     along the face at a quarter speed ("Residue" below), sprite
@@ -1604,8 +1604,8 @@ chunks against its own box and reports the burn (section 21,
   - 0x30027d10 also makes a type 3 off a chunk whose `+0x140` lies between 0
     and the clock (`0x30027ad0(chunk, 3, 40)` at 0x30027e9d, VERIFIED (the instructions)), but nothing sets a time there ("`+0x140`" below).
 - **vcod.** `fx::flame::FlameSystem::report` runs the check and the test
-  each frame after the chunk step, with `cg.snap` as the older of the drawn
-  pair. `PlayInput::in_flame` carries the flag into `wbuttons`
+  each frame after the chunk step, on the chunks the chain draw drew
+  (19.3.5), with `cg.snap` as the older of the drawn pair. `PlayInput::in_flame` carries the flag into `wbuttons`
   (`msg::WBUTTON_IN_FLAME_V22`), and the client sends the `fdc`. The test's
   trace (`fx::flame::ShotTrace`) is the world and the snapshot's solid
   entities, so a body between the chunk and the victim blocks. The chunks'
@@ -1776,8 +1776,47 @@ ticks (500 ms), so vcod's units a second are twice them.
   stream holds sets its `+0xb8` to 1 (0x3002458c..0x300245b6, a wave times
   0 plus 1.0) and lays type 0 chunks (0x30024976) (VERIFIED (the
   instructions)). So every drawn stream chunk carries `+0xb8` 1, own view
-  or not (INFERRED, the two branches). vcod lays its type 0 chunks from
-  the first frame and has no head.
+  or not (INFERRED, the two branches).
+  - **Head or chunks.** The type 0 loop runs only while the stream holds
+    (`edi`, set at 0x3002432e off 0x30024317..0x3002432c), the owner's
+    latest chunk (0x300ab790) is set and row `+0x5c` (0x300ab7ac) equals
+    the call's fourth argument, 1 at both callers; else the call jumps to
+    0x3002521b and lays the head alone (0x30024538..0x30024555) (VERIFIED
+    (the instructions)). So a stream's first frame lays no type 0 chunk
+    (INFERRED, the branch).
+  - **Its link.** ESI is 0 at the head's pool call (`xor esi,esi` at
+    0x30025269, the call at 0x30025277), so its `+0x8` is 0; each type 0
+    chunk is allocated with ESI the latest chunk (`mov edi,[ebp+0x40]` at
+    0x30024605, `mov esi,edi` at 0x3002481b), and the pool call stores ESI
+    in the new chunk's `+0x8` (0x300256c8). The head becomes the latest
+    at 0x300254da (VERIFIED (the instructions)). A chain therefore runs
+    from its newest chunk to the head (INFERRED, the links).
+  - **Its fields** (0x30025288..0x300254d4, VERIFIED (the instructions)):
+    speed `(1.8 * 0.7 + 0.3) * 900`, 1404 (0x3007bf24, 0x3007bea0,
+    0x3007c0d8), 0 behind a blocked nozzle; the current aim's forward,
+    unlerped; `+0xbc` 1, `+0xa0` 0 and `+0x130` -1.0 (0x3007c0a8). Its
+    `+0x14`, `+0xa8` and `+0x138` are never written, so the zeroed slot
+    leaves them 0 (INFERRED, 0x300256e0 clears a freed slot).
+  - **What it does.** With `+0x138` 0 it takes no trail step (19.3.3), so
+    it sheds no flame or smoke; the bounce's residue test needs type 0
+    (0x3002637b..0x3002638b); the merge needs type 0 (19.3.5); the sprite
+    add returns before the report's test (VERIFIED (the instructions)).
+    The next frame's first type 0 chunk is born at its birth plus the
+    spacing, and lerps from it (0x30024785..0x300247b8) (VERIFIED (the
+    instructions)). So all a head changes on screen and for the report is
+    the start frame's chunks, which it replaces (INFERRED, the uses
+    above).
+  - vcod lays nothing on a stream's first frame and spaces the next
+    frame's chunks from that frame's time (`FlameSystem::step`).
+- **The life.** A call's chunk life is `ftol((+0xb8 + 1) * 0.5 * 1666)`
+  ticks (0x3002445b..0x3002447d; 1666.0 at 0x3007c120; `_ftol`
+  truncates), read before the stream's `+0xb8` drops to 1 (0x3002455b..
+  0x300245bc), so with the callers' 1.8 (`push 0x3fe66666` before
+  0x300346a0 and 0x30046387) it is 2332 ticks, 1166 ms, for the head and
+  every type 0 chunk. The type 0 death is that past the birth (`fild
+  [esp+0x1c]` at 0x30024c89..0x30024c91), and a blocked nozzle halves it
+  (0x300244f0..0x30024518) (VERIFIED (the instructions)). vcod's
+  `LIFE_MS` is 1166.
 - **A stream chunk.** Its speed is `(+0xb8 * 0.9 + 0.1) * 900`
   (0x30024cbc, 0x3007bf6c, 0x3007c0d8), 900 with `+0xb8` 1. Its direction
   `+0x88` is the aim's times that speed plus the owner's velocity share,
@@ -1842,29 +1881,42 @@ ticks (500 ms), so vcod's units a second are twice them.
   (0x300ab760, 0x300ab784, 0x300ab778) to this frame's by
   `f = (now - t) / (now - last)`, `t` the chunk's birth and `last` the
   owner's latest chunk's (`+0x48` of 0x300ab790) (VERIFIED (the
-  instructions), 0x30024810..0x300248dd and the decompile's loop). The aim
-  lerps as plain angles (INFERRED (decompile)); what range the caller's
-  angles take, and so where a lerp would cross the wrap, is unread.
-- **vcod.** `fx::flame` moves each chunk a frame at a time by these rules
-  (`move_chunk`, `brake`, `chain_brake`, `lift`, `FlameSystem::size_rand`),
-  its stream the owner's from its first firing frame to its release, the
-  aim the nozzle's. The velocity share is `owner_velocity`, the own body's
-  off the snapshot's `ps.velocity`, and each chunk lerps nozzle, aim (the
-  short way round) and share as above (`FlameSystem::step`). Left out:
-  - the type 1 head;
-  - the 350-tick look-ahead of the chunk's trace (0x30026049) and its
-    rebase every 20 ticks (vcod moves and traces each frame). The move
-    traces from the last traced point `+0xc0` to the chunk's place 350
-    ticks on at its present speed (0x30025990 on `now + 0x15e`), sets
-    `+0xd0` to the hit's time along that span and, until the clock passes
-    it, only places the chunk; past it, the next trace starts at the
-    contact and the chunk bounces there (INFERRED (decompile)). The skip
-    and the 350 are read at 0x30026023..0x300260d1 (VERIFIED (the
-    instructions)). A chunk
-    braking short of a wall can still meet it (INFERRED, the speed held
-    over the span);
-  - the chain draw (0x300272b0), which skips a chunk near the last drawn
-    and fades by a tent of its life.
+  instructions), 0x30024810..0x300248dd and the decompile's loop).
+  - **The spacing.** The first chunk is born at `floor(last + spacing)`
+    ticks, and more than 180 chunks due (0x3007bd48) spread 180 over the
+    gap, the spacing `(now - last) / 180` (0x3007c0f0)
+    (0x30024785..0x300247cf) (VERIFIED (the instructions)). vcod spaces
+    them so and keeps the births in fractions of a ms.
+  - **The angles.** The aim's lerp is `now * (1 - f) + last * f` on each
+    axis, with no call to 0x3004be60 or `LerpAngle` (0x3004bd00) in the
+    loop, and goes only into the chunk's `+0x100..+0x108` (0x300248e4..
+    0x30024947, 0x3002512f..0x30025168) (VERIFIED (the instructions)).
+  - **The direction.** It is the forward of the current aim (0x3002422d)
+    and of the last (0x300245f7, row 0x300ab754) lerped by `f` and
+    normalized (0x30024969..0x300249e0), into `+0x88` and `+0xac`
+    (0x30024cd4..0x30024d07) before the speed and the velocity share go in
+    (VERIFIED (the instructions)).
+  - **The range.** `CG_Player` passes `cent+0x214`, the `LerpAngle` of the
+    two snapshots' `apos` (0x30021c67..0x30021c98, 0x30021cd6..0x30021cf4);
+    the view weapon passes `cg.refdefViewAngles` (0x304832ac) for the own
+    body and `cent+0x214` for another (0x30046329..0x30046387) (VERIFIED
+    (the instructions)). Those angles are a 16-bit angle's degrees, so
+    -180 up to 180, the pitch held short of 90 (INFERRED, the wire's
+    angles). So only a yaw crossing 180 between two frames sweeps a
+    frame's `+0x100` the long way round, through 0; the chunks so swept
+    brake at the whole friction against the latest's angles, their
+    direction untouched (INFERRED, the friction's wrap at 0x3004be60 and
+    the arithmetic). vcod lerps the forwards for the direction and the
+    angles plainly for the friction (`FlameSystem::step`;
+    `an_aim_across_yaw_180_sweeps_the_chain_angles_the_long_way`).
+- **vcod.** `fx::flame` moves each chunk by these rules (`move_chunk`,
+  `place`, `brake`, `chain_brake`, `lift`, `FlameSystem::size_rand`), its
+  stream the owner's from its first firing frame to its release, the aim
+  the nozzle's. The velocity share is `owner_velocity`, the own body's off
+  the snapshot's `ps.velocity`, and each chunk lerps nozzle, forward, chain
+  angles and share as above (`FlameSystem::step`). The move's look-ahead
+  is 19.3.4 and the draw 19.3.5. Left out: the births on whole ticks, and
+  the head's own flight, which nothing draws or tests.
 
 #### 19.3.3 The trail and its smoke
 
@@ -1955,9 +2007,148 @@ ticks (half ms).
   on the stream chunks with retail's draws, `trail_share` the first share;
   `Kind::Trail` is the flame, `Kind::Smoke` the puff. The owner's turn
   rate is the nozzle's aim between firing frames. Not done: the owner's
-  speed in the first step, the alpha and grey of the draw (the chain draw
-  0x300272b0 and 0x30026b08..0x30026c4f), and the merge of a chain's
-  chunks.
+  speed in the first step. The draw's alpha and grey and the merge of a
+  chain's chunks are 19.3.5.
+
+#### 19.3.4 The look-ahead
+
+0x30025da0 moves a chunk off a base and traces ahead of it. Addresses are
+`uo_cgame_mp_x86.dll`; times are ticks (half ms) and the clock `now` is
+`2 * cg.time`.
+
+- **The fields.** `+0x70` is the base and `+0x80` its time (a double);
+  `+0xc0` is where the last trace reached and `+0xd0` (a double) when the
+  chunk gets there; `+0x68` and `+0xf8` are the growth's and the
+  friction's clocks. At the birth `+0x68`, `+0x80` and `+0xd0` take the
+  birth and `+0x70`, `+0xc0` the nozzle (0x30024d64..0x30024da2; the head
+  at 0x3002530a..0x300253fc) (VERIFIED (the instructions)). A trail copy
+  takes them with the rest of the chunk (19.3.3), a residue's flame its
+  step's time as the base time (0x30028816) (VERIFIED (the
+  instructions)).
+- **The place.** 0x30025990 puts a chunk at `t` at `base + +0x88 * +0x94 *
+  dt - z * dt * age * +0xa8 * +0xb8` with 19.3.2's `p` term for type 0 or
+  1, `dt` and `age` the 1000-tick spans since `+0x80` and the birth
+  (0x3007bd94) (VERIFIED (the instructions), 0x30025996..0x30025c4f). The
+  present speed and direction stand for the whole span, so a brake since
+  the base moves it all (INFERRED, the arithmetic).
+- **The gate.** Past the friction step, the chunk only takes its place
+  unless its `+0x40` is 0, its speed is above 1 or its `+0xa8` is not 0,
+  and more than 20 ticks (0x3007c128, a double) have passed since the base
+  (0x30025fbc..0x3002600c) (VERIFIED (the instructions)). At 8 ms frames
+  it moves on every other frame (INFERRED).
+- **The trace.** Past the gate, a chunk whose `+0xd0` is at or past the
+  clock, or of type 5, rebases at its place (0x30026023..0x3002603f,
+  0x30026572..0x3002658e). Else it traces from `+0xc0` to its place at
+  `now + 350` (`lea eax,[edi+0x15e]` at 0x30026049) through 0x30025cd0 into
+  the result at 0x300a85b8 (0x300260d6..0x300260fa) (VERIFIED (the
+  instructions)):
+  - when that end lies within 2 (0x300851d0) of the last such trace's end
+    and the last one's fraction is 1, the trace is skipped: `+0xc0` takes
+    the last end, `+0xd0` `now + 350`, and the chunk rebases
+    (0x3002605d..0x300260d1);
+  - an allsolid result reads as fraction 0 ending at `+0xc0` (0x30026107..
+    0x3002612e);
+  - `+0xc0` takes the end and `+0xd0` grows by the fraction of its gap to
+    `now + 350` (0x30026134..0x30026171).
+
+  Then a clock short of `+0xd0` rebases the chunk at its place (0x30026177..
+  0x300261ab), which every miss does (VERIFIED (the instructions)).
+- **The contact.** A clock at or past `+0xd0` (VERIFIED (the
+  instructions), 0x300261b0..0x3002656a):
+  - stores a hit's normal in `+0x118`;
+  - when allsolid, zeroes the direction and the speed and does not
+    rebase;
+  - on a face with `surfaceFlags` 0x10 does nothing more
+    (0x3002624f..0x30026256), so the chunk flies on through it;
+  - else sets base and `+0xd0` to the contact at the clock, its drawn
+    origin to the contact itself, and, unless the fraction is 1, bounces
+    (19.3, "Residue").
+
+  So a contact found early is met only on the first frame at or past its
+  time, wherever the place has got to by then; a wall that comes up
+  inside a missed span is not seen until the span ends; and a contact's
+  next frame traces from the face (INFERRED, the order).
+- **vcod.** `move_chunk` runs these steps in ms (175 ahead, rebase past
+  10), `Chunk::{base, base_at, seen, seen_at}` the four fields and
+  `FlameSystem`'s last trace the shared result. It no longer bounces off a
+  `SURF_NOIMPACT` face, and a bounce leaves the chunk at the contact, not
+  a unit off it (`a_chunk_meets_only_what_its_look_ahead_traced`).
+
+#### 19.3.5 The chain draw
+
+`CG_AddFlameChunks` draws after its move pass: it walks the list of chain
+heads at 0x300d9750 (`+0xc`) and calls 0x300272b0 on each live one whose
+`+0xa0` is 0 or that is its owner's latest chunk, and frees a dead one
+with its tail (0x300290f5..0x30029164) (VERIFIED (the instructions)). The
+pool call puts a chunk with no parent at the head of that list and takes
+a parent off it (0x30025600..0x300256d1), so every chunk but a stream's
+type 0 is a chain of its own (VERIFIED (the instructions); the parents
+19.3.2, "Its link"). A type 0 chunk and the head store `+0xa0` 0
+(0x3002514c, 0x3002546c) and a type 0 `+0xa4` 0 (0x30024bf4) (VERIFIED
+(the instructions)); the head's `+0xa4` is the zeroed slot's, and the
+copies keep their parent's (INFERRED, no other store).
+0x300272b0, the chain's newest chunk in EAX (VERIFIED (the instructions),
+0x300272b0..0x3002783e):
+
+- **Live or not.** A chain is live when its newest is its owner's latest
+  (0x300ab790) and that owner fired this frame (0x300ab750 against
+  0x30459140); then each chunk's age is taken from the newest's birth,
+  else from the clock (0x300272e2..0x30027357).
+- **The tail.** A next chunk marked dead (`+0x24`) is freed, and 0x300256e0
+  frees its `+0x8` tail with it (0x30027357..0x3002736c,
+  0x300256e0..0x30025705). The move pass marks a chunk dead when the
+  clock is before its birth or past its death (0x30027e14..0x30027e3c) and
+  frees one of a type above 1 at once (0x300290b0..0x300290be).
+- **Not drawn.** A chunk is handled only when `0.2 * +0xa4` is below its
+  age (0x300274d2..0x300274f7), so with `+0xa4` 0 a live chain's newest,
+  of age 0, is not drawn, and with it not tested. The glow add before it
+  (0x300273e4..0x300274b5) needs `+0xa4` above the age and never runs.
+- **The merge.** While the chunk and its next are both type 0, the next
+  within `2 * ((r + 1) / 2)^1.5 * size * k` of it, `r` the size over 72.5
+  (0x3007c214) held to 1, `k` 0.1 for the view's own stream or 0.25
+  (0x3dcccccd, 0x3e800000), `1.5` the double at 0x3007c278, and born
+  under 50 ticks apart (0x3007c270), 0x300257e0 merges them
+  (0x30027505..0x30027618). It unlinks the next and, when the next is the
+  larger, copies its size, cap, `+0x60`, growth clock, birth, death,
+  roll, base and base time, origin, `+0xa8`, direction, speed, friction
+  clock and life fraction; it takes the next's `+0x18`, trail step,
+  `+0x140` and `+0x14` where its own are 0, and frees the next
+  (0x300257e0..0x30025987).
+- **The skip.** On a live chain not of the view's own body, a chunk whose
+  size differs from the last drawn one's by under a tenth of its own
+  (0x3007bda4) is skipped when `(1 - frac)^3 * min(size / 30, 1) * 32`
+  beats `(0.1 + 0.9 * (1 - |cos|)) * |eye - last| * |chunk - last| /
+  min(size, 30)`, `cos` between the unit lines from the last drawn chunk
+  to this one and to the eye (`cg.refdef.vieworg` 0x30487a90)
+  (0x3002761e..0x300277a7; 0x3007becc 30, 0x3007bdf8 3.0, 0x3007c258 32,
+  0x3007c268 0.9, 0x3007c260 0.1). The view's own stream and a chain not
+  live draw every chunk (the tests at 0x3002761e..0x30027640).
+- **The draw.** A drawn chunk goes to the sprite add with its life
+  fraction and half a tent of it, `2 frac` up to 0.5 and `2 - 2 frac`
+  after (0x300277a9..0x30027819), then becomes the last drawn; drawn or
+  skipped, its growth rate `+0x64` is redone (0x30027825).
+- **The colour** (0x30026b08..0x30026c4f): a stream chunk and its trail
+  are white; a residue's flame greys `min(2 frac, 1) * 255` (0x3007bd64);
+  smoke is `g = (1 - 2 max(frac - 0.5, 0)) * 80 + 20` (0x3007bfb0,
+  0x3007be04) times 0.97647, 0.93725, 0.85882 (0x3007c22c..0x3007c224,
+  249, 239 and 219 over 255) with an alpha of the tent's half times 76.5
+  (0x3007c220), each truncated. With `r_fullscreen` and `r_overbrightbits`
+  set (0x300a85f4, 0x300d977c) all but smoke halve their grey (0x30026c53..
+  0x30026c84). The shaders draw these as vertex colour and alpha
+  (`flamethrower.shader`: `flameSmoke*` blends `GL_SRC_ALPHA
+  GL_ONE_MINUS_SRC_ALPHA` with `rgbGen vertex` and `alphaGen vertex`,
+  `flamethrowerFire*` `GL_ONE GL_ONE_MINUS_SRC_COLOR` with `rgbGen
+  vertex`) (VERIFIED, `pakuo01.pk3`).
+- **vcod.** `FlameSystem::draw_chains` runs at the end of `step`: a stream
+  is a chain by its stream number, newest last in the pool, and every
+  other chunk a chain of one. It drops a dead chunk's tail, merges
+  (`overlaps`, `merge`), skips (`hidden_behind`) and marks what it draws;
+  `quads` draws and `report` tests only those, `colour` gives the
+  colours. Left out: the halving under `r_fullscreen` and
+  `r_overbrightbits`, the cached growth rate (vcod grows each chunk at its
+  present speed's rate), and the sprite add's pull of the view's own
+  chunks toward the eye and the drop of one that struck a ceiling
+  (0x30026a22..0x30026ae5).
 
 ### 19.4 HUD
 
