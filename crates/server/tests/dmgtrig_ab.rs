@@ -781,3 +781,96 @@ fn a_uo_throw_under_the_hold_leaves_from_retails_muzzle() {
     assert!(!retail.is_empty());
     assert_eq!(ours, retail);
 }
+
+/// Ours' log of `client-probes/probe_belltower_tank.gsc` on mp_foy with
+/// `fixtures/triggers/mp_foy-belltower-tank.ent` appended, the client
+/// driven as `vehicle_probe.rs`'s `SIT` drives `--probe-vehicle sit`: on
+/// foot 10 s from the placement, the use tap, then the seat.
+fn belltower_tank_run() -> Option<Vec<String>> {
+    use common::{Join, Queues, step};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use vcod_common::net::msg::{BUTTON_USE, UserCmd};
+    const SETTLE_MS: i64 = 10_000;
+    const TAP_MS: i64 = 150;
+    let mut fs = vcod_common::testing::uo_fs()?;
+    let path = fs.resolve_map("mp_foy").expect("mp_foy");
+    let bytes = fs.read(&path).unwrap();
+    fs.overlay(
+        &path,
+        vcod_common::testing::bsp_with_entities(
+            &bytes,
+            include_str!("fixtures/triggers/mp_foy-belltower-tank.ent"),
+        ),
+    );
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(&vcod_common::net::protocol::PROTOCOL_V22),
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_belltower_tank.gsc"
+        )),
+        ..common::Boot::new("mp_foy", "probe_belltower_tank")
+    }
+    .start(fs);
+    common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
+    let q = Rc::new(RefCell::new(Queues::default()));
+    let mut cl =
+        vcod_common::net::NetClient::start_with_qport(common::ClientEnd(q.clone()), now, 0x2001);
+    let mut join = Join::new("axis", "kar98k_mp");
+    let frame = std::time::Duration::from_millis(common::FRAME_MS as u64);
+    let mut hold = common::ProbeHold {
+        follow: true,
+        ..Default::default()
+    };
+    let mut placed_at: Option<i64> = None;
+    for i in 0..3000i64 {
+        if sv.script_log().iter().any(|l| l.contains("PROBE done")) {
+            break;
+        }
+        now += frame;
+        let since = placed_at.map(|at| (i - at) * common::FRAME_MS);
+        let tap = since.is_some_and(|ms| (SETTLE_MS..SETTLE_MS + TAP_MS).contains(&ms));
+        if tap {
+            hold.follow = false;
+        }
+        if placed_at.is_some() && cl.state() == vcod_common::net::NetState::Active {
+            let buttons = if tap { BUTTON_USE } else { 0 };
+            cl.send_cmds(&hold.cmds(&cl, buttons));
+        } else if let Some(c) = cl.send_frame(&UserCmd::default()) {
+            hold.last = c.server_time;
+        }
+        for e in step(&mut sv, &q, &mut cl, now) {
+            if let vcod_common::net::NetEvent::ServerCommand(tokens) = e {
+                join.on_server_command(&tokens, &mut cl, now);
+            }
+        }
+        if placed_at.is_none() && sv.script_log().iter().any(|l| l.contains("PROBE place")) {
+            placed_at = Some(i);
+        }
+    }
+    Some(
+        sv.script_log()
+            .iter()
+            .map(|l| l.trim().to_string())
+            .filter(|l| l.starts_with("PROBE"))
+            .collect(),
+    )
+}
+
+/// `fixtures/triggers/mp_foy-belltower-tank-uo.txt`, retail UO 1.51b: the
+/// seated driver's `fireTurret` shell strikes the belfry's north wall inside
+/// `*44` and walks the trigger_damages at the contact with damage 700 and
+/// mod 5, which the belltower refuses no more than the panzerschreck's. It
+/// fires (the activator is the driver), `_load.gsc`'s exploder deletes the
+/// trigger before the probe's `"damage"` waiter runs and takes the tower's
+/// `delete` brush (cod11-combat.md 14.8.3).
+#[test]
+fn a_tank_shell_sets_off_mp_foys_belltower_like_retail_uo() {
+    let Some(ours) = belltower_tank_run() else {
+        return;
+    };
+    let retail: Vec<&str> = include_str!("fixtures/triggers/mp_foy-belltower-tank-uo.txt")
+        .lines()
+        .filter(|l| l.starts_with("PROBE"))
+        .collect();
+    assert_eq!(ours, retail);
+}

@@ -1,0 +1,20 @@
+# Retail CoD UO 1.51b dedicated server, 2026-11-28: the PROBE lines of client-probes/probe_belltower_tank
+# on mp_foy with mp_foy-belltower-tank.ent appended, one more Panzer IV 900 units north of the belltower:
+#   tools/bsp_append_entities.py mp_foy.bsp out.bsp crates/server/tests/fixtures/triggers/mp_foy-belltower-tank.ent
+#   (out.bsp as maps/mp/mp_foy.bsp in a zzz_belltank.pk3 in the homepath's uo/, beside the game module)
+#   COD_VERSION=uo COD_DIR=<UO install> COD_LNXDED_HOME=<abs> PORT=34901 SECS=90 PROBE_UNTIL='PROBE done' \
+#     tools/run_probe.sh client-probes/probe_belltower_tank mp_foy
+# then, once `PROBE state` logs, the driver:
+#   vcod --game-dir <UO> --mod-dir uo --net-probe 127.0.0.1:34901 --probe-team axis --probe-vehicle sit --probe-secs 35
+# Two runs logged these lines alike. The second ran the server under GDB_PY=tools/re/gdb_trigger_walk.py,
+# which read the shell's one walk (cod11-combat.md 14.8.3):
+#   walk t=20150 attacker=0 start=43f69fac(493.247437),c4b2d1d2(-1430.55688),43d15de8(418.733643)
+#     end=43f69fac(493.247437),c4b2d1d2(-1430.55688),43d15de8(418.733643) dmg=700 mod=5
+PROBE vehicle 890 panzeriv_mp (495.00, -608.00, -2.62) (-3.64, -90.00, 1.79)
+PROBE state 1 1 1
+PROBE place 0 (385.05, -608.22, 5.38) 0.113423
+PROBE seat 1
+PROBE fire (495.00, -608.00, -2.62) (-3.64, -90.00, 1.79)
+PROBE trigger player
+PROBE state 0 0 1
+PROBE done
