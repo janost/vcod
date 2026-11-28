@@ -12,8 +12,9 @@
 //!
 //! vcod moves the chunks by retail's rules, tracing ahead of each
 //! (coduo-diff.md 19.3.2, 19.3.4), and draws them as its chain draw does,
-//! merging a stream's overlapping chunks (19.3.5); each section lists what
-//! it leaves out. Each stream chunk's trail steps shed climbing trail flames and, by its
+//! merging a stream's overlapping chunks (19.3.5), at the places its
+//! sprite add gives them (19.3.6); each section lists what it leaves out.
+//! Each stream chunk's trail steps shed climbing trail flames and, by its
 //! speed, smoke (19.3.3). A fire chunk's first bounce off the
 //! world may leave a burning residue ([`Residue`]): a still emitter that
 //! sheds small drifting, rising flames for a second or two, which burn as
@@ -182,6 +183,9 @@ struct Chunk {
     /// This frame's chain draw (0x300272b0) draws it, and so the report
     /// may test it.
     drawn: bool,
+    /// `+0x118`: the face its look-ahead last struck, zero until one
+    /// (0x300261b0..0x3002621f); copies keep it.
+    normal: Vec3,
 }
 
 /// A burning residue (a type 3 chunk, uo cgame 0x30027ad0 spawned off a
@@ -521,6 +525,10 @@ fn move_chunk(
         c.pos = place(c, now);
         return None;
     };
+    // Any face struck, a `SURF_NOIMPACT` one too.
+    if tr.fraction < 1.0 && tr.normal != Vec3::ZERO {
+        c.normal = tr.normal;
+    }
     if tr.allsolid {
         c.dir = Vec3::ZERO;
         c.speed = 0.0;
@@ -1042,6 +1050,9 @@ impl FlameSystem {
                     friction: 0.0,
                     chain: None,
                     drawn: false,
+                    // A copy of the residue, a copy of the chunk at the
+                    // contact.
+                    normal: n,
                 });
                 if let Some(w) = world
                     && r.death - now >= RESIDUE_FACE_MS
@@ -1287,6 +1298,7 @@ impl FlameSystem {
             friction: 1.0,
             chain: Some((o.chain, aim, n.pos)),
             drawn: false,
+            normal: Vec3::ZERO,
         });
     }
 
@@ -1301,15 +1313,17 @@ impl FlameSystem {
         ((0.75 + 0.35) * ((b + 1.0) * 0.125 + (a * 0.5 + 1.0) * 0.25 + r) * 140.0).min(110.0)
     }
 
-    /// Camera-facing sprites of the chunks the chain draw drew:
-    /// `flamethrowerFire{2..44}` by the chunk's share of its life
-    /// (0x300268e0), at a radius of half its size and no less than 6;
-    /// smoke as `flameSmoke{1..6}` ([`colour`]).
-    pub fn quads(&self, now: f64, cam_right: Vec3, cam_up: Vec3) -> Vec<FxQuad> {
+    /// Camera-facing sprites of the chunks the chain draw drew, placed by
+    /// [`sprite`]: `flamethrowerFire{2..44}` by the chunk's share of its
+    /// life (0x300268e0), smoke as `flameSmoke{1..6}` ([`colour`]).
+    /// `halve` is the cgame's `r_fullscreen` and `r_overbrightbits` test.
+    pub fn quads(&self, now: f64, view: &SpriteView, halve: bool) -> Vec<FxQuad> {
+        let (cam_right, cam_up) = (view.right, view.up);
         self.chunks
             .iter()
             .filter(|c| c.drawn)
-            .map(|c| {
+            .filter_map(|c| {
+                let (p, r) = sprite(c, view.eye, view.forward)?;
                 let frac = ((now - c.born) as f32 / c.life).clamp(0.0, 1.0);
                 let shader = match c.kind {
                     Kind::Smoke(n) => format!("flameSmoke{n}"),
@@ -1318,12 +1332,10 @@ impl FlameSystem {
                         format!("flamethrowerFire{frame}")
                     }
                 };
-                let r = (c.size / 2.0).max(6.0);
                 let (s, co) = c.roll.to_radians().sin_cos();
                 let right = (cam_right * co + cam_up * s) * r;
                 let up = (cam_up * co - cam_right * s) * r;
-                let p = c.pos;
-                FxQuad {
+                Some(FxQuad {
                     verts: [
                         (p - right + up).to_array(),
                         (p + right + up).to_array(),
@@ -1331,12 +1343,52 @@ impl FlameSystem {
                         (p - right - up).to_array(),
                     ],
                     uvs: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
-                    rgba: colour(c.kind, frac),
+                    rgba: colour(c.kind, frac, halve),
                     shader: shader.into(),
-                }
+                })
             })
             .collect()
     }
+}
+
+/// The view the flame sprites face: `cg.refdef`'s `vieworg` and axes.
+#[derive(Clone, Copy, Debug)]
+pub struct SpriteView {
+    pub eye: Vec3,
+    pub forward: Vec3,
+    pub right: Vec3,
+    pub up: Vec3,
+}
+
+/// Where the sprite add (0x300268e0) centres a chunk's sprite and its
+/// radius, `None` when it is not drawn. The radius is half the size. A
+/// chunk whose last struck face looks down sits `20 * |normal z|` lower
+/// (0x300269e1..0x30026a47). The view's own chunk is pulled its radius
+/// toward the eye and shrunk alike, so it covers the same screen; one
+/// within its radius of the eye goes 20 behind it (0x30026a4b..0x30026ae5).
+/// The radius is held to 0.5 (0x30026aef..0x30026b00), a sprite whose
+/// centre is not ahead of the eye is dropped (0x30026d41..0x30026d88),
+/// and the quad is raised by `0.55 * min(radius, 72.5) - 8.8`
+/// (0x30027005..0x300270cb).
+fn sprite(c: &Chunk, eye: Vec3, forward: Vec3) -> Option<(Vec3, f32)> {
+    let mut p = c.pos;
+    let mut r = c.size * 0.5;
+    if c.normal != Vec3::ZERO && c.normal.z < 0.0 {
+        p.z -= c.normal.z.abs() * 20.0;
+    }
+    if c.own {
+        let to = p - eye;
+        let len = to.length();
+        let pull = if len <= r { -len - 20.0 } else { -r };
+        p += to.normalize_or_zero() * pull;
+        r *= pull / len + 1.0;
+    }
+    r = r.max(0.5);
+    if forward.dot(p - eye) <= 0.0 {
+        return None;
+    }
+    p.z += r.min(72.5) * 0.55 - 8.8;
+    Some((p, r))
 }
 
 /// A drawn chunk's vertex colour (0x30026b08..0x30026c4f): white for a
@@ -1344,16 +1396,22 @@ impl FlameSystem {
 /// the first half of its life; smoke is `g` times (249, 239, 219) / 255,
 /// `g` 100 over its first half falling to 20, with an alpha of 76.5 times
 /// the chain draw's half tent of its life (0x300277a9..0x30027819).
-/// Truncated to bytes as `_ftol` does.
-fn colour(kind: Kind, frac: f32) -> [f32; 4] {
-    let byte = |v: f32| f32::from(v as u8) / 255.0;
+/// Truncated to bytes as `_ftol` does. `halve` shifts all but smoke's
+/// grey bytes right by one (0x30026c53..0x30026c84), on top of the
+/// renderer's `rgbGen vertex` shift.
+fn colour(kind: Kind, frac: f32, halve: bool) -> [f32; 4] {
+    let byte = |v: f32| f32::from(v as u8 >> u8::from(halve)) / 255.0;
     match kind {
-        Kind::Stream | Kind::Trail => [1.0; 4],
+        Kind::Stream | Kind::Trail => {
+            let g = byte(255.0);
+            [g, g, g, 1.0]
+        }
         Kind::ResidueFlame => {
             let g = byte((2.0 * frac).min(1.0) * 255.0);
             [g, g, g, 1.0]
         }
         Kind::Smoke(_) => {
+            let byte = |v: f32| f32::from(v as u8) / 255.0;
             let g = f32::from(((1.0 - 2.0 * (frac - 0.5).max(0.0)) * 80.0 + 20.0) as u8);
             let tent = if frac < 0.5 {
                 2.0 * frac
@@ -1476,6 +1534,7 @@ mod tests {
             friction: 0.0,
             chain: None,
             drawn: true,
+            normal: Vec3::ZERO,
         }
     }
 
@@ -1801,7 +1860,13 @@ mod tests {
         let x = c.speed * age / 1000.0;
         assert!((c.pos.x - x).abs() < 1e-2, "{} {x}", c.pos.x);
         assert!(c.pos.z < -1.0, "{}", c.pos.z);
-        let q = f.quads(1200.0, Vec3::Y, Vec3::Z);
+        let view = SpriteView {
+            eye: Vec3::ZERO,
+            forward: Vec3::X,
+            right: Vec3::NEG_Y,
+            up: Vec3::Z,
+        };
+        let q = f.quads(1200.0, &view, false);
         assert!(
             q.iter().any(|q| &*q.shader == "flamethrowerFire9"),
             "{:?}",
@@ -2379,7 +2444,7 @@ mod tests {
     /// only after (here a 2000-tick span, the chunk long past the wall's
     /// face). A contact is acted on once the clock passes it: the chunk
     /// bounces at the contact itself, a quarter as fast, and passes a
-    /// `SURF_NOIMPACT` face untouched.
+    /// `SURF_NOIMPACT` face untouched. Either keeps the face's normal.
     #[test]
     fn a_chunk_meets_only_what_its_look_ahead_traced() {
         use vcod_common::collision::synthetic_world;
@@ -2420,6 +2485,7 @@ mod tests {
         assert!(c.dir.x < 0.0 && c.speed < START_SPEED * 0.25, "{}", c.dir);
         assert!((97.5..98.0).contains(&c.pos.x), "{}", c.pos);
         assert_eq!((c.base, c.base_at), (c.pos, 64.0));
+        assert_eq!(c.normal, Vec3::NEG_X);
 
         let mut c = fast;
         let noimpact = wall(SURF_NOIMPACT);
@@ -2428,6 +2494,53 @@ mod tests {
             &[(&noimpact, 16.0), (&noimpact, 64.0), (&noimpact, 96.0)],
         );
         assert!(c.dir == Vec3::X && c.pos.x > 116.0, "{}", c.pos);
+        assert_eq!(c.normal, Vec3::NEG_X);
+    }
+
+    /// 0x300269e1..0x300270cb, the eye at the origin looking along +x: a
+    /// sprite's radius is half the size and it is raised by `0.55 *
+    /// min(radius, 72.5) - 8.8`; a chunk off a face that looks down sits
+    /// `20 * |normal z|` lower. The view's own chunk comes its radius
+    /// nearer the eye at `1 - radius / distance` of the radius, one inside
+    /// its radius goes 20 behind the eye, and nothing behind it is drawn.
+    #[test]
+    fn the_sprite_add_pulls_the_views_own_chunks_in_and_lowers_one_off_a_ceiling() {
+        let at = |pos: Vec3, size: f32, own: bool, normal: Vec3| {
+            let c = Chunk {
+                own,
+                normal,
+                ..fire(4, pos, size, 0.0, LIFE_MS)
+            };
+            sprite(&c, Vec3::ZERO, Vec3::X).map(|(p, r)| (p.to_array(), r))
+        };
+        let near = |got: Option<([f32; 3], f32)>, want: ([f32; 3], f32)| {
+            let (p, r) = got.expect("drawn");
+            let close = p.iter().zip(want.0).all(|(a, b)| (a - b).abs() < 1e-4);
+            assert!(close && (r - want.1).abs() < 1e-4, "{p:?} {r} != {want:?}");
+        };
+        let ahead = Vec3::new(200.0, 0.0, 0.0);
+        near(
+            at(ahead, 40.0, false, Vec3::ZERO),
+            ([200.0, 0.0, 2.2], 20.0),
+        );
+        near(at(ahead, 40.0, true, Vec3::ZERO), ([180.0, 0.0, 1.1], 18.0));
+        near(
+            at(ahead, 290.0, false, Vec3::ZERO),
+            ([200.0, 0.0, 31.075], 145.0),
+        );
+        assert_eq!(at(Vec3::new(10.0, 0.0, 0.0), 40.0, true, Vec3::ZERO), None);
+        assert_eq!(
+            at(Vec3::new(-50.0, 0.0, 0.0), 40.0, false, Vec3::ZERO),
+            None
+        );
+        let high = Vec3::new(200.0, 0.0, 100.0);
+        near(
+            at(high, 40.0, false, Vec3::NEG_Z),
+            ([200.0, 0.0, 82.2], 20.0),
+        );
+        near(at(high, 40.0, false, Vec3::Z), ([200.0, 0.0, 102.2], 20.0));
+        let slant = Vec3::new(0.6, 0.0, -0.8);
+        near(at(high, 40.0, false, slant), ([200.0, 0.0, 86.2], 20.0));
     }
 
     /// 0x300272b0 on a chain not live: newest first, a chunk takes in the
@@ -2519,17 +2632,24 @@ mod tests {
     /// 0x30026b08..0x30026c4f: smoke greys from 100 to 20 over its second
     /// half, tinted (249, 239, 219), its alpha 76.5 times half the tent of
     /// its life; a residue's flame greys up from black over its first half.
+    /// Halved (0x30026c53..0x30026c84), all but smoke shift their grey a
+    /// bit down and keep their alpha.
     #[test]
     fn smoke_fades_by_a_tent_of_its_life_and_a_residue_flame_greys_up() {
         let bytes = |c: [f32; 4]| c.map(|v| (v * 255.0).round() as u8);
-        assert_eq!(bytes(colour(Kind::Smoke(1), 0.25)), [97, 93, 85, 19]);
-        assert_eq!(bytes(colour(Kind::Smoke(1), 0.5)), [97, 93, 85, 38]);
-        assert_eq!(bytes(colour(Kind::Smoke(1), 0.75)), [58, 56, 51, 19]);
-        assert_eq!(
-            bytes(colour(Kind::ResidueFlame, 0.25)),
-            [127, 127, 127, 255]
-        );
-        assert_eq!(bytes(colour(Kind::ResidueFlame, 0.7)), [255; 4]);
-        assert_eq!(colour(Kind::Stream, 0.3), [1.0; 4]);
+        for halve in [false, true] {
+            let smoke = |frac| bytes(colour(Kind::Smoke(1), frac, halve));
+            assert_eq!(smoke(0.25), [97, 93, 85, 19]);
+            assert_eq!(smoke(0.5), [97, 93, 85, 38]);
+            assert_eq!(smoke(0.75), [58, 56, 51, 19]);
+        }
+        let rest = |kind, frac, halve| bytes(colour(kind, frac, halve));
+        assert_eq!(rest(Kind::ResidueFlame, 0.25, false), [127, 127, 127, 255]);
+        assert_eq!(rest(Kind::ResidueFlame, 0.7, false), [255; 4]);
+        assert_eq!(colour(Kind::Stream, 0.3, false), [1.0; 4]);
+        assert_eq!(rest(Kind::ResidueFlame, 0.25, true), [63, 63, 63, 255]);
+        assert_eq!(rest(Kind::ResidueFlame, 0.7, true), [127, 127, 127, 255]);
+        assert_eq!(rest(Kind::Stream, 0.3, true), [127, 127, 127, 255]);
+        assert_eq!(rest(Kind::Trail, 0.3, true), [127, 127, 127, 255]);
     }
 }
