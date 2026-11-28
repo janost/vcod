@@ -566,7 +566,8 @@ The fix, on the server's `re` view (`Server::bot_re`, `pickup_reach`):
 - `ReObjView::sides`: of the nine tries (the middle and the eight sides
   40 off it, `objective::pickup_side`), those whose point the middle
   reaches at its own height and whose standing eye (60 over the floor
-  under the point) reaches the middle, by the pick's mask. The taps go
+  under the point) reaches the middle, by the pick's mask, and since
+  4.2.5 under which a standing box fits. The taps go
   round those alone; with none, round all nine as before
   (`server::bot_world::tests::a_pickup_is_seen_from_the_sides_on_its_side_of_a_wall`,
   `bots::objective::tests::the_taps_go_round_the_sides_that_see_the_pickup`).
@@ -726,6 +727,136 @@ edge, with that plan's `best` and `idle`
 Seed 10 on the same build with it stalls 0. VERIFIED (measured, ours,
 release). INFERRED: the fix moves every chase, so the match moves from
 the first replan on as well; the six maps: 9.1.1.
+
+### 4.2.5 A pickup side no body stands on, 2026-11-28
+
+On master 3700b7168 the six maps of 9.1.1, seeds 1 to 48, stall 1180
+bot-ticks, 1010 of them on mp_pavlov, seeds 26 (760) and 15 (183) at
+(-9337 to -9160, 10007 to 10134, 106 to 160): 4.2.2's spot. VERIFIED
+(measured, ours, release, `bot_match GAMETYPE=re BOTS=10 TICKS=6000
+STALLS=1`). Traced on seed 26 with a temporary per-tick print of each
+attacker's target, `pick` and the objective's `sides`, and point and box
+traces of the collision round the drop through a temporary test. VERIFIED
+(the trace and the traces):
+
+- The objective lies dropped with its trigger's middle at (-9400.57,
+  9983.55, 162.13), on a strip of floor at 160 about 8 deep between a sill
+  to the north (its face at y 9983.875, its top between 182 and 190) and a
+  drop to 34 to the south. The wall 4.2.2 names at x -9360.125 stands to
+  the east.
+- `sides` reads 0, 1 and 5: the middle, east (-9360.57, 9983.55) and west
+  (-9440.57, 9983.55). The sides to the south stand over the drop, their
+  eye 126 lower; those to the north are past the sill.
+- A standing box fits on the floor under the west side, not under the
+  east one: 0.44 from the east wall and 0.33 from the sill.
+- Attackers on `pick` 1 take the second seen side, the east one. The
+  graph's node nearest it is node 27 at (-9337, 10016, 160), past the
+  wall; three attackers walked out their plans there and pressed into the
+  corner at (-9336.9, 10007.1) for the objective's 60 s. A side is tapped
+  from within 16 of it, so no tap came to move `pick` on. CoD1's bots do
+  not give up a point they walked out to (`Bot::track_reach` runs on CoD4
+  alone).
+
+The fix (`pickup_reach`): a side but the middle counts as seen only where
+a standing box (`HALF_WIDTH`, `HEIGHT_STAND`) fits on the floor under it.
+The middle is tapped from anywhere within 48, so it needs none. Here the
+sides go to 0 and 5
+(`server::bot_world::tests::a_pickup_is_seen_from_the_sides_on_its_side_of_a_wall`,
+whose wall-hugging east and west sides now drop out).
+
+VERIFIED (measured, ours, release, the same knobs, master 3700b7168 and
+the fix, each with a control: the same build with each bot's start hold
+drawn off another constant, as 9.1.1). Wins by team:
+
+| Build | stalled | captures | pickups | carrier deaths | allies W | axis W | kills |
+|---|---|---|---|---|---|---|---|
+| master | 1180 | 622 | 2128 | 947 | 891 | 441 | 10260 |
+| master, holds redrawn | 448 | 626 | 2132 | 943 | 915 | 425 | 10258 |
+| sides stood on | 237 | 624 | 2134 | 951 | 891 | 441 | 10273 |
+| sides stood on, holds redrawn | 448 | 622 | 2130 | 946 | 915 | 425 | 10263 |
+
+- VERIFIED (the runs): the fix moves three of master's 288 matches,
+  mp_pavlov seeds 15 and 26 (both to 0 stalled) and mp_brecourt seed 39,
+  and three of the control's, none of whose stalls move. mp_pavlov goes
+  from 1010 to 67.
+- The control reads 732 under master. Most of that is the two mp_pavlov
+  matches, which the redrawn holds do not reach. INFERRED (the per-match
+  counts).
+
+### 4.2.6 A guard pins a teammate in a nook, 2026-11-28
+
+9.1.1's mp_dawnville spot at (335 to 466, -16210 to -16032, 2 to 30)
+stalls on 4.2.5's build too: seed 35 93 bot-ticks, its control seeds 1
+(122) and 37 (112). VERIFIED (measured, the runs of 4.2.5). Traced on
+seed 35 with a temporary per-tick print of the follower (plan, start,
+shunned nodes and bodies) and of each bot's cmd near the spot, and box
+traces through a temporary test. VERIFIED (the trace and the traces):
+
+- The spot is a nook at the foot of a stair: the stair runs north up
+  from about y -16058 to the floor at 30, a wall closes the nook's west
+  at x 320.125 and a block its south, its north face at y -16103.875.
+- Slot 2, a defender, came down the stair hugging the wall into the nook
+  and stopped at (335.13, -16088.875, 4.88), against the wall and the
+  block. A teammate held its post crouched at (364.77, -16083.47, 4.68),
+  30.12 off. The two capsules (30 summed) clear by 0.12, but a box sweep
+  from slot 2 with the guard in the world hits the guard on every way
+  but west and south, where the wall and the block stand: a body's
+  middle keeps x 335.125 or more off the wall and 334.77 or less past
+  the guard at his y. No move frees it.
+- Slot 2's follower shuns the guard's node 723 and node 1045 under
+  itself (`Follower::bodies_in_way`). 4.2.3's start rule keeps the plan
+  off both, `NavGraph::walkable_start` finds no walk to the one node
+  left near, node 1051 at (336.1, -16135.1, 5.9) past the block, and
+  starts there anyway: slot 2 presses at it for 40 ticks a plan. Every
+  plan from 1045, when the shun runs out, runs into the guard again.
+- The guard never moves. CoD1's bots have no give way: `give_way` reads
+  only the block `mates_in_way` sets, which runs on CoD2 and CoD4
+  (`PARTS_MATES`).
+
+The fix (`driver::give_way_among`): on CoD1 (`SHUNS_BODIES`) a still bot
+gives way to a teammate within `GIVE_WAY_REACH` (96) held up under
+`HELD_UP_SPEED` (60) whose follower shuns the node nearest it
+(`Follower::shuns`), stepping `GIVE_WAY_STEP` (64) on, away from him, as
+CoD2's and CoD4's guards do for 12.7
+(`bots::driver::tests::a_still_bot_gives_way_to_a_teammate_shunning_its_node`).
+Neither may stand by a ladder (`NavGraph::by_ladder`, 4.2.3's rule):
+without that `bots::a_bot_backing_onto_a_climber_climbs_back_onto_the_crows_nest`
+failed from y 71, a bot dying on mp_ship's crow's nest. VERIFIED (the
+gate, with and without the give way). The ladder rule moves none of the
+288 matches below. VERIFIED (the runs).
+
+VERIFIED (measured, ours, release, master 3700b7168 with 4.2.5, against
+the same with the fix; six maps seeds 1 to 48, the knobs of 4.2.5, each
+with its control). Wins by team:
+
+| Build | stalled | captures | pickups | carrier deaths | allies W | axis W | kills |
+|---|---|---|---|---|---|---|---|
+| 4.2.5 | 237 | 624 | 2134 | 951 | 891 | 441 | 10273 |
+| 4.2.5, holds redrawn | 448 | 622 | 2130 | 946 | 915 | 425 | 10263 |
+| give way | 211 | 613 | 2109 | 954 | 883 | 457 | 10228 |
+| give way, holds redrawn | 571 | 601 | 2102 | 929 | 899 | 457 | 10330 |
+
+- VERIFIED (the runs): mp_dawnville stalls 0 on both give way rows,
+  against 93 and 234 without it. The totals stay inside the controls'
+  spread (211 against 571).
+- VERIFIED (the runs): pickups fall 25 and 28, captures 11 and 21, and
+  the axis win 16 and 32 more rounds, most of them on mp_rocket (axis 34
+  and 37 to 44 and 44, allies 89 and 88 to 82 and 86). INFERRED: about
+  1340 rounds a row put one standard error on a win count near 17, so
+  the shift is one to two of them; not settled.
+- VERIFIED (the runs, `STALLS=1`): the control's mp_rocket 241 is seed
+  13 (205), a bot at (9499, 1955, 280) pressing at node 10281 13.5 units
+  north up the slope, and seed 23 (36) on bot-navigation.md 3.16's upper
+  floor. Traced on seed 13 with a print of each give way: 26 in the
+  match, none by or for that bot. Left open.
+
+Tried, not kept: `walkable_start` scoring the nodes `keep` passes only
+while a walk or a jump arrives at one of them, else all of them, so no
+start lies a wall away. With it seed 35's plans start at node 1045 under
+the bot, which stays pinned (89 stalled). VERIFIED (the trace; measured,
+the same set): stalled 218 and 583 on 4.2.5 with it and its control, 151
+and 571 with the give way as well; it moves one control match on the
+give way build. No count moves past the controls.
 
 ## 5. Behind Enemy Lines (`bel`)
 

@@ -1346,9 +1346,18 @@ registered in 0x3002b560 (VERIFIED, strings).
     frame (`cod11-sound-system.md` 8) and refreshes its volume and fixed
     pitch each frame (`AudioSystem::refresh_loop`); on a UO connection the
     `loopSound` and `projectileSound` loops, which run through the same
-    0x3002ca80, refresh alike each snapshot. Left out: 0x452870's
-    `dist_max` cull before the refresh, after which the reaper ends the
-    voice until the body comes back in range.
+    0x3002ca80, refresh alike each snapshot. The cull before the
+    refresh is ported (`refresh_loop`): VERIFIED (the instructions),
+    0x452870..0x452917, on every channel but 1 and 6 to 9 (`[row+0x2c]`),
+    it blends `dist_max` (`[row+0x28]`) at the blend, squares it and the
+    listener's distance to the origin (0x9cbfa8, the call's `eax`), and
+    returns 0 at 0x45298c when `dist_max`² is below the distance² (`fcompp`,
+    `test ah,5`, `jnp`): strict, so a body at exactly `dist_max` is
+    refreshed. A culled call reaches neither 0x4523c0 nor a start, so the
+    frame stamp stays and the reaper ends the voice; the next call that is
+    in range finds no voice and starts one (0x4527c0), which is the owner's
+    restart (INFERRED, the reaper). vcod stops the voice in the refresh
+    and the owner's next frame starts it again.
   - A turret's loop rides `es.loopSound` from `turret_think` 0x6bc29; a
     vehicle's MGs ride its sound blend entities (VERIFIED,
     `game.mp.uo.i386.so`).
