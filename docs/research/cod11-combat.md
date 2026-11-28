@@ -9013,8 +9013,8 @@ end, backed off the world's face, does not reach the same face in a copy
 at the same place. VERIFIED, the same probe on retail UO, 2026-11-14:
 the same lines (`a_round_on_a_script_spawned_trigger_damage_matches_retail_uo`).
 
-**Left open** (not captured): a tank shell on the belltower (its walk,
-14.8.3). A grenade blast's charges were open until the 2026-11-28 retake
+**Left open** (not captured): none of the walks. The tank shell on the
+belltower was captured on 2026-11-28 (14.8.3). A grenade blast's charges were open until the 2026-11-28 retake
 below (a 2026-11-14 UO recapture of
 `probe_dmgshot` with the client's cmd times,
 `fixtures/triggers/mp_uo_stanjel-dmgshot-uo.txt`, replayed on them by
@@ -9176,18 +9176,33 @@ IV's `fireTurret` shell strikes the Elefant and walks once with the driver
 (client 0) as the attacker, start and end both the contact
 (-1421.27, 6196.21, 0.30), damage 700 and mod 5 (`MOD_PROJECTILE`): the
 panzerschreck shell's walk (14.8) with the turret weapon's damage.
-INFERRED, 14.8's table: mp_foy's belltower (spawnflags 115) refuses no mod
-5, so a tank shell whose contact lies inside `*44` fires it as the
-panzerschreck's did; not captured on mp_foy, which needs a seated driver
-with a line of fire to the belfry. VERIFIED, mp_foy's entity lump: the
-nearest tank `script_vehicle` (a Panzer IV at (-2012, 2662, 124)) stands
-4866 units off the belltower trigger's origin (495, -1508, 468), the
-nearest Sherman (-1398, -7399, 232) 6188; and an unseated `fireTurret`
-spawns no shell (`mp_kharkov-shell-fuse-uo.txt`, `PROBE idlefire 2050
-rockets 0 0`), so no clientless probe fires one at the tower. vcod: the same walk off the UO missile
-impact (`cod1_frame`, `x.shell_damage`, `x.direct_mod`); a debug print on
-`vehicle_shell_ab`'s replay read the same attacker, damage, mod and
-contact to 2e-6.
+VERIFIED, mp_foy's entity lump: the nearest tank `script_vehicle` (a
+Panzer IV at (-2012, 2662, 124)) stands 4866 units off the belltower
+trigger's origin (495, -1508, 468), the nearest Sherman (-1398, -7399,
+232) 6188; and an unseated `fireTurret` spawns no shell
+(`mp_kharkov-shell-fuse-uo.txt`, `PROBE idlefire 2050 rockets 0 0`), so
+no stock tank and no clientless probe fires one at the tower.
+
+VERIFIED, live (retail UO 1.51b, 2026-11-28, two runs, the second under
+`tools/re/gdb_trigger_walk.py`; `client-probes/probe_belltower_tank.gsc`,
+fixture `triggers/mp_foy-belltower-tank-uo.txt`): mp_foy with one more
+Panzer IV appended to its entity lump (`triggers/mp_foy-belltower-tank.ent`,
+origin (495, -608, 8), yaw 270, 900 units north of the trigger), entity
+890. The probe client boards it (`--probe-vehicle sit`), his view is held
+on the trigger's origin and `fireTurret` fires once 3 s into the seat. The
+shell strikes the belfry's north wall and walks once: attacker 0 (the
+driver), start and end both the contact (0x43f69fac, 0xc4b2d1d2,
+0x43d15de8: (493.247437, -1430.55688, 418.733643)), damage 700, mod 5.
+The contact lies inside `*44` (x 401..576, y -1587..-1414, z 408..549),
+and the belltower fires as it did for the panzerschreck's shell: `PROBE
+trigger player`, no `PROBE damage` (the exploder deleted the trigger
+first), then `PROBE state 0 0 1`. vcod: the same walk off the UO missile
+impact (`cod1_frame`, `x.shell_damage`, `x.direct_mod`). vcod measurement:
+a debug print on `dmgtrig_ab::a_tank_shell_sets_off_mp_foys_belltower_like_retail_uo`'s
+replay read attacker 0, damage 700, `MOD_PROJECTILE` and the contact
+within 2 ulps (0x43f69fad, 0xc4b2d1d1, 0x43d15de6); the gate holds every
+`PROBE` line. The same print on `vehicle_shell_ab`'s replay read the
+kharkov walk's attacker, damage, mod and contact to 2e-6.
 
 ---
 
